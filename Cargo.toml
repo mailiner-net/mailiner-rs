@@ -6,9 +6,28 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
+[features]
+build-classes = [
+    "dioxus-daisyui/build-classes",
+]
 
+[dependencies]
+console_error_panic_hook = "0.1"
 dioxus = { version = "0.5", features = ["web", "router"] }
+dioxus-daisyui = "0.7"
 
 # Debug
 dioxus-logger = "0.5.1"
+dioxus-router = "0.5.6"
+dioxus-tailwindcss = "0.7.0"
+getrandom = { version = "0.2.15", features = ["js"] }
+gloo-storage = "0.3.0"
+manganis = "0.2.2"
+proc-macro2 = "1.0.86"
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.122"
+uuid = { version = "1.10.0", features = ["v4"] }
+
+
+[build-dependencies]
+dioxus-daisyui = "0.7"

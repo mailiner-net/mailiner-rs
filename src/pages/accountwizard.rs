@@ -138,7 +138,7 @@ fn account_wizard(account_id: Option<String>) -> Element {
         { security_input("SMTP Security", "smtp-security", smtp_security) }
 
         button {
-            class: class!(btn_primary),
+            class: class!(btn btn_primary),
             value: "Save",
             onclick: move |_| {
                 let new_account = MailAccount {

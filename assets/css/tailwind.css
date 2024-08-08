@@ -1746,6 +1746,75 @@ html {
   --tw-contain-style:  ;
 }
 
+.btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+  -webkit-user-select: none;
+     -moz-user-select: none;
+          user-select: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  border-color: transparent;
+  border-color: hsl(var(--n) / var(--tw-border-opacity));
+  text-align: center;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, -webkit-backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter, -webkit-backdrop-filter;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: var(--rounded-btn, 0.5rem);
+  height: 3rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  line-height: 1em;
+  min-height: 3rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  text-transform: var(--btn-text-case, uppercase);
+  text-decoration-line: none;
+  border-width: var(--border-btn, 1px);
+  animation: button-pop var(--animation-btn, 0.25s) ease-out;
+  --tw-border-opacity: 1;
+  --tw-bg-opacity: 1;
+  background-color: hsl(var(--n) / var(--tw-bg-opacity));
+  --tw-text-opacity: 1;
+  color: hsl(var(--nc) / var(--tw-text-opacity));
+}
+
+.btn-disabled,
+  .btn[disabled] {
+  pointer-events: none;
+}
+
+.btn.loading,
+    .btn.loading:hover {
+  pointer-events: none;
+}
+
+.btn.loading:before {
+  margin-right: 0.5rem;
+  height: 1rem;
+  width: 1rem;
+  border-radius: 9999px;
+  border-width: 2px;
+  animation: spin 2s linear infinite;
+  content: "";
+  border-top-color: transparent;
+  border-left-color: transparent;
+  border-bottom-color: currentColor;
+  border-right-color: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn.loading:before {
+    animation: spin 10s linear infinite;
+  }
+}
+
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -1754,6 +1823,59 @@ html {
   to {
     transform: rotate(360deg);
   }
+}
+
+.btn-group > input[type="radio"].btn {
+  -webkit-appearance: none;
+     -moz-appearance: none;
+          appearance: none;
+}
+
+.btn-group > input[type="radio"].btn:before {
+  content: attr(data-title);
+}
+
+.collapse.collapse {
+  visibility: visible;
+}
+
+.collapse {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  grid-template-rows: 1fr auto;
+}
+
+.collapse-title,
+.collapse > input[type="checkbox"],
+.collapse-content {
+  grid-column-start: 1;
+  grid-row-start: 1;
+}
+
+.collapse > input[type="checkbox"] {
+  -webkit-appearance: none;
+     -moz-appearance: none;
+          appearance: none;
+  opacity: 0;
+}
+
+.collapse-content {
+  grid-row-start: 2;
+  overflow: hidden;
+  max-height: 0px;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  cursor: unset;
+  transition: padding 0.2s ease-in-out, background-color 0.2s ease-in-out;
+}
+
+.collapse-open .collapse-content,
+.collapse:focus:not(.collapse-close) .collapse-content,
+.collapse:not(.collapse-close)
+  input[type="checkbox"]:checked
+  ~ .collapse-content {
+  max-height: none;
 }
 
 .input {
@@ -1818,6 +1940,29 @@ html {
   color: hsl(var(--pc) / var(--tw-text-opacity));
 }
 
+.btn:active:hover,
+  .btn:active:focus {
+  animation: none;
+}
+
+.btn:not(.no-animation):active:hover,
+  .btn:not(.no-animation):active:focus {
+  transform: scale(var(--btn-focus-scale, 0.95));
+}
+
+.btn:hover,
+    .btn-active {
+  --tw-border-opacity: 1;
+  border-color: hsl(var(--nf, var(--n)) / var(--tw-border-opacity));
+  --tw-bg-opacity: 1;
+  background-color: hsl(var(--nf, var(--n)) / var(--tw-bg-opacity));
+}
+
+.btn:focus-visible {
+  outline: 2px solid hsl(var(--nf));
+  outline-offset: 2px;
+}
+
 .btn-primary {
   --tw-border-opacity: 1;
   border-color: hsl(var(--p) / var(--tw-border-opacity));
@@ -1839,6 +1984,16 @@ html {
   outline: 2px solid hsl(var(--p));
 }
 
+.btn.glass:hover,
+    .btn.glass.btn-active {
+  --glass-opacity: 25%;
+  --glass-border-opacity: 15%;
+}
+
+.btn.glass:focus-visible {
+  outline: 2px solid currentColor;
+}
+
 .btn-outline.btn-primary {
   --tw-text-opacity: 1;
   color: hsl(var(--p) / var(--tw-text-opacity));
@@ -1852,6 +2007,48 @@ html {
   background-color: hsl(var(--pf, var(--p)) / var(--tw-bg-opacity));
   --tw-text-opacity: 1;
   color: hsl(var(--pc) / var(--tw-text-opacity));
+}
+
+.btn-disabled,
+  .btn-disabled:hover,
+  .btn[disabled],
+  .btn[disabled]:hover {
+  --tw-border-opacity: 0;
+  background-color: hsl(var(--n) / var(--tw-bg-opacity));
+  --tw-bg-opacity: 0.2;
+  color: hsl(var(--bc) / var(--tw-text-opacity));
+  --tw-text-opacity: 0.2;
+}
+
+.btn.loading.btn-square:before,
+    .btn.loading.btn-circle:before {
+  margin-right: 0px;
+}
+
+.btn.loading.btn-xl:before,
+    .btn.loading.btn-lg:before {
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.btn.loading.btn-sm:before,
+    .btn.loading.btn-xs:before {
+  height: 0.75rem;
+  width: 0.75rem;
+}
+
+.btn-group > input[type="radio"]:checked.btn,
+  .btn-group > .btn-active {
+  --tw-border-opacity: 1;
+  border-color: hsl(var(--p) / var(--tw-border-opacity));
+  --tw-bg-opacity: 1;
+  background-color: hsl(var(--p) / var(--tw-bg-opacity));
+  --tw-text-opacity: 1;
+  color: hsl(var(--pc) / var(--tw-text-opacity));
+}
+
+.btn-group > input[type="radio"]:checked.btn:focus-visible, .btn-group > .btn-active:focus-visible {
+  outline: 2px solid hsl(var(--p));
 }
 
 @keyframes button-pop {
@@ -1880,6 +2077,102 @@ html {
   100% {
     background-position-y: 0;
   }
+}
+
+.collapse:focus-visible {
+  outline: 2px solid hsl(var(--nf));
+  outline-offset: 2px;
+}
+
+.collapse-arrow .collapse-title:after {
+  position: absolute;
+  display: block;
+  height: 0.5rem;
+  width: 0.5rem;
+  --tw-translate-y: -100%;
+  --tw-rotate: 45deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+  transition-property: all;
+  transition-duration: 150ms;
+  transition-duration: 0.2s;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  top: 50%;
+  right: 1.4rem;
+  content: "";
+  transform-origin: 75% 75%;
+  box-shadow: 2px 2px;
+  pointer-events: none;
+}
+
+[dir="rtl"] .collapse-arrow .collapse-title:after {
+  --tw-rotate: -45deg;
+}
+
+.collapse-plus .collapse-title:after {
+  position: absolute;
+  display: block;
+  height: 0.5rem;
+  width: 0.5rem;
+  transition-property: all;
+  transition-duration: 300ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  top: 0.9rem;
+  right: 1.4rem;
+  content: "+";
+  pointer-events: none;
+}
+
+.collapse:not(.collapse-open):not(.collapse-close) input[type="checkbox"],
+.collapse:not(.collapse-open):not(.collapse-close) .collapse-title {
+  cursor: pointer;
+}
+
+.collapse:focus:not(.collapse-open):not(.collapse-close) .collapse-title {
+  cursor: unset;
+}
+
+.collapse-title {
+  position: relative;
+}
+
+:where(.collapse > input[type="checkbox"]) {
+  z-index: 1;
+}
+
+.collapse-title,
+:where(.collapse > input[type="checkbox"]) {
+  width: 100%;
+  padding: 1rem;
+  padding-right: 3rem;
+  min-height: 3.75rem;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.collapse-open :where(.collapse-content),
+.collapse:focus:not(.collapse-close) :where(.collapse-content),
+.collapse:not(.collapse-close) :where(input[type="checkbox"]:checked ~ .collapse-content) {
+  padding-bottom: 1rem;
+  transition: padding 0.2s ease-in-out, background-color 0.2s ease-in-out;
+}
+
+.collapse-open.collapse-arrow .collapse-title:after,
+.collapse-arrow:focus:not(.collapse-close) .collapse-title:after,
+.collapse-arrow:not(.collapse-close) input[type="checkbox"]:checked ~ .collapse-title:after {
+  --tw-translate-y: -50%;
+  --tw-rotate: 225deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
+[dir="rtl"] .collapse-open.collapse-arrow .collapse-title:after,
+[dir="rtl"] .collapse-arrow:focus:not(.collapse-close) .collapse-title:after,
+[dir="rtl"] .collapse-arrow:not(.collapse-close) input[type="checkbox"]:checked ~ .collapse-title:after {
+  --tw-rotate: 135deg;
+}
+
+.collapse-open.collapse-plus .collapse-title:after,
+.collapse-plus:focus:not(.collapse-close) .collapse-title:after,
+.collapse-plus:not(.collapse-close) input[type="checkbox"]:checked ~ .collapse-title:after {
+  content: "−";
 }
 
 .drawer-toggle:focus-visible ~ .drawer-content .drawer-button.btn-primary {
@@ -1966,6 +2259,72 @@ html {
   }
 }
 
+.btn-group .btn:not(:first-child):not(:last-child) {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.btn-group .btn:first-child:not(:last-child) {
+  margin-top: -0px;
+  margin-left: -1px;
+  border-start-start-radius: var(--rounded-btn, 0.5rem);
+  border-start-end-radius: 0;
+  border-end-start-radius: var(--rounded-btn, 0.5rem);
+  border-end-end-radius: 0;
+}
+
+.btn-group .btn:last-child:not(:first-child) {
+  border-start-start-radius: 0;
+  border-start-end-radius: var(--rounded-btn, 0.5rem);
+  border-end-start-radius: 0;
+  border-end-end-radius: var(--rounded-btn, 0.5rem);
+}
+
+.btn-group-horizontal .btn:not(:first-child):not(:last-child) {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.btn-group-horizontal .btn:first-child:not(:last-child) {
+  margin-top: -0px;
+  margin-left: -1px;
+  border-start-start-radius: var(--rounded-btn, 0.5rem);
+  border-start-end-radius: 0;
+  border-end-start-radius: var(--rounded-btn, 0.5rem);
+  border-end-end-radius: 0;
+}
+
+.btn-group-horizontal .btn:last-child:not(:first-child) {
+  border-start-start-radius: 0;
+  border-start-end-radius: var(--rounded-btn, 0.5rem);
+  border-end-start-radius: 0;
+  border-end-end-radius: var(--rounded-btn, 0.5rem);
+}
+
+.btn-group-vertical .btn:first-child:not(:last-child) {
+  margin-top: -1px;
+  margin-left: -0px;
+  border-start-start-radius: var(--rounded-btn, 0.5rem);
+  border-start-end-radius: var(--rounded-btn, 0.5rem);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.btn-group-vertical .btn:last-child:not(:first-child) {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+  border-end-start-radius: var(--rounded-btn, 0.5rem);
+  border-end-end-radius: var(--rounded-btn, 0.5rem);
+}
+
+.collapse {
+  visibility: collapse;
+}
+
 .flex {
   display: flex;
 }
@@ -1982,8 +2341,8 @@ html {
   min-height: 0.625rem;
 }
 
-.w-64 {
-  width: 16rem;
+.w-80 {
+  width: 20rem;
 }
 
 .w-full {
@@ -2018,6 +2377,25 @@ html {
   gap: 0.5rem;
 }
 
+.border {
+  border-width: 1px;
+}
+
+.border-base-300 {
+  --tw-border-opacity: 1;
+  border-color: hsl(var(--b3, var(--b2)) / var(--tw-border-opacity));
+}
+
+.bg-base-200 {
+  --tw-bg-opacity: 1;
+  background-color: hsl(var(--b2, var(--b1)) / var(--tw-bg-opacity));
+}
+
+.bg-gray-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(243 244 246 / var(--tw-bg-opacity));
+}
+
 .bg-gray-600 {
   --tw-bg-opacity: 1;
   background-color: rgb(75 85 99 / var(--tw-bg-opacity));
@@ -2033,11 +2411,6 @@ html {
   background-color: rgb(31 41 55 / var(--tw-bg-opacity));
 }
 
-.bg-gray-900 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(17 24 39 / var(--tw-bg-opacity));
-}
-
 .p-4 {
   padding: 1rem;
 }
@@ -2047,14 +2420,18 @@ html {
   line-height: 2rem;
 }
 
-.text-lg {
-  font-size: 1.125rem;
+.text-xl {
+  font-size: 1.25rem;
   line-height: 1.75rem;
 }
 
-.text-sm {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
+.font-medium {
+  font-weight: 500;
+}
+
+.text-gray-300 {
+  --tw-text-opacity: 1;
+  color: rgb(209 213 219 / var(--tw-text-opacity));
 }
 
 .text-white {

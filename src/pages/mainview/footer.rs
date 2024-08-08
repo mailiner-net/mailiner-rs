@@ -5,7 +5,7 @@ use dioxus_tailwindcss::prelude::*;
 pub fn Footer() -> Element {
     rsx! {
         div {
-            class: class!(flex items_center justify_around p_4 bg_gray_800 text_white),
+            class: class!(flex items_center justify_around p_4 bg_gray_800 text_gray_300),
             "Made with ❤️ in Prague",
         }
     }

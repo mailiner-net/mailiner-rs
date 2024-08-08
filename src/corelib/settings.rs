@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::hooks::UsePersistent;
 
@@ -52,6 +55,11 @@ pub struct AppSettings {
 /// A hook that returns global AppSettings loaded from browser's local storage
 /// When saving the settings, it will also save it back to local storage.
 pub fn use_settings() -> UsePersistent<AppSettings> {
+    use_context()
+}
+
+/// Returns a map of all mail accounts
+pub fn use_accounts() -> Signal<HashMap<Uuid, MailAccount>> {
     use_context()
 }
 

@@ -20,35 +20,33 @@ pub fn MainView() -> Element {
         div {
             class: class!(h_full w_full flex flex_col),
 
-            div {
-                class: class!(bg_gray_800),
-                Header {}
-            },
+            Header {},
 
             div {
                 class: class!(flex grow),
 
-                div {
-                    class: class!(w_64 bg_gray_900),
+                aside {
+                    class: class!(w_80 bg_gray_100),
+
                     AccountsView {}
-                },
+                }
 
                 div {
                     class: class!(flex flex_col grow bg_gray_800),
 
-                    div {
+                    main {
                         class: class!(h_16 bg_gray_700 grow),
                         MessageList {}
                     },
 
-                    div {
+                    article  {
                         class: class!(min_h_2_half bg_gray_600),
                         MessageView {}
                     }
                 }
             },
 
-            div {
+            footer {
                 class: class!(bg_gray_800),
                 Footer {}
             }

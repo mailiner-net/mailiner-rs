@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
 use console_error_panic_hook;
+use uuid::Uuid;
+use std::collections::HashMap;
 use std::panic;
 use dioxus::prelude::*;
 use dioxus_logger::tracing::{info, Level};
@@ -10,7 +12,7 @@ mod pages;
 
 use pages::MainView;
 use pages::accountwizard::{NewAccount, EditAccount};
-use corelib::settings::AppSettings;
+use corelib::settings::{AppSettings, MailAccount};
 use corelib::hooks::use_persistent;
 
 fn main() {
@@ -38,8 +40,12 @@ enum Route {
 }
 
 fn App() -> Element {
-    let settings = use_persistent("app_settings", || AppSettings::default());
-    use_context_provider(|| settings);
+    let settings = use_persistent("app_settings", || AppSettings::default()).get();
+
+
+    let accounts = use_signal(HashMap::<Uuid, MailAccount>::new);
+    use_context_provider(|| accounts);
+
 
     rsx! {
         Router::<Route> {}

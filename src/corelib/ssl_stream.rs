@@ -2,7 +2,7 @@ use anyhow::{anyhow, Error};
 use bytes::{BufMut, BytesMut};
 use futures_core::Stream;
 use openssl::{
-    BIO_free, BIO_new, BIO_s_mem, ERR_get_error, EVP_add_cipher, EVP_aes_128_cbc, EVP_aes_128_gcm, EVP_aes_256_cbc, EVP_aes_256_gcm, EVP_chacha20_poly1305, EVP_sha1, EVP_sha256, EVP_sha384, OPENSSL_init_ssl, SSL_CTX_free, SSL_CTX_new, SSL_free, SSL_new, SSL_set_bio, SSL_set_connect_state, TLS_client_method, BIO, OPENSSL_INIT_SSL_DEFAULT, SSL, SSL_CTX
+    BIO_free, BIO_new, BIO_s_mem, ERR_get_error, EVP_add_cipher, EVP_aes_128_cbc, EVP_aes_128_gcm, EVP_aes_256_cbc, EVP_aes_256_gcm, EVP_chacha20_poly1305, EVP_sha1, EVP_sha256, EVP_sha384, OPENSSL_init_ssl, SSL_CTX_free, SSL_CTX_new, SSL_ctrl, SSL_free, SSL_new, SSL_set_bio, SSL_set_connect_state, TLSEXT_NAMETYPE_host_name, TLS_client_method, BIO, OPENSSL_INIT_SSL_DEFAULT, SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, SSL_CTX
 };
 use std::ffi::CString;
 use std::io::{ErrorKind, Read, Write};
@@ -56,7 +56,7 @@ struct Ssl {
 }
 
 impl Ssl {
-    fn new() -> Result<Self, Error> {
+    pub fn new() -> Result<Self, Error> {
         unsafe {
             if OPENSSL_init_ssl(OPENSSL_INIT_SSL_DEFAULT, ptr::null) == 0 {
                 return Err(anyhow!("Failed to initialize OpenSSL library"));
@@ -94,11 +94,21 @@ impl Ssl {
         }
     }
 
-    async fn connect(&self, hostname: &str) -> Result<(), Error> {
-        let hostname_cstr = CString::new(hostname).expect("Failed to create CString from hostname string");
-        SSL_set_tlsext_host_name(*self.ssl, hostname_cstr.as_ptr());
+    pub async fn connect(&self, hostname: &str) -> Result<(), Error> {
+        let hostname_cstr = CString::new(hostname)?;
+        unsafe {
+            // bindgen refuses to generate bindings for macro SSL_set_tlsext_host_name, this is what the macro
+            // really expands to:
+            SSL_ctrl(*self.ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, hostname_cstr.as_ptr());
+        }
 
         doHandshake().await?;
+
+        Ok(())
+    }
+
+    async fn doHandshake() -> Result<(), Error> {
+        // TODO
     }
 }
 

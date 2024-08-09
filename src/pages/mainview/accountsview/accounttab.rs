@@ -7,7 +7,7 @@ use crate::corelib::settings::use_accounts;
 #[component]
 pub fn AccountTab(account_id: Uuid) -> Element {
     let accounts = use_accounts();
-    let account = use_memo(|| accounts.read().get(account_id).unwrap());
+    let account = use_memo(move || accounts.read().get(&account_id).unwrap().clone() );
 
     rsx! {
         div {

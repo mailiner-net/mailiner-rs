@@ -3,11 +3,12 @@ name = "mailiner-rs"
 version = "0.1.0"
 authors = ["Daniel Vrátil <dvratil@kde.org>"]
 edition = "2021"
+publish = false
 
 [workspace]
 members = [
     ".",
-    "openssl"
+    "./openssl-bindings"
 ]
 
 [features]
@@ -33,7 +34,7 @@ imap-next = "0.2.0"
 imap-types = "1.0.0"
 js-sys = "0.3.69"
 manganis = "0.2.2"
-openssl = { path = "./openssl" }
+openssl-bindings = { path = "./openssl-bindings" }
 proc-macro2 = "1.0.86"
 serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.122"

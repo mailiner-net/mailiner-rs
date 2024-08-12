@@ -1,15 +1,9 @@
 [package]
 name = "mailiner-rs"
 version = "0.1.0"
-authors = ["Daniel Vrátil <dvratil@kde.org>"]
+authors = ["Daniel Vrátil <me@dvratil.cz>"]
 edition = "2021"
 publish = false
-
-[workspace]
-members = [
-    ".",
-    "./openssl-bindings"
-]
 
 [features]
 build-classes = [
@@ -27,10 +21,11 @@ dioxus-router = "0.5.6"
 dioxus-tailwindcss = "0.7.0"
 futures = "0.3.30"
 futures-core = "0.3.30"
+futures-sink = "0.3.30"
 futures-util = { version = "0.3.30" }
 getrandom = { version = "0.2.15", features = ["js"] }
 gloo-storage = "0.3.0"
-imap-next = "0.2.0"
+#imap-next = "0.2.0"
 imap-types = "1.0.0"
 js-sys = "0.3.69"
 manganis = "0.2.2"

@@ -1,64 +1,52 @@
 use anyhow::{anyhow, Error};
 use bytes::{BufMut, BytesMut};
-use futures_core::Stream;
-use openssl::{
-    BIO_free, BIO_new, BIO_s_mem, ERR_get_error, EVP_add_cipher, EVP_aes_128_cbc, EVP_aes_128_gcm, EVP_aes_256_cbc, EVP_aes_256_gcm, EVP_chacha20_poly1305, EVP_sha1, EVP_sha256, EVP_sha384, OPENSSL_init_ssl, SSL_CTX_free, SSL_CTX_new, SSL_ctrl, SSL_free, SSL_new, SSL_set_bio, SSL_set_connect_state, TLSEXT_NAMETYPE_host_name, TLS_client_method, BIO, OPENSSL_INIT_SSL_DEFAULT, SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, SSL_CTX
+use dioxus::prelude::spawn;
+use futures::stream::SplitSink;
+use futures::{Sink, SinkExt};
+use futures_util::{Stream, StreamExt};
+use openssl_bindings::{
+    BIO_ctrl_pending, BIO_free, BIO_new, BIO_read, BIO_s_mem, BIO_write, ERR_error_string,
+    ERR_get_error, EVP_add_cipher, EVP_add_digest, EVP_aes_128_cbc, EVP_aes_128_gcm,
+    EVP_aes_256_cbc, EVP_aes_256_gcm, EVP_chacha20_poly1305, EVP_sha1, EVP_sha256, EVP_sha384,
+    OPENSSL_init_ssl, SSL_CTX_free, SSL_CTX_new, SSL_ctrl, SSL_do_handshake, SSL_free,
+    SSL_get_error, SSL_new, SSL_pending, SSL_read, SSL_set_bio, SSL_set_connect_state,
+    SSL_shutdown, SSL_write, TLSEXT_NAMETYPE_host_name, TLS_client_method, BIO,
+    OPENSSL_INIT_SSL_DEFAULT, SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME, SSL_CTX, SSL_ERROR_WANT_READ,
+    SSL_ERROR_WANT_WRITE,
 };
-use std::ffi::CString;
+use std::ffi::{c_void, CStr, CString};
 use std::io::{ErrorKind, Read, Write};
-use std::ops::{Deref, DerefMut};
 use std::ptr;
+use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
-use std::boxed::Box;
 
 use dioxus_logger::tracing::error;
 
-struct UniquePtr<T> {
-    ptr: *mut T,
-    deleter: Box<dyn FnMut(* mut T) + 'static>
-}
+use crate::utils::UniquePtr;
 
-impl<T> UniquePtr<T>
+struct Ssl<EncryptedStream>
+where
+    EncryptedStream: Stream + Sink<Vec<u8>> + Unpin + 'static,
 {
-    pub fn new(ptr: *mut T, deleter: impl FnMut(* mut T) + 'static) -> Self {
-        Self {
-            ptr, deleter: Box::new(deleter)
-        }
-    }
-}
-
-impl<T> Deref for UniquePtr<T> {
-    type Target = *mut T;
-    fn deref(&self) -> &Self::Target {
-        return &self.ptr;
-    }
-}
-
-impl<T> DerefMut for UniquePtr<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        return &mut self.ptr;
-    }
-}
-
-impl<T> Drop for UniquePtr<T> {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            (self.deleter)(self.ptr);
-        }
-    }
-}
-
-struct Ssl {
     ctx: UniquePtr<SSL_CTX>,
     ssl: UniquePtr<SSL>,
-    input_bio: UniquePtr<BIO>,
-    output_bio: UniquePtr<BIO>
+    input_bio: UniquePtr<BIO, i32>,
+    output_bio: UniquePtr<BIO, i32>,
+    encrypted_sink: SplitSink<EncryptedStream, Vec<u8>>,
+
+    handshake_done: Mutex<bool>,
+
+    plain_waker: Mutex<Option<Waker>>,
 }
 
-impl Ssl {
-    pub fn new() -> Result<Self, Error> {
-        unsafe {
-            if OPENSSL_init_ssl(OPENSSL_INIT_SSL_DEFAULT, ptr::null) == 0 {
+impl<'a, EncryptedStream> Ssl<EncryptedStream>
+where
+    EncryptedStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin,
+{
+    pub fn new(encrypted_stream: EncryptedStream) -> Result<Arc<Ssl<EncryptedStream>>, Error> {
+        let (sink, mut stream) = encrypted_stream.split();
+        let ssl = unsafe {
+            if OPENSSL_init_ssl(OPENSSL_INIT_SSL_DEFAULT as u64, ptr::null()) == 0 {
                 return Err(anyhow!("Failed to initialize OpenSSL library"));
             }
             EVP_add_cipher(EVP_chacha20_poly1305());
@@ -66,136 +54,295 @@ impl Ssl {
             EVP_add_cipher(EVP_aes_256_gcm());
             EVP_add_cipher(EVP_aes_128_cbc());
             EVP_add_cipher(EVP_aes_256_cbc());
-            EVP_add_cipher(EVP_sha256());
-            EVP_add_cipher(EVP_sha384());
-            EVP_add_cipher(EVP_sha1());
+            EVP_add_digest(EVP_sha256());
+            EVP_add_digest(EVP_sha384());
+            EVP_add_digest(EVP_sha1());
 
-            let ctx = UniquePtr::<SSL_CTX>::new(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
+            let ctx = UniquePtr::new(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
             if ctx.is_null() {
-                return Err(anyhow!(format!("Failed to create new SSL context: {}", ERR_get_error())));
+                return Err(anyhow!(format!(
+                    "Failed to create new SSL context: {}",
+                    ERR_get_error()
+                )));
             }
 
             let input_bio = UniquePtr::new(BIO_new(BIO_s_mem()), BIO_free);
             let output_bio = UniquePtr::new(BIO_new(BIO_s_mem()), BIO_free);
 
-            let ssl = UniquePtr::<SSL>::new(SSL_new(ctx), SSL_free);
+            let ssl = UniquePtr::new(SSL_new(*ctx), SSL_free);
             if ssl.is_null() {
-                return Err(anyhow!(format!("Failed to create SSL object: {}", ERR_get_error())));
+                return Err(anyhow!(format!(
+                    "Failed to create SSL object: {}",
+                    ERR_get_error()
+                )));
             }
             SSL_set_bio(*ssl, *input_bio, *output_bio);
             SSL_set_connect_state(*ssl);
 
-            Ok(Ssl {
+            Arc::new(Ssl {
                 ctx,
                 ssl,
                 input_bio,
-                output_bio
+                output_bio,
+                encrypted_sink: sink,
+                handshake_done: Mutex::new(false),
+                plain_waker: Mutex::new(None),
             })
-        }
+        };
+
+        let ssl_clone = Arc::clone(&ssl);
+        spawn(async move {
+            loop {
+                let data = stream.next().await;
+                match data {
+                    Some(data) => {
+                        ssl_clone.write_tls_data(&data).await.unwrap();
+                    }
+                    None => break,
+                }
+            }
+        });
+
+        Ok(ssl)
     }
 
-    pub async fn connect(&self, hostname: &str) -> Result<(), Error> {
+    pub async fn connect(&mut self, hostname: &str) -> Result<(), Error> {
         let hostname_cstr = CString::new(hostname)?;
         unsafe {
             // bindgen refuses to generate bindings for macro SSL_set_tlsext_host_name, this is what the macro
             // really expands to:
-            SSL_ctrl(*self.ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, hostname_cstr.as_ptr());
+            SSL_ctrl(
+                *self.ssl,
+                SSL_CTRL_SET_TLSEXT_HOSTNAME as i32,
+                TLSEXT_NAMETYPE_host_name as i64,
+                hostname_cstr.as_ptr() as *mut c_void,
+            );
         }
 
-        doHandshake().await?;
+        self.do_handshake().await?;
 
         Ok(())
     }
 
-    async fn doHandshake() -> Result<(), Error> {
-        // TODO
+    async fn do_handshake(&self) -> Result<(), Error> {
+        let res = unsafe { SSL_do_handshake(*self.ssl) };
+
+        self.send_tls_data().await?;
+
+        if res == 1 {
+            *self
+                .handshake_done
+                .lock()
+                .expect("Failed to lock handshake_done") = true;
+            Ok(())
+        } else {
+            let ssl_err = unsafe { SSL_get_error(*self.ssl, res) } as u32;
+            if ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE {
+                // Waiting for more data
+                Ok(())
+            } else {
+                unsafe {
+                    let str = CStr::from_ptr(ERR_error_string(ssl_err as u64, ptr::null_mut()));
+                    Err(anyhow!(format!(
+                        "Failed to perform SSL handshake: {}",
+                        str.to_string_lossy()
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn write_plain_data(&self, data: &[u8]) -> Result<usize, Error> {
+        let mut written = 0usize;
+        while written < data.len() {
+            let res = unsafe {
+                SSL_write(
+                    *self.ssl,
+                    data[written..].as_ptr() as *const c_void,
+                    (data.len() - written) as i32,
+                )
+            };
+            if res <= 0 {
+                let ssl_err = unsafe { SSL_get_error(*self.ssl, res) } as u32;
+                if ssl_err == SSL_ERROR_WANT_WRITE {
+                    self.send_tls_data().await?; // flush data
+                    continue; // retry
+                }
+                unsafe {
+                    let str = CStr::from_ptr(ERR_error_string(ssl_err as u64, ptr::null_mut()));
+                    return Err(anyhow!(format!(
+                        "Failed to write data to SSL stream: {}",
+                        str.to_string_lossy()
+                    )));
+                }
+            }
+            written += res as usize;
+        }
+
+        // flush
+        self.send_tls_data().await?;
+
+        Ok(written)
+    }
+
+    async fn write_tls_data(&self, data: &[u8]) -> Result<(), Error> {
+        let mut written = 0usize;
+        while written < data.len() {
+            let res = unsafe {
+                BIO_write(
+                    *self.input_bio,
+                    data[written..].as_ptr() as *const c_void,
+                    (data.len() - written) as i32,
+                )
+            };
+            written += res as usize;
+        }
+
+        if !*self
+            .handshake_done
+            .lock()
+            .expect("Failed to lock handshake_done")
+        {
+            self.do_handshake().await?;
+        }
+
+        if *self
+            .handshake_done
+            .lock()
+            .expect("Failed to lock handshake_done")
+        {
+            if let Some(waker) = &*self.plain_waker.lock().expect("Failed to lock plain_waker") {
+                waker.wake_by_ref();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_plain_data(&self) -> Result<BytesMut, Error> {
+        let mut buffer = BytesMut::new();
+        let mut read_buffer = [0u8; 4096];
+        loop {
+            let res = unsafe {
+                SSL_read(
+                    *self.ssl,
+                    read_buffer.as_mut_ptr() as *mut c_void,
+                    read_buffer.len() as i32,
+                )
+            };
+            if res <= 0 {
+                let ssl_err = unsafe { SSL_get_error(*self.ssl, res) } as u32;
+                if ssl_err != SSL_ERROR_WANT_READ && ssl_err != SSL_ERROR_WANT_WRITE {
+                    unsafe {
+                        let str = CStr::from_ptr(ERR_error_string(ssl_err as u64, ptr::null_mut()));
+                        return Err(anyhow!(format!(
+                            "Failed to read data from SSL stream: {}",
+                            str.to_string_lossy()
+                        )));
+                    }
+                }
+                return Ok(buffer);
+            } else {
+                buffer.put(&read_buffer[..res as usize]);
+            }
+        }
+    }
+
+    async fn send_tls_data(&self) -> Result<(), Error> {
+        let mut read_buffer = [0u8; 4096];
+        while unsafe { BIO_ctrl_pending(*self.output_bio) } > 0 {
+            let read = unsafe {
+                BIO_read(
+                    *self.output_bio,
+                    read_buffer.as_mut_ptr() as *mut c_void,
+                    read_buffer.len() as i32,
+                )
+            };
+            if read > 0 {
+                self.encrypted_sink
+                    .send(read_buffer[..read as usize].to_vec())
+                    .await
+                    //.map_err(|e| anyhow::Error::msg(format!("Failed to send data into encrypted stream: {:?}", e))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn close(&self) -> Result<(), Error> {
+        unsafe {
+            SSL_shutdown(*self.ssl);
+        }
+        self.send_tls_data().await
     }
 }
 
+impl<EncryptedStream> Stream for Ssl<EncryptedStream>
+where
+    EncryptedStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin,
+{
+    type Item = BytesMut;
 
-pub struct SslStream<CipherStream> {
-    ssl_stream: ssl::SslStream<CipherStream>,
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if unsafe { SSL_pending(*self.ssl) } > 0 {
+            let data = self.read_plain_data();
+            if let Ok(data) = data {
+                Poll::Ready(Some(data))
+            } else {
+                Poll::Ready(None)
+            }
+        } else {
+            *self.plain_waker.lock().expect("Failed to lock plain_waker") =
+                Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+pub struct SslStream<EncryptedStream>
+where
+    EncryptedStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin + 'static,
+{
+    ssl: Arc<Ssl<EncryptedStream>>,
     plain_buffer: BytesMut,
     plain_waker: Option<Waker>,
 }
 
-impl<CipherStream> SslStream<CipherStream>
+impl<EncryptedStream> SslStream<EncryptedStream>
 where
-    CipherStream: Read + Write + Unpin,
+    EncryptedStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin + 'static,
 {
-    pub fn new(cipher_stream: CipherStream) -> std::io::Result<SslStream<CipherStream>> {
-        let ssl_ctx = ssl::SslContextBuilder::new(ssl::SslMethod::tls_client())?.build();
-        let ssl = ssl::Ssl::new(&ssl_ctx)?;
-        let mut ssl_stream = ssl::SslStream::new(ssl, cipher_stream).map_err(|err| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to create SSL stream: {}", err),
-            )
-        })?;
-        ssl_stream.connect().map_err(|err| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Failed to connect to SSL stream: {}", err),
-            )
-        })?;
+    pub fn new(encrypted_stream: EncryptedStream) -> Result<SslStream<EncryptedStream>, Error> {
         Ok(Self {
-            ssl_stream,
+            ssl: Ssl::new(encrypted_stream)?,
             plain_buffer: BytesMut::new(),
             plain_waker: None,
         })
-    }
-
-    fn try_read_ssl(&mut self) {
-        let mut buffer = [0u8; 4096];
-        match self.ssl_stream.ssl_read(&mut buffer) {
-            Ok(bytes) => {
-                self.plain_buffer
-                    .extend_from_slice(buffer[..bytes].as_ref());
-                if let Some(waker) = self.plain_waker.as_ref() {
-                    waker.wake_by_ref();
-                    self.plain_waker = None;
-                }
-            }
-            Err(err) => {
-                if err.code() == ssl::ErrorCode::WANT_READ {
-                    // This is OK, we'll just try again later once we pushed more data to the SSL context
-                } else {
-                    match err.ssl_error() {
-                        Some(err) => {
-                            error!("Error when reading from SSL stream: {}", err);
-                        }
-                        None => {
-                            error!(
-                                "Unexpected error from SSL context when reading TLS data: {}",
-                                err
-                            );
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
 impl<CipherStream> Write for SslStream<CipherStream>
 where
-    CipherStream: Read + Write + Unpin,
+    CipherStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin,
 {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let written = self.ssl_stream.write(buf)?;
-        self.try_read_ssl();
-        Ok(written)
+        self.ssl
+            .write_plain_data(buf)
+            .map_err(|e| std::io::Error::new(ErrorKind::Other, e.to_string()))
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.try_read_ssl();
+        //self.try_read_ssl();
         Ok(())
     }
 }
 
 impl<CipherStream> Stream for SslStream<CipherStream>
 where
-    CipherStream: Read + Write + Unpin,
+    CipherStream: Stream<Item = Vec<u8>> + Sink<Vec<u8>> + Unpin,
 {
     type Item = Vec<u8>;
 

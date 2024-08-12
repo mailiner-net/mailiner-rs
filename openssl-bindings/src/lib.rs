@@ -4,6 +4,14 @@
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+pub struct Dummy {}
+
+impl Dummy {
+    pub fn new() -> Self {
+        Dummy {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

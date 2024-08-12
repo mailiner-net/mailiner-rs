@@ -1,5 +1,4 @@
 #![allow(non_snake_case)]
-
 use console_error_panic_hook;
 use corelib::imap_account_manager::ImapAccountManager;
 use dioxus::prelude::*;
@@ -10,6 +9,7 @@ use uuid::Uuid;
 
 mod corelib;
 mod pages;
+mod utils;
 
 use corelib::hooks::use_persistent;
 use corelib::settings::{AppSettings, MailAccount};

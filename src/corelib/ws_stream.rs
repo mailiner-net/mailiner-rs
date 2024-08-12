@@ -1,5 +1,5 @@
 use bytes::{BufMut, BytesMut};
-use log::{error, info, warn};
+use dioxus_logger::tracing::{error, info, warn};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::{
@@ -43,23 +43,27 @@ impl WSStream {
             .set_binary_type(web_sys::BinaryType::Arraybuffer);
         let on_message_cb =
             Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| this_clone.on_message(event));
-        this.socket.set_onmessage(Some(on_message_cb.as_ref().unchecked_ref()));
+        this.socket
+            .set_onmessage(Some(on_message_cb.as_ref().unchecked_ref()));
         on_message_cb.forget(); // forget the callback to keep it alive
 
         let this_clone = Arc::clone(&this);
         let on_error_cb =
             Closure::<dyn FnMut(_)>::new(move |event: ErrorEvent| this_clone.on_error(event));
-        this.socket.set_onerror(Some(on_error_cb.as_ref().unchecked_ref()));
+        this.socket
+            .set_onerror(Some(on_error_cb.as_ref().unchecked_ref()));
         on_error_cb.forget();
 
         let this_clone = Arc::clone(&this);
         let on_open_cb = Closure::<dyn FnMut()>::new(move || this_clone.on_open());
-        this.socket.set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
+        this.socket
+            .set_onopen(Some(on_open_cb.as_ref().unchecked_ref()));
         on_open_cb.forget();
 
         let this_clone = Arc::clone(&this);
         let on_close_cb = Closure::<dyn FnMut()>::new(move || this_clone.on_close());
-        this.socket.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
+        this.socket
+            .set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
         on_close_cb.forget();
 
         Ok(this)
@@ -76,8 +80,14 @@ impl WSStream {
     fn on_message(&self, event: MessageEvent) {
         if let Ok(abuf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
             let array = js_sys::Uint8Array::new(&abuf);
-            self.buffer.lock().expect("Failed to lock buffer lock").put(array.to_vec().as_ref());
-            let mut waker_locked = self.stream_waker.lock().expect("Failed to lock stream_waker lock");
+            self.buffer
+                .lock()
+                .expect("Failed to lock buffer lock")
+                .put(array.to_vec().as_ref());
+            let mut waker_locked = self
+                .stream_waker
+                .lock()
+                .expect("Failed to lock stream_waker lock");
             if let Some(waker) = waker_locked.as_ref() {
                 waker.wake_by_ref();
                 *waker_locked = None;
@@ -143,7 +153,10 @@ impl Stream for WSStream {
             buffer.clear();
             result
         } else {
-            let mut stream_waker = self.stream_waker.lock().expect("Failed to lock stream_waker");
+            let mut stream_waker = self
+                .stream_waker
+                .lock()
+                .expect("Failed to lock stream_waker");
             *stream_waker = Some(cx.waker().clone());
             Poll::Pending
         }
@@ -159,16 +172,4 @@ fn socket_closed(socket: &WebSocket) -> bool {
             true
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use wasm_bindgen::test::*;
-
-    #[wasm_bindgen_test]
-    fn test_websocket_stream()
-    {
-
-    }
-
 }

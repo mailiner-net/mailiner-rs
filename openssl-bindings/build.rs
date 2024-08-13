@@ -96,7 +96,7 @@ fn find_executable(name: &str) -> io::Result<String> {
 }
 
 
-fn build_openssl() -> io::Result<()>
+fn build_openssl() -> io::Result<PathBuf>
 {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set!"));
     let openssl_build_dir = out_dir.join("openssl-build");
@@ -116,7 +116,7 @@ fn build_openssl() -> io::Result<()>
         cmd.env("CFLAGS", "-fPIC -flto=thin -Os")
             .env("LDFLAGS", "-flto=thin -sSIDE_MODULE=2 -Os")
             .arg(openssl_src_dir.join("Configure"))
-            .arg("linux32"); // out target platform for WASM
+                .arg("linux-x32"); // out target platform for WASM
         cmd
     } else {
         let mut cmd = Command::new(openssl_src_dir.join("Configure"));
@@ -205,11 +205,11 @@ fn build_openssl() -> io::Result<()>
     println!("cargo:rustc-link-lib=static=ssl");
     println!("cargo:rerun-if-changed=openssl-src");
 
-    Ok(())
+    Ok(openssl_install_dir)
 }
 
 fn main() {
-    build_openssl().expect("Failed to build OpenSSL");
+    let openssl_install_dir = build_openssl().expect("Failed to build OpenSSL");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -218,6 +218,7 @@ fn main() {
         // The input header we would like to generate
         // bindings for.
         .header("src/openssl.h")
+        .clang_arg(format!("-I{}/usr/local/include/", openssl_install_dir.display()))
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))

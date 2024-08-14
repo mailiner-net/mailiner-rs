@@ -13,7 +13,7 @@ pub enum WSConnectorMessage {
     Data { payload: Vec<u8> },
 }
 
-pub enum WSConnectorEvents {
+pub enum WSConnectorEvent {
     Connected,
     Error { error: Error },
     Data { payload: Vec<u8> },
@@ -21,18 +21,18 @@ pub enum WSConnectorEvents {
 
 pub struct WSConnector {
     coro_handle: Coroutine<WSConnectorMessage>,
-    event_rx: UnboundedReceiver<WSConnectorEvents>,
+    event_rx: UnboundedReceiver<WSConnectorEvent>,
 }
 
 impl WSConnector {
-    fn new() -> Self {
-        let (mut event_tx, event_rx) = mpsc::unbounded::<WSConnectorEvents>();
+    pub fn new() -> Self {
+        let (mut event_tx, event_rx) = mpsc::unbounded::<WSConnectorEvent>();
         let coro_handle =
             use_coroutine(|mut rx: UnboundedReceiver<WSConnectorMessage>| async move {
                 let websocket = match connect_websocket(&mut rx).await {
                     Ok(websocket) => websocket,
                     Err(err) => {
-                        let _ = event_tx.send(WSConnectorEvents::Error { error: err }).await;
+                        let _ = event_tx.send(WSConnectorEvent::Error { error: err }).await;
                         return;
                     }
                 };
@@ -44,6 +44,14 @@ impl WSConnector {
             coro_handle,
             event_rx,
         }
+    }
+
+    pub async fn receive(&mut self) -> Option<WSConnectorEvent> {
+        self.event_rx.next().await
+    }
+
+    pub fn send(&mut self, message: WSConnectorMessage) {
+        self.coro_handle.send(message);
     }
 }
 
@@ -70,7 +78,7 @@ async fn connect_websocket(
 async fn run_websocket_loop(
     websocket: web_sys::WebSocket,
     rx: &mut UnboundedReceiver<WSConnectorMessage>,
-    tx: &mut UnboundedSender<WSConnectorEvents>,
+    tx: &mut UnboundedSender<WSConnectorEvent>,
 ) -> Result<(), Error> {
     websocket.set_binary_type(BinaryType::Arraybuffer);
     let tx_clone = tx.clone();
@@ -81,7 +89,7 @@ async fn run_websocket_loop(
             let mut tx_clone = tx_clone.clone();
             spawn_local(async move {
                 if let Err(e) = tx_clone
-                    .send(WSConnectorEvents::Data {
+                    .send(WSConnectorEvent::Data {
                         payload: array.to_vec(),
                     })
                     .await
@@ -101,7 +109,7 @@ async fn run_websocket_loop(
         let mut tx_clone = tx_clone.clone();
         spawn_local(async move {
             if let Err(e) = tx_clone
-                .send(WSConnectorEvents::Error {
+                .send(WSConnectorEvent::Error {
                     error: anyhow::Error::msg(
                         e.as_string()
                             .unwrap_or("Unknown error from WebSocket".into()),

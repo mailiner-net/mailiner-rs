@@ -1,18 +1,13 @@
 #![allow(non_snake_case)]
 use console_error_panic_hook;
-use corelib::imap_account_manager::ImapAccountManager;
+use mailiner_core::imap_account_manager::ImapAccountManager;
 use dioxus::prelude::*;
-use dioxus_logger::tracing::{error, info, Level};
-use std::collections::HashMap;
+use dioxus_logger::tracing::{info, Level};
 use std::panic;
-use uuid::Uuid;
 
-mod corelib;
 mod pages;
 mod utils;
 
-use corelib::hooks::use_persistent;
-use corelib::settings::{AppSettings, MailAccount};
 use pages::accountwizard::{EditAccount, NewAccount};
 use pages::MainView;
 

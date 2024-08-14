@@ -1,4 +1,4 @@
-use crate::corelib::settings::{use_accounts, use_settings};
+use mailiner_core::settings::{use_accounts, use_settings};
 use dioxus::prelude::*;
 use dioxus_daisyui::prelude::*;
 

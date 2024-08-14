@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_daisyui::prelude::*;
 use uuid::Uuid;
-use crate::corelib::settings::use_accounts;
+use mailiner_core::settings::use_accounts;
 
 
 #[component]

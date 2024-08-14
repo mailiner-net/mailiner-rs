@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use dioxus_daisyui::prelude::*;
 use uuid::Uuid;
 
-use crate::corelib::settings::{
+use mailiner_core::settings::{
     use_settings, AuthMethod, ImapConfiguration, MailAccount, Security, SmtpConfiguration,
 };
 

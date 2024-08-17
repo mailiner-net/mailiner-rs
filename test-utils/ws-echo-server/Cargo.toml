@@ -1,0 +1,15 @@
+[package]
+name = "ws-echo-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7.5", features = ["ws"] }
+axum-server = { version = "0.7.1", features = ["tls-openssl"] }
+env_logger = "0.11.5"
+futures = "0.3.30"
+log = "0.4.22"
+openssl = "0.10.66"
+stream-ws = { version = "0.1.1", features = ["tokio"] }
+tokio = { version = "1.39.2", features = ["macros", "rt-multi-thread"] }
+tokio-openssl = "0.6.4"

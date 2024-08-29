@@ -1,7 +1,7 @@
 use std::{io::Cursor, sync::OnceLock};
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use mailiner_core::imap_stream::ImapStream;
+use mailiner_core::transport_stream::TransportStream;
 use rustls::RootCertStore;
 use rustls_pemfile::Item;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -17,7 +17,7 @@ fn init_logger() {
     });
 }
 
-async fn test_stream_operation(mut stream: ImapStream) {
+async fn test_stream_operation(mut stream: TransportStream) {
 
     stream
         .write("Hello World".as_bytes())
@@ -34,17 +34,17 @@ async fn test_stream_operation(mut stream: ImapStream) {
 }
 
 #[wasm_bindgen_test]
-async fn test_plain_imap_stream() {
+async fn test_plain_transport_stream() {
     init_logger();
 
-    let stream = ImapStream::connect_plain("ws://127.0.0.1:14000/plain")
+    let stream = TransportStream::connect_plain("ws://127.0.0.1:14000/plain")
         .await
         .expect("Failed to connect to server");
     test_stream_operation(stream).await;
 }
 
 #[wasm_bindgen_test]
-async fn test_tls_imap_stream() {
+async fn test_tls_transport_stream() {
     init_logger();
 
     let mut cert_store = RootCertStore::empty();
@@ -58,17 +58,17 @@ async fn test_tls_imap_stream() {
     }));
     info!("Added {} certificates, skipped {}", added, skipped);
 
-    let stream = ImapStream::connect_with_tls("ws://127.0.0.1:14000/tls", "test.mailiner.net", cert_store)
+    let stream = TransportStream::connect_with_tls("ws://127.0.0.1:14000/tls", "test.mailiner.net", cert_store)
         .await
         .expect("Failed to connect to server");
     test_stream_operation(stream).await;
 }
 
 #[wasm_bindgen_test]
-async fn test_imap_stream_with_nonexistent_proxy() {
+async fn test_transport_stream_with_nonexistent_proxy() {
     init_logger();
 
-    ImapStream::connect_plain("ws://127.0.0.1:14002")
+    TransportStream::connect_plain("ws://127.0.0.1:14002")
         .await
         .expect_err("Expected to fail to connect");
 }

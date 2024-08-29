@@ -1,51 +1,49 @@
 use super::settings::AuthMethod;
-use imap_types::command::CommandBody;
-use dioxus::prelude::*;
+use imap_codec::{encode, decode};
+use imap_next::imap_types::secret::Secret;
+use imap_types::command::{Command, CommandBody};
+use imap_types::auth::AuthMechanism;
+use imap_types::core::Tag;
+use imap_next::client::{Client as ImapClient, Options};
+use futures::{AsyncRead, AsyncWrite};
 use futures_util::stream::StreamExt;
+use crate::transport_stream::TransportStream;
 
-enum ImapCommand {
-    AuthenticateCommand {
-        auth: AuthMethod,
-    },
-    AuthenticateResponse,
+
+pub struct ImapConnector<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin
+{
+    stream: S,
+    client: ImapClient,
 }
 
-
-pub struct ImapConnector
+impl ImapConnector<TransportStream>
 {
-}
-
-impl ImapConnector
-{
-    pub fn new() -> Self
+    pub async fn new(proxy_url: &str, imap_server: &str, imap_port: u16) -> Self
     {
-        let coro = use_coroutine(|mut rx: UnboundedReceiver<ImapCommand>| async move {
-            while let Some(action) = rx.next().await {
-                match action {
-                    ImapCommand::AuthenticateCommand { auth } => {
-                        // Authenticate
-                    },
-                    _ => todo!()
-                }
-
-            }
-        });
-
-        Self
-        {
-
+        let stream = TransportStream::connect_with_tls(proxy_url, imap_server, cert_store).await.unwrap();
+        let client = ImapClient::new(Options::default());
+        Self {
+            stream,
+            client
         }
-    }
-
-    pub async fn connect(&self) -> Result<(), ImapError>
-    {
-        todo!();
-        Ok(())
     }
 
     pub async fn authenticate(&self, auth: AuthMethod) -> Result<(), ImapError>
     {
-        todo!();
+        match auth {
+            AuthMethod::Login{ username, password } => {
+                let cmd = Command::new(self.generate_tag(), CommandBody::login(username.into(), password.into())?)?;
+                let resp = self.client.enqueue_command(cmd);
+            },
+            AuthMethod::Plain { username, password } => {
+                let cmd = Command::new(self.generate_tag(), CommandBody::authenticate(AuthMechanism::Login))?;
+                let resp = self.client.enqueue_command(cmd);
+            }
+            _ => todo!(),
+        };
+
         Ok(())
     }
 

@@ -1,162 +1,156 @@
-use futures::{AsyncRead, AsyncWrite};
-use futures_rustls::TlsConnector;
-use rustls::{ClientConfig, RootCertStore};
-use rustls_pki_types::{DnsName, ServerName};
-use std::fmt::Debug;
-use std::pin::{pin, Pin};
-use std::sync::Arc;
-use tracing::trace;
-use ws_stream_wasm::{WsErr, WsMeta};
+use std::convert::Infallible;
 
-/// A meta-trait that combines all the requirements on the underlying stream
-trait AsyncStream: AsyncRead + AsyncWrite + Unpin {}
+use bytes::{Buf, BytesMut};
+use thiserror::Error;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    select,
+};
 
-/// Implement this meta trait for any type that satisfies the constraints.
-/// This way we can use `Box<dyn AsyncStream>` to hold a pointer to any
-/// object that implements `AsyncRead`, `AsyncWrite` and `Unpin``.
-impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Unpin {}
+use imap_next::{Interrupt, Io, State};
 
-/// Rrror from the ImapStream
-#[derive(Debug)]
-pub enum Error {
-    WebSocketError(WsErr),
-    InvalidDnsNameError,
-    IOError(std::io::Error),
+pub struct ImapStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Copy,
+{
+    stream: S,
+    read_buffer: BytesMut,
+    write_buffer: BytesMut,
 }
 
-enum InnerStream {
-    Tls(Box<dyn AsyncStream>),
-    Plain(Box<dyn AsyncStream>),
-}
-
-impl InnerStream {
-    fn stream(&mut self) -> &mut Box<dyn AsyncStream> {
-        match self {
-            Self::Plain(stream) => stream,
-            Self::Tls(stream) => stream,
+impl<S> ImapStream<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Copy,
+{
+    pub fn new(transport: S) -> Self {
+        Self {
+            stream: transport,
+            read_buffer: BytesMut::default(),
+            write_buffer: BytesMut::default(),
         }
     }
-}
 
-/// ImapStream is a high-level stream of IMAP commands and responses between the
-/// client and  the IMAP server.
-///
-/// Internally, the ImapStream takes care of establishing WebSocket connection to
-/// our WS<->TCP proxy, and encrypting and decrypting the IMAP data using TLS, if
-/// necessary. All of this should be transparent to the user, all they need to know
-/// is the name and port of the target IMAP server.
-pub struct ImapStream {
-    proxy_url: String,
-    inner_stream: InnerStream,
-}
-impl ImapStream {
-    /// Establishes secure connection to the IMAP server.
-    ///
-    /// Internally, this will block until WebSocket connection is established and TLS handshake with
-    /// the IMAP server is completed, returning a stream that is fully prepared to handle IMAP communication.
-    pub async fn connect_with_tls(
-        proxy_url: &str,
-        server_name: &str,
-        cert_store: RootCertStore,
-    ) -> Result<Self, Error> {
-        trace!("Connecting to WS proxy at {}", proxy_url);
-        let (_ws, ws_stream) = WsMeta::connect(proxy_url, None)
-            .await
-            .map_err(Error::WebSocketError)?;
-        trace!("Connected, preparing TLS layer");
-        let config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(cert_store)
-                .with_no_client_auth(),
-        );
-        let server_name = ServerName::DnsName(
-            DnsName::try_from(server_name.to_owned()).map_err(|_| Error::InvalidDnsNameError)?,
-        );
+    pub async fn flush(&mut self) -> Result<(), Error<Infallible>> {
+        // Flush TCP
+        write(&mut self.stream, &mut self.write_buffer).await?;
+        self.stream.flush().await?;
 
-        let connector = TlsConnector::from(config);
-        trace!("Establishing TLS connection with {:?}", server_name);
-        let tls_stream = connector
-            .connect(server_name, ws_stream.into_io())
-            .await
-            .map_err(Error::IOError)?;
-        trace!("TLS connection established");
-
-        Ok(Self {
-            proxy_url: proxy_url.to_owned(),
-            inner_stream: InnerStream::Tls(Box::new(tls_stream)),
-        })
+        Ok(())
     }
 
-    /// Establishes a plain-text connection to the IMAP server.
-    pub async fn connect_plain(proxy_url: &str) -> Result<Self, Error> {
-        let (_ws, ws_stream) = WsMeta::connect(proxy_url, None)
-            .await
-            .map_err(Error::WebSocketError)?;
+    pub async fn next<F: State>(&mut self, mut state: F) -> Result<F::Event, Error<F::Error>> {
+        let event = loop {
+            // Provide input bytes to the client/server
+            if !self.read_buffer.is_empty() {
+                state.enqueue_input(&self.read_buffer);
+                self.read_buffer.clear();
+            }
 
-        Ok(Self {
-            proxy_url: proxy_url.to_owned(),
-            inner_stream: InnerStream::Plain(Box::new(ws_stream.into_io())),
-        })
-    }
-}
+            // Progress the client/server
+            let result = state.next();
 
-impl Debug for ImapStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let stream_type = match self.inner_stream {
-            InnerStream::Plain(_) => "PlainStream",
-            InnerStream::Tls(_) => "TlsStream",
+            // Return events immediately without doing IO
+            let interrupt = match result {
+                Err(interrupt) => interrupt,
+                Ok(event) => break event,
+            };
+
+            // Return errors immediately without doing IO
+            let io = match interrupt {
+                Interrupt::Io(io) => io,
+                Interrupt::Error(err) => return Err(Error::State(err)),
+            };
+
+            // Handle the output bytes from the client/server
+            if let Io::Output(bytes) = io {
+                self.write_buffer.extend(bytes);
+            }
+
+            // Progress the stream
+            if self.write_buffer.is_empty() {
+                read(&mut self.stream, &mut self.read_buffer).await?;
+            } else {
+                // We read and write the stream simultaneously because otherwise
+                // a deadlock between client and server might occur if both sides
+                // would only read or only write.
+                let (mut read_stream, mut write_stream) = tokio::io::split(self.stream);
+                select! {
+                    result = read(&mut read_stream, &mut self.read_buffer) => result,
+                    result = write(&mut write_stream, &mut self.write_buffer) => result,
+                }?;
+                self.stream = read_stream.unsplit(write_stream);
+            };
         };
-        f.write_fmt(format_args!(
-            "ImapStream[proxy={}, stream={}]",
-            self.proxy_url, stream_type
-        ))
+
+        Ok(event)
     }
 }
 
-impl AsyncRead for ImapStream {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut [u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-
-        pin!(&mut this.inner_stream.stream()).poll_read(cx, buf)
-    }
+/// Error during reading into or writing from a stream.
+#[derive(Debug, Error)]
+pub enum Error<E> {
+    /// Operation failed because stream is closed.
+    ///
+    /// We detect this by checking if the read or written byte count is 0. Whether the stream is
+    /// closed indefinitely or temporarily depends on the actual stream implementation.
+    #[error("Stream was closed")]
+    Closed,
+    /// An I/O error occurred in the underlying stream.
+    #[error(transparent)]
+    Io(#[from] tokio::io::Error),
+    /// An error occurred while progressing the state.
+    #[error(transparent)]
+    State(E),
 }
 
-impl AsyncWrite for ImapStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-        pin!(&mut this.inner_stream.stream()).poll_write(cx, buf)
+async fn read<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    read_buffer: &mut BytesMut,
+) -> Result<(), ReadWriteError> {
+    let byte_count = stream.read_buf(read_buffer).await?;
+
+    if byte_count == 0 {
+        // The result is 0 if the stream reached "end of file" or the read buffer was
+        // already full before calling `read_buf`. Because we use an unlimited buffer we
+        // know that the first case occurred.
+        return Err(ReadWriteError::Closed);
     }
 
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-        pin!(&mut this.inner_stream.stream()).poll_write_vectored(cx, bufs)
+    Ok(())
+}
+
+async fn write<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    write_buffer: &mut BytesMut,
+) -> Result<(), ReadWriteError> {
+    while !write_buffer.is_empty() {
+        let byte_count = stream.write(write_buffer).await?;
+        write_buffer.advance(byte_count);
+
+        if byte_count == 0 {
+            // The result is 0 if the stream doesn't accept bytes anymore or the write buffer
+            // was already empty before calling `write_buf`. Because we checked the buffer
+            // we know that the first case occurred.
+            return Err(ReadWriteError::Closed);
+        }
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        pin!(&mut this.inner_stream.stream()).poll_flush(cx)
-    }
+    Ok(())
+}
 
-    fn poll_close(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        pin!(&mut this.inner_stream.stream()).poll_close(cx)
+#[derive(Debug, Error)]
+enum ReadWriteError {
+    #[error("Stream was closed")]
+    Closed,
+    #[error(transparent)]
+    Io(#[from] tokio::io::Error),
+}
+
+impl<E> From<ReadWriteError> for Error<E> {
+    fn from(value: ReadWriteError) -> Self {
+        match value {
+            ReadWriteError::Closed => Error::Closed,
+            ReadWriteError::Io(err) => Error::Io(err),
+        }
     }
 }

@@ -38,10 +38,9 @@ impl InnerStream {
     }
 }
 
-/// ImapStream is a high-level stream of IMAP commands and responses between the
-/// client and  the IMAP server.
-///
-/// Internally, the ImapStream takes care of establishing WebSocket connection to
+/// TransportStream is a high-level stream of (optionally encrypted) data between
+/// the client and an IMAP server.
+/// Internally, the TransportStream takes care of establishing WebSocket connection to
 /// our WS<->TCP proxy, and encrypting and decrypting the IMAP data using TLS, if
 /// necessary. All of this should be transparent to the user, all they need to know
 /// is the name and port of the target IMAP server.

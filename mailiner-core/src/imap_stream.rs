@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{borrow::BorrowMut, cell::RefCell, convert::Infallible, ops::Deref, pin::Pin};
 
 use bytes::{Buf, BytesMut};
 use thiserror::Error;
@@ -11,20 +11,20 @@ use imap_next::{Interrupt, Io, State};
 
 pub struct ImapStream<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Copy,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
-    stream: S,
+    stream: Pin<Box<S>>,
     read_buffer: BytesMut,
     write_buffer: BytesMut,
 }
 
 impl<S> ImapStream<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Copy,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     pub fn new(transport: S) -> Self {
         Self {
-            stream: transport,
+            stream: Pin::new(Box::new(transport)),
             read_buffer: BytesMut::default(),
             write_buffer: BytesMut::default(),
         }
@@ -73,12 +73,11 @@ where
                 // We read and write the stream simultaneously because otherwise
                 // a deadlock between client and server might occur if both sides
                 // would only read or only write.
-                let (mut read_stream, mut write_stream) = tokio::io::split(self.stream);
+                let (mut read_stream, mut write_stream) = tokio::io::split(self.stream.borrow_mut());
                 select! {
                     result = read(&mut read_stream, &mut self.read_buffer) => result,
                     result = write(&mut write_stream, &mut self.write_buffer) => result,
                 }?;
-                self.stream = read_stream.unsplit(write_stream);
             };
         };
 

@@ -1,10 +1,13 @@
+use std::num::NonZeroU32;
+
 use super::settings::AuthMethod;
 use crate::imap_stream::ImapStream;
 use imap_next::client::{Client as ImapClient, Error as ImapError, Event, Options};
 use imap_types::command::{Command, CommandBody};
 use imap_types::core::{Tag, TagGenerator as ImapTagGenerator};
+use imap_types::flag::FlagPerm;
 use imap_types::mailbox::{ListMailbox, Mailbox as ImapMailbox};
-use imap_types::response::{Capability, Data, Status, StatusKind};
+use imap_types::response::{Capability, Code, Data, Status, StatusKind};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -27,6 +30,17 @@ pub struct Mailbox {
     pub flags: Vec<String>,
     pub delimiter: Option<char>,
     pub name: ImapMailbox<'static>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct MailboxStats {
+    pub exists: Option<u32>,
+    pub recent: Option<u32>,
+    pub flags: Option<Vec<String>>,
+    pub permanent_flags: Option<Vec<FlagPerm<'static>>>,
+    pub read_only: bool,
+    pub uid_next: Option<NonZeroU32>,
+    pub uid_validity: Option<NonZeroU32>,
 }
 
 pub trait TagGenerator {
@@ -81,20 +95,9 @@ where
 /// The data handler takes form of a pattern matching block that is used to match the data
 /// received:
 ///
-/// ```rust
+/// ```ignore
 /// Data::Capability(capability) => { /* user code */ }
-/// ```
-///
-/// Example usage:
-/// ```rust
-/// async def capability(&self) -> Result<Vec<String>, Error> {
-///     let mut capabilities = Vec::<String>::new();
-///     handle_response!(
-///         stream, client,
-///         Data::Capability(capability) => { capabilities.extend_from_slice(&capability.into_inner()) },
-///     );
-///     return Ok(capabilities);
-/// }
+// }
 /// ```
 macro_rules! handle_response {
     (
@@ -107,7 +110,13 @@ macro_rules! handle_response {
                 Event::CommandSent { .. } => {},
                 Event::StatusReceived { status } => match status {
                     Status::Tagged(s) => match s.body.kind {
-                        StatusKind::Ok => break,
+                        StatusKind::Ok => {
+                            #[allow(unused_variables)]
+                            if let Some(code) = s.body.code {
+                                handle_response!(@process_code code, $($data)*)
+                            }
+                            break
+                        }
                         StatusKind::No => {
                             return Err(Error::CommandFailed(s.body.text.to_string()));
                         },
@@ -115,7 +124,14 @@ macro_rules! handle_response {
                             return Err(Error::BadCommandError(s.body.text.to_string()));
                         }
                     },
-                    status => return Err(Error::UnexpectedResponse(format!("{:?}", status))),
+                    Status::Untagged(s) => match s.code {
+                        #[allow(unused_variables)]
+                        Some(code) => {
+                            handle_response!(@process_code code, $($data)*)
+                        },
+                        None => {},
+                    },
+                    status => return Err(Error::UnexpectedResponse(format!("status {:?}", status))),
                 },
                 Event::DataReceived{ data } => {
                     handle_response!(@process_data data, $($data)*)
@@ -143,6 +159,12 @@ macro_rules! handle_response {
             handle_response!(@process_data $data, $($tail)*)
         }
     };
+    (@process_data $data:expr, Code::$data_pat:ident ($($data_var:ident),*) => $data_handler:expr, $($tail:tt)*) => {
+        handle_response!(@process_data $data, $($tail)*)
+    };
+    (@process_data $data:expr, Code::$data_pat:ident => $data_handler:expr, $($tail:tt)*) => {
+        handle_response!(@process_data $data, $($tail)*)
+    };
     (@process_data $data:expr, Data::$data_pat:ident { $($data_var:ident),* } => $data_handler:expr, $($tail:tt)*) => {
         if let Data::$data_pat{ $($data_var),* } = $data {
             $data_handler
@@ -150,8 +172,43 @@ macro_rules! handle_response {
             handle_response!(@process_data $data, $($tail)*)
         }
     };
+    (@process_data $data:expr, Code::$data_pat:ident { $($data_var:ident),* } => $data_handler:expr, $($tail:tt)*) => {
+        handle_response!(@process_data $data, $($tail)*)
+    };
     (@process_data $data:expr,) => {
-        return Err(Error::UnexpectedResponse(format!("{:?}", $data)))
+        return Err(Error::UnexpectedResponse(format!("data {:?}", $data)))
+    };
+
+    (@process_code $code:expr, Code::$code_pat:ident => $code_handler:expr, $($tail:tt)*) => {
+        if let Code::$code_pat = $code {
+            $code_handler
+        } else {
+            handle_response!(@process_code $code, $($tail)*)
+        }
+    };
+    (@process_code $code:expr, Code::$code_pat:ident ($($code_var:ident),*) => $code_handler:expr, $($tail:tt)*) => {
+        if let Code::$code_pat($($code_var),*) = $code {
+            $code_handler
+        } else {
+            handle_response!(@process_code $code, $($tail)*)
+        }
+    };
+    (@process_code $code:expr, Data::$code_pat:ident ($($code_var:ident),*) => $code_handler:expr, $($tail:tt)*) => {
+        handle_response!(@process_code $code, $($tail)*)
+    };
+    (@process_code $code:expr, Code::$code_pat:ident {$($code_var:ident),*} => $code_handler:expr, $($tail:tt)*) => {
+        if let Code::$code_pat{ $($code_var),* } = $code {
+            $code_handler
+        } else {
+            handle_response!(@process_code $code, $($tail)*)
+        }
+    };
+    (@process_code $code:expr, Data::$code_pat:ident {$($code_var:ident),*} => $code_handler:expr, $($tail:tt)*) => {
+        handle_response!(@process_code $code, $($tail)*)
+    };
+    (@process_code $code:expr,) => {
+        // no-op
+        {}
     };
 }
 
@@ -196,9 +253,9 @@ where
                 let cmd = Command::new(
                     self.next_tag(),
                     CommandBody::login(username.to_string(), password.to_string())
-                        .expect("Failed to construct LOGIN command"),
+                        .expect("Failed to construct LOGIN command body"),
                 )
-                .unwrap();
+                .expect("Failed to construct LOGIN command");
                 self.client.enqueue_command(cmd);
             }
             _ => todo!(), // TODO: Support additional authentication methods
@@ -231,9 +288,9 @@ where
                 ListMailbox::try_from("*".to_string())
                     .expect("Failed to construct ListMailbox for \"*\""),
             )
-            .expect("Failed to construct LIST command"),
+            .expect("Failed to construct LIST command body"),
         )
-        .unwrap();
+        .expect("Failed to construct LIST body");
         self.client.enqueue_command(cmd);
 
         let mut mailboxes = Vec::<Mailbox>::new();
@@ -251,6 +308,29 @@ where
 
         Ok(mailboxes)
     }
+
+    pub async fn select_mailbox(&mut self, mailbox: String) -> Result<MailboxStats, Error> {
+        let cmd = Command::new(
+            self.next_tag(),
+            CommandBody::select(mailbox).expect("Failed to construct SELECT command body"),
+        ).expect("Failed to construct SELECT command");
+        self.client.enqueue_command(cmd);
+
+        let mut mailbox_stats = MailboxStats::default();
+
+        handle_response!(
+            self.stream, self.client,
+            Data::Exists(count) => mailbox_stats.exists = Some(count),
+            Data::Flags(flags) => mailbox_stats.flags = Some(flags.into_iter().map(|flag| flag.to_string()).collect()),
+            Data::Recent(count) => mailbox_stats.recent = Some(count),
+            Code::PermanentFlags(flags) => mailbox_stats.permanent_flags = Some(flags),
+            Code::ReadOnly => mailbox_stats.read_only = true,
+            Code::UidNext(uid) => mailbox_stats.uid_next = Some(uid),
+            Code::UidValidity(uid) => mailbox_stats.uid_validity = Some(uid),
+        );
+
+        Ok(mailbox_stats)
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +338,7 @@ mod testing {
 
     use super::*;
     use imap_types::core::Atom;
+    use imap_types::flag::Flag;
     use imap_types::response::Capability;
     use tokio_test::io::Builder;
 
@@ -385,5 +466,55 @@ mod testing {
                 name: ImapMailbox::try_from("INBOX.Sent".to_string()).unwrap()
             }
         )
+    }
+
+    #[tokio::test]
+    async fn test_select() {
+        let stream = Builder::new()
+            .read(b"* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] Greetings!!\r\n")
+            .write(b"1 SELECT INBOX\r\n")
+            .read(b"* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n")
+            .read(b"* OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted.\r\n")
+            .read(b"* 23 EXISTS\r\n")
+            .read(b"* 0 RECENT\r\n")
+            .read(b"* OK [UIDVALIDITY 3857529045] UIDs valid\r\n")
+            .read(b"* OK [UIDNEXT 23] Predicted next UID\r\n")
+            .read(b"1 OK [READ-ONLY] Select completed\r\n")
+            .build();
+        let mut connector =
+            ImapConnector::new_with_tag_generator(stream, SequentialTagGenerator::default())
+                .await
+                .expect("Failed to create connector");
+
+        let result = connector
+            .select_mailbox("INBOX".to_string())
+            .await
+            .expect("Failed to select mailbox");
+        assert_eq!(result.exists, Some(23));
+        assert_eq!(result.recent, Some(0));
+        assert_eq!(
+            result.flags,
+            Some(vec![
+                "\\Answered".to_string(),
+                "\\Flagged".to_string(),
+                "\\Deleted".to_string(),
+                "\\Seen".to_string(),
+                "\\Draft".to_string()
+            ])
+        );
+        assert_eq!(
+            result.permanent_flags,
+            Some(vec![
+                FlagPerm::Flag(Flag::Answered),
+                FlagPerm::Flag(Flag::Flagged),
+                FlagPerm::Flag(Flag::Deleted),
+                FlagPerm::Flag(Flag::Seen),
+                FlagPerm::Flag(Flag::Draft),
+                FlagPerm::Asterisk,
+            ])
+        );
+        assert_eq!(result.read_only, true);
+        assert_eq!(result.uid_next, Some(NonZeroU32::new(23).unwrap()));
+        assert_eq!(result.uid_validity, Some(NonZeroU32::new(3857529045).unwrap()));
     }
 }

@@ -74,7 +74,11 @@ impl ImapAccountManager {
 }
 
 fn load_accounts() -> Result<HashMap<Uuid, Signal<ImapAccount>>, StorageError> {
-    let accounts = LocalStorage::get::<Vec<ImapAccount>>("accounts")?;
+    let accounts = match LocalStorage::get::<Vec<ImapAccount>>("accounts") {
+        Ok(accounts) => accounts,
+        Err(StorageError::KeyNotFound(_)) => return Ok(HashMap::new()),
+        Err(err) => return Err(err),
+    };
 
     Ok(HashMap::from_iter(
         accounts

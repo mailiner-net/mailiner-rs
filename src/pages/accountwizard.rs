@@ -3,10 +3,15 @@ use dioxus_daisyui::prelude::*;
 use uuid::Uuid;
 
 use mailiner_core::settings::{
-    use_settings, AuthMethod, ImapConfiguration, MailAccount, Security, SmtpConfiguration,
+    use_accounts, AuthMethod, ImapConfiguration, MailAccount, Security, SmtpConfiguration,
 };
 
-fn text_input(label_var: &str, name: &str, placeholder_var: &str, signal: Signal<String>) -> Element {
+fn text_input(
+    label_var: &str,
+    name: &str,
+    placeholder_var: &str,
+    signal: Signal<String>,
+) -> Element {
     let mut signal = signal.clone();
     rsx! {
         label {
@@ -106,22 +111,83 @@ fn get_password(auth: &AuthMethod) -> String {
 }
 
 fn account_wizard(account_id: Option<String>) -> Element {
-    let mut settings = use_settings();
-    let settings_locked = settings.get();
-    let account = account_id.and_then(|id| settings_locked.accounts.iter().find(|a| a.id == id).cloned());
+    let accounts = use_accounts();
+    let account = account_id.and_then(|id| {
+        accounts
+            .read()
+            .iter()
+            .find(|(uuid, account)| uuid.to_string() == id)
+            .map(|(_, account)| account)
+            .cloned()
+    });
 
-    let email = use_signal(|| account.as_ref().map(|a| a.email.clone()).unwrap_or_default());
+    let email = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.email.clone())
+            .unwrap_or_default()
+    });
     let name = use_signal(|| account.as_ref().map(|a| a.name.clone()).unwrap_or_default());
-    let imap_server = use_signal(|| account.as_ref().map(|a| a.imap.server.clone()).unwrap_or_default());
-    let imap_port = use_signal(|| account.as_ref().map(|a| a.imap.port.clone()).unwrap_or_default());
-    let imap_username = use_signal(|| account.as_ref().map(|a| get_username(&a.imap.auth)).unwrap_or_default());
-    let imap_password = use_signal(|| account.as_ref().map(|a| get_password(&a.imap.auth)).unwrap_or_default());
-    let imap_security = use_signal(|| account.as_ref().map(|a| a.imap.security.clone()).unwrap_or(Security::None));
-    let smtp_server = use_signal(||account.as_ref().map(|a| a.smtp.server.clone()).unwrap_or_default());
-    let smtp_port = use_signal(|| account.as_ref().map(|a| a.smtp.port.clone()).unwrap_or_default());
-    let smtp_username = use_signal(|| account.as_ref().map(|a| get_username(&a.smtp.auth)).unwrap_or_default());
-    let smtp_password = use_signal(|| account.as_ref().map(|a| get_password(&a.smtp.auth)).unwrap_or_default());
-    let smtp_security = use_signal(|| account.as_ref().map(|a| a.smtp.security.clone()).unwrap_or(Security::None));
+    let imap_server = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.imap.server.clone())
+            .unwrap_or_default()
+    });
+    let imap_port = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.imap.port.clone())
+            .unwrap_or_default()
+    });
+    let imap_username = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| get_username(&a.imap.auth))
+            .unwrap_or_default()
+    });
+    let imap_password = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| get_password(&a.imap.auth))
+            .unwrap_or_default()
+    });
+    let imap_security = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.imap.security.clone())
+            .unwrap_or(Security::None)
+    });
+    let smtp_server = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.smtp.server.clone())
+            .unwrap_or_default()
+    });
+    let smtp_port = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.smtp.port.clone())
+            .unwrap_or_default()
+    });
+    let smtp_username = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| get_username(&a.smtp.auth))
+            .unwrap_or_default()
+    });
+    let smtp_password = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| get_password(&a.smtp.auth))
+            .unwrap_or_default()
+    });
+    let smtp_security = use_signal(|| {
+        account
+            .as_ref()
+            .map(|a| a.smtp.security.clone())
+            .unwrap_or(Security::None)
+    });
 
     rsx! {
         { text_input("Email Address", "email", "Email Address", email) }
@@ -165,6 +231,7 @@ fn account_wizard(account_id: Option<String>) -> Element {
                     },
                 };
 
+                /*
                 let mut mut_settings = settings.get();
                 if let Some(account) = &account {
                     for acc in mut_settings.accounts.iter_mut() {
@@ -177,6 +244,7 @@ fn account_wizard(account_id: Option<String>) -> Element {
                     mut_settings.accounts.push(new_account);
                 }
                 settings.set(mut_settings);
+                */
             },
 
             { "Save Account" }

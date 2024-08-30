@@ -70,11 +70,36 @@ where
     }
 }
 
+/// Macro used to handle responses from the server without having to write a lot of boilerplate
+/// code. The macro takes a stream, a client and an optional list of data handlers.
+///
+/// The macro will loop until the response is fully processed and the sever responds with
+/// a tagged /// response (OK/NO/BAD/...). If the response is OK, loop is exited and the code
+/// that follows is executed. If the response is NO or BAD, an error is returned immediatelly
+/// and the whole function that invoked the macro is exited.
+///
+/// The data handler takes form of a pattern matching block that is used to match the data
+/// received:
+///
+/// ```rust
+/// Data::Capability(capability) => { /* user code */ }
+/// ```
+///
+/// Example usage:
+/// ```rust
+/// async def capability(&self) -> Result<Vec<String>, Error> {
+///     let mut capabilities = Vec::<String>::new();
+///     handle_response!(
+///         stream, client,
+///         Data::Capability(capability) => { capabilities.extend_from_slice(&capability.into_inner()) },
+///     );
+///     return Ok(capabilities);
+/// }
+/// ```
 macro_rules! handle_response {
     (
         $stream:expr,
         $client:expr,
-        StatusKind::Ok => $status_ok_handler:expr,
         $($data:tt)*
     )  => {
         loop {
@@ -82,7 +107,7 @@ macro_rules! handle_response {
                 Event::CommandSent { .. } => {},
                 Event::StatusReceived { status } => match status {
                     Status::Tagged(s) => match s.body.kind {
-                        StatusKind::Ok => $status_ok_handler,
+                        StatusKind::Ok => break,
                         StatusKind::No => {
                             return Err(Error::CommandFailed(s.body.text.to_string()));
                         },
@@ -103,24 +128,11 @@ macro_rules! handle_response {
     };
     (
         $stream:expr,
-        $client:expr,
-        $($data:tt)*
-    ) => {
-        handle_response!(
-            $stream,
-            $client,
-            StatusKind::Ok => { return Ok(()); },
-            $($data)*
-        )
-    };
-    (
-        $stream:expr,
         $client:expr
     ) => {
         handle_response!(
             $stream,
             $client,
-            StatusKind::Ok => { return Ok(()); },
         )
     };
 
@@ -193,6 +205,7 @@ where
         };
 
         handle_response!(self.stream, self.client);
+        Ok(())
     }
 
     pub async fn capabilities(&mut self) -> Result<Vec<Capability>, Error> {
@@ -203,9 +216,10 @@ where
 
         handle_response!(
             self.stream, self.client,
-            StatusKind::Ok => { return Ok(capabilities) },
             Data::Capability(capability) => capabilities.extend_from_slice(&capability.into_inner()),
         );
+
+        Ok(capabilities)
     }
 
     pub async fn list_mailboxes(&mut self) -> Result<Vec<Mailbox>, Error> {
@@ -226,7 +240,6 @@ where
 
         handle_response!(
             self.stream, self.client,
-            StatusKind::Ok => { return Ok(mailboxes) },
             Data::List { items, delimiter, mailbox } => {
                 mailboxes.push(Mailbox {
                     flags: items.into_iter().map(|item| item.to_string()).collect(),
@@ -235,6 +248,8 @@ where
                 });
             },
         );
+
+        Ok(mailboxes)
     }
 }
 
@@ -349,7 +364,10 @@ mod testing {
                 .await
                 .expect("Failed to create connector");
 
-        let result = connector.list_mailboxes().await.expect("Failed to list mailboxes");
+        let result = connector
+            .list_mailboxes()
+            .await
+            .expect("Failed to list mailboxes");
         assert_eq!(result.len(), 2);
         assert_eq!(
             result[0],

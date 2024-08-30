@@ -1,3 +1,5 @@
+#![feature(trace_macros)]
+
 pub mod settings;
 pub mod hooks;
 pub mod security;

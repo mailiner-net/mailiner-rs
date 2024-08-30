@@ -22,12 +22,12 @@ fn main() {
 #[derive(PartialEq, Clone, Debug, Routable)]
 enum Route {
     #[nest("/accountwizard")]
-    #[route("/:account_id")]
-    EditAccount { account_id: String },
-
     #[route("/")]
     NewAccount {},
+    #[route("/:account_id")]
+    EditAccount { account_id: String },
     #[end_nest]
+
     #[route("/")]
     MainView {},
 }

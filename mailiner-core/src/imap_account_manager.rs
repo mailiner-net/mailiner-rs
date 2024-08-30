@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
+use dioxus_logger::tracing::error;
 use gloo_storage::{errors::StorageError, LocalStorage, Storage};
 use serde::{de::Deserializer, Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use uuid::Uuid;
-use dioxus_logger::tracing::error;
 
 use super::security::{Authentication, Security};
 
@@ -51,15 +51,13 @@ impl ImapAccountManager {
         })
     }
 
-    pub fn accounts(&self) -> impl Iterator<Item = &Signal<ImapAccount>> {
-        self.accounts.values()
+    pub fn accounts(&self) -> Vec<&Signal<ImapAccount>> {
+        self.accounts.values().collect()
     }
 
     pub fn add_account(&mut self, account: ImapAccount) {
         self.accounts.insert(account.id, Signal::new(account));
-        if let Err(err) = save_accounts(&self.accounts) {
-            error!("Failed to save accounts to Local Storage: {:?}", err);
-        }
+        self.save();
     }
 
     pub fn update_account(&mut self, account: ImapAccount) {
@@ -70,6 +68,12 @@ impl ImapAccountManager {
 
     pub fn get_account(&self, id: Uuid) -> Option<Signal<ImapAccount>> {
         self.accounts.get(&id).cloned()
+    }
+
+    pub fn save(&self) {
+        if let Err(err) = save_accounts(&self.accounts) {
+            error!("Failed to save accounts to Local Storage: {:?}", err);
+        }
     }
 }
 
@@ -94,4 +98,8 @@ fn save_accounts(accounts: &HashMap<Uuid, Signal<ImapAccount>>) -> Result<(), St
         .collect::<Vec<_>>();
 
     LocalStorage::set("accounts", accounts)
+}
+
+pub fn use_imap_account_manager() -> Signal<ImapAccountManager> {
+    use_context::<Signal<ImapAccountManager>>()
 }

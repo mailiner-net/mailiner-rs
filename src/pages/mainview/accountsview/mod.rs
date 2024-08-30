@@ -1,10 +1,11 @@
-use mailiner_core::settings::use_accounts;
 use dioxus::prelude::*;
 use dioxus_daisyui::prelude::*;
+use mailiner_core::imap_account_manager::use_imap_account_manager;
 
 mod accounttab;
 
 use accounttab::AccountTab;
+use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Props)]
 pub struct Props {
@@ -13,13 +14,14 @@ pub struct Props {
 
 #[component]
 pub fn AccountsView() -> Element {
-    let accounts = use_accounts();
+    let account_manager = use_imap_account_manager();
     let ids = use_memo(move || {
-        accounts
-            .read()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
+        let manager_ref = account_manager.read();
+        manager_ref
+            .accounts()
+            .into_iter()
+            .map(|account| account.read().id.clone())
+            .collect::<Vec<Uuid>>()
     });
 
     rsx! {

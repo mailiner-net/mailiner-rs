@@ -1,13 +1,12 @@
 use dioxus::prelude::*;
 use dioxus_daisyui::prelude::*;
+use mailiner_core::imap_account_manager::use_imap_account_manager;
 use uuid::Uuid;
-use mailiner_core::settings::use_accounts;
-
 
 #[component]
 pub fn AccountTab(account_id: Uuid) -> Element {
-    let accounts = use_accounts();
-    let account = use_memo(move || accounts.read().get(&account_id).unwrap().clone() );
+    let manager = use_imap_account_manager();
+    let account = manager.read().get_account(account_id).unwrap();
 
     rsx! {
         div {

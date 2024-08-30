@@ -2,6 +2,8 @@ use std::num::NonZeroU32;
 
 use super::settings::AuthMethod;
 use crate::imap_stream::ImapStream;
+use crate::transport_stream::TransportStream;
+use async_compat::Compat;
 use imap_next::client::{Client as ImapClient, Error as ImapError, Event, Options};
 use imap_types::command::{Command, CommandBody};
 use imap_types::core::{Tag, TagGenerator as ImapTagGenerator};
@@ -65,7 +67,7 @@ impl TagGenerator for SecureTagGenerator {
     }
 }
 
-pub struct ImapConnector<T, G = SecureTagGenerator>
+pub struct ImapConnector<T = Compat<TransportStream>, G = SecureTagGenerator>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     G: TagGenerator,
@@ -75,12 +77,10 @@ where
     tag_generator: G,
 }
 
-impl<T> ImapConnector<T, SecureTagGenerator>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
+impl ImapConnector<Compat<TransportStream>, SecureTagGenerator>
 {
-    pub async fn new(transport: T) -> Result<Self, Error> {
-        Self::new_with_tag_generator(transport, SecureTagGenerator::new()).await
+    pub async fn new(transport: TransportStream) -> Result<Self, Error> {
+        Self::new_with_tag_generator(Compat::new(transport), SecureTagGenerator::new()).await
     }
 }
 

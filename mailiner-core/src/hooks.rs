@@ -1,7 +1,6 @@
 use gloo_storage::{LocalStorage, Storage};
 use serde::{de::DeserializeOwned, Serialize};
 use dioxus::prelude::*;
-use dioxus_logger::tracing::error;
 
 /// A hook that creates UsePersistent state, which is loaded from browser's Local Storage
 /// and saves it back to Local Storage when changes.
@@ -43,7 +42,7 @@ impl<T: Serialize + DeserializeOwned + Clone + 'static> UsePersistent<T> {
     pub fn set(&mut self, value: T) {
         let mut inner = self.inner.write();
         if let Err(e) = LocalStorage::set(inner.key.as_str(), &value) {
-            error!("Failed to persist value for key {} in Local Storage: {:?}", inner.key, e);
+            tracing::error!("Failed to persist value for key {} in Local Storage: {:?}", inner.key, e);
         }
         inner.value = value;
     }

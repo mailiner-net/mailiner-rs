@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-use dioxus_logger::tracing::error;
 use gloo_storage::{errors::StorageError, LocalStorage, Storage};
 use serde::{de::Deserializer, Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
@@ -45,7 +44,7 @@ impl ImapAccountManager {
     pub fn new() -> Result<Self, StorageError> {
         Ok(Self {
             accounts: load_accounts().map_err(|err| {
-                error!("Failed to load accounts from Local Storage: {:?}", err);
+                tracing::error!("Failed to load accounts from Local Storage: {:?}", err);
                 err
             })?,
         })
@@ -72,7 +71,7 @@ impl ImapAccountManager {
 
     pub fn save(&self) {
         if let Err(err) = save_accounts(&self.accounts) {
-            error!("Failed to save accounts to Local Storage: {:?}", err);
+            tracing::error!("Failed to save accounts to Local Storage: {:?}", err);
         }
     }
 }

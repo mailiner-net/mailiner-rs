@@ -6,20 +6,19 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
-async-compat = "0.2.4"
-async_io_stream = "0.3.3"
+async-compat = "0.2"
+async_io_stream = "0.3"
 bytes = { workspace = true }
 dioxus = { workspace = true }
-dioxus-logger = { workspace = true }
 futures =  { workspace = true }
 futures-core = { workspace = true }
-futures-rustls = { version = "0.26.0", default-features=false, features = ["ring", "tls12"] }
+futures-rustls = { version = "0.26", default-features=false, features = ["ring", "tls12"] }
 futures-sink =  { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true }
 gloo-storage = "0.3"
-imap-codec = "1.0.0"
-imap-next = { version = "0.2.0", default-features = false }
+imap-codec = "1.0"
+imap-next = { version = "0.3", default-features = false }
 imap-types = { version = "2.0.0-alpha", features = ["tag_generator"] }
 js-sys = { workspace = true }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
@@ -27,14 +26,14 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 rustls-pki-types = { version = "1.8", features = ["web"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = "1.0.63"
-tokio = { workspace = true, features = ["io-util"] }
-tracing = "0.1.40"
+thiserror = "1.0"
+tokio = { workspace = true, features = ["io-util", "sync"] }
+tracing = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 wasm-bindgen = { workspace = true}
 wasm-bindgen-futures ={ workspace = true }
 web-sys = { workspace = true, features = ["BinaryType", "Blob", "ErrorEvent", "MessageEvent", "WebSocket"] }
-ws_stream_wasm = "0.7.4"
+ws_stream_wasm = "0.7"
 
 [target.'cfg(unix)'.dependencies]
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"] }
@@ -42,6 +41,6 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 openssl = "0.10"
-tokio-test = "0.4.4"
+tokio-test = "0.4"
 
 

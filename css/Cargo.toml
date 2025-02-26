@@ -7,6 +7,8 @@ edition = "2021"
 [features]
 
 [build-dependencies]
-dioxus-daisyui = "0.7"
+dioxus-daisyui = { workspace = true }
+dioxus-tailwindcss = { workspace = true }
 
 [dependencies]
+dioxus-tailwindcss = { workspace = true }

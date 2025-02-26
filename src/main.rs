@@ -2,21 +2,21 @@
 use console_error_panic_hook;
 use mailiner_core::imap_account_manager::ImapAccountManager;
 use dioxus::prelude::*;
-use dioxus_logger::tracing::{info, Level};
 use std::panic;
 
+mod components;
 mod pages;
 mod utils;
 
+use components::ComponentGallery;
 use pages::accountwizard::{EditAccount, NewAccount};
 use pages::MainView;
 
 fn main() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
-    dioxus_logger::init(Level::INFO).expect("failed to init logger");
 
-    info!("starting app");
-    launch(App);
+    tracing::info!("starting app");
+    dioxus::launch(App);
 }
 
 #[derive(PartialEq, Clone, Debug, Routable)]
@@ -30,6 +30,9 @@ enum Route {
 
     #[route("/")]
     MainView {},
+
+    #[route("/gallery")]
+    ComponentGallery {},
 }
 
 fn App() -> Element {
@@ -38,6 +41,10 @@ fn App() -> Element {
     use_context_provider(move || imap_account_manager);
 
     rsx! {
+        document::Stylesheet {
+            href: asset!("assets/css/tailwind.css")
+        }
+
         Router::<Route> {}
     }
 }

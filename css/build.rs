@@ -3,6 +3,8 @@ use std::path::Path;
 use dioxus_daisyui::build::*;
 use dioxus_daisyui::prelude::*;
 
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=classes.rs");
     // let out_dir = env::var_os("OUT_DIR").unwrap();

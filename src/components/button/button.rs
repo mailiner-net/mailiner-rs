@@ -106,7 +106,11 @@ pub fn Button(props: ButtonProps) -> Element {
     // Build the final class string
     let class = format!(
         "{} {} {} {} {}",
-        base_classes, variant_classes, size_classes, width_classes, class!(rounded)
+        base_classes,
+        variant_classes,
+        size_classes,
+        width_classes,
+        class!(rounded)
     );
 
     rsx! {
@@ -143,4 +147,3 @@ pub fn Button(props: ButtonProps) -> Element {
         }
     }
 }
-

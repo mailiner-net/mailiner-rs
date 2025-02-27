@@ -8,7 +8,7 @@ mod components;
 mod pages;
 mod utils;
 
-use components::ComponentGallery;
+use components::{ComponentGallery, ComponentGalleryLayout};
 use pages::accountwizard::{EditAccount, NewAccount};
 use pages::MainView;
 
@@ -22,17 +22,31 @@ fn main() {
 #[derive(PartialEq, Clone, Debug, Routable)]
 enum Route {
     #[nest("/accountwizard")]
-    #[route("/")]
-    NewAccount {},
-    #[route("/:account_id")]
-    EditAccount { account_id: String },
+        #[route("/")]
+        NewAccount {},
+        #[route("/:account_id")]
+        EditAccount { account_id: String },
     #[end_nest]
 
-    #[route("/")]
-    MainView {},
+    //#[route("/")]
+    //MainView {},
+    //#[end_layout]
 
-    #[route("/gallery")]
+    #[layout(MainLayout)]
+    #[route("/")]
     ComponentGallery {},
+}
+
+#[component]
+fn MainLayout() -> Element {
+    rsx! {
+        Link {
+            to: Route::ComponentGallery {},
+            "Component Gallery"
+        }
+
+        Outlet::<Route> {}
+    }
 }
 
 fn App() -> Element {

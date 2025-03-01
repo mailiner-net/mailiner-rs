@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+use dioxus_free_icons::Icon;
+use dioxus_free_icons::icons::ld_icons::LdCheck;
 use dioxus_tailwindcss::prelude::*;
 use mailiner_css::*;
 
@@ -81,19 +83,9 @@ pub fn Checkbox(props: CheckboxProps) -> Element {
 
                     // Checkmark (show when checked)
                     if checked() {
-                        svg {
+                        Icon {
+                            icon: LdCheck,
                             class: class!(w_3_half h_3_half text_white),
-                            xmlns: "http://www.w3.org/2000/svg",
-                            view_box: "0 0 24 24",
-                            stroke_width: "3",
-                            stroke: "currentColor",
-                            fill: "none",
-
-                            path {
-                                stroke_linecap: "round",
-                                stroke_linejoin: "round",
-                                d: "M5 13l4 4L19 7"
-                            }
                         }
                     }
 

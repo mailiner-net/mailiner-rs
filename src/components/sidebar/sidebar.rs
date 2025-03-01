@@ -1,5 +1,6 @@
 // components/sidebar.rs
 use dioxus::prelude::*;
+use dioxus_free_icons::{icons::ld_icons::{LdChevronDown, LdChevronRight}, Icon};
 use dioxus_tailwindcss::prelude::*;
 use mailiner_css::*;
 
@@ -68,27 +69,15 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     class: class!(absolute right_0 top_4 translate_x_1_half bg_white rounded_full p_1 shadow_sm border border_neutral_200 hover(bg_neutral_50)),
                     onclick: move |_| handler.call(!is_collapsed),
                     
-                    svg {
-                        class: class!(h_4 w_4 text_neutral_600),
-                        xmlns: "http://www.w3.org/2000/svg",
-                        fill: "none",
-                        view_box: "0 0 24 24",
-                        stroke: "currentColor",
-                        
-                        if is_collapsed {
-                            path {
-                                stroke_linecap: "round",
-                                stroke_linejoin: "round",
-                                stroke_width: "2",
-                                d: "M13 5l7 7-7 7M5 5l7 7-7 7"
-                            }
-                        } else {
-                            path {
-                                stroke_linecap: "round",
-                                stroke_linejoin: "round",
-                                stroke_width: "2",
-                                d: "M11 19l-7-7 7-7m8 14l-7-7 7-7"
-                            }
+                    if is_collapsed {
+                        Icon {
+                            icon: LdChevronRight,
+                            class: class!(h_4 w_4 text_neutral_600),
+                        }
+                    } else {
+                        Icon {
+                            icon: LdChevronDown,
+                            class: class!(h_4 w_4 text_neutral_600),
                         }
                     }
                 }
@@ -233,20 +222,10 @@ pub fn SidebarItem(props: SidebarItemProps) -> Element {
                         
                         // Chevron for submenu (if children exist)
                         if has_children {
-                            svg {
+                            Icon {
+                                icon: LdChevronRight,
                                 class: class!(h_4 w_4 ml_1 transition_transform),
                                 style: if is_expanded() { "transform: rotate(90deg)" } else { "" },
-                                xmlns: "http://www.w3.org/2000/svg",
-                                fill: "none",
-                                view_box: "0 0 24 24",
-                                stroke: "currentColor",
-                                
-                                path {
-                                    stroke_linecap: "round",
-                                    stroke_linejoin: "round",
-                                    stroke_width: "2",
-                                    d: "M9 5l7 7-7 7"
-                                }
                             }
                         }
                     }

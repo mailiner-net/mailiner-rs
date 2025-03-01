@@ -1,9 +1,13 @@
 use dioxus::prelude::*;
+use dioxus_free_icons::icons::ld_icons::{
+    LdBold, LdForward, LdItalic, LdPlus, LdReply, LdTrash2, LdUnderline,
+};
+use dioxus_free_icons::Icon;
 use dioxus_tailwindcss::prelude::*;
 use mailiner_css::*;
 
 use crate::components::{
-    Toolbar, ToolbarItemData, ToolbarPosition, ToolbarSize, ButtonGroupToolbar,
+    ButtonGroupToolbar, Toolbar, ToolbarItemData, ToolbarPosition, ToolbarSize,
 };
 
 use super::ToolbarItemStates;
@@ -14,23 +18,23 @@ pub fn ToolbarDesignSystem() -> Element {
     rsx! {
         div { class: class!(min_h_screen bg_neutral_50),
             // Page header
-            header { 
+            header {
                 class: class!(bg_white border_b border_neutral_200 py_4 px_6 mb_6),
-                h1 { 
-                    class: class!(text_2xl font_semibold text_neutral_800), 
-                    "Mailiner Toolbar Design System" 
+                h1 {
+                    class: class!(text_2xl font_semibold text_neutral_800),
+                    "Mailiner Toolbar Design System"
                 }
             }
-            
+
             // Main content container
             div { class: class!(container mx_auto px_4 pb_12),
                 // Toolbar Section
                 section { class: class!(mb_12),
-                    h2 { 
-                        class: class!(text_xl font_medium text_neutral_800 mb_4 pb_2 border_b border_neutral_200), 
-                        "Toolbars" 
+                    h2 {
+                        class: class!(text_xl font_medium text_neutral_800 mb_4 pb_2 border_b border_neutral_200),
+                        "Toolbars"
                     }
-                    
+
                     // Props documentation
                     ToolbarProps {}
 
@@ -41,10 +45,10 @@ pub fn ToolbarDesignSystem() -> Element {
                     div { class: class!(grid grid_cols_1 md(grid_cols_2) gap_8 mt_8),
                         // Position variants
                         ToolbarPositions {}
-                        
+
                         // Size variants
                         ToolbarSizes {}
-                        
+
                         // Item states
                         ToolbarItemStates {}
                     }
@@ -59,11 +63,11 @@ fn ToolbarExamples() -> Element {
     rsx! {
         div { class: class!(bg_white border border_neutral_200 p_6 rounded shadow_sm mb_8),
             // Top Toolbar with Labels
-            div { 
+            div {
                 class: class!(mb_8),
-                h3 { 
-                    class: class!(text_lg font_medium text_neutral_700 mb_3), 
-                    "Top Toolbar (with labels)" 
+                h3 {
+                    class: class!(text_lg font_medium text_neutral_700 mb_3),
+                    "Top Toolbar (with labels)"
                 }
                 Toolbar {
                     position: ToolbarPosition::Top,
@@ -73,20 +77,10 @@ fn ToolbarExamples() -> Element {
                             id: "new".to_string(),
                             label: Some("New".to_string()),
                             icon: rsx! {
-                                svg {
+                                Icon {
+                                    icon: LdPlus,
                                     class: class!(w_5 h_5),
-                                    xmlns: "http://www.w3.org/2000/svg",
-                                    view_box: "0 0 24 24",
-                                    fill: "none",
-                                    stroke: "currentColor",
-                                    
-                                    path {
-                                        stroke_linecap: "round",
-                                        stroke_linejoin: "round",
-                                        stroke_width: "2",
-                                        d: "M12 4v16m8-8H4"
-                                    }
-                                },
+                                }
                             },
                             tooltip: Some("Create new email".to_string()),
                             disabled: None,
@@ -96,19 +90,9 @@ fn ToolbarExamples() -> Element {
                             id: "reply".to_string(),
                             label: Some("Reply".to_string()),
                             icon: rsx! {
-                                svg {
+                                Icon {
+                                    icon: LdReply,
                                     class: class!(w_5 h_5),
-                                    xmlns: "http://www.w3.org/2000/svg",
-                                    view_box: "0 0 24 24",
-                                    fill: "none",
-                                    stroke: "currentColor",
-                                    
-                                    path {
-                                        stroke_linecap: "round",
-                                        stroke_linejoin: "round",
-                                        stroke_width: "2",
-                                        d: "M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
-                                    }
                                 }
                             },
                             tooltip: Some("Reply to sender".to_string()),
@@ -119,20 +103,10 @@ fn ToolbarExamples() -> Element {
                             id: "forward".to_string(),
                             label: Some("Forward".to_string()),
                             icon: rsx! {
-                                svg {
+                                Icon {
+                                    icon: LdForward,
                                     class: class!(w_5 h_5),
-                                    xmlns: "http://www.w3.org/2000/svg",
-                                    view_box: "0 0 24 24",
-                                    fill: "none",
-                                    stroke: "currentColor",
-                                    
-                                    path {
-                                        stroke_linecap: "round",
-                                        stroke_linejoin: "round",
-                                        stroke_width: "2",
-                                        d: "M17 8l4 4m0 0l-4 4m4-4H3"
-                                    }
-                                },
+                                }
                             },
                             tooltip: Some("Forward email".to_string()),
                             disabled: None,
@@ -142,20 +116,10 @@ fn ToolbarExamples() -> Element {
                             id: "delete".to_string(),
                             label: Some("Delete".to_string()),
                             icon: rsx! {
-                                svg {
+                                Icon {
+                                    icon: LdTrash2,
                                     class: class!(w_5 h_5),
-                                    xmlns: "http://www.w3.org/2000/svg",
-                                    view_box: "0 0 24 24",
-                                    fill: "none",
-                                    stroke: "currentColor",
-                                    
-                                    path {
-                                        stroke_linecap: "round",
-                                        stroke_linejoin: "round",
-                                        stroke_width: "2",
-                                        d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                                    }
-                                },
+                                }
                             },
                             tooltip: Some("Delete email".to_string()),
                             disabled: None,
@@ -164,15 +128,15 @@ fn ToolbarExamples() -> Element {
                     ]
                 }
             }
-            
+
             // Left Toolbar Demo
-            div { 
+            div {
                 class: class!(mb_8 flex),
-                div { 
+                div {
                     class: class!(w_32),
-                    h3 { 
-                        class: class!(text_lg font_medium text_neutral_700 mb_3), 
-                        "Left Toolbar" 
+                    h3 {
+                        class: class!(text_lg font_medium text_neutral_700 mb_3),
+                        "Left Toolbar"
                     }
                     Toolbar {
                         position: ToolbarPosition::Left,
@@ -183,20 +147,10 @@ fn ToolbarExamples() -> Element {
                                 id: "format_bold".to_string(),
                                 label: None,
                                 icon: rsx! {
-                                    svg {
+                                    Icon {
+                                        icon: LdBold,
                                         class: class!(w_5 h_5),
-                                        xmlns: "http://www.w3.org/2000/svg",
-                                        view_box: "0 0 24 24",
-                                        fill: "none",
-                                        stroke: "currentColor",
-                                        
-                                        path {
-                                            stroke_linecap: "round",
-                                            stroke_linejoin: "round",
-                                            stroke_width: "2",
-                                            d: "M6 12h8a4 4 0 100-8H6v8zm0 0h10a4 4 0 110 8H6v-8z"
-                                        }
-                                    },
+                                    }
                                 },
                                 tooltip: Some("Bold".to_string()),
                                 disabled: None,
@@ -206,20 +160,10 @@ fn ToolbarExamples() -> Element {
                                 id: "format_italic".to_string(),
                                 label: None,
                                 icon: rsx! {
-                                    svg {
+                                    Icon {
+                                        icon: LdItalic,
                                         class: class!(w_5 h_5),
-                                        xmlns: "http://www.w3.org/2000/svg",
-                                        view_box: "0 0 24 24",
-                                        fill: "none",
-                                        stroke: "currentColor",
-                                        
-                                        path {
-                                            stroke_linecap: "round",
-                                            stroke_linejoin: "round",
-                                            stroke_width: "2",
-                                            d: "M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                                        }
-                                    },
+                                    }
                                 },
                                 tooltip: Some("Italic".to_string()),
                                 disabled: None,
@@ -229,20 +173,10 @@ fn ToolbarExamples() -> Element {
                                 id: "format_underline".to_string(),
                                 label: None,
                                 icon: rsx! {
-                                    svg {
+                                    Icon {
+                                        icon: LdUnderline,
                                         class: class!(w_5 h_5),
-                                        xmlns: "http://www.w3.org/2000/svg",
-                                        view_box: "0 0 24 24",
-                                        fill: "none",
-                                        stroke: "currentColor",
-                                        
-                                        path {
-                                            stroke_linecap: "round",
-                                            stroke_linejoin: "round",
-                                            stroke_width: "2",
-                                            d: "M4 7v10a2 2 0 002 2h12a2 2 0 002-2V7M8 21h8m-4-15v8m4-8a4 4 0 11-8 0 4 4 0 018 0z"
-                                        }
-                                    },
+                                    }
                                 },
                                 tooltip: Some("Underline".to_string()),
                                 disabled: Some(true),
@@ -253,13 +187,13 @@ fn ToolbarExamples() -> Element {
                 }
 
                 // Description
-                div { 
+                div {
                     class: class!(ml_8),
-                    p { 
-                        class: class!(text_neutral_700 mb_2), 
-                        "Toolbars provide quick access to common actions." 
+                    p {
+                        class: class!(text_neutral_700 mb_2),
+                        "Toolbars provide quick access to common actions."
                     }
-                    ul { 
+                    ul {
                         class: class!(list_disc pl_5 text_sm text_neutral_600 space_y_1),
                         li { "Support for top/bottom/left/right positioning" }
                         li { "Optional labels for better clarity" }
@@ -268,12 +202,12 @@ fn ToolbarExamples() -> Element {
                     }
                 }
             }
-            
+
             // Button Group Toolbar
             div {
-                h3 { 
-                    class: class!(text_lg font_medium text_neutral_700 mb_3), 
-                    "Button Group Toolbar" 
+                h3 {
+                    class: class!(text_lg font_medium text_neutral_700 mb_3),
+                    "Button Group Toolbar"
                 }
                 ButtonGroupToolbar {
                     button {
@@ -297,50 +231,50 @@ fn ToolbarExamples() -> Element {
 /// Component to showcase toolbar positions
 fn ToolbarPositions() -> Element {
     rsx! {
-        div { 
+        div {
             class: class!(bg_white p_4 rounded border border_neutral_200 shadow_sm),
-            h3 { 
-                class: class!(text_lg font_medium mb_3), 
-                "Toolbar Positions" 
+            h3 {
+                class: class!(text_lg font_medium mb_3),
+                "Toolbar Positions"
             }
-            
-            div { 
+
+            div {
                 class: class!(grid grid_cols_2 gap_3),
-                div { 
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
                     h4 { class: class!(font_medium mb_1), "Top" }
                     p { class: class!(text_sm text_neutral_600), "Horizontal toolbar at the top" }
-                    div { 
+                    div {
                         class: class!(h_6 w_full bg_neutral_100 mt_2 flex items_center justify_center rounded text_xs text_neutral_500),
                         "ToolbarPosition::Top"
                     }
                 }
-                
-                div { 
+
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
                     h4 { class: class!(font_medium mb_1), "Bottom" }
                     p { class: class!(text_sm text_neutral_600), "Horizontal toolbar at the bottom" }
-                    div { 
+                    div {
                         class: class!(h_6 w_full bg_neutral_100 mt_2 flex items_center justify_center rounded text_xs text_neutral_500),
                         "ToolbarPosition::Bottom"
                     }
                 }
-                
-                div { 
+
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
                     h4 { class: class!(font_medium mb_1), "Left" }
                     p { class: class!(text_sm text_neutral_600), "Vertical toolbar on the left" }
-                    div { 
+                    div {
                         class: class!(h_6 w_full bg_neutral_100 mt_2 flex items_center justify_center rounded text_xs text_neutral_500),
                         "ToolbarPosition::Left"
                     }
                 }
-                
-                div { 
+
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
                     h4 { class: class!(font_medium mb_1), "Right" }
                     p { class: class!(text_sm text_neutral_600), "Vertical toolbar on the right" }
-                    div { 
+                    div {
                         class: class!(h_6 w_full bg_neutral_100 mt_2 flex items_center justify_center rounded text_xs text_neutral_500),
                         "ToolbarPosition::Right"
                     }
@@ -353,23 +287,23 @@ fn ToolbarPositions() -> Element {
 /// Component to showcase toolbar sizes
 fn ToolbarSizes() -> Element {
     rsx! {
-        div { 
+        div {
             class: class!(bg_white p_4 rounded border border_neutral_200 shadow_sm),
-            h3 { 
-                class: class!(text_lg font_medium mb_3), 
-                "Toolbar Sizes" 
+            h3 {
+                class: class!(text_lg font_medium mb_3),
+                "Toolbar Sizes"
             }
-            
-            div { 
+
+            div {
                 class: class!(space_y_3),
-                div { 
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
-                    div { 
+                    div {
                         class: class!(flex justify_between items_center),
                         h4 { class: class!(font_medium), "Small" }
                         span { class: class!(text_xs text_neutral_500 px_2 py_1 bg_neutral_100 rounded), "ToolbarSize::Small" }
                     }
-                    ul { 
+                    ul {
                         class: class!(mt_2 text_sm space_y_1),
                         li { class: class!(flex justify_between),
                             span { "Height (Top/Bottom)" }
@@ -381,15 +315,15 @@ fn ToolbarSizes() -> Element {
                         }
                     }
                 }
-                
-                div { 
+
+                div {
                     class: class!(border border_primary_200 bg_primary_50 rounded p_3),
-                    div { 
+                    div {
                         class: class!(flex justify_between items_center),
                         h4 { class: class!(font_medium text_primary_700), "Medium (Default)" }
                         span { class: class!(text_xs text_primary_600 px_2 py_1 bg_primary_100 rounded), "ToolbarSize::Medium" }
                     }
-                    ul { 
+                    ul {
                         class: class!(mt_2 text_sm space_y_1),
                         li { class: class!(flex justify_between),
                             span { "Height (Top/Bottom)" }
@@ -401,15 +335,15 @@ fn ToolbarSizes() -> Element {
                         }
                     }
                 }
-                
-                div { 
+
+                div {
                     class: class!(border border_neutral_200 rounded p_3),
-                    div { 
+                    div {
                         class: class!(flex justify_between items_center),
                         h4 { class: class!(font_medium), "Large" }
                         span { class: class!(text_xs text_neutral_500 px_2 py_1 bg_neutral_100 rounded), "ToolbarSize::Large" }
                     }
-                    ul { 
+                    ul {
                         class: class!(mt_2 text_sm space_y_1),
                         li { class: class!(flex justify_between),
                             span { "Height (Top/Bottom)" }

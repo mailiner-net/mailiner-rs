@@ -1,6 +1,8 @@
 // components/dialog.rs
 use dioxus::prelude::*;
 use dioxus_tailwindcss::prelude::*;
+use dioxus_free_icons::Icon;
+use dioxus_free_icons::icons::ld_icons::{LdCheck, LdCircleAlert, LdInfo, LdTriangleAlert, LdX};
 use mailiner_css::*;
 
 /// Dialog sizes
@@ -94,73 +96,33 @@ pub fn Dialog(props: DialogProps) -> Element {
         DialogVariant::Default => (class!(bg_white), None),
         DialogVariant::Info => (class!(bg_primary_50), Some(
             rsx! {
-                svg {
+                Icon {
+                    icon: LdInfo,
                     class: class!(w_6 h_6 text_primary_500),
-                    xmlns: "http://www.w3.org/2000/svg",
-                    fill: "none",
-                    view_box: "0 0 24 24",
-                    stroke: "currentColor",
-                    
-                    path {
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        stroke_width: "2",
-                        d: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    }
                 }
             }
         )),
         DialogVariant::Warning => (class!(bg_warning_50), Some(
             rsx! {
-                svg {
+                Icon {
+                    icon: LdTriangleAlert,
                     class: class!(w_6 h_6 text_warning_500),
-                    xmlns: "http://www.w3.org/2000/svg",
-                    fill: "none",
-                    view_box: "0 0 24 24",
-                    stroke: "currentColor",
-                    
-                    path {
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        stroke_width: "2",
-                        d: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    }
                 }
             }
         )),
         DialogVariant::Danger => (class!(bg_danger_50), Some(
             rsx! {
-                svg {
+                Icon {
+                    icon: LdCircleAlert,
                     class: class!(w_6 h_6 text_danger_500),
-                    xmlns: "http://www.w3.org/2000/svg",
-                    fill: "none",
-                    view_box: "0 0 24 24",
-                    stroke: "currentColor",
-                
-                    path {
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        stroke_width: "2",
-                        d: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    }
                 }
             }
         )),
         DialogVariant::Success => (class!(bg_success_50), Some(
             rsx! {
-                svg {
+                Icon {
+                    icon: LdCheck,
                     class: class!(w_6 h_6 text_success_500),
-                    xmlns: "http://www.w3.org/2000/svg",
-                    fill: "none",
-                    view_box: "0 0 24 24",
-                    stroke: "currentColor",
-                    
-                    path {
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        stroke_width: "2",
-                        d: "M5 13l4 4L19 7"
-                    }
                 }
             }
         )),
@@ -222,19 +184,9 @@ pub fn Dialog(props: DialogProps) -> Element {
                             "aria-label": "Close",
                             onclick: move |_| on_close(),
                             
-                            svg {
+                            Icon {
+                                icon: LdX,
                                 class: class!(h_5 w_5),
-                                xmlns: "http://www.w3.org/2000/svg",
-                                fill: "none",
-                                view_box: "0 0 24 24",
-                                stroke: "currentColor",
-                                
-                                path {
-                                    stroke_linecap: "round",
-                                    stroke_linejoin: "round",
-                                    stroke_width: "2",
-                                    d: "M6 18L18 6M6 6l12 12"
-                                }
                             }
                         }
                     }

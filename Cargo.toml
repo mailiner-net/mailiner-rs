@@ -19,6 +19,7 @@ bytes = "1.7"
 dioxus = { version = "0.6", features = ["router"] }
 dioxus-logger = "0.6"
 dioxus-daisyui = "0.8"
+dioxus-free-icons = { version = "0.9", features = ["lucide"] }
 dioxus-tailwindcss = "0.8"
 futures = "0.3"
 futures-core = "0.3"
@@ -45,6 +46,7 @@ mailiner-core = { path = "mailiner-core" }
 console_error_panic_hook = "0.1"
 dioxus = { workspace = true, features = ["web", "router"] }
 dioxus-daisyui = { workspace = true }
+dioxus-free-icons = { workspace = true }
 dioxus-tailwindcss = { workspace = true }
 futures = { workspace = true }
 futures-core = { workspace = true }

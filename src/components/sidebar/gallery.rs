@@ -1,6 +1,8 @@
 // pages/sidebar_design_system.rs
 use dioxus::prelude::*;
 use dioxus_tailwindcss::prelude::*;
+use dioxus_free_icons::Icon;
+use dioxus_free_icons::icons::ld_icons::{LdMail, LdChevronRight, LdChevronsRight, LdFolder, LdSquarePen, LdArchive};
 use mailiner_css::*;
 
 use crate::components::{
@@ -50,19 +52,9 @@ pub fn Gallery() -> Element {
                                         id: "inbox".to_string(),
                                         label: "Inbox".to_string(),
                                         icon: Some(rsx! {
-                                            svg {
+                                            Icon {
+                                                icon: LdMail,
                                                 class: class!(w_5 h_5),
-                                                xmlns: "http://www.w3.org/2000/svg",
-                                                view_box: "0 0 24 24",
-                                                fill: "none",
-                                                stroke: "currentColor",
-                                                
-                                                path {
-                                                    stroke_linecap: "round",
-                                                    stroke_linejoin: "round",
-                                                    stroke_width: "2",
-                                                    d: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                                                }
                                             }
                                         }),
                                         badge: Some("42".to_string()),
@@ -72,19 +64,9 @@ pub fn Gallery() -> Element {
                                         id: "sent".to_string(),
                                         label: "Sent".to_string(),
                                         icon: Some(rsx! {
-                                            svg {
+                                            Icon {
+                                                icon: LdChevronsRight,
                                                 class: class!(w_5 h_5),
-                                                xmlns: "http://www.w3.org/2000/svg",
-                                                view_box: "0 0 24 24",
-                                                fill: "none",
-                                                stroke: "currentColor",
-                                                
-                                                path {
-                                                    stroke_linecap: "round",
-                                                    stroke_linejoin: "round",
-                                                    stroke_width: "2",
-                                                    d: "M13 5l7 7-7 7M5 5l7 7-7 7"
-                                                }
                                             }
                                         }),
                                         badge: None,
@@ -94,19 +76,9 @@ pub fn Gallery() -> Element {
                                         id: "folders".to_string(),
                                         label: "Folders".to_string(),
                                         icon: Some(rsx! {
-                                            svg {
+                                            Icon {
+                                                icon: LdFolder,
                                                 class: class!(w_5 h_5),
-                                                xmlns: "http://www.w3.org/2000/svg",
-                                                view_box: "0 0 24 24",
-                                                fill: "none",
-                                                stroke: "currentColor",
-                                                
-                                                path {
-                                                    stroke_linecap: "round",
-                                                    stroke_linejoin: "round",
-                                                    stroke_width: "2",
-                                                    d: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-                                                }
                                             }
                                         }),
                                         badge: None,
@@ -131,19 +103,9 @@ pub fn Gallery() -> Element {
                                         id: "drafts".to_string(),
                                         label: "Drafts".to_string(),
                                         icon: Some(rsx! {
-                                            svg {
+                                            Icon {
+                                                icon: LdSquarePen,
                                                 class: class!(w_5 h_5),
-                                                xmlns: "http://www.w3.org/2000/svg",
-                                                view_box: "0 0 24 24",
-                                                fill: "none",
-                                                stroke: "currentColor",
-                                                
-                                                path {
-                                                    stroke_linecap: "round",
-                                                    stroke_linejoin: "round",
-                                                    stroke_width: "2",
-                                                    d: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                                }
                                             }
                                         }),
                                         badge: Some("3".to_string()),
@@ -153,19 +115,9 @@ pub fn Gallery() -> Element {
                                         id: "archived".to_string(),
                                         label: "Archived".to_string(),
                                         icon: Some(rsx! {
-                                            svg {
+                                            Icon {
+                                                icon: LdArchive,
                                                 class: class!(w_5 h_5),
-                                                xmlns: "http://www.w3.org/2000/svg",
-                                                view_box: "0 0 24 24",
-                                                fill: "none",
-                                                stroke: "currentColor",
-                                                
-                                                path {
-                                                    stroke_linecap: "round",
-                                                    stroke_linejoin: "round",
-                                                    stroke_width: "2",
-                                                    d: "M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
-                                                }
                                             }
                                         }),
                                         badge: None,
@@ -303,18 +255,9 @@ pub fn Gallery() -> Element {
                                             class: class!(flex items_center rounded p_2 text_neutral_700 bg_neutral_50),
                                             div { 
                                                 class: class!(w_5 h_5 text_neutral_500 mr_2),
-                                                svg {
-                                                    xmlns: "http://www.w3.org/2000/svg",
-                                                    view_box: "0 0 24 24",
-                                                    fill: "none",
-                                                    stroke: "currentColor",
-                                                    
-                                                    path {
-                                                        stroke_linecap: "round",
-                                                        stroke_linejoin: "round",
-                                                        stroke_width: "2",
-                                                        d: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                                                    }
+                                                Icon {
+                                                    icon: LdMail,
+                                                    class: class!(w_5 h_5),
                                                 }
                                             }
                                             span { "Inbox" }
@@ -331,18 +274,9 @@ pub fn Gallery() -> Element {
                                                 class: class!(flex items_center),
                                                 div { 
                                                     class: class!(w_5 h_5 text_neutral_500 mr_2),
-                                                    svg {
-                                                        xmlns: "http://www.w3.org/2000/svg",
-                                                        view_box: "0 0 24 24",
-                                                        fill: "none",
-                                                        stroke: "currentColor",
-                                                        
-                                                        path {
-                                                            stroke_linecap: "round",
-                                                            stroke_linejoin: "round",
-                                                            stroke_width: "2",
-                                                            d: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                                                        }
+                                                    Icon {
+                                                        icon: LdMail,
+                                                        class: class!(w_5 h_5),
                                                     }
                                                 }
                                                 span { "Inbox" }
@@ -364,36 +298,18 @@ pub fn Gallery() -> Element {
                                                 class: class!(flex items_center),
                                                 div { 
                                                     class: class!(w_5 h_5 text_neutral_500 mr_2),
-                                                    svg {
-                                                        xmlns: "http://www.w3.org/2000/svg",
-                                                        view_box: "0 0 24 24",
-                                                        fill: "none",
-                                                        stroke: "currentColor",
-                                                        
-                                                        path {
-                                                            stroke_linecap: "round",
-                                                            stroke_linejoin: "round",
-                                                            stroke_width: "2",
-                                                            d: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-                                                        }
+                                                    Icon {
+                                                        icon: LdFolder,
+                                                        class: class!(w_5 h_5),
                                                     }
                                                 }
                                                 span { "Folders" }
                                             }
                                             div { 
                                                 class: class!(w_4 h_4 text_neutral_500),
-                                                svg {
-                                                    xmlns: "http://www.w3.org/2000/svg",
-                                                    fill: "none",
-                                                    view_box: "0 0 24 24",
-                                                    stroke: "currentColor",
-                                                    
-                                                    path {
-                                                        stroke_linecap: "round",
-                                                        stroke_linejoin: "round",
-                                                        stroke_width: "2",
-                                                        d: "M9 5l7 7-7 7"
-                                                    }
+                                                Icon {
+                                                    icon: LdChevronRight,
+                                                    class: class!(w_5 h_5),
                                                 }
                                             }
                                         }

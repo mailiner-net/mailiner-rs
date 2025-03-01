@@ -16,6 +16,7 @@ members = [
 [workspace.dependencies]
 anyhow = "1.0"
 bytes = "1.7"
+chrono = { version = "0.4", features = ["serde"] }
 dioxus = { version = "0.6", features = ["router"] }
 dioxus-logger = "0.6"
 dioxus-daisyui = "0.8"
@@ -43,6 +44,7 @@ build-classes = [
 [dependencies]
 mailiner-css = { path = "css" }
 mailiner-core = { path = "mailiner-core" }
+chrono = { workspace = true }
 console_error_panic_hook = "0.1"
 dioxus = { workspace = true, features = ["web", "router"] }
 dioxus-daisyui = { workspace = true }

@@ -1,4 +1,4 @@
 pub mod accountwizard;
-pub mod mainview;
+pub mod mail;
 
-pub use mainview::MainView;
+pub use mail::MailView;

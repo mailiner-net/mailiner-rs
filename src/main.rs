@@ -1,16 +1,19 @@
 #![allow(non_snake_case)]
 use console_error_panic_hook;
-use mailiner_core::imap_account_manager::ImapAccountManager;
 use dioxus::prelude::*;
 use std::panic;
 
 mod components;
+mod layouts;
 mod pages;
 mod utils;
+mod mailiner_core;
 
 use components::{ComponentGallery, ComponentGalleryLayout};
 use pages::accountwizard::{EditAccount, NewAccount};
-use pages::MainView;
+use layouts::MailLayout;
+use pages::MailView;
+use mailiner_core::mail_controller::MailController;
 
 fn main() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -28,31 +31,23 @@ enum Route {
         EditAccount { account_id: String },
     #[end_nest]
 
-    //#[route("/")]
-    //MainView {},
-    //#[end_layout]
-
-    #[layout(MainLayout)]
     #[route("/")]
+    #[layout(MailLayout)]
+    MailView {},
+    #[end_layout]
+
+    #[layout(MailLayout)]
+    #[route("/gallery")]
     ComponentGallery {},
 }
 
-#[component]
-fn MainLayout() -> Element {
-    rsx! {
-        Link {
-            to: Route::ComponentGallery {},
-            "Component Gallery"
-        }
-
-        Outlet::<Route> {}
-    }
-}
 
 fn App() -> Element {
-    let imap_account_manager =
-        use_signal(|| ImapAccountManager::new().expect("Failed to load ImapAccountManager"));
-    use_context_provider(move || imap_account_manager);
+    // Create the mail controller
+    let mail_controller = MailController::new();
+    
+    // Provide the mail controller to the context
+    use_context_provider(move || mail_controller);
 
     rsx! {
         document::Stylesheet {

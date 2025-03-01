@@ -249,7 +249,7 @@ pub fn SidebarItem(props: SidebarItemProps) -> Element {
                             rsx! {
                                 li {
                                     div {
-                                        class: format!("{} {}", class!(flex items_center rounded px_3 py_2 transition_colors), state_classes),  
+                                        class: format!("{} {}", class!(flex items_center rounded px_3 py_2 transition_colors cursor_pointer), state_classes),  
                                         onclick: move |_| {
                                             if let Some(handler) = &props.on_select {
                                                 handler.call(child.id.clone());

@@ -43,27 +43,21 @@ pub struct InputProps {
     input_type: InputType,
     
     /// Input placeholder
-    #[props(into)]
     placeholder: Option<String>,
     
     /// Input value
-    #[props(into)]
     value: Option<String>,
     
     /// Default value (uncontrolled)
-    #[props(into)]
     default_value: Option<String>,
     
     /// Input label
-    #[props(into)]
     label: Option<String>,
     
     /// Helper text below the input
-    #[props(into)]
     helper_text: Option<String>,
     
     /// Error message
-    #[props(into)]
     error: Option<String>,
     
     /// Icon to show at the start of input

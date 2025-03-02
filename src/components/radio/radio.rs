@@ -6,15 +6,12 @@ use mailiner_css::*;
 #[derive(Clone, Props, PartialEq)]
 pub struct RadioButtonProps {
     /// Label text for the radio button
-    #[props(into)]
     label: String,
 
     /// Value associated with this radio button
-    #[props(into)]
     value: String,
 
     /// Group name to associate radio buttons together
-    #[props(into)]
     group: String,
 
     /// Whether this radio is selected

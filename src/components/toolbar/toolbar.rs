@@ -50,7 +50,6 @@ pub struct ToolbarProps {
     show_dividers: Option<bool>,
     
     /// Additional CSS classes
-    #[props(into)]
     class: Option<String>,
     
     /// Item click event handler

@@ -24,7 +24,6 @@ pub enum ButtonSize {
 #[derive(Clone, Props, PartialEq)]
 pub struct ButtonProps {
     /// Text to display on the button
-    #[props(into)]
     text: String,
 
     /// Optional icon to display before the text

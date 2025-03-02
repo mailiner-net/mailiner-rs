@@ -30,7 +30,6 @@ pub struct DialogProps {
     open: Option<bool>,
     
     /// Dialog title
-    #[props(into)]
     title: Option<String>,
     
     /// Dialog size

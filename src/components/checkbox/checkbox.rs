@@ -8,7 +8,6 @@ use mailiner_css::*;
 #[derive(Clone, Props, PartialEq)]
 pub struct CheckboxProps {
     /// Label text for the checkbox
-    #[props(into)]
     label: Option<String>,
 
     /// Whether the checkbox is checked

@@ -21,7 +21,6 @@ pub struct SidebarProps {
     items: Vec<SidebarItemData>,
     
     /// Currently selected item ID
-    #[props(into)]
     selected: Option<String>,
     
     /// Whether the sidebar is collapsed

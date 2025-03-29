@@ -7,7 +7,7 @@ publish = false
 
 [workspace]
 members = [
-    "mailiner-core",
+    #"mailiner-core",
     "test-utils/ws-echo-server",
     "css",
     ".", 
@@ -15,6 +15,7 @@ members = [
 
 [workspace.dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 bytes = "1.7"
 chrono = { version = "0.4", features = ["serde"] }
 dioxus = { version = "0.6", features = ["router"] }
@@ -29,11 +30,12 @@ futures-util = "0.3"
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"
 tokio = "1.40"
+thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = "0.3"
+web-sys = { version = "0.3", features = ["Storage"] }
 
 
 [features]
@@ -43,7 +45,8 @@ build-classes = [
 
 [dependencies]
 mailiner-css = { path = "css" }
-mailiner-core = { path = "mailiner-core" }
+#mailiner-core = { path = "mailiner-core" }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 console_error_panic_hook = "0.1"
 dioxus = { workspace = true, features = ["web", "router"] }
@@ -64,6 +67,7 @@ wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true }
 tracing = "0.1"
+thiserror = { workspace = true }
 rustls-pemfile = "2.1"
 tokio = { workspace = true, features = ["macros"] }
 
@@ -73,6 +77,7 @@ dioxus-daisyui = { workspace = true }
 [dev-dependencies]
 dioxus-logger = { workspace = true }
 rustls = { version = "0.23", default-features=false, features = ["ring"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 wasm-bindgen-test = "0.3"
 
 [profile]

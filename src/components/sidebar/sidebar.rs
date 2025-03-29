@@ -52,7 +52,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
     
     rsx! {
         aside {
-            class: format!("{} {}",class!(bg_neutral_50 border_r border_neutral_200 h_full flex flex_col transition_all duration_200), width_class),
+            class: format!("{} {}",class!(relative bg_neutral_50 border_r border_neutral_200 h_full flex flex_col transition_all duration_200), width_class),
             
             // Sidebar header section
             if let Some(header) = &props.header {

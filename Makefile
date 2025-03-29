@@ -11,3 +11,6 @@ clear-buffer:
 
 watch-classes:
 	cargo watch -w src/ -s "make clear-buffer && cargo rustc -- -Awarnings && make build-classes"
+
+test-browser:
+	wasm-pack test --chrome

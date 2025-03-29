@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "crates/mailiner-core",
+    "crates/mailiner-imap-connector"
+]

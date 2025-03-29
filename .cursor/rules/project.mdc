@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Mailiner is a feature-packed email client written in Rust. It targets primarily web browser. The idea is that it will run completely client-side in the browser without any backend logic. This will enhance privacy and trust-worthiness of the project. Since our main target is WASM in web browsers, emphasis is placed on efficiency - performance and low memory requirements are very important aspects that must always be considered when implementing new features. 

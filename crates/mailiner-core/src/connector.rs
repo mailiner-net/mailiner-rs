@@ -24,7 +24,7 @@ pub trait EmailConnector: Send + Sync {
     async fn update_envelope_flags(&self, message_id: &MessageId, flags: &[(&str, bool)]) -> Result<()>;
     
     // Message part operations
-    async fn get_message_part(&self, part_id: &MessagePartId) -> Result<MessagePart>;
+    async fn get_message_part(&self, message_id: &MessageId, part_id: &MessagePartId) -> Result<MessagePart>;
 }
 
 // Mock implementation for testing
@@ -48,7 +48,7 @@ impl EmailConnector for MockConnector {
         Ok(())
     }
 
-    async fn authenticate(&self, credentials: &str) -> Result<Account> {
+    async fn authenticate(&self, _credentials: &str) -> Result<Account> {
         Ok(Account {
             id: AccountId::new("mock-account-1"),
             name: "Mock Account".to_string(),
@@ -90,7 +90,7 @@ impl EmailConnector for MockConnector {
         })
     }
 
-    async fn delete_folder(&self, folder_id: &FolderId) -> Result<()> {
+    async fn delete_folder(&self, _folder_id: &FolderId) -> Result<()> {
         Ok(())
     }
 
@@ -101,35 +101,24 @@ impl EmailConnector for MockConnector {
                 id: message_id.clone(),
                 account_id: AccountId::new("mock-account-1"),
                 folder_id: folder_id.clone(),
-                subject: "Test Message".to_string(),
-                from: crate::models::EmailAddress {
+                subject: Some("Test Message".to_string()),
+                from: Some(crate::models::EmailAddress::List(vec![crate::models::EmailAddr {
                     name: Some("Test Sender".to_string()),
-                    email: "sender@example.com".to_string(),
-                },
-                to: vec![
-                    crate::models::EmailAddress {
-                        name: Some("Test Recipient".to_string()),
-                        email: "recipient@example.com".to_string(),
-                    }
-                ],
-                cc: vec![],
-                bcc: vec![],
+                    email: Some("sender@example.com".to_string()),
+                }])),
+                to: Some(crate::models::EmailAddress::List(vec![crate::models::EmailAddr {
+                    name: Some("Test Recipient".to_string()),
+                    email: Some("recipient@example.com".to_string()),
+                }])),
+                cc: None,
+                bcc: None,
                 date: Utc::now(),
-                received_at: Utc::now(),
                 is_read: false,
                 is_starred: false,
                 is_flagged: false,
                 is_draft: false,
                 is_deleted: false,
                 has_attachments: true,
-                message_structure: crate::models::MessageStructure::Multipart {
-                    parts: vec![
-                        crate::ids::MessagePartId::new("text-part-1"),
-                        crate::ids::MessagePartId::new("html-part-1"),
-                        crate::ids::MessagePartId::new("attachment-1"),
-                    ],
-                    boundary: "boundary123".to_string(),
-                },
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },
@@ -141,45 +130,34 @@ impl EmailConnector for MockConnector {
             id: message_id.clone(),
             account_id: AccountId::new("mock-account-1"),
             folder_id: FolderId::new("inbox"),
-            subject: "Test Message".to_string(),
-            from: crate::models::EmailAddress {
+            subject: Some("Test Message".to_string()),
+            from: Some(crate::models::EmailAddress::List(vec![crate::models::EmailAddr {
                 name: Some("Test Sender".to_string()),
-                email: "sender@example.com".to_string(),
-            },
-            to: vec![
-                crate::models::EmailAddress {
-                    name: Some("Test Recipient".to_string()),
-                    email: "recipient@example.com".to_string(),
-                }
-            ],
-            cc: vec![],
-            bcc: vec![],
+                email: Some("sender@example.com".to_string()),
+            }])),
+            to: Some(crate::models::EmailAddress::List(vec![crate::models::EmailAddr {
+                name: Some("Test Recipient".to_string()),
+                email: Some("recipient@example.com".to_string()),
+            }])),
+            cc: None,
+            bcc: None,
             date: Utc::now(),
-            received_at: Utc::now(),
             is_read: false,
             is_starred: false,
             is_flagged: false,
             is_draft: false,
             is_deleted: false,
             has_attachments: true,
-            message_structure: crate::models::MessageStructure::Multipart {
-                parts: vec![
-                    crate::ids::MessagePartId::new("text-part-1"),
-                    crate::ids::MessagePartId::new("html-part-1"),
-                    crate::ids::MessagePartId::new("attachment-1"),
-                ],
-                boundary: "boundary123".to_string(),
-            },
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })
     }
 
-    async fn update_envelope_flags(&self, message_id: &MessageId, flags: &[(&str, bool)]) -> Result<()> {
+    async fn update_envelope_flags(&self, _message_id: &MessageId, _flags: &[(&str, bool)]) -> Result<()> {
         Ok(())
     }
 
-    async fn get_message_part(&self, part_id: &MessagePartId) -> Result<MessagePart> {
+    async fn get_message_part(&self, _message_id: &MessageId, part_id: &MessagePartId) -> Result<MessagePart> {
         Ok(MessagePart {
             id: part_id.clone(),
             envelope_id: MessageId::new("test-message-1"),

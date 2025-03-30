@@ -23,9 +23,21 @@ pub struct Folder {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmailAddress {
+pub struct EmailAddr {
     pub name: Option<String>,
-    pub email: String,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    pub name: Option<String>,
+    pub members: Vec<EmailAddr>
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EmailAddress {
+    List(Vec<EmailAddr>),
+    Group(Vec<Group>)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,31 +45,20 @@ pub struct Envelope {
     pub id: MessageId,
     pub account_id: AccountId,
     pub folder_id: FolderId,
-    pub subject: String,
-    pub from: EmailAddress,
-    pub to: Vec<EmailAddress>,
-    pub cc: Vec<EmailAddress>,
-    pub bcc: Vec<EmailAddress>,
+    pub subject: Option<String>,
+    pub from: Option<EmailAddress>,
+    pub to: Option<EmailAddress>,
+    pub cc: Option<EmailAddress>,
+    pub bcc: Option<EmailAddress>,
     pub date: DateTime<Utc>,
-    pub received_at: DateTime<Utc>,
     pub is_read: bool,
     pub is_starred: bool,
     pub is_flagged: bool,
     pub is_draft: bool,
     pub is_deleted: bool,
     pub has_attachments: bool,
-    pub message_structure: MessageStructure,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MessageStructure {
-    Simple(MessagePartId),
-    Multipart {
-        parts: Vec<MessagePartId>,
-        boundary: String,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -8,8 +8,8 @@ pub use error::{MailinerError, Result};
 pub use ids::{AccountId, FolderId, MessageId, MessagePartId};
 pub use models::{
     Account, AccountMetadata, Envelope, Folder, FolderMetadata,
-    MessagePart, MessageStructure, MessageContent,
-    EmailAddress,
+    MessagePart, MessageContent,
+    EmailAddress, EmailAddr, Group,
 };
 pub use storage::{Storage, InMemoryStorage};
 pub use connector::{EmailConnector, MockConnector};

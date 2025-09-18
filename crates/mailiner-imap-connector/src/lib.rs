@@ -551,7 +551,7 @@ impl EmailConnector for ImapConnector {
 
             // Fetch the actual content
             let content = self
-                .fetch_message_part(&message_id, &part_id)
+                .fetch_message_part(&message_id, part_id.as_str())
                 .await?;
 
             // TODO: Parse the content

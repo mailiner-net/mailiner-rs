@@ -1,8 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_imap::types::Flag;
 use async_imap::{Client, Session};
-use async_native_tls::TlsConnector;
-use async_native_tls::TlsStream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
@@ -10,6 +10,9 @@ use imap_proto::types::BodyStructure;
 use mail_parser::{Address, MessageParser};
 use thiserror::Error;
 use tokio::net::TcpStream;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
 use mailiner_core::{
     Account, AccountId, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder, FolderId, Group,
@@ -78,21 +81,26 @@ impl ImapConnector {
         }
     }
 
-    async fn ensure_connected(&mut self) -> Result<(), ImapError> {
+    async fn ensure_connected(&self) -> Result<(), ImapError> {
         let mut imap = self.imap.lock().await;
         match *imap {
             ImapSession::Disconnected => {
-                let tls = TlsConnector::new();
+                let root_store = RootCertStore {
+                    roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+                };
+                let config = ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth();
+                let tls = TlsConnector::from(Arc::new(config));
                 let tcp_stream = TcpStream::connect((self.host.as_str(), self.port))
                     .await
                     .map_err(|e| ImapError::Connection(format!("Failed to connect: {}", e)))?;
 
-                let tls_stream =
-                    tls.connect(self.host.as_str(), tcp_stream)
-                        .await
-                        .map_err(|e| {
-                            ImapError::Connection(format!("Failed to establish TLS: {}", e))
-                        })?;
+                let server_name = ServerName::try_from(self.host.as_str())
+                    .map_err(|e| ImapError::Connection(format!("Invalid server name: {}", e)))?;
+                let tls_stream = tls.connect(server_name, tcp_stream).await.map_err(|e| {
+                    ImapError::Connection(format!("Failed to establish TLS: {}", e))
+                })?;
 
                 *imap = ImapSession::Unauthenticated(Client::new(tls_stream));
             }
@@ -205,7 +213,7 @@ impl ImapConnector {
     async fn fetch_message_part(
         &self,
         message_id: &MessageId,
-        part_number: &str,
+        part_number: &MessagePartId,
     ) -> Result<Vec<u8>, ImapError> {
         let mut imap_client = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap_client {
@@ -217,7 +225,7 @@ impl ImapConnector {
             let mut fetch = session
                 .fetch(
                     message_id.as_str(),
-                    &format!("(BODY.PEEK[{}])", part_number),
+                    &format!("(BODY.PEEK[{}])", part_number.as_str()),
                 )
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch message part: {}", e)))?;
@@ -241,7 +249,7 @@ impl ImapConnector {
 #[async_trait]
 impl EmailConnector for ImapConnector {
     async fn connect(&self) -> MailinerResult<()> {
-        Ok(())
+        self.ensure_connected().await.map_err(|e| e.into())
     }
 
     async fn disconnect(&self) -> MailinerResult<()> {
@@ -526,7 +534,11 @@ impl EmailConnector for ImapConnector {
         }
     }
 
-    async fn get_message_part(&self, message_id: &MessageId, part_id: &MessagePartId) -> MailinerResult<MessagePart> {
+    async fn get_message_part(
+        &self,
+        message_id: &MessageId,
+        part_id: &MessagePartId,
+    ) -> MailinerResult<MessagePart> {
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
             session
@@ -551,7 +563,7 @@ impl EmailConnector for ImapConnector {
 
             // Fetch the actual content
             let content = self
-                .fetch_message_part(&message_id, part_id.as_str())
+                .fetch_message_part(&message_id, part_id)
                 .await?;
 
             // TODO: Parse the content

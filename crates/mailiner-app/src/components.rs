@@ -1,5 +1,4 @@
 mod emailnavigation;
-mod messagelist;
 mod messageview;
 mod sidebar;
 

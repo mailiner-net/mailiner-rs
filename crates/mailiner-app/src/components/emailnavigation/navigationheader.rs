@@ -17,6 +17,15 @@ pub struct EmailNavigationHeaderProps {
 #[component]
 pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let mut ctx = use_context::<AppContext>();
+    let mailboxes = ctx.mailbox_nodes.read();
+    let accounts = ctx.accounts.read();
+    let current_mailbox_id = ctx.selected_mailbox.read();
+    let current_account_id = ctx.selected_account.read();
+
+    let current_mailbox = current_mailbox_id
+        .as_ref()
+        .and_then(|id| mailboxes.get(&id));
+    let current_account = current_account_id.as_ref().and_then(|id| accounts.get(&id));
     rsx! {
         header {
             id: "navigation-header",
@@ -38,7 +47,13 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             div {
-                "Inbox"
+                if let Some(mailbox) = current_mailbox {
+                    "{mailbox.name}"
+                } else if let Some(account) = current_account {
+                    "{account.name}"
+                } else {
+                    "Accounts"
+                }
             }
         }
     }

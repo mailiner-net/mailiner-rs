@@ -1,18 +1,21 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use dioxus::prelude::*;
 
-use crate::{
-    components::{EmailNavigation, MessageView, Sidebar},
-    context::AppContext,
-    core_event::core_loop,
-    mailbox::{MailboxId, MailboxNode},
-};
+use crate::account::{Account, AccountId};
+use crate::components::{EmailNavigation, MessageView, Sidebar};
+use crate::context::AppContext;
+use crate::core_event::core_loop;
+use crate::mailbox::{MailboxId, MailboxNode};
+use crate::message::{Message, MessageId};
 
+mod account;
 mod components;
 mod context;
 mod core_event;
 mod mailbox;
+mod message;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -42,6 +45,20 @@ fn MainLayout() -> Element {
 
 #[component]
 fn App() -> Element {
+    let dummy_account_id = AccountId::new();
+
+    let selected_account = use_signal(|| Some(dummy_account_id.clone()));
+    let accounts = use_signal(|| {
+        HashMap::from([(
+            dummy_account_id.clone(),
+            Account {
+                id: dummy_account_id,
+                name: "Valhalla".to_string(),
+                email: "me@dvratil.cz".to_string(),
+            },
+        )])
+    });
+
     let mailbox_nodes = use_signal(|| {
         HashMap::from([
             (
@@ -88,10 +105,37 @@ fn App() -> Element {
     });
     let selected_mailbox = use_signal(|| None);
 
+    let messages = use_signal(|| {
+        vec![
+            Arc::new(Message {
+                id: MessageId::from("1".to_string()),
+                subject: "Hello".to_string(),
+                from: "John Doe".to_string(),
+                to: "Jane Doe".to_string(),
+                cc: "".to_string(),
+                bcc: "".to_string(),
+            }),
+            Arc::new(Message {
+                id: MessageId::from("2".to_string()),
+                subject: "Hello".to_string(),
+                from: "John Doe".to_string(),
+                to: "Jane Doe".to_string(),
+                cc: "".to_string(),
+                bcc: "".to_string(),
+            }),
+        ]
+    });
+    let selected_message = use_signal(|| None);
+
     let ctx = AppContext {
+        accounts,
         mailbox_nodes,
         mailbox_roots,
+        messages,
+
         selected_mailbox,
+        selected_account,
+        selected_message,
     };
     let ctx_clone = ctx.clone();
 

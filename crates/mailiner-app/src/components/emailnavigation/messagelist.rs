@@ -12,7 +12,9 @@ pub fn MessageList() -> Element {
     let messages = ctx.messages.read();
 
     rsx! {
-        section {
+        div {
+            id: "messagelist",
+
             for message in messages.iter() {
                 MessageListItem {
                     message: Arc::clone(&message),
@@ -35,7 +37,8 @@ pub fn MessageListItem(props: MessageListItemProps) -> Element {
     rsx! {
         div {
             class: "message-list-item",
-            class: if let Some(selected_message) = selected_message.as_ref() && *selected_message == props.message.id {
+            // This is a bit of a hack, but if-let chains don't seem to work in Dioxus despite using edition 2024.
+            class: if selected_message.as_ref().map(|id| *id == props.message.id).unwrap_or(false) {
                 "selected"
             },
 

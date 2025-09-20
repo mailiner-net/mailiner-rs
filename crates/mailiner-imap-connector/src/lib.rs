@@ -98,11 +98,13 @@ impl ImapConnector {
 
                 let server_name = ServerName::try_from(self.host.as_str())
                     .map_err(|e| ImapError::Connection(format!("Invalid server name: {}", e)))?;
+                /*
                 let tls_stream = tls.connect(server_name, tcp_stream).await.map_err(|e| {
                     ImapError::Connection(format!("Failed to establish TLS: {}", e))
                 })?;
 
                 *imap = ImapSession::Unauthenticated(Client::new(tls_stream));
+                */
             }
             _ => {
                 // Already connected

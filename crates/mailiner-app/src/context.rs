@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
+
+use crate::mailbox::{MailboxId, MailboxNode};
 
 #[derive(Clone)]
 pub struct AppContext {
-    core_tx: UnboundedSender<CoreEvent>
-    mailboxes: Signal<Vec<Mailbox>>,
-    messages: Signal<Vec<Message>>,
-    selected_mailbox: Signal<Option<Mailbox>>,
-    selected_message: Signal<Option<Message>>,
+    pub mailbox_nodes: Signal<HashMap<MailboxId, MailboxNode>>,
+    pub mailbox_roots: Signal<Vec<MailboxId>>,
+
+    pub selected_mailbox: Signal<Option<MailboxId>>,
 }

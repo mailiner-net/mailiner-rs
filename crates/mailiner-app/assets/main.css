@@ -4,6 +4,11 @@
     
     --sidebar: #fafafa;
     --sidebar-border: #e5e5e5;
+
+    --item-hover-background: #f5f5f5;
+
+    --margin: 10px;
+    --spacing: 10px;
 }
 
 body {
@@ -19,7 +24,7 @@ body {
     height: 100vh;
 
     section {
-        border-right: 1px solid var(--sidebar-border);
+        border-right: 2px solid var(--sidebar-border);
     }
 
     #sidebar {
@@ -28,6 +33,30 @@ body {
 
     #emailnavigation {
         min-width: 15%;
+
+        #navigation-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing);
+            padding: var(--margin);
+        }
+
+        #mailboxtreeview {
+            display: flex;
+            flex-direction: column;
+            
+            .mailbox-tree-view-item {
+                display: flex;
+                align-items: center;
+                gap: var(--spacing);
+                padding: var(--margin);
+                cursor: pointer;
+
+                &:hover {
+                    background-color: var(--item-hover-background);
+                }
+            }
+        }
     }
 
     #messageview {

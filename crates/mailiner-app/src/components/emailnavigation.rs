@@ -1,11 +1,43 @@
 use dioxus::prelude::*;
 
+mod navigationheader;
+mod mailboxtreeview;
+mod messagelist;
+
+pub use navigationheader::NavigationHeader;
+pub use mailboxtreeview::MailboxTreeView;
+pub use messagelist::MessageList;
+
+use crate::{components::emailnavigation::navigationheader::Mode, context::AppContext};
+
 #[component]
 pub fn EmailNavigation() -> Element {
+    let ctx = use_context::<AppContext>();
     rsx! {
         section {
             id: "emailnavigation",
-            "EmailNavigation"
+
+           div {
+                display: if ctx.selected_mailbox.read().is_none() { "block" } else { "none" },
+
+                NavigationHeader {
+                    mode: Mode::MailboxTreeView,
+                }
+
+                MailboxTreeView {
+                }
+            }
+
+            div {
+                display: if ctx.selected_mailbox.read().is_some() { "block" } else { "none" },
+
+                NavigationHeader {
+                    mode: Mode::MessageList,
+                }
+
+                MessageList {
+                }
+            }
         }
     }
 }

@@ -11,6 +11,12 @@ dioxus = { version = "0.6", features = ["router"] }
 dioxus-heroicons = "0.4"
 futures-util = "0.3"
 uuid = { version = "1.18", features = ["v4", "js"] }
+mailiner-core = { path = "../mailiner-core" }
+mailiner-imap-connector = { path = "../mailiner-imap-connector" }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["BinaryType", "MessageEvent", "WebSocket"] }
+tokio = { workspace = true }
+
 
 [features]
 default = ["web"]

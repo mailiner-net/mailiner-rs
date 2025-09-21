@@ -16,6 +16,7 @@ mod context;
 mod core_event;
 mod mailbox;
 mod message;
+mod websocket_stream;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]

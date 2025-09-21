@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -9,7 +10,7 @@ use futures::{StreamExt, TryStreamExt};
 use imap_proto::types::BodyStructure;
 use mail_parser::{Address, MessageParser};
 use thiserror::Error;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::{client::TlsStream, TlsConnector};
@@ -49,28 +50,40 @@ impl From<ImapError> for MailinerError {
     }
 }
 
-struct ImapClient {
-    client: Client<TlsStream<TcpStream>>,
-    session: Option<Session<TlsStream<TcpStream>>>,
+struct ImapClient<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+{
+    client: Client<TlsStream<S>>,
+    session: Option<Session<TlsStream<S>>>,
 }
 
 #[derive(Debug)]
-enum ImapSession {
+enum ImapSession<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+{
     Disconnected,
-    Unauthenticated(Client<TlsStream<TcpStream>>),
+    Unauthenticated(Client<TlsStream<S>>),
     Authenticating,
-    Authenticated(Session<TlsStream<TcpStream>>),
+    Authenticated(Session<TlsStream<S>>),
 }
 
-pub struct ImapConnector {
+pub struct ImapConnector<S> 
+where
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+{
     host: String,
     port: u16,
     username: String,
     password: String,
-    imap: Mutex<ImapSession>,
+    imap: Mutex<ImapSession<S>>,
 }
 
-impl ImapConnector {
+impl<S> ImapConnector<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync,
+{
     pub fn new(host: String, port: u16, username: String, password: String) -> Self {
         Self {
             host,
@@ -81,7 +94,7 @@ impl ImapConnector {
         }
     }
 
-    async fn ensure_connected(&self) -> Result<(), ImapError> {
+    async fn ensure_connected(&self, stream: S) -> Result<(), ImapError> {
         let mut imap = self.imap.lock().await;
         match *imap {
             ImapSession::Disconnected => {
@@ -92,19 +105,14 @@ impl ImapConnector {
                     .with_root_certificates(root_store)
                     .with_no_client_auth();
                 let tls = TlsConnector::from(Arc::new(config));
-                let tcp_stream = TcpStream::connect((self.host.as_str(), self.port))
-                    .await
-                    .map_err(|e| ImapError::Connection(format!("Failed to connect: {}", e)))?;
-
-                let server_name = ServerName::try_from(self.host.as_str())
+                let server_name = ServerName::try_from(self.host.clone())
                     .map_err(|e| ImapError::Connection(format!("Invalid server name: {}", e)))?;
-                /*
-                let tls_stream = tls.connect(server_name, tcp_stream).await.map_err(|e| {
+
+                let tls_stream = tls.connect(server_name, stream).await.map_err(|e| {
                     ImapError::Connection(format!("Failed to establish TLS: {}", e))
                 })?;
 
                 *imap = ImapSession::Unauthenticated(Client::new(tls_stream));
-                */
             }
             _ => {
                 // Already connected
@@ -249,9 +257,13 @@ impl ImapConnector {
 }
 
 #[async_trait]
-impl EmailConnector for ImapConnector {
-    async fn connect(&self) -> MailinerResult<()> {
-        self.ensure_connected().await.map_err(|e| e.into())
+impl<S> EmailConnector<S> for ImapConnector<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync,
+{
+    async fn connect(&self, stream: S) -> MailinerResult<()>
+    {
+        self.ensure_connected(stream).await.map_err(|e| e.into())
     }
 
     async fn disconnect(&self) -> MailinerResult<()> {

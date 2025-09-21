@@ -52,7 +52,7 @@ impl From<ImapError> for MailinerError {
 
 struct ImapClient<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug
 {
     client: Client<TlsStream<S>>,
     session: Option<Session<TlsStream<S>>>,
@@ -61,7 +61,7 @@ where
 #[derive(Debug)]
 enum ImapSession<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug
 {
     Disconnected,
     Unauthenticated(Client<TlsStream<S>>),
@@ -71,7 +71,7 @@ where
 
 pub struct ImapConnector<S> 
 where
-    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug
 {
     host: String,
     port: u16,
@@ -82,7 +82,7 @@ where
 
 impl<S> ImapConnector<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync,
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send
 {
     pub fn new(host: String, port: u16, username: String, password: String) -> Self {
         Self {

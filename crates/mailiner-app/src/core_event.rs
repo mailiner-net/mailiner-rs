@@ -7,6 +7,7 @@ use crate::account::AccountId;
 use crate::context::AppContext;
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
+use crate::websocket_stream::WebSocketStream;
 
 pub enum CoreEvent {
     SelectAccount(AccountId),

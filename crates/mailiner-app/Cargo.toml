@@ -17,6 +17,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["BinaryType", "MessageEvent", "WebSocket"] }
 tokio = { workspace = true }
 
+[build-dependencies]
+dotenv = "0.15"
 
 [features]
 default = ["web"]

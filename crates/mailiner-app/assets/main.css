@@ -3,19 +3,29 @@
     --foreground: #0a0a0a; 
     
     --sidebar: #fafafa;
-    --sidebar-border: #e5e5e5;
+    --sidebar-border: #c7c7c7;
 
     --item-hover-background: #f5f5f5;
     --item-accent: #007bff;
 
     --margin: 10px;
     --spacing: 10px;
+    --spacing-small: 5px;
 }
 
 body {
     margin: 0;
     padding: 0;
     background-color: #fff;
+}
+
+button.flat {
+    border: none;
+    padding: 0;
+    margin: 0;
+    height: 24px;
+    background-color: unset;
+    cursor: pointer;
 }
 
 #app {
@@ -34,6 +44,7 @@ body {
 
     #emailnavigation {
         min-width: 15%;
+        overflow-y: scroll;
 
         #navigation-header {
             display: flex;
@@ -48,13 +59,31 @@ body {
             
             .mailbox-tree-view-item {
                 display: flex;
-                align-items: center;
-                gap: var(--spacing);
-                padding: var(--margin);
-                cursor: pointer;
+                flex-direction: column;
+                min-height: 32px;
 
-                &:hover {
-                    background-color: var(--item-hover-background);
+                >div:first-child {
+                    display: flex;
+                    flex-direction: row;
+                    align-items: center;
+                    gap: var(--spacing-small);
+                    cursor: pointer;
+                    height: 40px;
+
+                    div {
+                        display: block;
+                        flex-grow: 1;
+                        line-height: 40px;
+                    }
+
+                    &:hover {
+                        background-color: var(--item-hover-background);
+                    }
+                }
+
+                >div:last-child {
+                    display: none;
+                    padding-left: calc(2 * var(--margin));
                 }
             }
         }

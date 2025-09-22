@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dioxus::logger::tracing::Level;
 use dioxus::prelude::*;
 
 use crate::account::{Account, AccountId};
 use crate::components::{EmailNavigation, MessageView, Sidebar};
 use crate::context::AppContext;
-use crate::core_event::core_loop;
+use crate::core_event::{core_loop, CoreEvent};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 
@@ -53,57 +54,15 @@ fn App() -> Element {
         HashMap::from([(
             dummy_account_id.clone(),
             Account {
-                id: dummy_account_id,
+                id: dummy_account_id.clone(),
                 name: "Valhalla".to_string(),
                 email: "me@dvratil.cz".to_string(),
             },
         )])
     });
 
-    let mailbox_nodes = use_signal(|| {
-        HashMap::from([
-            (
-                MailboxId::from("INBOX".to_string()),
-                MailboxNode {
-                    id: MailboxId::from("INBOX".to_string()),
-                    name: "INBOX".to_string(),
-                    parent: None,
-                    children: vec![],
-                    unread_count: 0,
-                    total_count: 0,
-                },
-            ),
-            (
-                MailboxId::from("Sent".to_string()),
-                MailboxNode {
-                    id: MailboxId::from("Sent".to_string()),
-                    name: "Sent".to_string(),
-                    parent: None,
-                    children: vec![],
-                    unread_count: 0,
-                    total_count: 0,
-                },
-            ),
-            (
-                MailboxId::from("Drafts".to_string()),
-                MailboxNode {
-                    id: MailboxId::from("Drafts".to_string()),
-                    name: "Drafts".to_string(),
-                    parent: None,
-                    children: vec![],
-                    unread_count: 0,
-                    total_count: 0,
-                },
-            ),
-        ])
-    });
-    let mailbox_roots = use_signal(|| {
-        Vec::from([
-            MailboxId::from("INBOX".to_string()),
-            MailboxId::from("Sent".to_string()),
-            MailboxId::from("Drafts".to_string()),
-        ])
-    });
+    let mailbox_nodes = use_signal(|| HashMap::new());
+    let mailbox_roots = use_signal(|| { Vec::new() });
     let selected_mailbox = use_signal(|| None);
 
     let messages = use_signal(|| {
@@ -141,20 +100,17 @@ fn App() -> Element {
     let ctx_clone = ctx.clone();
 
     use_context_provider(|| ctx);
-    use_coroutine(move |core_rx| {
+    let tx = use_coroutine(move |core_rx| {
         let ctx = ctx_clone.clone();
         async move { core_loop(core_rx, ctx).await }
     });
+    tx.send(CoreEvent::SelectAccount(dummy_account_id.clone()));
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         Router::<Route> {}
-
-        div {
-            id: "app",
-        }
     }
 }
 

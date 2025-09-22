@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use dioxus::logger::tracing::{info, error};
 use futures_util::StreamExt;
 use mailiner_core::Folder;
 use mailiner_core::connector::EmailConnector;
@@ -22,12 +23,22 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
     let password = env!("IMAP_PASSWORD").to_string();
     let websocket_stream = WebSocketStream::new("ws://localhost:9400/proxy?token=testtoken&remote=dvratil.cz:993");
     let connector = ImapConnector::new(
-        "localhost".to_string(),
+        "dvratil.cz".to_string(),
         8081,
         "me@dvratil.cz".to_string(),
-        password,
+        password.clone(),
     );
-    connector.connect(websocket_stream).await;
+
+    info!("Connecting to IMAP server...");
+    connector.connect(websocket_stream).await.or_else(|e| {
+        error!("Failed to connect to IMAP server: {}", e);
+        Err(e)
+    }).expect("Failed to connect to IMAP server");
+    info!("Connected to IMAP server");
+
+    connector.authenticate(password.as_str()).await.expect("Failed to authenticate with IMAP server");
+    info!("Authenticated with IMAP server");
+    
 
     while let Some(event) = core_rx.next().await {
         match event {
@@ -55,9 +66,27 @@ fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<MailboxI
 
     for folder in folders {
         let mailbox_id: MailboxId = folder.id.clone().into();
+        mboxes.entry(mailbox_id.clone()).and_modify(|node| {
+            node.parent = folder.parent_id.as_ref().map(|id| id.clone().into());
+            node.name = folder.name.clone();
+        }).or_insert(MailboxNode {
+            id: mailbox_id.clone(),
+            name: folder.name.clone(),
+            parent: folder.parent_id.as_ref().map(|id| id.clone().into()),
+            children: vec![],
+            unread_count: 0,
+            total_count: 0,
+        });
         mboxes.insert(mailbox_id.clone(), folder.clone().into());
         if let Some(parent_id) = folder.parent_id.clone() {
-            mboxes.get_mut(&parent_id.into()).unwrap().children.push(mailbox_id);
+            mboxes.entry(parent_id.clone().into()).or_insert(MailboxNode {
+                id: parent_id.clone().into(),
+                name: parent_id.to_string(),
+                parent: None,
+                children: vec![],
+                unread_count: 0,
+                total_count: 0,
+            }).children.push(mailbox_id);
         } else {
             root_ids.push(mailbox_id);
         }

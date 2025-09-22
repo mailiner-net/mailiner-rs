@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use dioxus::logger::tracing::{info, error};
 use send_wrapper::SendWrapper;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use web_sys::wasm_bindgen::prelude::*;
@@ -11,8 +12,10 @@ use web_sys::{BinaryType, CloseEvent, Event, MessageEvent, WebSocket};
 #[derive(Debug)]
 pub struct WebSocketStreamInner {
     web_socket: SendWrapper<Option<WebSocket>>,
-    buf: Vec<u8>,
-    wakers: Vec<Waker>,
+    read_buf: Vec<u8>,
+    write_buf: Vec<u8>,
+    read_wakers: Vec<Waker>,
+    write_waiters: Vec<Waker>,
 }
 
 impl WebSocketStreamInner {
@@ -25,8 +28,10 @@ impl WebSocketStreamInner {
         let web_socket = SendWrapper::new(Some(web_socket));
         Self {
             web_socket,
-            buf: Vec::with_capacity(4096),
-            wakers: Vec::new(),
+            read_buf: Vec::with_capacity(4096),
+            write_buf: Vec::with_capacity(4096),
+            read_wakers: Vec::new(),
+            write_waiters: Vec::new(),
         }
     }
 
@@ -34,20 +39,25 @@ impl WebSocketStreamInner {
         if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
             let array = js_sys::Uint8Array::new(&abuf);
             let data = array.to_vec();
-            self.buf.extend_from_slice(&data);
+            self.read_buf.extend_from_slice(&data);
 
-            for waker in self.wakers.drain(..) {
+            for waker in self.read_wakers.drain(..) {
                 waker.wake();
             }
         }
     }
 
     pub fn on_close(&mut self, e: CloseEvent) {
-        println!("WebSocket closed: {:?}", e);
+        info!("WebSocket closed: {:?}", e);
     }
 
     pub fn on_open(&mut self) {
-        println!("WebSocket opened");
+        info!("WebSocket opened");
+        if !self.write_waiters.is_empty() {
+            for waker in self.write_waiters.drain(..) {
+                waker.wake();
+            }
+        }
     }
 }
 
@@ -80,7 +90,7 @@ impl WebSocketStream {
                 .on_message(e);
         });
         let onerror_cb = Closure::<dyn FnMut(Event)>::new(move |e: Event| {
-            println!("WebSocket error: {:?}", e);
+            error!("WebSocket error: {:?}", e);
         });
         let inner_clone = Arc::clone(&inner);
         let onclose_cb = Closure::<dyn FnMut(CloseEvent)>::new(move |e: CloseEvent| {
@@ -124,13 +134,13 @@ impl AsyncRead for WebSocketStream {
             )));
         }
 
-        if inner.buf.is_empty() {
-            inner.wakers.push(cx.waker().clone());
+        if inner.read_buf.is_empty() {
+            inner.read_wakers.push(cx.waker().clone());
             Poll::Pending
         } else {
-            let len = std::cmp::min(inner.buf.len(), buf.remaining());
-            buf.put_slice(&inner.buf[..len]);
-            inner.buf.drain(..len);
+            let len = std::cmp::min(inner.read_buf.len(), buf.remaining());
+            buf.put_slice(&inner.read_buf[..len]);
+            inner.read_buf.drain(..len);
             Poll::Ready(Ok(()))
         }
     }
@@ -142,10 +152,19 @@ impl AsyncWrite for WebSocketStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let inner = self.inner.lock().expect("Failed to lock web socket");
+        let mut inner = self.inner.lock().expect("Failed to lock web socket");
         if let Some(web_socket) = inner.web_socket.as_ref() {
-            web_socket.send_with_u8_array(buf);
-            Poll::Ready(Ok(buf.len()))
+            if web_socket.ready_state() == WebSocket::OPEN {
+                web_socket.send_with_u8_array(buf).map_err(|e| {
+                    error!("Failed to send WebSocket message: {:?}", e);
+                    io::Error::new(io::ErrorKind::Other, "Failed to send WebSocket message")
+                })?;
+                info!("WebSocket wrote {} bytes", buf.len());
+                Poll::Ready(Ok(buf.len()))
+            } else {
+                inner.write_waiters.push(cx.waker().clone());
+                Poll::Pending
+            }
         } else {
             Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::NotConnected,

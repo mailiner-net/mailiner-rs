@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::{client::TlsStream, TlsConnector};
+use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder, FolderId, Group,
@@ -108,9 +109,11 @@ where
                 let server_name = ServerName::try_from(self.host.clone())
                     .map_err(|e| ImapError::Connection(format!("Invalid server name: {}", e)))?;
 
+                info!("Establishing TLS connection...");
                 let tls_stream = tls.connect(server_name, stream).await.map_err(|e| {
                     ImapError::Connection(format!("Failed to establish TLS: {}", e))
                 })?;
+                info!("TLS stream established");
 
                 *imap = ImapSession::Unauthenticated(Client::new(tls_stream));
             }
@@ -320,19 +323,24 @@ where
         if let ImapSession::Authenticated(session) = &mut *imap {
             let mut mailboxes = Vec::new();
             let mut list = session
-                .list(Some(""), Some("*"))
+                .lsub(Some(""), Some("*"))
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to list folders: {}", e)))?;
 
             while let Some(result) = list.next().await {
                 let mailbox =
                     result.map_err(|e| ImapError::Imap(format!("Failed to get mailbox: {}", e)))?;
-                let name = mailbox.name().to_string();
+                let full_name = mailbox.name().to_string();
+                let name_chunked = full_name.split(mailbox.delimiter().unwrap_or("/")).collect::<Vec<&str>>();
                 mailboxes.push(Folder {
-                    id: FolderId::new(name.clone()),
+                    id: FolderId::new(mailbox.name().to_string()),
                     account_id: account_id.clone(),
-                    name,
-                    parent_id: None,
+                    name: name_chunked.last().unwrap_or(&mailbox.name()).to_string(),
+                    parent_id: if name_chunked.len() > 1 {
+                        Some(FolderId::new(name_chunked[..name_chunked.len() - 1].join(mailbox.delimiter().unwrap_or("/"))))
+                    } else {
+                        None
+                    },
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 });

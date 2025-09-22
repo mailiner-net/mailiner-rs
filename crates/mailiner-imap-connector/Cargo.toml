@@ -20,3 +20,4 @@ mail-parser = "0.10"
 mailiner-core = { path = "../mailiner-core" } 
 uuid = { version = "1.16", features = ["js"] }
 webpki-roots = "0.26"
+tracing = { version = "0.1" }

@@ -13,8 +13,9 @@ futures-util = "0.3"
 uuid = { version = "1.18", features = ["v4", "js"] }
 mailiner-core = { path = "../mailiner-core" }
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
+send_wrapper = "0.6"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["BinaryType", "MessageEvent", "WebSocket"] }
+web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "MessageEvent", "WebSocket"] }
 tokio = { workspace = true }
 
 [build-dependencies]

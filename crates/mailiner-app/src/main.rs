@@ -46,7 +46,7 @@ fn MainLayout() -> Element {
 
 #[component]
 fn App() -> Element {
-    let dummy_account_id = AccountId::new();
+    let dummy_account_id = AccountId::new("1");
 
     let selected_account = use_signal(|| Some(dummy_account_id.clone()));
     let accounts = use_signal(|| {

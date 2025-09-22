@@ -1858,8 +1858,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2720,6 +2722,7 @@ dependencies = [
  "js-sys",
  "mailiner-core",
  "mailiner-imap-connector",
+ "send_wrapper",
  "tokio",
  "uuid",
  "web-sys",
@@ -2751,6 +2754,7 @@ dependencies = [
  "imap-proto",
  "mail-parser",
  "mailiner-core",
+ "ring",
  "rustls",
  "rustls-pki-types",
  "thiserror 2.0.12",
@@ -3830,6 +3834,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd3c25631629d034ce7cd9940adc9d45762d46de2b0f57193c4443b92c6d4d40"
 dependencies = [
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",

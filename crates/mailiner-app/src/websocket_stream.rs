@@ -3,13 +3,14 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use send_wrapper::SendWrapper;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use web_sys::wasm_bindgen::prelude::*;
-use web_sys::{BinaryType, MessageEvent, WebSocket};
+use web_sys::{BinaryType, CloseEvent, Event, MessageEvent, WebSocket};
 
 #[derive(Debug)]
 pub struct WebSocketStreamInner {
-    web_socket: Option<WebSocket>,
+    web_socket: SendWrapper<Option<WebSocket>>,
     buf: Vec<u8>,
     wakers: Vec<Waker>,
 }
@@ -19,7 +20,9 @@ impl WebSocketStreamInner {
         let web_socket = WebSocket::new(url).unwrap();
         web_socket.set_binary_type(BinaryType::Arraybuffer);
 
-        let web_socket = Some(web_socket);
+        // JS objects are not Send, but in JavaScript we only have a single thread, so it's safe to wrap them
+        // in SendWrapper to make the code that wants Send+Sync happy.
+        let web_socket = SendWrapper::new(Some(web_socket));
         Self {
             web_socket,
             buf: Vec::with_capacity(4096),
@@ -39,23 +42,23 @@ impl WebSocketStreamInner {
         }
     }
 
-    pub fn on_error(&mut self, e: MessageEvent) {
-        println!("WebSocket error: {:?}", e);
-    }
-
-    pub fn on_close(&mut self, e: MessageEvent) {
-        self.web_socket = None;
+    pub fn on_close(&mut self, e: CloseEvent) {
         println!("WebSocket closed: {:?}", e);
     }
 
-    pub fn on_open(&mut self, e: MessageEvent) {
-        println!("WebSocket opened: {:?}", e);
+    pub fn on_open(&mut self) {
+        println!("WebSocket opened");
     }
 }
 
 #[derive(Debug)]
 pub struct WebSocketStream {
     inner: Arc<Mutex<WebSocketStreamInner>>,
+
+    onopen_cb: SendWrapper<Closure<dyn FnMut()>>,
+    onmessage_cb: SendWrapper<Closure<dyn FnMut(MessageEvent)>>,
+    onerror_cb: SendWrapper<Closure<dyn FnMut(Event)>>,
+    onclose_cb: SendWrapper<Closure<dyn FnMut(CloseEvent)>>,
 }
 
 impl WebSocketStream {
@@ -63,11 +66,11 @@ impl WebSocketStream {
         let inner = Arc::new(Mutex::new(WebSocketStreamInner::new(url)));
 
         let inner_clone = Arc::clone(&inner);
-        let onopen_cb = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        let onopen_cb = Closure::<dyn FnMut()>::new(move || {
             inner_clone
                 .lock()
                 .expect("Failed to lock web socket")
-                .on_open(e);
+                .on_open();
         });
         let inner_clone = Arc::clone(&inner);
         let onmessage_cb = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
@@ -76,15 +79,11 @@ impl WebSocketStream {
                 .expect("Failed to lock web socket")
                 .on_message(e);
         });
-        let inner_clone = Arc::clone(&inner);
-        let onerror_cb = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
-            inner_clone
-                .lock()
-                .expect("Failed to lock web socket")
-                .on_error(e);
+        let onerror_cb = Closure::<dyn FnMut(Event)>::new(move |e: Event| {
+            println!("WebSocket error: {:?}", e);
         });
         let inner_clone = Arc::clone(&inner);
-        let onclose_cb = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
+        let onclose_cb = Closure::<dyn FnMut(CloseEvent)>::new(move |e: CloseEvent| {
             inner_clone
                 .lock()
                 .expect("Failed to lock web socket")
@@ -101,7 +100,13 @@ impl WebSocketStream {
             }
         }
 
-        Self { inner }
+        Self {
+            inner,
+            onopen_cb: SendWrapper::new(onopen_cb),
+            onmessage_cb: SendWrapper::new(onmessage_cb),
+            onerror_cb: SendWrapper::new(onerror_cb),
+            onclose_cb: SendWrapper::new(onclose_cb),
+        }
     }
 }
 

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use dioxus::prelude::*;
 use dioxus::logger::tracing::{info, error};
 use futures_util::StreamExt;
-use mailiner_core::Folder;
+use mailiner_core::{Folder, FolderId};
 use mailiner_core::connector::EmailConnector;
 use mailiner_imap_connector::ImapConnector;
 
@@ -51,7 +52,11 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 ctx.selected_mailbox.set(None);
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
-                ctx.selected_mailbox.set(Some(mailbox_id));
+                ctx.messages.set(Vec::new());
+                ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+                let folder_id = FolderId::new(mailbox_id.to_string());
+                let messages = connector.list_envelopes(&folder_id).await.unwrap();
+                ctx.messages.set(messages.into_iter().map(|e| Arc::new(e.into())).collect());
             }
             CoreEvent::SelectMessage(message_id) => {
                 ctx.selected_message.set(Some(message_id));

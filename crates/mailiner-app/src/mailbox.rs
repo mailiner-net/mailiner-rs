@@ -15,6 +15,12 @@ impl From<FolderId> for MailboxId {
     }
 }
 
+impl ToString for MailboxId {
+    fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
 
 pub struct MailboxNode {
     pub id: MailboxId,

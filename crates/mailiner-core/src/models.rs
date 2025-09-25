@@ -28,16 +28,58 @@ pub struct EmailAddr {
     pub email: Option<String>,
 }
 
+impl ToString for EmailAddr {
+    fn to_string(&self) -> String {
+        match (self.name.as_ref(), self.email.as_ref()) {
+            (Some(name), Some(email)) => format!("{} <{}>", name, email),
+            (Some(name), None) => format!("{}", name),
+            (None, Some(email)) => format!("{}", email),
+            (None, None) => String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub name: Option<String>,
-    pub members: Vec<EmailAddr>
+    pub members: Vec<EmailAddr>,
+}
+
+impl ToString for Group {
+    fn to_string(&self) -> String {
+        match self.name.as_ref() {
+            Some(name) => format!(
+                "{}: {}",
+                name,
+                self.members
+                    .iter()
+                    .map(EmailAddr::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => self
+                .members
+                .iter()
+                .map(EmailAddr::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EmailAddress {
     List(Vec<EmailAddr>),
-    Group(Vec<Group>)
+    Group(Vec<Group>),
+}
+
+impl ToString for EmailAddress {
+    fn to_string(&self) -> String {
+        match self {
+            EmailAddress::List(list) => list.iter().map(|e| e.to_string()).collect(),
+            EmailAddress::Group(group) => group.iter().map(|g| g.to_string()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,4 +136,4 @@ pub struct AccountMetadata {
     pub id: AccountId,
     pub last_sync: DateTime<Utc>,
     pub folders: Vec<FolderMetadata>,
-} 
+}

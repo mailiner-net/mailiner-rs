@@ -65,26 +65,7 @@ fn App() -> Element {
     let mailbox_roots = use_signal(|| { Vec::new() });
     let selected_mailbox = use_signal(|| None);
 
-    let messages = use_signal(|| {
-        vec![
-            Arc::new(Message {
-                id: MessageId::from("1".to_string()),
-                subject: "Hello".to_string(),
-                from: "John Doe".to_string(),
-                to: "Jane Doe".to_string(),
-                cc: "".to_string(),
-                bcc: "".to_string(),
-            }),
-            Arc::new(Message {
-                id: MessageId::from("2".to_string()),
-                subject: "Hello".to_string(),
-                from: "John Doe".to_string(),
-                to: "Jane Doe".to_string(),
-                cc: "".to_string(),
-                bcc: "".to_string(),
-            }),
-        ]
-    });
+    let messages = use_signal(|| Vec::new());
     let selected_message = use_signal(|| None);
 
     let ctx = AppContext {

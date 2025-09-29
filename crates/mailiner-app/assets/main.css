@@ -115,4 +115,83 @@ button.flat {
     #messageview {
         flex-grow: 1.0;
     }
+
+    /* Virtual scroll styles */
+    .virtual-scroll-container {
+        position: relative;
+        overflow-y: auto;
+    }
+
+    .virtual-scroll-spacer {
+        position: relative;
+    }
+
+    .virtual-scroll-content {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+    }
+
+    .virtual-scroll-item {
+        box-sizing: border-box;
+    }
+
+    .virtual-scroll-placeholder {
+        display: flex;
+        align-items: center;
+        padding: 8px;
+    }
+
+    .loading-skeleton {
+        height: 60%;
+        width: 100%;
+        background: linear-gradient(90deg, #f0f0f0 25%, #f8f8f8 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 4px;
+    }
+
+    @keyframes shimmer {
+        0% {
+            background-position: -200% 0;
+        }
+        100% {
+            background-position: 200% 0;
+        }
+    }
+
+    #virtual-messagelist {
+        .message-list-item {
+            padding: 12px;
+            border-bottom: 1px solid #e0e0e0;
+            cursor: pointer;
+            transition: background-color 0.2s;
+
+            &:hover {
+                background-color: var(--item-hover-background);
+            }
+
+            &.selected {
+                background-color: #e3f2fd;
+            }
+
+            .message-list-item-content {
+                .message-from {
+                    font-weight: 600;
+                    margin-bottom: 4px;
+                }
+
+                .message-subject {
+                    color: #333;
+                    margin-bottom: 2px;
+                }
+
+                .message-cc {
+                    font-size: 0.9em;
+                    color: #666;
+                }
+            }
+        }
+    }
 }

@@ -1,10 +1,11 @@
 use std::fmt::Debug;
+use std::ops::Range;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::error::{MailinerError, Result};
+use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId, MessagePartId};
 use crate::models::{Account, Envelope, Folder, MessagePart};
 
@@ -31,6 +32,7 @@ where
 
     // Envelope operations
     async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>>;
+    async fn list_envelopes_range(&self, folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envelope>>;
     async fn get_envelope(&self, message_id: &MessageId) -> Result<Envelope>;
     async fn update_envelope_flags(
         &self,
@@ -122,36 +124,78 @@ where
     }
 
     async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>> {
-        let message_id = MessageId::new("test-message-1");
-        Ok(vec![Envelope {
-            id: message_id.clone(),
-            account_id: AccountId::new("mock-account-1"),
-            folder_id: folder_id.clone(),
-            subject: Some("Test Message".to_string()),
-            from: Some(crate::models::EmailAddress::List(vec![
-                crate::models::EmailAddr {
-                    name: Some("Test Sender".to_string()),
-                    email: Some("sender@example.com".to_string()),
-                },
-            ])),
-            to: Some(crate::models::EmailAddress::List(vec![
-                crate::models::EmailAddr {
-                    name: Some("Test Recipient".to_string()),
-                    email: Some("recipient@example.com".to_string()),
-                },
-            ])),
-            cc: None,
-            bcc: None,
-            date: Utc::now(),
-            is_read: false,
-            is_starred: false,
-            is_flagged: false,
-            is_draft: false,
-            is_deleted: false,
-            has_attachments: true,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        }])
+        // Call the range version with default range
+        let mut envelopes = Vec::new();
+        for i in 0..100 {
+            let message_id = MessageId::new(format!("test-message-{}", i + 1));
+            envelopes.push(Envelope {
+                id: message_id.clone(),
+                account_id: AccountId::new("mock-account-1"),
+                folder_id: folder_id.clone(),
+                subject: Some(format!("Test Message {}", i + 1)),
+                from: Some(crate::models::EmailAddress::List(vec![
+                    crate::models::EmailAddr {
+                        name: Some(format!("Sender {}", i + 1)),
+                        email: Some(format!("sender{}@example.com", i + 1)),
+                    },
+                ])),
+                to: Some(crate::models::EmailAddress::List(vec![
+                    crate::models::EmailAddr {
+                        name: Some("Test Recipient".to_string()),
+                        email: Some("recipient@example.com".to_string()),
+                    },
+                ])),
+                cc: None,
+                bcc: None,
+                date: Utc::now(),
+                is_read: i % 3 == 0,
+                is_starred: i % 5 == 0,
+                is_flagged: false,
+                is_draft: false,
+                is_deleted: false,
+                has_attachments: i % 2 == 0,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            });
+        }
+        Ok(envelopes)
+    }
+
+    async fn list_envelopes_range(&self, folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envelope>> {
+        let mut envelopes = Vec::new();
+        for i in range {
+            let message_id = MessageId::new(format!("test-message-{}", i + 1));
+            envelopes.push(Envelope {
+                id: message_id.clone(),
+                account_id: AccountId::new("mock-account-1"),
+                folder_id: folder_id.clone(),
+                subject: Some(format!("Test Message {}", i + 1)),
+                from: Some(crate::models::EmailAddress::List(vec![
+                    crate::models::EmailAddr {
+                        name: Some(format!("Sender {}", i + 1)),
+                        email: Some(format!("sender{}@example.com", i + 1)),
+                    },
+                ])),
+                to: Some(crate::models::EmailAddress::List(vec![
+                    crate::models::EmailAddr {
+                        name: Some("Test Recipient".to_string()),
+                        email: Some("recipient@example.com".to_string()),
+                    },
+                ])),
+                cc: None,
+                bcc: None,
+                date: Utc::now(),
+                is_read: i % 3 == 0,
+                is_starred: i % 5 == 0,
+                is_flagged: false,
+                is_draft: false,
+                is_deleted: false,
+                has_attachments: i % 2 == 0,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            });
+        }
+        Ok(envelopes)
     }
 
     async fn get_envelope(&self, message_id: &MessageId) -> Result<Envelope> {

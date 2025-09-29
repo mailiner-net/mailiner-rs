@@ -398,6 +398,10 @@ where
     }
 
     async fn list_envelopes(&self, folder_id: &FolderId) -> MailinerResult<Vec<Envelope>> {
+        self.list_envelopes_range(folder_id, 0..usize::MAX).await
+    }
+
+    async fn list_envelopes_range(&self, folder_id: &FolderId, range: std::ops::Range<usize>) -> MailinerResult<Vec<Envelope>> {
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
             session
@@ -406,8 +410,16 @@ where
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
             let mut envelopes = Vec::new();
+
+            // Convert range to IMAP sequence set format
+            let sequence_set = if range.end == usize::MAX {
+                format!("{}:*", range.start + 1)  // IMAP uses 1-based indexing
+            } else {
+                format!("{}:{}", range.start + 1, range.end)
+            };
+
             let mut fetch = session
-                .uid_fetch("1:*", "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
+                .uid_fetch(&sequence_set, "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {}", e)))?;
 

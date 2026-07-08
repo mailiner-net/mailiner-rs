@@ -129,10 +129,10 @@ impl ViewportInfo {
         item_height: f64,
         total_items: usize,
     ) -> Self {
-        if total_items == 0 || item_height <= 0.0 {
+        if total_items == 0 || item_height <= 0.0 || viewport_height <= 0.0 {
             return Self {
                 scroll_top,
-                viewport_height,
+                viewport_height: viewport_height.max(0.0),
                 first_visible_index: 0,
                 last_visible_index: 0,
                 visible_count: 0,
@@ -153,6 +153,9 @@ impl ViewportInfo {
     }
 
     pub fn buffered_range(&self, buffer_size: usize, total_items: usize) -> Range<usize> {
+        if self.visible_count == 0 || total_items == 0 {
+            return 0..0;
+        }
         let start = self.first_visible_index.saturating_sub(buffer_size);
         let end = (self.last_visible_index + buffer_size + 1).min(total_items);
         start..end
@@ -199,7 +202,7 @@ fn queue_missing_fetches<T: Clone>(
     pending: &RefCell<Vec<Range<usize>>>,
     on_need_range: EventHandler<Range<usize>>,
 ) {
-    if items.total_count() == 0 {
+    if items.total_count() == 0 || buffered.start >= buffered.end {
         return;
     }
 
@@ -231,7 +234,6 @@ where
     /// Sparse cache of loaded items (shared with the data layer).
     pub items: Signal<SparseList<T>>,
     pub item_height: f64,
-    pub viewport_height: f64,
     /// Extra rows above/below the viewport to pre-fetch and pre-render.
     pub buffer_size: usize,
     /// Fired when a contiguous range of missing indices should be loaded.
@@ -249,8 +251,10 @@ pub fn VirtualScroll<T>(props: VirtualScrollProps<T>) -> Element
 where
     T: Clone + PartialEq + 'static,
 {
+    // Measured content-box height from ResizeObserver; 0 until first observation.
+    let mut measured_height = use_signal(|| 0.0f64);
     let mut viewport_info = use_signal(|| {
-        ViewportInfo::calculate(0.0, props.viewport_height, props.item_height, 0)
+        ViewportInfo::calculate(0.0, 0.0, props.item_height, 0)
     });
     // Non-reactive bookkeeping — must not be a Signal (writing Signals inside
     // effects that also read them re-triggers the effect forever and freezes wasm).
@@ -259,8 +263,8 @@ where
     let mut scroll_generation = use_signal(|| 0u64);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
-    // React only to `items` changes. Never write reactive state that this effect
-    // also reads (except viewport reset via peek).
+    // React to `items` and measured height. Never write reactive state that this
+    // effect also reads with `.read()` (use peek for viewport when writing it).
     use_effect({
         let props = props.clone();
         let pending_ranges = pending_ranges.clone();
@@ -268,23 +272,32 @@ where
         move || {
             let items = props.items.read().clone();
             let total = items.total_count();
+            let height = *measured_height.read();
 
-            if total != last_total.get() {
+            let total_changed = total != last_total.get();
+            if total_changed {
                 last_total.set(total);
                 pending_ranges.borrow_mut().clear();
-                // Writing viewport is fine: this effect does not subscribe to it.
-                viewport_info.set(ViewportInfo::calculate(
-                    0.0,
-                    props.viewport_height,
-                    props.item_height,
-                    total,
-                ));
             }
 
-            let vp = *viewport_info.peek();
-            let buffered = vp.buffered_range(props.buffer_size, total);
-            // Only mutates non-reactive pending bookkeeping + fires fetch events.
-            // Must not write `props.items` here — that would re-trigger this effect.
+            let scroll_top = if total_changed {
+                0.0
+            } else {
+                viewport_info.peek().scroll_top
+            };
+            let new_vp =
+                ViewportInfo::calculate(scroll_top, height, props.item_height, total);
+            if new_vp != *viewport_info.peek() {
+                viewport_info.set(new_vp);
+            }
+
+            // Wait for ResizeObserver before requesting data so we only fetch
+            // what fits the real viewport (+ buffer).
+            if height <= 0.0 {
+                return;
+            }
+
+            let buffered = new_vp.buffered_range(props.buffer_size, total);
             queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
         }
     });
@@ -304,9 +317,10 @@ where
             if let Some(element) = container_clone.read().as_ref() {
                 if let Ok(offset) = element.get_scroll_offset().await {
                     let total = props.items.peek().total_count();
+                    let height = *measured_height.peek();
                     let vp = ViewportInfo::calculate(
                         offset.y,
-                        props.viewport_height,
+                        height,
                         props.item_height,
                         total,
                     );
@@ -323,6 +337,10 @@ where
 
             let items = props.items.peek().clone();
             let total = items.total_count();
+            let height = *measured_height.peek();
+            if height <= 0.0 {
+                return;
+            }
             let vp = *viewport_info.peek();
             let buffered = vp.buffered_range(props.buffer_size, total);
             queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
@@ -337,11 +355,40 @@ where
         });
     };
 
+    let handle_resize = move |evt: Event<ResizeData>| {
+        let height = evt
+            .data()
+            .get_content_box_size()
+            .map(|s| s.height)
+            .or_else(|_| {
+                evt.data()
+                    .get_border_box_size()
+                    .map(|s| s.height)
+            })
+            .unwrap_or(0.0);
+
+        let prev = *measured_height.peek();
+        // Ignore sub-pixel noise from the observer.
+        if (height - prev).abs() < 0.5 {
+            return;
+        }
+        measured_height.set(height.max(0.0));
+        // The items/height effect recalculates the viewport and queues fetches.
+    };
+
     let total = props.items.read().total_count();
     let total_height = total as f64 * props.item_height;
     let vp = *viewport_info.read();
-    let render_start = vp.first_visible_index.saturating_sub(props.buffer_size);
-    let render_end = (vp.last_visible_index + props.buffer_size + 1).min(total);
+    let render_start = if vp.visible_count == 0 {
+        0
+    } else {
+        vp.first_visible_index.saturating_sub(props.buffer_size)
+    };
+    let render_end = if vp.visible_count == 0 {
+        0
+    } else {
+        (vp.last_visible_index + props.buffer_size + 1).min(total)
+    };
 
     let items_to_render: Vec<(usize, Option<T>)> = {
         let items = props.items.read();
@@ -353,10 +400,22 @@ where
     rsx! {
         div {
             class: "virtual-scroll-container",
-            style: "position: relative; height: {props.viewport_height}px; overflow-y: auto;",
+            // Fill the parent; height is measured via ResizeObserver (onresize).
+            style: "position: relative; height: 100%; width: 100%; overflow-y: auto;",
             onscroll: handle_scroll,
+            onresize: handle_resize,
             onmounted: move |node_ref| {
-                container_ref.set(Some(node_ref.data()));
+                let data = node_ref.data();
+                container_ref.set(Some(data.clone()));
+                // Bootstrap size if ResizeObserver is delayed; onresize will refine it.
+                spawn(async move {
+                    if let Ok(rect) = data.get_client_rect().await {
+                        let height = rect.height();
+                        if height > 0.0 && (*measured_height.peek() - height).abs() >= 0.5 {
+                            measured_height.set(height);
+                        }
+                    }
+                });
             },
 
             div {
@@ -435,5 +494,22 @@ mod tests {
         let pending = vec![5..10];
         let result = subtract_pending(needed, &pending);
         assert_eq!(result, vec![0..5, 10..20]);
+    }
+
+    #[test]
+    fn viewport_zero_height_requests_nothing() {
+        let vp = ViewportInfo::calculate(0.0, 0.0, 72.0, 1000);
+        assert_eq!(vp.visible_count, 0);
+        assert_eq!(vp.buffered_range(15, 1000), 0..0);
+    }
+
+    #[test]
+    fn viewport_measured_height_drives_visible_count() {
+        // 320px / 72px ≈ 4.44 → ceil + 1 = 6 visible rows
+        let vp = ViewportInfo::calculate(0.0, 320.0, 72.0, 1000);
+        assert_eq!(vp.first_visible_index, 0);
+        assert_eq!(vp.visible_count, 6);
+        assert_eq!(vp.last_visible_index, 5);
+        assert_eq!(vp.buffered_range(2, 1000), 0..8);
     }
 }

@@ -10,8 +10,7 @@ use crate::core_event::CoreEvent;
 use crate::message::Message;
 
 const ITEM_HEIGHT: f64 = 72.0;
-const VIEWPORT_HEIGHT: f64 = 320.0;
-const BUFFER_SIZE: usize = 15;
+const BUFFER_SIZE: usize = 5;
 const MAX_CACHED: usize = 500;
 
 #[component]
@@ -94,7 +93,6 @@ pub fn MessageList() -> Element {
                     VirtualScroll {
                         items: ctx.messages,
                         item_height: ITEM_HEIGHT,
-                        viewport_height: VIEWPORT_HEIGHT,
                         buffer_size: BUFFER_SIZE,
                         debounce_ms: Some(100),
                         max_cached: Some(MAX_CACHED),

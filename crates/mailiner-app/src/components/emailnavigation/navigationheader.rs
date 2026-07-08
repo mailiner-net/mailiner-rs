@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dioxus_heroicons::{solid::Shape, Icon, IconButton};
+use dioxus_heroicons::{solid::Shape, Icon};
 
 use crate::context::AppContext;
 
@@ -16,7 +16,7 @@ pub struct EmailNavigationHeaderProps {
 
 #[component]
 pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
-    let mut ctx = use_context::<AppContext>();
+    let ctx = use_context::<AppContext>();
     let mailboxes = ctx.mailbox_nodes.read();
     let accounts = ctx.accounts.read();
     let current_mailbox_id = ctx.selected_mailbox.read();
@@ -24,22 +24,11 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
 
     let current_mailbox = current_mailbox_id
         .as_ref()
-        .and_then(|id| mailboxes.get(&id));
-    let current_account = current_account_id.as_ref().and_then(|id| accounts.get(&id));
+        .and_then(|id| mailboxes.get(id));
+    let current_account = current_account_id.as_ref().and_then(|id| accounts.get(id));
     rsx! {
         header {
-            id: "navigation-header",
-
-            IconButton {
-                class: "back-button",
-
-                onclick: move |_| {
-                    ctx.selected_mailbox.set(None);
-                },
-
-                size: 24,
-                icon: Shape::ChevronLeft,
-            }
+            class: "pane-header",
 
             Icon {
                 size: 24,
@@ -47,8 +36,12 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             div {
-                if let Some(mailbox) = current_mailbox {
-                    "{mailbox.name}"
+                if props.mode == Mode::MessageList {
+                    if let Some(mailbox) = current_mailbox {
+                        "{mailbox.name}"
+                    } else {
+                        "Messages"
+                    }
                 } else if let Some(account) = current_account {
                     "{account.name}"
                 } else {

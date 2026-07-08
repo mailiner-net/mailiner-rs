@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
-use crate::components::{EmailNavigation, MessageView, Sidebar};
+use crate::components::{EmailNavigation, MessageList, MessageView};
 use crate::context::AppContext;
 use crate::core_event::{core_loop, CoreEvent};
 
@@ -34,11 +34,7 @@ fn main() {
 #[component]
 fn MainLayout() -> Element {
     rsx! {
-        div {
-            id: "app",
-
-            Outlet::<Route> {}
-        }
+        Outlet::<Route> {}
     }
 }
 
@@ -100,13 +96,17 @@ fn MainView() -> Element {
         div {
             id: "app",
 
-            Sidebar {
-            }
-
             EmailNavigation {
             }
 
-            MessageView {
+            div {
+                id: "content",
+
+                MessageList {
+                }
+
+                MessageView {
+                }
             }
         }
     }

@@ -36,12 +36,20 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let mailboxes = ctx.mailbox_nodes.read();
     let mailbox = mailboxes.get(&props.mailbox_id).unwrap();
+    let is_selected = ctx
+        .selected_mailbox
+        .read()
+        .as_ref()
+        .map(|id| *id == props.mailbox_id)
+        .unwrap_or(false);
     let mut children_visible = use_signal(|| false);
     rsx! {
         div {
             class: "mailbox-tree-view-item",
 
             div {
+                class: if is_selected { "selected" },
+
                 onclick: move |_| {
                     let _ = core_tx.send(CoreEvent::SelectMailbox(props.mailbox_id.clone()));
                 },

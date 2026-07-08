@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 use dioxus::prelude::*;
 
+use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
 use crate::components::virtual_scroll::VirtualScroll;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::message::Message;
 
 const ITEM_HEIGHT: f64 = 72.0;
-const VIEWPORT_HEIGHT: f64 = 600.0;
+const VIEWPORT_HEIGHT: f64 = 320.0;
 const BUFFER_SIZE: usize = 15;
 const MAX_CACHED: usize = 500;
 
@@ -64,34 +65,42 @@ pub fn MessageList() -> Element {
     };
 
     rsx! {
-        div {
+        section {
             id: "messagelist",
 
-            if selected_mailbox.is_none() {
-                div {
-                    class: "message-list-empty",
-                    "Select a mailbox to view messages"
-                }
-            } else if loading {
-                div {
-                    class: "message-list-empty",
-                    "Loading…"
-                }
-            } else if total == 0 {
-                div {
-                    class: "message-list-empty",
-                    "No messages"
-                }
-            } else {
-                VirtualScroll {
-                    items: ctx.messages,
-                    item_height: ITEM_HEIGHT,
-                    viewport_height: VIEWPORT_HEIGHT,
-                    buffer_size: BUFFER_SIZE,
-                    debounce_ms: Some(100),
-                    max_cached: Some(MAX_CACHED),
-                    on_need_range: on_need_range,
-                    render_item: render_item,
+            NavigationHeader {
+                mode: Mode::MessageList,
+            }
+
+            div {
+                class: "message-list-body",
+
+                if selected_mailbox.is_none() {
+                    div {
+                        class: "message-list-empty",
+                        "Select a mailbox to view messages"
+                    }
+                } else if loading {
+                    div {
+                        class: "message-list-empty",
+                        "Loading…"
+                    }
+                } else if total == 0 {
+                    div {
+                        class: "message-list-empty",
+                        "No messages"
+                    }
+                } else {
+                    VirtualScroll {
+                        items: ctx.messages,
+                        item_height: ITEM_HEIGHT,
+                        viewport_height: VIEWPORT_HEIGHT,
+                        buffer_size: BUFFER_SIZE,
+                        debounce_ms: Some(100),
+                        max_cached: Some(MAX_CACHED),
+                        on_need_range: on_need_range,
+                        render_item: render_item,
+                    }
                 }
             }
         }

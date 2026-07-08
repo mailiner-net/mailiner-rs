@@ -1,10 +1,15 @@
 use dioxus::prelude::*;
-use dioxus::dioxus_core::SpawnIfAsync;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
+/// Sparse, non-contiguous list backed by a BTreeMap.
+///
+/// Only indices that have been loaded occupy memory. `total_count` is the logical
+/// length of the list (e.g. IMAP EXISTS), which may be much larger than the number
+/// of cached entries. Missing indices are the signal that data still needs fetching.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SparseList<T: Clone> {
     items: BTreeMap<usize, T>,
     total_count: usize,
@@ -18,12 +23,19 @@ impl<T: Clone> SparseList<T> {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.total_count = 0;
+    }
+
     pub fn insert(&mut self, index: usize, item: T) {
         if index < self.total_count {
             self.items.insert(index, item);
         }
     }
 
+    /// Insert a contiguous batch starting at `start_index`.
+    /// Items beyond `total_count` are ignored.
     pub fn insert_batch(&mut self, start_index: usize, items: Vec<T>) {
         for (offset, item) in items.into_iter().enumerate() {
             self.insert(start_index + offset, item);
@@ -49,11 +61,7 @@ impl<T: Clone> SparseList<T> {
     }
 
     pub fn clear_range(&mut self, range: Range<usize>) {
-        let keys_to_remove: Vec<usize> = self.items
-            .range(range)
-            .map(|(k, _)| *k)
-            .collect();
-
+        let keys_to_remove: Vec<usize> = self.items.range(range).map(|(k, _)| *k).collect();
         for key in keys_to_remove {
             self.items.remove(&key);
         }
@@ -71,6 +79,38 @@ impl<T: Clone> SparseList<T> {
     pub fn cached_count(&self) -> usize {
         self.items.len()
     }
+
+    /// Find contiguous runs of missing indices within `[start, end)`.
+    pub fn missing_ranges(&self, start: usize, end: usize) -> Vec<Range<usize>> {
+        let end = end.min(self.total_count);
+        let start = start.min(end);
+        let mut ranges = Vec::new();
+        let mut gap_start: Option<usize> = None;
+
+        for i in start..end {
+            if self.has_item(i) {
+                if let Some(gs) = gap_start.take() {
+                    ranges.push(gs..i);
+                }
+            } else if gap_start.is_none() {
+                gap_start = Some(i);
+            }
+        }
+        if let Some(gs) = gap_start {
+            ranges.push(gs..end);
+        }
+        ranges
+    }
+
+    /// Drop cached items far from the viewport when over `max_cached`.
+    pub fn evict_outside(&mut self, keep: Range<usize>, max_cached: usize) {
+        if self.items.len() <= max_cached {
+            return;
+        }
+        let keep_start = keep.start;
+        let keep_end = keep.end.min(self.total_count);
+        self.items.retain(|&k, _| k >= keep_start && k < keep_end);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,8 +123,23 @@ pub struct ViewportInfo {
 }
 
 impl ViewportInfo {
-    pub fn calculate(scroll_top: f64, viewport_height: f64, item_height: f64, total_items: usize) -> Self {
+    pub fn calculate(
+        scroll_top: f64,
+        viewport_height: f64,
+        item_height: f64,
+        total_items: usize,
+    ) -> Self {
+        if total_items == 0 || item_height <= 0.0 {
+            return Self {
+                scroll_top,
+                viewport_height,
+                first_visible_index: 0,
+                last_visible_index: 0,
+                visible_count: 0,
+            };
+        }
         let first_visible = (scroll_top / item_height).floor() as usize;
+        let first_visible = first_visible.min(total_items.saturating_sub(1));
         let visible_count = (viewport_height / item_height).ceil() as usize + 1;
         let last_visible = (first_visible + visible_count - 1).min(total_items.saturating_sub(1));
 
@@ -96,6 +151,76 @@ impl ViewportInfo {
             visible_count,
         }
     }
+
+    pub fn buffered_range(&self, buffer_size: usize, total_items: usize) -> Range<usize> {
+        let start = self.first_visible_index.saturating_sub(buffer_size);
+        let end = (self.last_visible_index + buffer_size + 1).min(total_items);
+        start..end
+    }
+}
+
+/// Subtract already-pending ranges so we do not re-request in-flight data.
+fn subtract_pending(needed: Vec<Range<usize>>, pending: &[Range<usize>]) -> Vec<Range<usize>> {
+    if pending.is_empty() {
+        return needed;
+    }
+    let mut result = Vec::new();
+    for range in needed {
+        let mut segments = vec![range];
+        for p in pending {
+            let mut next = Vec::new();
+            for seg in segments {
+                if seg.end <= p.start || seg.start >= p.end {
+                    next.push(seg);
+                } else {
+                    if seg.start < p.start {
+                        next.push(seg.start..p.start);
+                    }
+                    if seg.end > p.end {
+                        next.push(p.end..seg.end);
+                    }
+                }
+            }
+            segments = next;
+        }
+        result.extend(segments);
+    }
+    result
+}
+
+fn ranges_fully_loaded<T: Clone>(items: &SparseList<T>, range: &Range<usize>) -> bool {
+    (range.start..range.end).all(|i| items.has_item(i))
+}
+
+/// Queue fetches for missing ranges. `pending` is non-reactive bookkeeping.
+fn queue_missing_fetches<T: Clone>(
+    items: &SparseList<T>,
+    buffered: Range<usize>,
+    pending: &RefCell<Vec<Range<usize>>>,
+    on_need_range: EventHandler<Range<usize>>,
+) {
+    if items.total_count() == 0 {
+        return;
+    }
+
+    pending
+        .borrow_mut()
+        .retain(|r| !ranges_fully_loaded(items, r));
+
+    let to_request = {
+        let needed = items.missing_ranges(buffered.start, buffered.end);
+        let pending_guard = pending.borrow();
+        subtract_pending(needed, &pending_guard)
+    };
+
+    if to_request.is_empty() {
+        return;
+    }
+
+    pending.borrow_mut().extend(to_request.iter().cloned());
+    for range in to_request {
+        on_need_range.call(range);
+    }
 }
 
 #[derive(Props, Clone, PartialEq)]
@@ -103,94 +228,20 @@ pub struct VirtualScrollProps<T>
 where
     T: Clone + PartialEq + 'static,
 {
-    pub total_items: usize,
+    /// Sparse cache of loaded items (shared with the data layer).
+    pub items: Signal<SparseList<T>>,
     pub item_height: f64,
     pub viewport_height: f64,
+    /// Extra rows above/below the viewport to pre-fetch and pre-render.
     pub buffer_size: usize,
-    pub fetch_threshold: usize,
-    pub on_fetch: Callback<Range<usize>, Vec<T>>,
+    /// Fired when a contiguous range of missing indices should be loaded.
+    pub on_need_range: EventHandler<Range<usize>>,
     pub render_item: Callback<(usize, T), Element>,
     #[props(!optional)]
     pub debounce_ms: Option<u32>,
+    /// Soft cap on cached items; entries outside the buffered viewport are dropped.
     #[props(!optional)]
     pub max_cached: Option<usize>,
-}
-
-pub struct VirtualScrollState<T: Clone> {
-    pub items: SparseList<T>,
-    pub viewport_info: ViewportInfo,
-    pub is_fetching: Signal<bool>,
-    pub pending_ranges: Signal<Vec<Range<usize>>>,
-}
-
-impl<T: Clone> VirtualScrollState<T> {
-    pub fn new(total_items: usize) -> Self {
-        Self {
-            items: SparseList::new(total_items),
-            viewport_info: ViewportInfo {
-                scroll_top: 0.0,
-                viewport_height: 0.0,
-                first_visible_index: 0,
-                last_visible_index: 0,
-                visible_count: 0,
-            },
-            is_fetching: Signal::new(false),
-            pending_ranges: Signal::new(Vec::new()),
-        }
-    }
-
-    pub fn get_fetch_ranges(&self, buffer_size: usize, fetch_threshold: usize) -> Vec<Range<usize>> {
-        let mut ranges = Vec::new();
-
-        let start = self.viewport_info.first_visible_index.saturating_sub(buffer_size);
-        let end = (self.viewport_info.last_visible_index + buffer_size + 1)
-            .min(self.items.total_count());
-
-        let mut fetch_start = None;
-        let mut consecutive_missing = 0;
-
-        for i in start..end {
-            if !self.items.has_item(i) {
-                if fetch_start.is_none() {
-                    fetch_start = Some(i);
-                }
-                consecutive_missing += 1;
-            } else {
-                if let Some(range_start) = fetch_start {
-                    if consecutive_missing >= fetch_threshold {
-                        ranges.push(range_start..i);
-                    }
-                }
-                fetch_start = None;
-                consecutive_missing = 0;
-            }
-        }
-
-        if let Some(range_start) = fetch_start {
-            if consecutive_missing >= fetch_threshold {
-                ranges.push(range_start..end);
-            }
-        }
-
-        ranges
-    }
-
-    pub fn clear_outside_viewport(&mut self, buffer_size: usize, max_cached: usize) {
-        if self.items.cached_count() <= max_cached {
-            return;
-        }
-
-        let keep_start = self.viewport_info.first_visible_index.saturating_sub(buffer_size * 2);
-        let keep_end = (self.viewport_info.last_visible_index + buffer_size * 2)
-            .min(self.items.total_count());
-
-        if keep_start > 0 {
-            self.items.clear_range(0..keep_start);
-        }
-        if keep_end < self.items.total_count() {
-            self.items.clear_range(keep_end..self.items.total_count());
-        }
-    }
 }
 
 #[component]
@@ -198,19 +249,52 @@ pub fn VirtualScroll<T>(props: VirtualScrollProps<T>) -> Element
 where
     T: Clone + PartialEq + 'static,
 {
-    let mut state = use_signal(|| VirtualScrollState::<T>::new(props.total_items));
-    // Generation counter for debounce: works on wasm where std::time::Instant panics.
+    let mut viewport_info = use_signal(|| {
+        ViewportInfo::calculate(0.0, props.viewport_height, props.item_height, 0)
+    });
+    // Non-reactive bookkeeping — must not be a Signal (writing Signals inside
+    // effects that also read them re-triggers the effect forever and freezes wasm).
+    let pending_ranges = use_hook(|| Rc::new(RefCell::new(Vec::<Range<usize>>::new())));
+    let last_total = use_hook(|| Rc::new(Cell::new(0usize)));
     let mut scroll_generation = use_signal(|| 0u64);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
-    use_effect(move || {
-        state.write().items.set_total_count(props.total_items);
+    // React only to `items` changes. Never write reactive state that this effect
+    // also reads (except viewport reset via peek).
+    use_effect({
+        let props = props.clone();
+        let pending_ranges = pending_ranges.clone();
+        let last_total = last_total.clone();
+        move || {
+            let items = props.items.read().clone();
+            let total = items.total_count();
+
+            if total != last_total.get() {
+                last_total.set(total);
+                pending_ranges.borrow_mut().clear();
+                // Writing viewport is fine: this effect does not subscribe to it.
+                viewport_info.set(ViewportInfo::calculate(
+                    0.0,
+                    props.viewport_height,
+                    props.item_height,
+                    total,
+                ));
+            }
+
+            let vp = *viewport_info.peek();
+            let buffered = vp.buffered_range(props.buffer_size, total);
+            // Only mutates non-reactive pending bookkeeping + fires fetch events.
+            // Must not write `props.items` here — that would re-trigger this effect.
+            queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
+        }
     });
 
-    let props_clone = props.clone();
+    let props_for_scroll = props.clone();
+    let pending_for_scroll = pending_ranges.clone();
     let container_clone = container_ref;
     let handle_scroll = move |_| {
-        let props_clone = props_clone.clone();
+        let props = props_for_scroll.clone();
+        let pending_ranges = pending_for_scroll.clone();
         let generation = {
             let next = *scroll_generation.peek() + 1;
             scroll_generation.set(next);
@@ -218,57 +302,51 @@ where
         };
         spawn(async move {
             if let Some(element) = container_clone.read().as_ref() {
-                let scroll_top = element.get_scroll_offset().await.unwrap().y;
-                let viewport = ViewportInfo::calculate(
-                    scroll_top,
-                    props_clone.viewport_height,
-                    props_clone.item_height,
-                    props_clone.total_items,
-                );
-
-                state.write().viewport_info = viewport;
+                if let Ok(offset) = element.get_scroll_offset().await {
+                    let total = props.items.peek().total_count();
+                    let vp = ViewportInfo::calculate(
+                        offset.y,
+                        props.viewport_height,
+                        props.item_height,
+                        total,
+                    );
+                    viewport_info.set(vp);
+                }
             }
 
-            if let Some(debounce_ms) = props_clone.debounce_ms {
+            if let Some(debounce_ms) = props.debounce_ms {
                 sleep_ms(debounce_ms).await;
-
-                // Only fetch if this is still the latest scroll event.
-                if *scroll_generation.peek() == generation {
-                    trigger_fetch(state, props_clone).await;
+                if *scroll_generation.peek() != generation {
+                    return;
                 }
-            } else {
-                trigger_fetch(state, props_clone).await;
+            }
+
+            let items = props.items.peek().clone();
+            let total = items.total_count();
+            let vp = *viewport_info.peek();
+            let buffered = vp.buffered_range(props.buffer_size, total);
+            queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
+
+            if let Some(max_cached) = props.max_cached {
+                if items.cached_count() > max_cached {
+                    let keep = vp.buffered_range(props.buffer_size * 2, total);
+                    let mut items_signal = props.items;
+                    items_signal.write().evict_outside(keep, max_cached);
+                }
             }
         });
     };
 
-    use_effect({
-        let props = props.clone();
-        move || {
-            let props_clone = props.clone();
-            spawn(async move {
-                state.write().viewport_info = ViewportInfo::calculate(
-                    0.0,
-                    props_clone.viewport_height,
-                    props_clone.item_height,
-                    props_clone.total_items,
-                );
-                trigger_fetch(state, props_clone).await;
-            });
-        }
-    });
-
-    let total_height = props.total_items as f64 * props.item_height;
-    let viewport = state.read().viewport_info;
-
-    let render_start = viewport.first_visible_index.saturating_sub(props.buffer_size);
-    let render_end = (viewport.last_visible_index + props.buffer_size + 1)
-        .min(props.total_items);
+    let total = props.items.read().total_count();
+    let total_height = total as f64 * props.item_height;
+    let vp = *viewport_info.read();
+    let render_start = vp.first_visible_index.saturating_sub(props.buffer_size);
+    let render_end = (vp.last_visible_index + props.buffer_size + 1).min(total);
 
     let items_to_render: Vec<(usize, Option<T>)> = {
-        let state_read = state.read();
+        let items = props.items.read();
         (render_start..render_end)
-            .map(|index| (index, state_read.items.get(index).cloned()))
+            .map(|index| (index, items.get(index).cloned()))
             .collect()
     };
 
@@ -315,40 +393,6 @@ where
     }
 }
 
-async fn trigger_fetch<T>(mut state: Signal<VirtualScrollState<T>>, props: VirtualScrollProps<T>)
-where
-    T: Clone + PartialEq + 'static,
-{
-    if *state.read().is_fetching.read() {
-        return;
-    }
-
-    let ranges = state.read().get_fetch_ranges(props.buffer_size, props.fetch_threshold);
-
-    if ranges.is_empty() {
-        return;
-    }
-
-    state.write().is_fetching.set(true);
-    state.write().pending_ranges.set(ranges.clone());
-
-    for range in ranges {
-        let items = (props.on_fetch)(range.clone()).spawn();
-        state.write().items.insert_batch(range.start, items);
-    }
-
-    state.write().is_fetching.set(false);
-    state.write().pending_ranges.set(Vec::new());
-
-    if let Some(max_cached) = props.max_cached {
-        state.write().clear_outside_viewport(props.buffer_size, max_cached);
-    }
-}
-
-pub fn prepend_message<T: Clone + 'static>(state: &mut Signal<VirtualScrollState<T>>, message: T) {
-    state.write().items.prepend(message);
-}
-
 /// Sleep that works on both wasm (no `std::time::Instant` / tokio time) and native.
 async fn sleep_ms(ms: u32) {
     #[cfg(target_arch = "wasm32")]
@@ -358,5 +402,38 @@ async fn sleep_ms(ms: u32) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_list_missing_ranges() {
+        let mut list = SparseList::new(100);
+        list.insert(0, "a");
+        list.insert(1, "b");
+        list.insert(5, "c");
+        let gaps = list.missing_ranges(0, 10);
+        assert_eq!(gaps, vec![2..5, 6..10]);
+    }
+
+    #[test]
+    fn sparse_list_no_dense_allocation() {
+        let mut list = SparseList::new(60_000);
+        list.insert(0, 1);
+        list.insert(59_999, 2);
+        assert_eq!(list.cached_count(), 2);
+        assert_eq!(list.total_count(), 60_000);
+        assert!(!list.has_item(1));
+    }
+
+    #[test]
+    fn subtract_pending_splits_ranges() {
+        let needed = vec![0..20];
+        let pending = vec![5..10];
+        let result = subtract_pending(needed, &pending);
+        assert_eq!(result, vec![0..5, 10..20]);
     }
 }

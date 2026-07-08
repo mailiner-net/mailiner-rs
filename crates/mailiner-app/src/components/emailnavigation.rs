@@ -1,14 +1,12 @@
 use dioxus::prelude::*;
 
-mod navigationheader;
 mod mailboxtreeview;
 mod messagelist;
-mod messagelist_virtual;
+mod navigationheader;
 
-pub use navigationheader::NavigationHeader;
 pub use mailboxtreeview::MailboxTreeView;
 pub use messagelist::MessageList;
-pub use messagelist_virtual::{VirtualMessageList, MessageListWithRealData};
+pub use navigationheader::NavigationHeader;
 
 use crate::{components::emailnavigation::navigationheader::Mode, context::AppContext};
 
@@ -37,8 +35,7 @@ pub fn EmailNavigation() -> Element {
                     mode: Mode::MessageList,
                 }
 
-                // Use VirtualMessageList for demo, or MessageListWithRealData for production
-                VirtualMessageList {
+                MessageList {
                 }
             }
         }

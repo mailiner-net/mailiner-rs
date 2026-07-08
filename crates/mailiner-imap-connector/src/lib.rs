@@ -397,31 +397,55 @@ where
         }
     }
 
-    async fn list_envelopes(&self, folder_id: &FolderId) -> MailinerResult<Vec<Envelope>> {
-        self.list_envelopes_range(folder_id, 0..usize::MAX).await
-    }
-
-    async fn list_envelopes_range(&self, folder_id: &FolderId, range: std::ops::Range<usize>) -> MailinerResult<Vec<Envelope>> {
+    async fn open_folder(&self, folder_id: &FolderId) -> MailinerResult<usize> {
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
-            session
+            let mailbox = session
                 .select(folder_id.as_str())
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+            Ok(mailbox.exists as usize)
+        } else {
+            Err(ImapError::NotAuthenticated.into())
+        }
+    }
 
-            let mut envelopes = Vec::new();
+    async fn list_envelopes(&self, folder_id: &FolderId) -> MailinerResult<Vec<Envelope>> {
+        let total = self.open_folder(folder_id).await?;
+        self.list_envelopes_range(folder_id, 0..total).await
+    }
 
-            // Convert range to IMAP sequence set format
-            let sequence_set = if range.end == usize::MAX {
-                format!("{}:*", range.start + 1)  // IMAP uses 1-based indexing
-            } else {
-                format!("{}:{}", range.start + 1, range.end)
-            };
+    async fn list_envelopes_range(
+        &self,
+        folder_id: &FolderId,
+        range: std::ops::Range<usize>,
+    ) -> MailinerResult<Vec<Envelope>> {
+        let mut imap = self.imap.lock().await;
+        if let ImapSession::Authenticated(session) = &mut *imap {
+            let mailbox = session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+            let total = mailbox.exists as usize;
 
+            if total == 0 || range.start >= total || range.start >= range.end {
+                return Ok(Vec::new());
+            }
+
+            // UI indices are newest-first: index 0 => IMAP sequence `total`.
+            // Range [start, end) maps to sequences [total-end+1, total-start].
+            let end = range.end.min(total);
+            let seq_high = total - range.start;
+            let seq_low = total - end + 1;
+            let sequence_set = format!("{}:{}", seq_low, seq_high);
+
+            // Sequence FETCH (not UID FETCH) — sequence_set is 1-based message sequence numbers.
             let mut fetch = session
-                .uid_fetch(&sequence_set, "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
+                .fetch(&sequence_set, "(UID RFC822.HEADER FLAGS BODYSTRUCTURE)")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {}", e)))?;
+
+            let mut envelopes = Vec::new();
 
             while let Some(result) = fetch.next().await {
                 let fetch = result
@@ -431,7 +455,9 @@ where
                     .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
                 let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
                     Self::parse_flags(fetch.flags());
-                assert!(fetch.uid.is_some());
+                let uid = fetch
+                    .uid
+                    .ok_or_else(|| ImapError::InvalidData("No UID in FETCH response".to_string()))?;
 
                 let parser = MessageParser::new();
                 let parsed_headers = parser.parse_headers(header).ok_or::<MailinerError>(
@@ -439,7 +465,7 @@ where
                 )?;
 
                 envelopes.push(Envelope {
-                    id: MessageId::new(fetch.uid.unwrap().to_string()),
+                    id: MessageId::new(uid.to_string()),
                     account_id: AccountId::new(self.username.clone()),
                     folder_id: folder_id.clone(),
                     subject: parsed_headers.subject().map(|s| s.to_string()),
@@ -459,6 +485,9 @@ where
                 });
             }
 
+            // FETCH returns ascending sequence order (oldest first within the set);
+            // reverse so index 0 of the result is the newest (matches UI range.start).
+            envelopes.reverse();
             Ok(envelopes)
         } else {
             Err(ImapError::NotAuthenticated.into())

@@ -90,13 +90,30 @@ button.flat {
     }
 
     #messagelist {
+        height: 100%;
+
+        .message-list-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: calc(2 * var(--margin));
+            color: #666;
+        }
+
         .message-list-item {
+            box-sizing: border-box;
+            height: 100%;
             padding: var(--margin);
             cursor: pointer;
             position: relative;
+            border-bottom: 1px solid #e0e0e0;
 
             &:hover {
                 background-color: var(--item-hover-background);
+            }
+
+            &.selected {
+                background-color: #e3f2fd;
             }
 
             &.selected::before {
@@ -108,6 +125,23 @@ button.flat {
                 position: absolute;
                 left: 0;
                 top: 0;
+            }
+
+            .message-list-item-content {
+                .message-from {
+                    font-weight: 600;
+                    margin-bottom: 4px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+
+                .message-subject {
+                    color: #333;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
             }
         }
     }

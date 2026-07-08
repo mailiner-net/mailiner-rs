@@ -1,15 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use dioxus::logger::tracing::Level;
 use dioxus::prelude::*;
 
 use crate::account::{Account, AccountId};
+use crate::components::virtual_scroll::SparseList;
 use crate::components::{EmailNavigation, MessageView, Sidebar};
 use crate::context::AppContext;
 use crate::core_event::{core_loop, CoreEvent};
-use crate::mailbox::{MailboxId, MailboxNode};
-use crate::message::{Message, MessageId};
 
 mod account;
 mod components;
@@ -65,7 +62,8 @@ fn App() -> Element {
     let mailbox_roots = use_signal(|| { Vec::new() });
     let selected_mailbox = use_signal(|| None);
 
-    let messages = use_signal(|| Vec::new());
+    let messages = use_signal(|| SparseList::new(0));
+    let messages_loading = use_signal(|| false);
     let selected_message = use_signal(|| None);
 
     let ctx = AppContext {
@@ -73,6 +71,7 @@ fn App() -> Element {
         mailbox_nodes,
         mailbox_roots,
         messages,
+        messages_loading,
 
         selected_mailbox,
         selected_account,

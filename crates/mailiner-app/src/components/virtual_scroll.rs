@@ -109,7 +109,7 @@ where
     pub buffer_size: usize,
     pub fetch_threshold: usize,
     pub on_fetch: Callback<Range<usize>, Vec<T>>,
-    pub render_item: Callback<(usize, &'static T), Element>,
+    pub render_item: Callback<(usize, T), Element>,
     #[props(!optional)]
     pub debounce_ms: Option<u32>,
     #[props(!optional)]
@@ -194,12 +194,12 @@ impl<T: Clone> VirtualScrollState<T> {
 }
 
 #[component]
-pub fn VirtualScroll<T, F, R>(props: VirtualScrollProps<T>) -> Element
+pub fn VirtualScroll<T>(props: VirtualScrollProps<T>) -> Element
 where
     T: Clone + PartialEq + 'static,
 {
     let mut state = use_signal(|| VirtualScrollState::<T>::new(props.total_items));
-    let mut scroll_timer = use_signal(|| None);
+    let mut scroll_timer = use_signal(|| None::<std::time::Instant>);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
     use_effect(move || {
@@ -207,7 +207,7 @@ where
     });
 
     let props_clone = props.clone();
-    let container_clone = container_ref.clone();
+    let container_clone = container_ref;
     let handle_scroll = move |_| {
         let props_clone = props_clone.clone();
         spawn(async move {
@@ -226,7 +226,6 @@ where
             if let Some(debounce_ms) = props_clone.debounce_ms {
                 scroll_timer.set(Some(std::time::Instant::now()));
 
-                let state = state.clone();
                 tokio::time::sleep(tokio::time::Duration::from_millis(debounce_ms as u64)).await;
 
                 if let Some(timer_start) = scroll_timer.read().as_ref() {
@@ -235,14 +234,12 @@ where
                     }
                 }
             } else {
-                let state = state.clone();
                 trigger_fetch(state, props_clone).await;
             }
         });
     };
 
     use_effect({
-        let mut state = state.clone();
         let props = props.clone();
         move || {
             let props_clone = props.clone();
@@ -259,12 +256,18 @@ where
     });
 
     let total_height = props.total_items as f64 * props.item_height;
-    let state_read = state.read();
-    let viewport = state_read.viewport_info;
+    let viewport = state.read().viewport_info;
 
     let render_start = viewport.first_visible_index.saturating_sub(props.buffer_size);
     let render_end = (viewport.last_visible_index + props.buffer_size + 1)
         .min(props.total_items);
+
+    let items_to_render: Vec<(usize, Option<T>)> = {
+        let state_read = state.read();
+        (render_start..render_end)
+            .map(|index| (index, state_read.items.get(index).cloned()))
+            .collect()
+    };
 
     rsx! {
         div {
@@ -272,7 +275,7 @@ where
             style: "position: relative; height: {props.viewport_height}px; overflow-y: auto;",
             onscroll: handle_scroll,
             onmounted: move |node_ref| {
-                container_ref.set(Some(node_ref.data));
+                container_ref.set(Some(node_ref.data()));
             },
 
             div {
@@ -283,8 +286,8 @@ where
                     class: "virtual-scroll-content",
                     style: "transform: translateY({render_start as f64 * props.item_height}px); position: absolute; top: 0; left: 0; right: 0;",
 
-                    for index in render_start..render_end {
-                        if let Some(item) = state().get_item(index) {
+                    for (index, item) in items_to_render {
+                        if let Some(item) = item {
                             div {
                                 key: "{index}",
                                 class: "virtual-scroll-item",
@@ -339,6 +342,6 @@ where
     }
 }
 
-pub fn prepend_message<T: Clone>(state: &mut Signal<VirtualScrollState<T>>, message: T) {
+pub fn prepend_message<T: Clone + 'static>(state: &mut Signal<VirtualScrollState<T>>, message: T) {
     state.write().items.prepend(message);
 }

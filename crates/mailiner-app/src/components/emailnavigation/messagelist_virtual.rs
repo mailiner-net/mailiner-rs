@@ -1,11 +1,9 @@
-use std::sync::Arc;
 use std::ops::Range;
-use std::pin::Pin;
+use std::sync::Arc;
 
 use dioxus::prelude::*;
-use mailiner_core::connector::EmailConnector;
 
-use crate::components::virtual_scroll::{VirtualScroll, VirtualScrollProps, prepend_message, VirtualScrollState};
+use crate::components::virtual_scroll::{VirtualScroll, VirtualScrollState};
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::message::Message;
@@ -13,17 +11,14 @@ use crate::message::Message;
 #[component]
 pub fn VirtualMessageList() -> Element {
     let ctx = use_context::<AppContext>();
-    let selected_mailbox = ctx.selected_mailbox.read();
+    let selected_mailbox = ctx.selected_mailbox.read().clone();
 
     // For demo purposes, we'll simulate a large mailbox
     let total_messages = 10000;
 
-    // Create a fetch function that returns messages for a given range
-    let fetch_messages = async move |range: Range<usize>| -> Vec<Arc<Message>> {
-        // Simulate async fetching with a small delay
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-        // Generate mock messages for the range
+    // Fetch function that returns messages for a given range.
+    // Callbacks that return values must be synchronous in dioxus 0.7.
+    let fetch_messages = move |range: Range<usize>| -> Vec<Arc<Message>> {
         let mut messages = Vec::new();
         for i in range {
             let message = Arc::new(Message {
@@ -31,7 +26,11 @@ pub fn VirtualMessageList() -> Element {
                 subject: format!("Message {} - Important email about project updates", i),
                 from: format!("sender{}@example.com", i % 10),
                 to: "you@example.com".to_string(),
-                cc: if i % 3 == 0 { Some("team@example.com".to_string()) } else { None },
+                cc: if i % 3 == 0 {
+                    Some("team@example.com".to_string())
+                } else {
+                    None
+                },
                 bcc: None,
             });
             messages.push(message);
@@ -39,12 +38,15 @@ pub fn VirtualMessageList() -> Element {
         messages
     };
 
-    let render_item = move |args: (usize, &Arc<Message>)| -> Element {
-        let (index, message) = args;
+    let render_item = move |args: (usize, Arc<Message>)| -> Element {
+        let (_index, message) = args;
         let core_tx = use_coroutine_handle::<CoreEvent>();
         let ctx = use_context::<AppContext>();
         let selected_message = ctx.selected_message.read();
-        let is_selected = selected_message.as_ref().map(|id| *id == message.id).unwrap_or(false);
+        let is_selected = selected_message
+            .as_ref()
+            .map(|id| *id == message.id)
+            .unwrap_or(false);
 
         rsx! {
             div {
@@ -96,8 +98,8 @@ pub fn VirtualMessageList() -> Element {
                     fetch_threshold: 5,  // Start fetching when at least 5 items are missing
                     debounce_ms: Some(150),  // Debounce scrolling by 150ms
                     max_cached: Some(500),  // Keep max 500 messages in memory
-                    on_fetch: Callback::new(fetch_messages),
-                    render_item: Callback::new(render_item),
+                    on_fetch: fetch_messages,
+                    render_item: render_item,
                 }
             } else {
                 div {
@@ -113,35 +115,31 @@ pub fn VirtualMessageList() -> Element {
 #[component]
 pub fn MessageListWithRealData() -> Element {
     let ctx = use_context::<AppContext>();
-    let selected_mailbox = ctx.selected_mailbox.read();
-    let mut virtual_state = use_signal(|| None::<Signal<VirtualScrollState<Arc<Message>>>>);
+    let selected_mailbox = ctx.selected_mailbox.read().clone();
+    let _virtual_state = use_signal(|| None::<Signal<VirtualScrollState<Arc<Message>>>>);
 
-    // This would connect to the real IMAP connector
-    let fetch_messages = async move |range: Range<usize>| -> Vec<Arc<Message>> {
-        let ctx = ctx.clone();
-        let selected_mailbox = selected_mailbox.clone();
+    // Placeholder fetch until IMAP range listing is wired up.
+    let fetch_messages = move |_range: Range<usize>| -> Vec<Arc<Message>> { vec![] };
 
-        if let Some(mailbox_id) = selected_mailbox.as_ref() {
-            // Here you would call the IMAP connector's list_envelopes_range
-            // For now, returning empty vec as placeholder
-            vec![]
-        } else {
-            vec![]
-        }
-    };
-
-    let render_item = move |args: (usize, &Arc<Message>)| -> Element {
-        let (index, message) = args;
+    let render_item = move |args: (usize, Arc<Message>)| -> Element {
+        let (_index, message) = args;
         let core_tx = use_coroutine_handle::<CoreEvent>();
         let ctx = use_context::<AppContext>();
         let selected_message = ctx.selected_message.read();
-        let is_selected = selected_message.as_ref().map(|id| *id == message.id).unwrap_or(false);
+        let is_selected = selected_message
+            .as_ref()
+            .map(|id| *id == message.id)
+            .unwrap_or(false);
+        let background = if is_selected { "#e3f2fd" } else { "white" };
+        let style = format!(
+            "padding: 12px; border-bottom: 1px solid #e0e0e0; cursor: pointer; background-color: {background};"
+        );
 
         rsx! {
             div {
                 class: "message-list-item",
                 class: if is_selected { "selected" },
-                style: "padding: 12px; border-bottom: 1px solid #e0e0e0; cursor: pointer; background-color: {if is_selected { \"#e3f2fd\" } else { \"white\" }};",
+                style: "{style}",
 
                 onclick: move |_| {
                     let _ = core_tx.send(CoreEvent::SelectMessage(message.id.clone()));
@@ -188,8 +186,8 @@ pub fn MessageListWithRealData() -> Element {
                     fetch_threshold: 5,
                     debounce_ms: Some(200),
                     max_cached: Some(1000),
-                    on_fetch: Callback::new(fetch_messages),
-                    render_item: Callback::new(render_item),
+                    on_fetch: fetch_messages,
+                    render_item: render_item,
                 }
             } else {
                 div {

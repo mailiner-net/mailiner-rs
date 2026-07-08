@@ -10,6 +10,7 @@ edition = "2024"
 dioxus = { version = "0.7.9", features = ["router"] }
 dioxus-heroicons = "0.4.1"
 futures-util = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
 uuid = { version = "1.18", features = ["v4", "js"] }
 mailiner-core = { path = "../mailiner-core" }
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }

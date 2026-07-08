@@ -3186,6 +3186,7 @@ dependencies = [
  "dioxus-heroicons",
  "dotenv",
  "futures-util",
+ "gloo-timers",
  "js-sys",
  "mailiner-core",
  "mailiner-imap-connector",

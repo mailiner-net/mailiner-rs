@@ -199,7 +199,8 @@ where
     T: Clone + PartialEq + 'static,
 {
     let mut state = use_signal(|| VirtualScrollState::<T>::new(props.total_items));
-    let mut scroll_timer = use_signal(|| None::<std::time::Instant>);
+    // Generation counter for debounce: works on wasm where std::time::Instant panics.
+    let mut scroll_generation = use_signal(|| 0u64);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
     use_effect(move || {
@@ -210,6 +211,11 @@ where
     let container_clone = container_ref;
     let handle_scroll = move |_| {
         let props_clone = props_clone.clone();
+        let generation = {
+            let next = *scroll_generation.peek() + 1;
+            scroll_generation.set(next);
+            next
+        };
         spawn(async move {
             if let Some(element) = container_clone.read().as_ref() {
                 let scroll_top = element.get_scroll_offset().await.unwrap().y;
@@ -224,14 +230,11 @@ where
             }
 
             if let Some(debounce_ms) = props_clone.debounce_ms {
-                scroll_timer.set(Some(std::time::Instant::now()));
+                sleep_ms(debounce_ms).await;
 
-                tokio::time::sleep(tokio::time::Duration::from_millis(debounce_ms as u64)).await;
-
-                if let Some(timer_start) = scroll_timer.read().as_ref() {
-                    if timer_start.elapsed().as_millis() >= debounce_ms as u128 {
-                        trigger_fetch(state, props_clone).await;
-                    }
+                // Only fetch if this is still the latest scroll event.
+                if *scroll_generation.peek() == generation {
+                    trigger_fetch(state, props_clone).await;
                 }
             } else {
                 trigger_fetch(state, props_clone).await;
@@ -344,4 +347,16 @@ where
 
 pub fn prepend_message<T: Clone + 'static>(state: &mut Signal<VirtualScrollState<T>>, message: T) {
     state.write().items.prepend(message);
+}
+
+/// Sleep that works on both wasm (no `std::time::Instant` / tokio time) and native.
+async fn sleep_ms(ms: u32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(ms).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
+    }
 }

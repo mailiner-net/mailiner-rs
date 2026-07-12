@@ -82,7 +82,8 @@ where
     port: u16,
     username: String,
     password: String,
-    imap: Mutex<ImapSession<S>>,
+    /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
+    imap: Arc<Mutex<ImapSession<S>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by message UID.
     structure_cache: Mutex<HashMap<MessageId, BodyPart>>,
 }
@@ -97,7 +98,7 @@ where
             port,
             username,
             password,
-            imap: Mutex::new(ImapSession::Disconnected),
+            imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
         }
     }
@@ -212,6 +213,9 @@ where
     }
 
     /// Extract raw bytes for a BODY.PEEK section from a FETCH response.
+    ///
+    /// Works for both full and partial (`BODY[sec]<origin>`) responses — the
+    /// section path match does not filter on the origin index.
     fn extract_section_bytes(
         fetch: &async_imap::types::Fetch,
         section: &str,
@@ -229,7 +233,48 @@ where
             .ok_or_else(|| ImapError::InvalidData(format!("missing BODY[{section}]")))
     }
 
-    const STREAM_CHUNK: usize = 64 * 1024;
+    /// One partial `UID FETCH … BODY.PEEK[section]<offset.length>`.
+    async fn fetch_partial_chunk(
+        session: &mut Session<TlsStream<S>>,
+        folder_id: &str,
+        message_id: &str,
+        section: &str,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, ImapError> {
+        session
+            .select(folder_id)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+
+        // RFC 3501 partial fetch: BODY.PEEK[section]<origin.octet-count>
+        let query = format!("(BODY.PEEK[{section}]<{offset}.{length}>)");
+        let mut fetch = session
+            .uid_fetch(message_id, &query)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to fetch part: {e}")))?;
+
+        let fetch = match fetch.next().await {
+            Some(Ok(f)) => f,
+            Some(Err(e)) => {
+                return Err(ImapError::Imap(format!("Failed to fetch part: {e}")));
+            }
+            None => {
+                // No FETCH response — treat as end-of-part (empty / past end).
+                return Ok(Vec::new());
+            }
+        };
+
+        // Missing section / NIL body → EOF for this offset.
+        match Self::extract_section_bytes(&fetch, section) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => Ok(Vec::new()),
+        }
+    }
+
+    /// Partial FETCH window. Larger = fewer RTTs/SELECTs per download; smaller =
+    /// lower peak memory. 512 KiB is a pragmatic default until adaptive sizing.
+    const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
 }
@@ -238,7 +283,8 @@ where
 #[async_trait]
 impl<S> EmailConnector<S> for ImapConnector<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync,
+    // `'static` required so partial-fetch streams can own `Arc<Mutex<ImapSession<S>>>`.
+    S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync + 'static,
 {
     async fn connect(&self, stream: S) -> MailinerResult<()>
     {
@@ -716,61 +762,202 @@ where
         message_id: &MessageId,
         section: &str,
     ) -> MailinerResult<PartStream> {
-        let data = {
-            let mut imap = self.imap.lock().await;
-            let ImapSession::Authenticated(session) = &mut *imap else {
+        // Fail fast if not authenticated (before returning a stream that would error later).
+        {
+            let imap = self.imap.lock().await;
+            if !matches!(*imap, ImapSession::Authenticated(_)) {
                 return Err(ImapError::NotAuthenticated.into());
-            };
-
-            session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
-
-            let query = format!("(BODY.PEEK[{section}])");
-            let mut fetch = session
-                .uid_fetch(message_id.as_str(), &query)
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch part: {}", e)))?;
-
-            let fetch = fetch
-                .next()
-                .await
-                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch part: {}", e)))?;
-
-            Self::extract_section_bytes(&fetch, section)?
-        };
-
-        let total = data.len() as u64;
-        if total > Self::MAX_DOWNLOAD {
-            return Err(MailinerError::Connector(format!(
-                "attachment exceeds download limit ({total} > {})",
-                Self::MAX_DOWNLOAD
-            )));
+            }
         }
 
-        // Yield 64 KiB frames lazily — do not pre-collect every chunk into a second Vec.
-        // Note: async-imap still delivers the full BODY.PEEK literal up-front; true
-        // progressive IMAP partial-fetch can replace this later behind the same API.
+        let total_hint = self
+            .structure_cache
+            .lock()
+            .await
+            .get(message_id)
+            .and_then(|root| part_size_from_structure(root, section));
+
+        if let Some(total) = total_hint {
+            if total > Self::MAX_DOWNLOAD {
+                return Err(MailinerError::Connector(format!(
+                    "attachment exceeds download limit ({total} > {})",
+                    Self::MAX_DOWNLOAD
+                )));
+            }
+        }
+
+        let imap = Arc::clone(&self.imap);
+        let folder_id = folder_id.as_str().to_string();
+        let message_id = message_id.as_str().to_string();
+        let section = section.to_string();
         let chunk_size = Self::STREAM_CHUNK;
-        let data = std::sync::Arc::new(data);
+        let max_download = Self::MAX_DOWNLOAD;
+
+        // Progressive partial FETCH: each poll issues
+        //   UID FETCH uid (BODY.PEEK[section]<offset.chunk_size>)
+        // so peak memory stays ~one chunk, not the full part. async-imap still
+        // buffers each literal fully, but that literal is now only `chunk_size`.
         Ok(Box::pin(futures::stream::unfold(
-            (data, total, 0usize, chunk_size),
-            |(data, total, offset, chunk_size)| async move {
-                if offset >= data.len() {
+            PartialFetchState {
+                imap,
+                folder_id,
+                message_id,
+                section,
+                offset: 0u64,
+                chunk_size,
+                max_download,
+                total_hint,
+                done: false,
+            },
+            |mut state| async move {
+                if state.done {
                     return None;
                 }
-                let end = (offset + chunk_size).min(data.len());
-                let chunk = data[offset..end].to_vec();
-                Some((
-                    Ok(PartChunk {
-                        data: chunk,
-                        total_hint: Some(total),
-                    }),
-                    (data, total, end, chunk_size),
-                ))
+
+                if state.offset >= state.max_download {
+                    state.done = true;
+                    return Some((
+                        Err(MailinerError::Connector(format!(
+                            "attachment exceeds download limit (> {})",
+                            state.max_download
+                        ))),
+                        state,
+                    ));
+                }
+
+                let remaining_cap = (state.max_download - state.offset) as usize;
+                let req_len = state.chunk_size.min(remaining_cap);
+
+                let fetch_result = {
+                    let mut guard = state.imap.lock().await;
+                    match &mut *guard {
+                        ImapSession::Authenticated(session) => {
+                            Self::fetch_partial_chunk(
+                                session,
+                                &state.folder_id,
+                                &state.message_id,
+                                &state.section,
+                                state.offset,
+                                req_len,
+                            )
+                            .await
+                        }
+                        _ => Err(ImapError::NotAuthenticated),
+                    }
+                };
+
+                match fetch_result {
+                    Ok(bytes) if bytes.is_empty() => None,
+                    Ok(bytes) => {
+                        let n = bytes.len() as u64;
+                        state.offset = state.offset.saturating_add(n);
+                        // Cap without relying solely on BODYSTRUCTURE size.
+                        if state.offset > state.max_download {
+                            state.done = true;
+                            return Some((
+                                Err(MailinerError::Connector(format!(
+                                    "attachment exceeds download limit (> {})",
+                                    state.max_download
+                                ))),
+                                state,
+                            ));
+                        }
+                        // Short read ⇒ last chunk.
+                        if bytes.len() < req_len {
+                            state.done = true;
+                        }
+                        Some((
+                            Ok(PartChunk {
+                                data: bytes,
+                                total_hint: state.total_hint,
+                            }),
+                            state,
+                        ))
+                    }
+                    Err(e) => {
+                        state.done = true;
+                        Some((Err(e.into()), state))
+                    }
+                }
             },
         )))
+    }
+}
+
+/// State machine for progressive `BODY.PEEK[section]<offset.length>` streaming.
+struct PartialFetchState<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
+{
+    imap: Arc<Mutex<ImapSession<S>>>,
+    folder_id: String,
+    message_id: String,
+    section: String,
+    offset: u64,
+    chunk_size: usize,
+    max_download: u64,
+    total_hint: Option<u64>,
+    done: bool,
+}
+
+/// Look up BODYSTRUCTURE-reported octets for a section path (e.g. `"1.2"`).
+fn part_size_from_structure(root: &BodyPart, section: &str) -> Option<u64> {
+    if section.eq_ignore_ascii_case("TEXT") {
+        return root.size;
+    }
+    let mut node = root;
+    for seg in section.split('.') {
+        let n: usize = seg.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        node = node.subparts.get(n - 1)?;
+    }
+    node.size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf(size: u64) -> BodyPart {
+        BodyPart {
+            type_: "application".into(),
+            subtype: "pdf".into(),
+            size: Some(size),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn part_size_text_uses_root() {
+        let root = BodyPart {
+            type_: "text".into(),
+            subtype: "plain".into(),
+            size: Some(42),
+            ..Default::default()
+        };
+        assert_eq!(part_size_from_structure(&root, "TEXT"), Some(42));
+    }
+
+    #[test]
+    fn part_size_nested_section() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    size: Some(10),
+                    ..Default::default()
+                },
+                leaf(99_000),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(part_size_from_structure(&root, "2"), Some(99_000));
+        assert_eq!(part_size_from_structure(&root, "1"), Some(10));
+        assert_eq!(part_size_from_structure(&root, "3"), None);
     }
 }

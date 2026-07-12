@@ -3234,6 +3234,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailiner-mime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "encoding_rs",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

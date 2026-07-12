@@ -3,7 +3,8 @@ resolver = "2"
 members = [
     "crates/mailiner-app",
     "crates/mailiner-core",
-    "crates/mailiner-imap-connector"
+    "crates/mailiner-imap-connector",
+    "crates/mailiner-mime"
 ]
 
 [workspace.dependencies]

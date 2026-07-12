@@ -2,11 +2,35 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dioxus::prelude::*;
+use mailiner_core::models::LoadedMessage;
 
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
+
+/// Viewer panel state driven by core_loop load pipeline.
+#[derive(Clone, Debug)]
+pub enum MessageViewState {
+    Empty,
+    Loading {
+        message_id: MessageId,
+    },
+    Ready {
+        message_id: MessageId,
+        loaded: Arc<LoadedMessage>,
+    },
+    Error {
+        message_id: MessageId,
+        message: String,
+    },
+}
+
+impl Default for MessageViewState {
+    fn default() -> Self {
+        Self::Empty
+    }
+}
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -21,4 +45,6 @@ pub struct AppContext {
     pub selected_mailbox: Signal<Option<MailboxId>>,
     pub selected_account: Signal<Option<AccountId>>,
     pub selected_message: Signal<Option<MessageId>>,
+    /// Body viewer state (load / format inputs).
+    pub message_view: Signal<MessageViewState>,
 }

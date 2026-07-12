@@ -6,14 +6,15 @@ use dioxus::logger::tracing::{error, info};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use mailiner_core::connector::EmailConnector;
-use mailiner_core::{Folder, FolderId};
+use mailiner_core::{Folder, FolderId, MessageId as CoreMessageId};
 use mailiner_imap_connector::ImapConnector;
 
 use crate::account::AccountId;
 use crate::components::virtual_scroll::SparseList;
-use crate::context::AppContext;
+use crate::context::{AppContext, MessageViewState};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::MessageId;
+use crate::message_loader::load_message;
 use crate::websocket_stream::WebSocketStream;
 
 pub enum CoreEvent {
@@ -67,9 +68,11 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 ctx.messages.set(SparseList::new(0));
                 ctx.messages_loading.set(false);
                 ctx.selected_message.set(None);
+                ctx.message_view.set(MessageViewState::Empty);
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 ctx.selected_message.set(None);
+                ctx.message_view.set(MessageViewState::Empty);
                 ctx.messages.set(SparseList::new(0));
                 ctx.messages_loading.set(true);
                 ctx.selected_mailbox.set(Some(mailbox_id.clone()));
@@ -142,7 +145,49 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 }
             }
             CoreEvent::SelectMessage(message_id) => {
-                ctx.selected_message.set(Some(message_id));
+                ctx.selected_message.set(Some(message_id.clone()));
+                ctx.message_view.set(MessageViewState::Loading {
+                    message_id: message_id.clone(),
+                });
+
+                let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+                    ctx.message_view.set(MessageViewState::Error {
+                        message_id: message_id.clone(),
+                        message: "No mailbox selected".into(),
+                    });
+                    continue;
+                };
+
+                let folder_id = FolderId::new(mailbox_id.to_string());
+                let core_id = CoreMessageId::new(message_id.to_string());
+                info!(
+                    "Loading message {} in {}",
+                    message_id,
+                    mailbox_id.to_string()
+                );
+
+                match load_message(&connector, &folder_id, &core_id).await {
+                    Ok(loaded) => {
+                        // Drop stale results if the user selected another message.
+                        if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                            continue;
+                        }
+                        ctx.message_view.set(MessageViewState::Ready {
+                            message_id,
+                            loaded: Arc::new(loaded),
+                        });
+                    }
+                    Err(e) => {
+                        if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                            continue;
+                        }
+                        error!("Failed to load message {}: {}", message_id, e);
+                        ctx.message_view.set(MessageViewState::Error {
+                            message_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
             }
         }
     }

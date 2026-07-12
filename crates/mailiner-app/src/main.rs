@@ -12,8 +12,10 @@ mod account;
 mod components;
 mod context;
 mod core_event;
+mod formatter;
 mod mailbox;
 mod message;
+mod message_loader;
 mod websocket_stream;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
@@ -61,6 +63,7 @@ fn App() -> Element {
     let messages = use_signal(|| SparseList::new(0));
     let messages_loading = use_signal(|| false);
     let selected_message = use_signal(|| None);
+    let message_view = use_signal(|| crate::context::MessageViewState::Empty);
 
     let ctx = AppContext {
         accounts,
@@ -72,6 +75,7 @@ fn App() -> Element {
         selected_mailbox,
         selected_account,
         selected_message,
+        message_view,
     };
     let ctx_clone = ctx.clone();
 

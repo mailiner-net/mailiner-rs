@@ -1,7 +1,15 @@
+use chrono::{DateTime, Utc};
 use mailiner_core::{EmailAddress, Envelope};
+use std::fmt;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct MessageId(String);
+
+impl MessageId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl From<String> for MessageId {
     fn from(id: String) -> Self {
@@ -9,7 +17,13 @@ impl From<String> for MessageId {
     }
 }
 
-#[derive(PartialEq, Debug)]
+impl fmt::Display for MessageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub struct Message {
     pub id: MessageId,
     pub subject: String,
@@ -17,6 +31,8 @@ pub struct Message {
     pub to: String,
     pub cc: Option<String>,
     pub bcc: Option<String>,
+    pub date: DateTime<Utc>,
+    pub has_attachments: bool,
 }
 
 impl From<Envelope> for Message {
@@ -36,6 +52,8 @@ impl From<Envelope> for Message {
                 .unwrap_or_default(),
             cc: envelope.cc.as_ref().map(EmailAddress::to_string),
             bcc: envelope.bcc.as_ref().map(EmailAddress::to_string),
+            date: envelope.date,
+            has_attachments: envelope.has_attachments,
         }
     }
 }

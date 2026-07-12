@@ -56,6 +56,14 @@ impl<T: Clone> SparseList<T> {
         self.items.get(&index)
     }
 
+    /// Find a cached item by predicate (does not scan missing indices).
+    pub fn find<F>(&self, mut pred: F) -> Option<&T>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.items.values().find(|v| pred(v))
+    }
+
     pub fn has_item(&self, index: usize) -> bool {
         self.items.contains_key(&index)
     }

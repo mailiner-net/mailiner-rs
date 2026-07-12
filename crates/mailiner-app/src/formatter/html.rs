@@ -1,7 +1,7 @@
 //! Safe HTML formatter with cid resolution and remote-resource blocking.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use mailiner_core::models::{MessageContent, MessagePart, PartKind};
+use mailiner_core::models::{MessageContent, MessagePart};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use mailiner_core::ids::{MessageId, MessagePartId};
-    use mailiner_core::models::TransferEncoding;
+    use mailiner_core::models::{PartKind, TransferEncoding};
 
     fn html_part(html: &str) -> MessagePart {
         let now = Utc::now();

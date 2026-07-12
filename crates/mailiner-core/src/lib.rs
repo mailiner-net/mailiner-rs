@@ -1,30 +1,18 @@
+pub mod body;
+pub mod connector;
 pub mod error;
 pub mod ids;
 pub mod models;
 pub mod storage;
-pub mod connector;
 
+pub use body::{BodyPart, ContentDisposition};
+pub use connector::{
+    mock_multipart_structure, mock_text_part, EmailConnector, MockConnector, PartStream,
+};
 pub use error::{MailinerError, Result};
 pub use ids::{AccountId, FolderId, MessageId, MessagePartId};
 pub use models::{
-    Account, AccountMetadata, Envelope, Folder, FolderMetadata,
-    MessagePart, MessageContent,
-    EmailAddress, EmailAddr, Group,
+    Account, AccountMetadata, EmailAddr, EmailAddress, Envelope, Folder, FolderMetadata, Group,
+    LoadedMessage, MessageContent, MessagePart, PartChunk, PartKind, TransferEncoding,
 };
-pub use storage::{Storage, InMemoryStorage};
-pub use connector::{EmailConnector, MockConnector};
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use storage::{InMemoryStorage, Storage};

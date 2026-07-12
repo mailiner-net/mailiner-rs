@@ -16,9 +16,10 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
+use std::collections::HashMap;
 use mailiner_core::{
-    Account, AccountId, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder, FolderId, Group,
-    MailinerError, MessageContent, MessageId, MessagePart, MessagePartId, Result as MailinerResult,
+    Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
+    FolderId, Group, MailinerError, MessageId, PartStream, Result as MailinerResult,
 };
 
 use tokio::sync::Mutex;
@@ -223,41 +224,8 @@ where
         }
     }
 
-    async fn fetch_message_part(
-        &self,
-        message_id: &MessageId,
-        part_number: &MessagePartId,
-    ) -> Result<Vec<u8>, ImapError> {
-        let mut imap_client = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap_client {
-            session
-                .select("INBOX")
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
-
-            let mut fetch = session
-                .fetch(
-                    message_id.as_str(),
-                    &format!("(BODY.PEEK[{}])", part_number.as_str()),
-                )
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch message part: {}", e)))?;
-
-            let fetch = fetch
-                .next()
-                .await
-                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch message part: {}", e)))?;
-
-            fetch
-                .body()
-                .ok_or_else(|| ImapError::InvalidData("Message part not found".to_string()))
-                .map(|body| body.to_vec())
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
-    }
 }
+
 
 #[async_trait]
 impl<S> EmailConnector<S> for ImapConnector<S>
@@ -597,52 +565,36 @@ where
         }
     }
 
-    async fn get_message_part(
+    async fn get_body_structure(
         &self,
-        message_id: &MessageId,
-        part_id: &MessagePartId,
-    ) -> MailinerResult<MessagePart> {
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            session
-                .select("INBOX")
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+        _folder_id: &FolderId,
+        _message_id: &MessageId,
+    ) -> MailinerResult<BodyPart> {
+        Err(MailinerError::Connector(
+            "get_body_structure not yet implemented".into(),
+        ))
+    }
 
-            let mut fetch = session
-                .fetch(message_id.as_str(), "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
-                .await
-                .map_err(|e| {
-                    ImapError::Imap(format!("Failed to fetch message structure: {}", e))
-                })?;
+    async fn fetch_raw_parts(
+        &self,
+        _folder_id: &FolderId,
+        _message_id: &MessageId,
+        _sections: &[String],
+    ) -> MailinerResult<HashMap<String, Vec<u8>>> {
+        Err(MailinerError::Connector(
+            "fetch_raw_parts not yet implemented".into(),
+        ))
+    }
 
-            let fetch = fetch
-                .next()
-                .await
-                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
-                .map_err(|e| {
-                    ImapError::Imap(format!("Failed to fetch message structure: {}", e))
-                })?;
-
-            // Fetch the actual content
-            let content = self
-                .fetch_message_part(&message_id, part_id)
-                .await?;
-
-            // TODO: Parse the content
-            Ok(MessagePart {
-                id: part_id.clone(),
-                envelope_id: message_id.clone(),
-                content_type: "text/plain".to_string(),
-                filename: None,
-                size: content.len() as u64,
-                is_attachment: false,
-                content: MessageContent::Text(String::from_utf8_lossy(&content).to_string()),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
+    async fn stream_raw_part(
+        &self,
+        _folder_id: &FolderId,
+        _message_id: &MessageId,
+        _section: &str,
+    ) -> MailinerResult<PartStream> {
+        Err(MailinerError::Connector(
+            "stream_raw_part not yet implemented".into(),
+        ))
     }
 }
+

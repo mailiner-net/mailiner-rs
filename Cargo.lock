@@ -3203,6 +3203,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

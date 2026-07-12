@@ -38,9 +38,9 @@ pub enum PrefillError {
 
 /// Build a draft for the given intent.
 ///
-/// PR2: plain-quote path only. If the best body is HTML-only (no plain part),
-/// returns [`PrefillError::HtmlBodyNeedsSanitize`] for Reply/Forward so callers
-/// wait for the shared sanitize module (PR 3). New compose always succeeds.
+/// Plain bodies use `>` quotes. HTML bodies are sanitized via
+/// [`crate::sanitize::sanitize_for_edit`] and wrapped as a rich quote.
+/// CID rehydration lands in PR 6.
 pub fn build_draft(
     intent: ComposeIntent,
     identity: &FromIdentity,
@@ -101,21 +101,66 @@ fn build_reply_like(
             draft.html_body.clear();
             draft.plain_cache_dirty = false;
         }
-        BodyPick::HtmlOnly(_html) => {
-            // PR2: do not inject unsanitized HTML.
-            return Err(PrefillError::HtmlBodyNeedsSanitize);
+        BodyPick::HtmlOnly(html) => {
+            let clean = crate::sanitize::sanitize_for_edit(&html);
+            draft.mode = BodyMode::Rich;
+            draft.html_body = wrap_html_quote(&attribution, &clean);
+            draft.plain_body = quote_plain(&attribution, &crate::model::html_to_plain(&clean));
+            draft.plain_cache_dirty = false;
         }
-        BodyPick::HtmlWithPlain { plain } => {
-            // Prefer plain quote in PR2 even when HTML exists — safe path.
-            // HTML rich quote lands in PR 3 (sanitize) + PR 6 (cid).
-            draft.mode = BodyMode::Plain;
+        BodyPick::HtmlWithPlain { plain, html } => {
+            let clean = crate::sanitize::sanitize_for_edit(&html);
+            draft.mode = BodyMode::Rich;
+            draft.html_body = wrap_html_quote(&attribution, &clean);
             draft.plain_body = quote_plain(&attribution, &plain);
-            draft.html_body.clear();
             draft.plain_cache_dirty = false;
         }
     }
 
     Ok(draft)
+}
+
+fn wrap_html_quote(attribution: &str, sanitized_body: &str) -> String {
+    let attr_esc = html_escape_text(attribution);
+    // Strip untrusted classes/markers from the quote body so original mail cannot
+    // spoof composer chrome (mlnr-compose-*, data-mlnr-quote).
+    let body = strip_composer_chrome_attrs(sanitized_body);
+    format!(
+        concat!(
+            r#"<div class="mlnr-compose-body">"#,
+            r#"<div class="mlnr-compose-reply-editor"><br></div>"#,
+            r#"<div class="mlnr-compose-quote" data-mlnr-quote="1">"#,
+            r#"<p class="mlnr-attribution">{attr}</p>"#,
+            r#"<blockquote class="mlnr-quote-body">{body}</blockquote>"#,
+            r#"</div></div>"#
+        ),
+        attr = attr_esc,
+        body = body
+    )
+}
+
+fn strip_composer_chrome_attrs(html: &str) -> String {
+    // Best-effort: drop class/data-mlnr-* from the untrusted fragment before wrapping.
+    let re_class = regex::Regex::new(r#"(?i)\sclass\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#).unwrap();
+    let re_mlnr =
+        regex::Regex::new(r#"(?i)\sdata-mlnr-[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)"#)
+            .unwrap();
+    let s = re_class.replace_all(html, "");
+    re_mlnr.replace_all(&s, "").into_owned()
+}
+
+fn html_escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn reply_to_addresses(env: &Envelope) -> Vec<ComposerAddress> {
@@ -153,8 +198,8 @@ fn reply_all_addresses(env: &Envelope, self_email: &str) -> (Vec<ComposerAddress
 enum BodyPick {
     Plain(String),
     HtmlOnly(String),
-    /// Multipart alternative: use plain for PR2 quote (HTML reserved for later).
-    HtmlWithPlain { plain: String },
+    /// Multipart alternative: rich HTML quote + plain alternative text.
+    HtmlWithPlain { plain: String, html: String },
 }
 
 fn pick_body(loaded: &LoadedMessage) -> Result<BodyPick, PrefillError> {
@@ -185,7 +230,7 @@ fn pick_body(loaded: &LoadedMessage) -> Result<BodyPick, PrefillError> {
     }
 
     match (plain, html) {
-        (Some(p), Some(_h)) => Ok(BodyPick::HtmlWithPlain { plain: p }),
+        (Some(p), Some(h)) => Ok(BodyPick::HtmlWithPlain { plain: p, html: h }),
         (Some(p), None) => Ok(BodyPick::Plain(p)),
         (None, Some(h)) => Ok(BodyPick::HtmlOnly(h)),
         (None, None) => Ok(BodyPick::Plain(String::new())),
@@ -322,12 +367,15 @@ mod tests {
     }
 
     #[test]
-    fn html_only_needs_sanitize() {
+    fn html_only_sanitized_rich_quote() {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
-        let loaded = loaded_html_only("<p>Hi</p>");
-        let err = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap_err();
-        assert_eq!(err, PrefillError::HtmlBodyNeedsSanitize);
+        let loaded = loaded_html_only("<p>Hi</p><script>alert(1)</script>");
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert_eq!(d.mode, BodyMode::Rich);
+        assert!(d.html_body.contains("Hi"), "{}", d.html_body);
+        assert!(!d.html_body.contains("script"), "{}", d.html_body);
+        assert!(d.html_body.contains("data-mlnr-quote"), "{}", d.html_body);
     }
 
     #[test]

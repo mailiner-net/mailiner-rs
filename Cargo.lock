@@ -3251,6 +3251,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "mailiner-core",
+ "mailiner-html",
+ "regex",
  "thiserror 2.0.12",
  "uuid",
 ]
@@ -3268,6 +3270,15 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "mailiner-html"
+version = "0.1.0"
+dependencies = [
+ "ammonia",
+ "once_cell",
+ "regex",
 ]
 
 [[package]]

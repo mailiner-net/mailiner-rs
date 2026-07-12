@@ -5,7 +5,8 @@ members = [
     "crates/mailiner-core",
     "crates/mailiner-imap-connector",
     "crates/mailiner-mime",
-    "crates/mailiner-composer"
+    "crates/mailiner-composer",
+    "crates/mailiner-html"
 ]
 
 [workspace.dependencies]

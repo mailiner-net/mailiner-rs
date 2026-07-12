@@ -38,6 +38,7 @@ pub use model::{
 pub use reply::{
     attribution_line, build_draft, quote_plain, subject_with_prefix, ComposeIntent, PrefillError,
 };
+pub use sanitize::{sanitize_for_edit, sanitize_for_export};
 
 /// Crate version string (for diagnostics / about UI).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -3239,7 +3239,10 @@ name = "mailiner-mime"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "encoding_rs",
+ "mailiner-core",
+ "serde_json",
  "thiserror 2.0.12",
 ]
 

@@ -98,6 +98,29 @@ pub fn decode_content(
     }
 }
 
+
+/// Decode using core [`TransferEncoding`] / [`MessageContent`].
+pub fn decode_part_content(
+    raw: &[u8],
+    encoding: mailiner_core::TransferEncoding,
+    content_type: &str,
+    charset: Option<&str>,
+) -> Result<mailiner_core::MessageContent, DecodeError> {
+    use mailiner_core::{MessageContent, TransferEncoding};
+    let name = match encoding {
+        TransferEncoding::SevenBit => "7BIT",
+        TransferEncoding::EightBit => "8BIT",
+        TransferEncoding::Binary => "BINARY",
+        TransferEncoding::Base64 => "BASE64",
+        TransferEncoding::QuotedPrintable => "QUOTED-PRINTABLE",
+        TransferEncoding::Other => "OTHER",
+    };
+    match decode_content(raw, name, content_type, charset)? {
+        DecodedContent::Text(t) => Ok(MessageContent::Text(t)),
+        DecodedContent::Binary(b) => Ok(MessageContent::Binary(b)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

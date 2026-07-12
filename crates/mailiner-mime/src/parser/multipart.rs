@@ -1,0 +1,106 @@
+use mailiner_core::body::BodyPart;
+use mailiner_core::models::MessagePart;
+
+use super::{PartParser, ParseContext, ATTACHMENT_MIME};
+use crate::heuristics::{is_attachment, is_rich_part};
+
+pub struct MultipartAlternativeParser;
+pub struct MultipartMixedParser;
+pub struct MultipartRelatedParser;
+
+impl PartParser for MultipartAlternativeParser {
+    fn mime_types(&self) -> &[&str] {
+        &["multipart/alternative"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        // Prefer last subpart we can parse (RFC / TS).
+        for (i, sub) in part.subparts.iter().enumerate().rev() {
+            let ct = sub.content_type();
+            if !ctx.registry.can_parse(&ct) {
+                continue;
+            }
+            let mut sub_path = path.to_vec();
+            sub_path.push((i + 1).to_string());
+            let sub_id = format!("{part_id}.alternative.{i}");
+            return ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path);
+        }
+        Vec::new()
+    }
+}
+
+impl PartParser for MultipartMixedParser {
+    fn mime_types(&self) -> &[&str] {
+        // Unknown multipart/* treated as mixed (registered after related/alternative exact).
+        &["multipart/mixed", "multipart/*"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        let mut out = Vec::new();
+        for (i, sub) in part.subparts.iter().enumerate() {
+            let mut sub_path = path.to_vec();
+            sub_path.push((i + 1).to_string());
+            let sub_id = format!("{part_id}.mixed.{i}");
+            if is_attachment(sub) {
+                out.extend(ctx.registry.parse_as(
+                    ctx.envelope_id,
+                    sub,
+                    ATTACHMENT_MIME,
+                    &sub_id,
+                    &sub_path,
+                ));
+            } else {
+                out.extend(ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path));
+            }
+        }
+        out
+    }
+}
+
+impl PartParser for MultipartRelatedParser {
+    fn mime_types(&self) -> &[&str] {
+        &["multipart/related"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        let has_rich = part.subparts.iter().any(is_rich_part);
+        let mut out = Vec::new();
+        for (i, sub) in part.subparts.iter().enumerate() {
+            let mut sub_path = path.to_vec();
+            sub_path.push((i + 1).to_string());
+            let sub_id = format!("{part_id}.related.{i}");
+            // Attachment only if is_attachment && (!cid || !has_rich)
+            let force_att = is_attachment(sub) && (sub.id.is_none() || !has_rich);
+            if force_att {
+                out.extend(ctx.registry.parse_as(
+                    ctx.envelope_id,
+                    sub,
+                    ATTACHMENT_MIME,
+                    &sub_id,
+                    &sub_path,
+                ));
+            } else {
+                out.extend(ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path));
+            }
+        }
+        out
+    }
+}

@@ -1,3 +1,4 @@
+mod attachments;
 mod emailnavigation;
 mod messageview;
 mod sidebar;

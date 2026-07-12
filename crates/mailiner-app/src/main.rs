@@ -12,6 +12,7 @@ mod account;
 mod components;
 mod context;
 mod core_event;
+mod download;
 mod formatter;
 mod mailbox;
 mod message;
@@ -64,6 +65,7 @@ fn App() -> Element {
     let messages_loading = use_signal(|| false);
     let selected_message = use_signal(|| None);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
+    let download_status = use_signal(std::collections::HashMap::new);
 
     let ctx = AppContext {
         accounts,
@@ -76,6 +78,7 @@ fn App() -> Element {
         selected_account,
         selected_message,
         message_view,
+        download_status,
     };
     let ctx_clone = ctx.clone();
 

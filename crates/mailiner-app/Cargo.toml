@@ -27,16 +27,21 @@ chrono = { version = "0.4", features = ["serde"] }
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
 send_wrapper = "0.6"
 js-sys = "0.3"
+wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
     "BinaryType",
+    "Blob",
+    "BlobPropertyBag",
     "CloseEvent",
     "Document",
     "Element",
+    "HtmlAnchorElement",
     "HtmlElement",
     "MessageEvent",
     "ShadowRoot",
     "ShadowRootInit",
     "ShadowRootMode",
+    "Url",
     "WebSocket",
     "Window",
 ] }

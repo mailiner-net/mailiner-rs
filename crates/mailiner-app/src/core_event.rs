@@ -6,12 +6,14 @@ use dioxus::logger::tracing::{error, info};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use mailiner_core::connector::EmailConnector;
+use mailiner_core::models::TransferEncoding;
 use mailiner_core::{Folder, FolderId, MessageId as CoreMessageId};
 use mailiner_imap_connector::ImapConnector;
 
 use crate::account::AccountId;
 use crate::components::virtual_scroll::SparseList;
 use crate::context::{AppContext, MessageViewState};
+use crate::download::{decode_attachment, save_bytes_to_disk, DownloadStatus, MAX_DOWNLOAD_BYTES};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::MessageId;
 use crate::message_loader::load_message;
@@ -26,6 +28,16 @@ pub enum CoreEvent {
         range: Range<usize>,
     },
     SelectMessage(MessageId),
+    /// Stream a single attachment part and save to disk (browser download).
+    DownloadAttachment {
+        mailbox_id: MailboxId,
+        message_id: MessageId,
+        section: String,
+        filename: String,
+        content_type: String,
+        encoding: TransferEncoding,
+        size_hint: Option<u64>,
+    },
 }
 
 pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppContext) {
@@ -69,10 +81,12 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 ctx.messages_loading.set(false);
                 ctx.selected_message.set(None);
                 ctx.message_view.set(MessageViewState::Empty);
+                ctx.download_status.set(HashMap::new());
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 ctx.selected_message.set(None);
                 ctx.message_view.set(MessageViewState::Empty);
+                ctx.download_status.set(HashMap::new());
                 ctx.messages.set(SparseList::new(0));
                 ctx.messages_loading.set(true);
                 ctx.selected_mailbox.set(Some(mailbox_id.clone()));
@@ -85,8 +99,6 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                             mailbox_id.to_string(),
                             total
                         );
-                        // Only store the total count — envelopes load on demand as the
-                        // virtual list discovers missing sparse ranges.
                         ctx.messages.set(SparseList::new(total));
                         ctx.messages_loading.set(false);
                         if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
@@ -100,7 +112,6 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 }
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
-                // Ignore stale requests after the user switched mailboxes.
                 if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
                     continue;
                 }
@@ -108,7 +119,6 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                     continue;
                 }
 
-                // Skip indices we already have.
                 let already = {
                     let messages = ctx.messages.read();
                     (range.start..range.end).all(|i| messages.has_item(i))
@@ -126,7 +136,6 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 );
                 match connector.list_envelopes_range(&folder_id, range.clone()).await {
                     Ok(envelopes) => {
-                        // Re-check selection after the await.
                         if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
                             continue;
                         }
@@ -146,6 +155,7 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
             }
             CoreEvent::SelectMessage(message_id) => {
                 ctx.selected_message.set(Some(message_id.clone()));
+                ctx.download_status.set(HashMap::new());
                 ctx.message_view.set(MessageViewState::Loading {
                     message_id: message_id.clone(),
                 });
@@ -168,7 +178,6 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
 
                 match load_message(&connector, &folder_id, &core_id).await {
                     Ok(loaded) => {
-                        // Drop stale results if the user selected another message.
                         if ctx.selected_message.read().as_ref() != Some(&message_id) {
                             continue;
                         }
@@ -186,6 +195,135 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                             message_id,
                             message: e.to_string(),
                         });
+                    }
+                }
+            }
+            CoreEvent::DownloadAttachment {
+                mailbox_id,
+                message_id,
+                section,
+                filename,
+                content_type,
+                encoding,
+                size_hint,
+            } => {
+                // Ignore if user navigated away.
+                if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                    continue;
+                }
+                if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
+                    ctx.download_status.write().insert(
+                        section.clone(),
+                        DownloadStatus::Error(format!(
+                            "attachment too large (max {} bytes)",
+                            MAX_DOWNLOAD_BYTES
+                        )),
+                    );
+                    continue;
+                }
+
+                ctx.download_status.write().insert(
+                    section.clone(),
+                    DownloadStatus::InProgress {
+                        received: 0,
+                        total: size_hint,
+                    },
+                );
+
+                let folder_id = FolderId::new(mailbox_id.to_string());
+                let core_id = CoreMessageId::new(message_id.to_string());
+                info!(
+                    "Downloading attachment section {} for message {}",
+                    section, message_id
+                );
+
+                let stream_result = connector
+                    .stream_raw_part(&folder_id, &core_id, &section)
+                    .await;
+
+                let mut stream = match stream_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("stream_raw_part failed: {}", e);
+                        ctx.download_status.write().insert(
+                            section,
+                            DownloadStatus::Error(e.to_string()),
+                        );
+                        continue;
+                    }
+                };
+
+                let mut raw = Vec::new();
+                let mut total_hint = size_hint;
+                let mut failed = false;
+
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(chunk) => {
+                            if let Some(h) = chunk.total_hint {
+                                total_hint = Some(h);
+                            }
+                            raw.extend_from_slice(&chunk.data);
+                            if raw.len() > MAX_DOWNLOAD_BYTES {
+                                ctx.download_status.write().insert(
+                                    section.clone(),
+                                    DownloadStatus::Error(format!(
+                                        "download exceeded limit ({} bytes)",
+                                        MAX_DOWNLOAD_BYTES
+                                    )),
+                                );
+                                failed = true;
+                                break;
+                            }
+                            let received = raw.len() as u64;
+                            ctx.download_status.write().insert(
+                                section.clone(),
+                                DownloadStatus::InProgress {
+                                    received,
+                                    total: total_hint,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            error!("download chunk error: {}", e);
+                            ctx.download_status.write().insert(
+                                section.clone(),
+                                DownloadStatus::Error(e.to_string()),
+                            );
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+
+                if failed {
+                    continue;
+                }
+                if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                    continue;
+                }
+
+                match decode_attachment(&raw, encoding, &content_type) {
+                    Ok(decoded) => {
+                        if let Err(e) =
+                            save_bytes_to_disk(&filename, &content_type, &decoded)
+                        {
+                            error!("save download failed: {}", e);
+                            ctx.download_status.write().insert(
+                                section,
+                                DownloadStatus::Error(e),
+                            );
+                        } else {
+                            ctx.download_status
+                                .write()
+                                .insert(section, DownloadStatus::Finished);
+                        }
+                    }
+                    Err(e) => {
+                        error!("decode attachment failed: {}", e);
+                        ctx.download_status
+                            .write()
+                            .insert(section, DownloadStatus::Error(e));
                     }
                 }
             }

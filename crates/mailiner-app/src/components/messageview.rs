@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
+use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
 use crate::formatter::{FormatOptions, MessageFormatter};
 use crate::message::{Message, MessageId};
@@ -172,6 +173,8 @@ pub fn MessageView() -> Element {
                         class: "mlnr-msg-host",
                         // Host stays empty in RSX — content is mounted into shadow DOM.
                     }
+
+                    AttachmentsFooter {}
                 },
             }
         }

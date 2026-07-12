@@ -293,6 +293,95 @@ button.flat {
             padding: 12px 24px;
             overflow: auto;
         }
+
+        .message-attachments {
+            flex-shrink: 0;
+            border-top: 1px solid var(--sidebar-border);
+            padding: 8px 24px 16px;
+            background: #fafafa;
+        }
+
+        .message-attachments-details {
+            width: 100%;
+        }
+
+        .message-attachments-summary {
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 6px 0;
+            user-select: none;
+        }
+
+        .message-attachments-list {
+            list-style: none;
+            margin: 8px 0 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .attachment-item {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+
+        .attachment-item-main {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .attachment-item-title {
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        .attachment-item-meta {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .attachment-item-error {
+            font-size: 0.85rem;
+            color: #b00020;
+            margin-top: 4px;
+        }
+
+        .attachment-download-btn {
+            flex-shrink: 0;
+            border: 1px solid var(--item-accent);
+            background: var(--item-accent);
+            color: #fff;
+            border-radius: 4px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+
+        .attachment-download-btn:disabled {
+            opacity: 0.6;
+            cursor: default;
+        }
+
+        .attachment-progress-track {
+            margin-top: 8px;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .attachment-progress-bar {
+            height: 100%;
+            background: var(--item-accent);
+            transition: width 0.15s ease-out;
+        }
     }
 
     /* Virtual scroll styles */

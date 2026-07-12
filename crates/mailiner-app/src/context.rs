@@ -6,6 +6,7 @@ use mailiner_core::models::LoadedMessage;
 
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
+use crate::download::DownloadStatus;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 
@@ -47,4 +48,6 @@ pub struct AppContext {
     pub selected_message: Signal<Option<MessageId>>,
     /// Body viewer state (load / format inputs).
     pub message_view: Signal<MessageViewState>,
+    /// Per-section attachment download progress (section path → status).
+    pub download_status: Signal<HashMap<String, DownloadStatus>>,
 }

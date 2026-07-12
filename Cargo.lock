@@ -3246,6 +3246,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailiner-composer"
+version = "0.1.0"
+
+[[package]]
 name = "mailiner-core"
 version = "0.1.0"
 dependencies = [

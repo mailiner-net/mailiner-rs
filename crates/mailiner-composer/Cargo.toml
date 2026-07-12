@@ -1,0 +1,10 @@
+[package]
+name = "mailiner-composer"
+version = "0.1.0"
+edition = "2021"
+description = "Email draft model, plain/rich body editors, and composer shell for Mailiner"
+
+[features]
+default = []
+# Reserved for web-only contenteditable / File APIs (PR 5+).
+web = []

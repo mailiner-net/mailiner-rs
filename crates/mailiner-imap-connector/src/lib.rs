@@ -1,3 +1,6 @@
+mod bodystructure;
+mod section_path;
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -19,7 +22,7 @@ use tracing::info;
 use std::collections::HashMap;
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
-    FolderId, Group, MailinerError, MessageId, PartStream, Result as MailinerResult,
+    FolderId, Group, MailinerError, MessageId, PartChunk, PartStream, Result as MailinerResult,
 };
 
 use tokio::sync::Mutex;
@@ -80,6 +83,8 @@ where
     username: String,
     password: String,
     imap: Mutex<ImapSession<S>>,
+    /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by message UID.
+    structure_cache: Mutex<HashMap<MessageId, BodyPart>>,
 }
 
 impl<S> ImapConnector<S>
@@ -93,6 +98,7 @@ where
             username,
             password,
             imap: Mutex::new(ImapSession::Disconnected),
+            structure_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -197,32 +203,34 @@ where
 
     fn has_attachments(bodystructure: Option<&BodyStructure<'_>>) -> bool {
         match bodystructure {
-            Some(BodyStructure::Basic { common, .. }) => common
-                .disposition
-                .as_ref()
-                .map(|d| d.ty == "attachment")
-                .unwrap_or(false),
-            Some(BodyStructure::Text { common, .. }) => common
-                .disposition
-                .as_ref()
-                .map(|d| d.ty == "attachment")
-                .unwrap_or(false),
-            Some(BodyStructure::Message { common, .. }) => common
-                .disposition
-                .as_ref()
-                .map(|d| d.ty == "attachment")
-                .unwrap_or(false),
-            Some(BodyStructure::Multipart { common, bodies, .. }) => {
-                common
-                    .disposition
-                    .as_ref()
-                    .map(|d| d.ty == "attachment")
-                    .unwrap_or(false)
-                    || bodies.iter().any(|b| Self::has_attachments(Some(b)))
+            Some(bs) => {
+                let part = bodystructure::convert_body_structure(bs);
+                bodystructure::structure_has_attachments(&part)
             }
             None => false,
         }
     }
+
+    /// Extract raw bytes for a BODY.PEEK section from a FETCH response.
+    fn extract_section_bytes(
+        fetch: &async_imap::types::Fetch,
+        section: &str,
+    ) -> Result<Vec<u8>, ImapError> {
+        if section.eq_ignore_ascii_case("TEXT") {
+            return fetch
+                .text()
+                .map(|b| b.to_vec())
+                .ok_or_else(|| ImapError::InvalidData(format!("missing BODY[{section}]")));
+        }
+        let path = section_path::parse_section_path(section)?;
+        fetch
+            .section(&path)
+            .map(|b| b.to_vec())
+            .ok_or_else(|| ImapError::InvalidData(format!("missing BODY[{section}]")))
+    }
+
+    const STREAM_CHUNK: usize = 64 * 1024;
+    const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
 }
 
@@ -388,8 +396,12 @@ where
         folder_id: &FolderId,
         range: std::ops::Range<usize>,
     ) -> MailinerResult<Vec<Envelope>> {
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
+        let (envelopes, structures) = {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+
             let mailbox = session
                 .select(folder_id.as_str())
                 .await
@@ -400,20 +412,18 @@ where
                 return Ok(Vec::new());
             }
 
-            // UI indices are newest-first: index 0 => IMAP sequence `total`.
-            // Range [start, end) maps to sequences [total-end+1, total-start].
             let end = range.end.min(total);
             let seq_high = total - range.start;
             let seq_low = total - end + 1;
             let sequence_set = format!("{}:{}", seq_low, seq_high);
 
-            // Sequence FETCH (not UID FETCH) — sequence_set is 1-based message sequence numbers.
             let mut fetch = session
                 .fetch(&sequence_set, "(UID RFC822.HEADER FLAGS BODYSTRUCTURE)")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {}", e)))?;
 
             let mut envelopes = Vec::new();
+            let mut structures: Vec<(MessageId, BodyPart)> = Vec::new();
 
             while let Some(result) = fetch.next().await {
                 let fetch = result
@@ -432,8 +442,18 @@ where
                     ImapError::InvalidData("Failed to parse headers".to_string()).into(),
                 )?;
 
+                let mid = MessageId::new(uid.to_string());
+                let has_attachments = if let Some(bs) = fetch.bodystructure() {
+                    let part = bodystructure::convert_body_structure(bs);
+                    let has = bodystructure::structure_has_attachments(&part);
+                    structures.push((mid.clone(), part));
+                    has
+                } else {
+                    false
+                };
+
                 envelopes.push(Envelope {
-                    id: MessageId::new(uid.to_string()),
+                    id: mid,
                     account_id: AccountId::new(self.username.clone()),
                     folder_id: folder_id.clone(),
                     subject: parsed_headers.subject().map(|s| s.to_string()),
@@ -447,31 +467,44 @@ where
                     is_flagged,
                     is_draft,
                     is_deleted,
-                    has_attachments: Self::has_attachments(fetch.bodystructure()),
+                    has_attachments,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 });
             }
 
-            // FETCH returns ascending sequence order (oldest first within the set);
-            // reverse so index 0 of the result is the newest (matches UI range.start).
             envelopes.reverse();
-            Ok(envelopes)
-        } else {
-            Err(ImapError::NotAuthenticated.into())
+            (envelopes, structures)
+        }; // imap lock released
+
+        if !structures.is_empty() {
+            let mut cache = self.structure_cache.lock().await;
+            for (id, part) in structures {
+                cache.insert(id, part);
+                if cache.len() > 500 {
+                    if let Some(k) = cache.keys().next().cloned() {
+                        cache.remove(&k);
+                    }
+                }
+            }
         }
+        Ok(envelopes)
     }
 
     async fn get_envelope(&self, message_id: &MessageId) -> MailinerResult<Envelope> {
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
+        let (envelope, structure) = {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+
             session
                 .select("INBOX")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
             let mut fetch = session
-                .fetch(message_id.as_str(), "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
+                .uid_fetch(message_id.as_str(), "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {}", e)))?;
 
@@ -488,35 +521,49 @@ where
             let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
                 Self::parse_flags(fetch.flags());
 
-            let parsed_headers =
-                MessageParser::new()
-                    .parse_headers(header)
-                    .ok_or(ImapError::InvalidData(
-                        "Failed to parse headers".to_string(),
-                    ))?;
+            let parsed_headers = MessageParser::new()
+                .parse_headers(header)
+                .ok_or(ImapError::InvalidData("Failed to parse headers".to_string()))?;
 
-            Ok(Envelope {
-                id: message_id.clone(),
-                account_id: AccountId::new(self.username.clone()),
-                folder_id: FolderId::new("INBOX"),
-                subject: parsed_headers.subject().map(|s| s.to_string()),
-                from: Self::parse_email_address(parsed_headers.from()),
-                to: Self::parse_email_address(parsed_headers.to()),
-                cc: Self::parse_email_address(parsed_headers.cc()),
-                bcc: Self::parse_email_address(parsed_headers.bcc()),
-                date: Self::parse_date(parsed_headers.date())?,
-                is_read,
-                is_starred,
-                is_flagged,
-                is_draft,
-                is_deleted,
-                has_attachments: Self::has_attachments(fetch.bodystructure()),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-        } else {
-            Err(ImapError::NotAuthenticated.into())
+            let (has_attachments, structure) = if let Some(bs) = fetch.bodystructure() {
+                let part = bodystructure::convert_body_structure(bs);
+                let has = bodystructure::structure_has_attachments(&part);
+                (has, Some(part))
+            } else {
+                (false, None)
+            };
+
+            (
+                Envelope {
+                    id: message_id.clone(),
+                    account_id: AccountId::new(self.username.clone()),
+                    folder_id: FolderId::new("INBOX"),
+                    subject: parsed_headers.subject().map(|s| s.to_string()),
+                    from: Self::parse_email_address(parsed_headers.from()),
+                    to: Self::parse_email_address(parsed_headers.to()),
+                    cc: Self::parse_email_address(parsed_headers.cc()),
+                    bcc: Self::parse_email_address(parsed_headers.bcc()),
+                    date: Self::parse_date(parsed_headers.date())?,
+                    is_read,
+                    is_starred,
+                    is_flagged,
+                    is_draft,
+                    is_deleted,
+                    has_attachments,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                },
+                structure,
+            )
+        };
+
+        if let Some(part) = structure {
+            self.structure_cache
+                .lock()
+                .await
+                .insert(message_id.clone(), part);
         }
+        Ok(envelope)
     }
 
     async fn update_envelope_flags(
@@ -525,76 +572,194 @@ where
         flags: &[(&str, bool)],
     ) -> MailinerResult<()> {
         let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            session
-                .select("INBOX")
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
 
-            for (flag, value) in flags {
-                let flag = match *flag {
-                    "is_read" => Flag::Seen,
-                    "is_flagged" => Flag::Flagged,
-                    "is_draft" => Flag::Draft,
-                    "is_deleted" => Flag::Deleted,
-                    "is_starred" => Flag::Custom("\\Starred".into()),
-                    _ => {
-                        return Err(ImapError::InvalidData(format!("Unknown flag: {}", flag)).into())
-                    }
-                };
+        session
+            .select("INBOX")
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
-                let stream = if *value {
-                    session
-                        .store(message_id.as_str(), format!("+FLAGS ({:?})", flag))
-                        .await
-                        .map_err(|e| ImapError::Imap(format!("Failed to set flag: {}", e)))?
-                } else {
-                    session
-                        .store(message_id.as_str(), format!("-FLAGS ({:?})", flag))
-                        .await
-                        .map_err(|e| ImapError::Imap(format!("Failed to remove flag: {}", e)))?
-                };
-                let _updates = stream.try_collect::<Vec<_>>().await.map_err(|e| {
-                    ImapError::Imap(format!("Failed to update envelope flags: {}", e))
-                })?;
-            }
+        for (flag, value) in flags {
+            let flag = match *flag {
+                "is_read" => Flag::Seen,
+                "is_flagged" => Flag::Flagged,
+                "is_draft" => Flag::Draft,
+                "is_deleted" => Flag::Deleted,
+                "is_starred" => Flag::Custom("\\Starred".into()),
+                _ => {
+                    return Err(ImapError::InvalidData(format!("Unknown flag: {}", flag)).into())
+                }
+            };
 
-            Ok(())
-        } else {
-            Err(ImapError::NotAuthenticated.into())
+            let stream = if *value {
+                session
+                    .uid_store(message_id.as_str(), format!("+FLAGS ({:?})", flag))
+                    .await
+                    .map_err(|e| ImapError::Imap(format!("Failed to set flag: {}", e)))?
+            } else {
+                session
+                    .uid_store(message_id.as_str(), format!("-FLAGS ({:?})", flag))
+                    .await
+                    .map_err(|e| ImapError::Imap(format!("Failed to remove flag: {}", e)))?
+            };
+            let _updates = stream.try_collect::<Vec<_>>().await.map_err(|e| {
+                ImapError::Imap(format!("Failed to update envelope flags: {}", e))
+            })?;
         }
+
+        Ok(())
     }
 
     async fn get_body_structure(
         &self,
-        _folder_id: &FolderId,
-        _message_id: &MessageId,
+        folder_id: &FolderId,
+        message_id: &MessageId,
     ) -> MailinerResult<BodyPart> {
-        Err(MailinerError::Connector(
-            "get_body_structure not yet implemented".into(),
-        ))
+        {
+            let cache = self.structure_cache.lock().await;
+            if let Some(part) = cache.get(message_id) {
+                return Ok(part.clone());
+            }
+        }
+
+        let part = {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+
+            session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+
+            let mut fetch = session
+                .uid_fetch(message_id.as_str(), "(BODYSTRUCTURE)")
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch BODYSTRUCTURE: {}", e)))?;
+
+            let fetch = fetch
+                .next()
+                .await
+                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch BODYSTRUCTURE: {}", e)))?;
+
+            let bs = fetch
+                .bodystructure()
+                .ok_or_else(|| ImapError::InvalidData("No BODYSTRUCTURE".to_string()))?;
+            bodystructure::convert_body_structure(bs)
+        };
+
+        self.structure_cache
+            .lock()
+            .await
+            .insert(message_id.clone(), part.clone());
+        Ok(part)
     }
 
     async fn fetch_raw_parts(
         &self,
-        _folder_id: &FolderId,
-        _message_id: &MessageId,
-        _sections: &[String],
+        folder_id: &FolderId,
+        message_id: &MessageId,
+        sections: &[String],
     ) -> MailinerResult<HashMap<String, Vec<u8>>> {
-        Err(MailinerError::Connector(
-            "fetch_raw_parts not yet implemented".into(),
-        ))
+        if sections.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let query_items: Vec<String> = sections
+            .iter()
+            .map(|s| format!("BODY.PEEK[{s}]"))
+            .collect();
+        let query = format!("({})", query_items.join(" "));
+
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+
+        let mut fetch = session
+            .uid_fetch(message_id.as_str(), &query)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to fetch parts: {}", e)))?;
+
+        let fetch = fetch
+            .next()
+            .await
+            .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
+            .map_err(|e| ImapError::Imap(format!("Failed to fetch parts: {}", e)))?;
+
+        let mut map = HashMap::new();
+        for section in sections {
+            match Self::extract_section_bytes(&fetch, section) {
+                Ok(bytes) => {
+                    map.insert(section.clone(), bytes);
+                }
+                Err(e) => {
+                    tracing::warn!(section = %section, error = %e, "section missing in FETCH");
+                }
+            }
+        }
+        Ok(map)
     }
 
     async fn stream_raw_part(
         &self,
-        _folder_id: &FolderId,
-        _message_id: &MessageId,
-        _section: &str,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+        section: &str,
     ) -> MailinerResult<PartStream> {
-        Err(MailinerError::Connector(
-            "stream_raw_part not yet implemented".into(),
-        ))
+        let data = {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+
+            session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+
+            let query = format!("(BODY.PEEK[{section}])");
+            let mut fetch = session
+                .uid_fetch(message_id.as_str(), &query)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch part: {}", e)))?;
+
+            let fetch = fetch
+                .next()
+                .await
+                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch part: {}", e)))?;
+
+            Self::extract_section_bytes(&fetch, section)?
+        };
+
+        let total = data.len() as u64;
+        if total > Self::MAX_DOWNLOAD {
+            return Err(MailinerError::Connector(format!(
+                "attachment exceeds download limit ({total} > {})",
+                Self::MAX_DOWNLOAD
+            )));
+        }
+
+        let chunks: Vec<MailinerResult<PartChunk>> = data
+            .chunks(Self::STREAM_CHUNK)
+            .map(|c| {
+                Ok(PartChunk {
+                    data: c.to_vec(),
+                    total_hint: Some(total),
+                })
+            })
+            .collect();
+
+        Ok(Box::pin(futures::stream::iter(chunks)))
     }
 }
-

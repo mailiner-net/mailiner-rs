@@ -3223,6 +3223,7 @@ dependencies = [
  "imap-proto",
  "mail-parser",
  "mailiner-core",
+ "mailiner-mime",
  "ring",
  "rustls",
  "rustls-pki-types",

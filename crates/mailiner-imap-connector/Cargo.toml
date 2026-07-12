@@ -17,7 +17,8 @@ thiserror = "2.0"
 futures = "0.3"
 imap-proto = "0.16"
 mail-parser = "0.10"
-mailiner-core = { path = "../mailiner-core" } 
+mailiner-core = { path = "../mailiner-core" }
+mailiner-mime = { path = "../mailiner-mime" } 
 uuid = { version = "1.16", features = ["js"] }
 webpki-roots = "0.26"
 tracing = { version = "0.1" }

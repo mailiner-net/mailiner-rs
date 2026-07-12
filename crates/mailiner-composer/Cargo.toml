@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Email draft model, plain/rich body editors, and composer shell for Mailiner"
 
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
+mailiner-core = { path = "../mailiner-core" }
+thiserror = "2.0"
+uuid = { version = "1.16", features = ["v4", "js"] }
+
 [features]
 default = []
-# Reserved for web-only contenteditable / File APIs (PR 5+).
 web = []

@@ -1,1 +1,1 @@
-//! cid — stub (populated in a later PR).
+//! CID → InlineImage rehydration (implemented in PR 6; stub types only in PR 2).

@@ -3248,6 +3248,12 @@ dependencies = [
 [[package]]
 name = "mailiner-composer"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "mailiner-core",
+ "thiserror 2.0.12",
+ "uuid",
+]
 
 [[package]]
 name = "mailiner-core"

@@ -13,7 +13,7 @@ use mailiner_imap_connector::ImapConnector;
 use crate::account::AccountId;
 use crate::components::virtual_scroll::SparseList;
 use crate::context::{AppContext, MessageViewState};
-use crate::download::{decode_attachment, save_bytes_to_disk, DownloadStatus, MAX_DOWNLOAD_BYTES};
+use crate::download::{DownloadStatus, StreamingBlobDownload, MAX_DOWNLOAD_BYTES};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::MessageId;
 use crate::message_loader::load_message;
@@ -253,7 +253,9 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                     }
                 };
 
-                let mut raw = Vec::new();
+                // Stream wire → TE decode → Blob parts (no full-file Vec in Rust).
+                let mut download =
+                    StreamingBlobDownload::new(encoding, filename, content_type);
                 let mut total_hint = size_hint;
                 let mut failed = false;
 
@@ -263,23 +265,20 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                             if let Some(h) = chunk.total_hint {
                                 total_hint = Some(h);
                             }
-                            raw.extend_from_slice(&chunk.data);
-                            if raw.len() > MAX_DOWNLOAD_BYTES {
-                                ctx.download_status.write().insert(
-                                    section.clone(),
-                                    DownloadStatus::Error(format!(
-                                        "download exceeded limit ({} bytes)",
-                                        MAX_DOWNLOAD_BYTES
-                                    )),
-                                );
+                            if let Err(e) = download.push_wire_chunk(&chunk.data) {
+                                error!("download stream error: {}", e);
+                                ctx.download_status
+                                    .write()
+                                    .insert(section.clone(), DownloadStatus::Error(e));
                                 failed = true;
                                 break;
                             }
-                            let received = raw.len() as u64;
+                            // Drop wire chunk after decode; only Blob parts retain decoded data.
+                            drop(chunk);
                             ctx.download_status.write().insert(
                                 section.clone(),
                                 DownloadStatus::InProgress {
-                                    received,
+                                    received: download.wire_received,
                                     total: total_hint,
                                 },
                             );
@@ -303,24 +302,14 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                     continue;
                 }
 
-                match decode_attachment(&raw, encoding, &content_type) {
-                    Ok(decoded) => {
-                        if let Err(e) =
-                            save_bytes_to_disk(&filename, &content_type, &decoded)
-                        {
-                            error!("save download failed: {}", e);
-                            ctx.download_status.write().insert(
-                                section,
-                                DownloadStatus::Error(e),
-                            );
-                        } else {
-                            ctx.download_status
-                                .write()
-                                .insert(section, DownloadStatus::Finished);
-                        }
+                match download.finish_and_save() {
+                    Ok(()) => {
+                        ctx.download_status
+                            .write()
+                            .insert(section, DownloadStatus::Finished);
                     }
                     Err(e) => {
-                        error!("decode attachment failed: {}", e);
+                        error!("save download failed: {}", e);
                         ctx.download_status
                             .write()
                             .insert(section, DownloadStatus::Error(e));

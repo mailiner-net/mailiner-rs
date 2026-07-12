@@ -7,8 +7,9 @@ pub mod params;
 pub mod parser;
 
 pub use codec::{
-    decode_content, decode_part_content, decode_transfer_encoding, DecodeError, DecodedContent,
-    MAX_BINARY_DECODE_BYTES, MAX_TEXT_DECODE_BYTES,
+    decode_content, decode_part_content, decode_transfer_encoding, decode_transfer_stream,
+    DecodeError, DecodedContent, StreamingTransferDecoder, MAX_BINARY_DECODE_BYTES,
+    MAX_TEXT_DECODE_BYTES,
 };
 pub use heuristics::{is_attachment, is_rich_part};
 pub use params::{mime_words_decode, normalize_params};

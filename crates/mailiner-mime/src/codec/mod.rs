@@ -3,10 +3,12 @@
 mod base64;
 mod charset;
 mod qp;
+mod stream;
 
 pub use base64::base64_decode;
 pub use charset::charset_decode;
 pub use qp::qp_decode;
+pub use stream::{decode_transfer_stream, StreamingTransferDecoder};
 
 /// Soft limit for decoded text payloads (WASM safety).
 pub const MAX_TEXT_DECODE_BYTES: usize = 5 * 1024 * 1024;

@@ -750,16 +750,27 @@ where
             )));
         }
 
-        let chunks: Vec<MailinerResult<PartChunk>> = data
-            .chunks(Self::STREAM_CHUNK)
-            .map(|c| {
-                Ok(PartChunk {
-                    data: c.to_vec(),
-                    total_hint: Some(total),
-                })
-            })
-            .collect();
-
-        Ok(Box::pin(futures::stream::iter(chunks)))
+        // Yield 64 KiB frames lazily — do not pre-collect every chunk into a second Vec.
+        // Note: async-imap still delivers the full BODY.PEEK literal up-front; true
+        // progressive IMAP partial-fetch can replace this later behind the same API.
+        let chunk_size = Self::STREAM_CHUNK;
+        let data = std::sync::Arc::new(data);
+        Ok(Box::pin(futures::stream::unfold(
+            (data, total, 0usize, chunk_size),
+            |(data, total, offset, chunk_size)| async move {
+                if offset >= data.len() {
+                    return None;
+                }
+                let end = (offset + chunk_size).min(data.len());
+                let chunk = data[offset..end].to_vec();
+                Some((
+                    Ok(PartChunk {
+                        data: chunk,
+                        total_hint: Some(total),
+                    }),
+                    (data, total, end, chunk_size),
+                ))
+            },
+        )))
     }
 }

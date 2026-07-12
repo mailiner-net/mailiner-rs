@@ -6,6 +6,10 @@ edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "mailiner_app"
+path = "src/lib.rs"
+
 [dependencies]
 dioxus = { version = "0.7.9", features = ["router"] }
 dioxus-heroicons = "0.4.1"
@@ -13,6 +17,13 @@ futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 uuid = { version = "1.18", features = ["v4", "js"] }
 mailiner-core = { path = "../mailiner-core" }
+mailiner-mime = { path = "../mailiner-mime" }
+ammonia = "4.0"
+linkify = "0.10"
+base64 = "0.22"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
 send_wrapper = "0.6"
 js-sys = "0.3"

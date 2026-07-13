@@ -3,6 +3,9 @@
 Playwright drives the app in a real browser against a `dx serve` instance of
 `mailiner-app`.
 
+All commands below are run from the repository root — `package.json` and
+`playwright.config.ts` live there, not inside `e2e/`.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -28,10 +31,11 @@ and waits for it to come up before running the tests. The first run can take a
 few minutes since it compiles the whole workspace to WASM.
 
 `mailiner-app`'s `build.rs` bakes an `IMAP_PASSWORD` value in at compile time.
-The config supplies a placeholder automatically, so no `.env` file is
-required just to bring the app up; connecting to a real IMAP account still
-needs the usual local setup described in the top-level `README.md` (including
-running `ws-tcp-proxy`).
+`playwright.config.ts` loads a repo-root `.env` (if present) and forwards
+`IMAP_PASSWORD` from it, falling back to a placeholder otherwise, so no
+`.env` file is required just to bring the app up. Connecting to a real IMAP
+account still needs the usual local setup described in the top-level
+`README.md` (including running `ws-tcp-proxy`).
 
 Useful variations:
 

@@ -136,8 +136,11 @@ pub enum EnsureConnectedMode {
     /// Active-only switch: tear down other sessions **before** connecting
     /// (`SelectAccount`, `ConnectExisting`, `Bootstrap`, `Reconnect`).
     Switch,
-    /// Trial connect for first-save / add-account: keep existing sessions until Ready,
-    /// then switch. On failure the prior session is left intact.
+    /// Trial / first-save connect: never tears down other sessions.
+    ///
+    /// Callers (e.g. `CommitNewAccount`) must call [`AccountConnectionManager::disconnect_others`]
+    /// only after **full** success (connect Ready **and** store upsert + set_active_id).
+    /// On connect or store failure the prior active session remains intact.
     KeepActiveUntilReady,
 }
 
@@ -378,10 +381,8 @@ impl AccountConnectionManager {
 
         match connect_result {
             Ok(connector) => {
-                if mode == EnsureConnectedMode::KeepActiveUntilReady {
-                    // Now that the new account is Ready, drop other sessions (active-only).
-                    self.disconnect_others(Some(account_id), ctx).await;
-                }
+                // KeepActiveUntilReady deliberately does **not** disconnect others here.
+                // Callers switch active-only only after full commit (store writes) succeed.
                 self.connectors.insert(account_id.clone(), connector);
                 set_connection_state(ctx, account_id, ConnectionState::Ready);
                 info!("Account {} connected and authenticated", account_id);
@@ -423,12 +424,13 @@ impl AccountConnectionManager {
         }
     }
 
-    /// Ephemeral test connect: never persists; always disconnects; uses `request_id` for state.
+    /// Ephemeral test connect: never persists; always disconnects the trial stream;
+    /// uses `request_id` for state.
     ///
-    /// On success the state is set to `Ready` then immediately to `Disconnected` so the map
-    /// does not retain permanent Ready badges. UI should observe success during the
-    /// Connecting→Ready transition (or via a dedicated test-status signal in PR5); call
-    /// [`clear_connection_state`] to remove the ephemeral key after the user dismisses.
+    /// On success leaves `connection_states[request_id] = Ready` so the UI can show
+    /// “Connection successful”. The ephemeral connector is dropped (not installed in
+    /// the long-lived map). **UI owns cleanup:** call [`clear_connection_state`] when
+    /// the user dismisses the success indicator so ephemeral keys do not accumulate.
     pub async fn test_connection(
         &mut self,
         request_id: &AccountId,
@@ -446,13 +448,11 @@ impl AccountConnectionManager {
 
         match result {
             Ok(connector) => {
-                // Brief Ready so any reactive observer can note success, then clear to
-                // Disconnected so ephemeral request_ids do not linger as Ready forever.
-                set_connection_state(ctx, request_id, ConnectionState::Ready);
                 if let Err(e) = connector.disconnect().await {
                     warn!("test connection disconnect: {}", e);
                 }
-                set_connection_state(ctx, request_id, ConnectionState::Disconnected);
+                // Leave Ready for UI observation; UI clears via clear_connection_state.
+                set_connection_state(ctx, request_id, ConnectionState::Ready);
                 Ok(())
             }
             Err(err) => {

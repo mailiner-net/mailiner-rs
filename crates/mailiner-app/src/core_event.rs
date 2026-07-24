@@ -306,8 +306,8 @@ async fn handle_commit_new_account(
 ) {
     let account_id = config.id.clone();
 
-    // KeepActiveUntilReady: do not tear down the current active session until Ready.
-    // On connect failure the prior session remains intact.
+    // KeepActiveUntilReady: prior active session stays up through connect **and**
+    // store writes. disconnect_others only after full commit success (below).
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)
         .await
@@ -316,6 +316,7 @@ async fn handle_commit_new_account(
             // Connect-before-persist: only write store on Ready.
             if let Err(e) = manager.store().upsert(&config).await {
                 error!("CommitNewAccount: store upsert failed: {}", e);
+                // Drop only the new trial session; prior active session is still live.
                 manager.disconnect_account(&account_id, ctx).await;
                 set_connection_state(
                     ctx,
@@ -330,9 +331,8 @@ async fn handle_commit_new_account(
             }
             if let Err(e) = manager.store().set_active_id(Some(&account_id)).await {
                 error!("CommitNewAccount: set_active_id failed: {}", e);
-                // Treat like upsert failure for the session: disconnect and surface Error.
-                // Account remains in the store (upsert already succeeded) so the user can
-                // retry via SelectAccount / set_active without re-entering credentials.
+                // Drop only the new trial session; prior remains. Account stays in store
+                // for retry via SelectAccount / set_active without re-entering credentials.
                 manager.disconnect_account(&account_id, ctx).await;
                 set_connection_state(
                     ctx,
@@ -349,7 +349,8 @@ async fn handle_commit_new_account(
                 return;
             }
 
-            // Keep connector + config in manager (store-backed now).
+            // Full commit success: switch active-only (tear down prior sessions).
+            manager.disconnect_others(Some(&account_id), ctx).await;
             manager.cache_config(config.clone());
             refresh_ui_accounts(manager, ctx).await;
             ctx.selected_account.set(Some(account_id.clone()));
@@ -367,12 +368,15 @@ async fn handle_commit_new_account(
 
 async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &mut AppContext) {
     // Store list is authoritative for persisted accounts; memory_only is explicit.
-    // Tear down connectors for ids that are neither in the store nor memory-only.
+    // On list **error**, do not treat as empty (would mass-disconnect all connectors).
     let store_ids: std::collections::HashSet<AccountId> = match manager.store().list().await {
         Ok(list) => list.into_iter().map(|c| c.id).collect(),
         Err(e) => {
-            warn!("AccountsChanged: failed to list store: {}", e);
-            std::collections::HashSet::new()
+            warn!(
+                "AccountsChanged: failed to list store (skipping orphan teardown and UI wipe): {}",
+                e
+            );
+            return;
         }
     };
     let known: std::collections::HashSet<AccountId> = store_ids
@@ -396,6 +400,9 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
 ///
 /// Does **not** re-insert the previous `ctx.accounts` map (that resurrected deleted
 /// accounts). Only store list + `manager.memory_only` are authoritative.
+///
+/// On `store.list()` **error**, leaves current UI accounts unchanged (does not treat
+/// the failure as an empty store).
 async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppContext) {
     let mut map = HashMap::new();
     match manager.store().list().await {
@@ -405,7 +412,11 @@ async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppCo
             }
         }
         Err(e) => {
-            warn!("Failed to list accounts from store: {}", e);
+            warn!(
+                "Failed to list accounts from store (leaving UI accounts unchanged): {}",
+                e
+            );
+            return;
         }
     }
     // Explicit memory-only (e.g. interim dev_default) — not the previous UI map.

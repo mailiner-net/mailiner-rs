@@ -286,9 +286,9 @@ async fn handle_reconnect(
     ctx: &mut AppContext,
     account_id: AccountId,
 ) {
-    manager.disconnect_account(&account_id, ctx).await;
-
-    // disconnect_account clears cached config — re-resolve from store / cache.
+    // Snapshot config **before** disconnect: `disconnect_account` drops the
+    // manager cache (including memory-only configs). Store-backed accounts can
+    // re-resolve after disconnect; memory-only ones cannot.
     let Some(config) = manager.resolve_config(&account_id).await else {
         error!("Reconnect: unknown account {}", account_id);
         set_connection_state(
@@ -302,14 +302,11 @@ async fn handle_reconnect(
         );
         return;
     };
-    let is_memory_only = manager
-        .store()
-        .get(&account_id)
-        .await
-        .ok()
-        .flatten()
-        .is_none();
-    if is_memory_only {
+    let was_memory_only = manager.memory_only_ids().contains(&account_id);
+
+    manager.disconnect_account(&account_id, ctx).await;
+
+    if was_memory_only {
         manager.cache_config_memory_only(config.clone());
     } else {
         manager.cache_config(config.clone());

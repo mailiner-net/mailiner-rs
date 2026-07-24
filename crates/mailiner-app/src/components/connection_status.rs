@@ -18,6 +18,30 @@ use crate::core_event::CoreEvent;
 pub fn ConnectionStatusBanner() -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
+    let mut retry_pending = use_signal(|| false);
+
+    // Re-arm Retry once core has left the Error/Disconnected surface (or finished
+    // Ready). Prevents double-clicks from enqueueing multiple Reconnects while
+    // the UI is still showing the previous Error/Disconnected state.
+    use_effect(move || {
+        let selected = ctx.selected_account.read().clone();
+        let states = ctx.connection_states.read();
+        let Some(id) = selected else {
+            return;
+        };
+        let Some(state) = states.get(&id) else {
+            return;
+        };
+        if matches!(
+            state,
+            ConnectionState::Connecting | ConnectionState::Authenticating | ConnectionState::Ready
+        ) {
+            if retry_pending() {
+                retry_pending.set(false);
+            }
+        }
+    });
+
     let selected = ctx.selected_account.read().clone();
     let states = ctx.connection_states.read();
 
@@ -33,7 +57,6 @@ pub fn ConnectionStatusBanner() -> Element {
         return rsx! {};
     }
 
-    // Snapshot fields we need after the read-guard is dropped (Retry move).
     let account_id_for_retry = account_id.clone();
     let view = StatusView::from_state(state);
 
@@ -43,6 +66,7 @@ pub fn ConnectionStatusBanner() -> Element {
     let label = view.label;
     let detail = view.detail;
     let tooltip = view.tooltip;
+    let retry_disabled = retry_pending();
 
     rsx! {
         div {
@@ -74,13 +98,22 @@ pub fn ConnectionStatusBanner() -> Element {
                 button {
                     class: "connection-banner-retry",
                     r#type: "button",
-                    title: "Reconnect to the mail server",
+                    disabled: retry_disabled,
+                    title: if retry_disabled {
+                        "Reconnecting…"
+                    } else {
+                        "Reconnect to the mail server"
+                    },
                     onclick: move |_| {
+                        if retry_pending() {
+                            return;
+                        }
+                        retry_pending.set(true);
                         let _ = core_tx.send(CoreEvent::Reconnect {
                             account_id: account_id_for_retry.clone(),
                         });
                     },
-                    "Retry"
+                    if retry_disabled { "Retrying…" } else { "Retry" }
                 }
             }
         }

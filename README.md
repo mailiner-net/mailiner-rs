@@ -42,24 +42,27 @@ remote references that could reveal details about the user to the sender.
 ### Content-Security-Policy (baseline)
 
 The app ships a baseline CSP via a document `<meta>` tag (see `mailiner-app`
-`CONTENT_SECURITY_POLICY`):
+`CONTENT_SECURITY_POLICY`). The meta tag is injected after WASM/`App` mounts, so
+the **initial** HTML/script/WASM load is not constrained by it. Prefer the same
+policy as an **HTTP response header** at deploy time for first-paint coverage
+(and note that `dx serve` HMR may inject scripts after mount).
 
 | Directive | Policy | Why |
 |-----------|--------|-----|
 | `default-src` | `'self'` | Deny unexpected origins by default |
 | `script-src` | `'self' 'wasm-unsafe-eval'` | App WASM only; no third-party JS. `wasm-unsafe-eval` is required to instantiate WASM (not full `unsafe-eval`) |
-| `style-src` | `'self' 'unsafe-inline'` | Dioxus uses inline `style=` (virtual list, layout). Strict style-src would break the UI |
-| `img-src` | `'self' data: blob:` | Inline message images (`data:` from cid rehydration); download previews (`blob:`) |
+| `style-src` | `'self' 'unsafe-inline'` | Dioxus uses inline `style=` (virtual list, layout). Strict style-src would break the UI. Remote stylesheets are stripped by the sanitizer |
+| `img-src` | `'self' data: blob: http: https:` | Inline message images (`data:` from cid rehydration); download previews (`blob:`); remote images when the user clicks **Allow remote resources** (privacy is gated in the HTML formatter first; CSP must not veto that path) |
 | `connect-src` | `'self' ws: wss: http: https:` | User-configured proxies can be any host; a strict host allowlist is not feasible without dynamic CSP. IMAP remains TLS-wrapped in the client |
 | `object-src` | `'none'` | No plugins |
 | `base-uri` / `form-action` | `'self'` | Limit base URL and form targets |
 
-**Tradeoff:** CSP here is primarily XSS hardening for secrets stored in the origin.
-It does **not** pin proxy destinations — that would break self-hosted / custom
-proxies. When deploying behind a reverse proxy, you may also send an equivalent
-(or stricter) CSP HTTP header; keep `connect-src` open enough for your users’
-proxy hosts and retain `wasm-unsafe-eval` + `style-src 'unsafe-inline'` for the
-Dioxus runtime.
+**Tradeoffs:** CSP is primarily XSS hardening for secrets stored in the origin.
+It does **not** pin proxy destinations or remote image hosts — privacy for mail
+images is enforced in the formatter (block by default; Allow opts in). When
+deploying, send an equivalent CSP HTTP header; keep `connect-src` open enough
+for user proxies, `img-src` open for intentional remote images, and retain
+`wasm-unsafe-eval` + `style-src 'unsafe-inline'` for the Dioxus runtime.
 
 ## Running Mailiner locally
 

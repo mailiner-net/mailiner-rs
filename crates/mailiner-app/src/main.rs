@@ -70,26 +70,33 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 /// Baseline Content-Security-Policy for the Mailiner origin (PR7).
 ///
 /// Goals: reduce XSS impact (script injection → local secrets) while keeping
-/// the Dioxus/WASM runtime and user-defined mail proxies working.
+/// the Dioxus/WASM runtime, user-defined mail proxies, and intentional remote
+/// message images working.
 ///
 /// Tradeoffs:
 /// - `script-src 'self' 'wasm-unsafe-eval'`: WASM instantiation needs
 ///   `wasm-unsafe-eval` (not full `unsafe-eval`). No third-party scripts.
 /// - `style-src 'self' 'unsafe-inline'`: Dioxus components (e.g. virtual list)
-///   use inline `style=` attributes; strict style-src breaks layout.
-/// - `img-src 'self' data: blob:`: message HTML may inline images as `data:`
-///   (cid rehydration); downloads use `blob:` URLs.
+///   use inline `style=` attributes; strict style-src breaks layout. Remote
+///   stylesheets are not allowed (formatter/sanitizer strips them).
+/// - `img-src 'self' data: blob: http: https:`: cid→`data:` inlines and
+///   `blob:` downloads, plus remote `http(s)` images when the user clicks
+///   **Allow remote resources** in the message viewer. Privacy is gated in the
+///   HTML formatter first; CSP must not veto that path. CSS `url(...)` image
+///   loads are also constrained by `img-src` in most browsers.
 /// - `connect-src 'self' ws: wss: http: https:`: user-entered proxy hosts make
 ///   a strict host allowlist impossible without dynamic CSP (limited in browsers).
 ///   Schemes stay open so self-hosted proxies work; IMAP traffic is still
 ///   TLS-wrapped client-side. This mitigates script XSS, not proxy diversity.
-/// - Prefer deployment-level CSP headers when hosting static assets; the meta
-///   tag is the in-app baseline for `dx serve` and simple static hosts.
+/// - Meta tag is injected after WASM/`App` mounts, so the initial document +
+///   script load are not covered. Prefer an equivalent **HTTP CSP header** at
+///   deploy time for first-paint coverage (and note HMR/`dx serve` may inject
+///   scripts after mount).
 const CONTENT_SECURITY_POLICY: &str = "\
 default-src 'self'; \
 script-src 'self' 'wasm-unsafe-eval'; \
 style-src 'self' 'unsafe-inline'; \
-img-src 'self' data: blob:; \
+img-src 'self' data: blob: http: https:; \
 font-src 'self'; \
 connect-src 'self' ws: wss: http: https:; \
 object-src 'none'; \

@@ -119,8 +119,7 @@
     border-top: 1px solid var(--sidebar-border);
 }
 
-.onboarding-section legend,
-.onboarding-advanced summary {
+.onboarding-section legend {
     font-size: 0.85rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -131,9 +130,17 @@
     cursor: default;
 }
 
+.onboarding-advanced {
+    margin-top: 0.35rem;
+}
+
 .onboarding-advanced summary {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #555;
     cursor: pointer;
     list-style: revert;
+    margin-bottom: 0.5rem;
 }
 
 .onboarding-field {

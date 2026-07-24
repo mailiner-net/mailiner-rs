@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test';
 
-test('loads the main layout', async ({ page }) => {
+test('empty store shows first-run onboarding', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.locator('#app')).toBeVisible();
+  // Empty localStorage → NeedsOnboarding → /onboarding (no mail chrome #app).
+  await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
+  await expect(page.locator('.onboarding-shell')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
+  await expect(page.locator('#app')).toHaveCount(0);
 });

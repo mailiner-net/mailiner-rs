@@ -364,7 +364,8 @@ async fn handle_commit_new_account(
                     &account_id,
                     ConnectionState::Error {
                         message: format!(
-                            "Connected and saved, but failed to set active account: {e}"
+                            "Connected and saved, but failed to set active account: {e}. \
+                             The account may already be saved — reload the page or try again."
                         ),
                         kind: ConnectErrorKind::Internal,
                         retryable: true,

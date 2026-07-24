@@ -22,7 +22,7 @@ enum FormPhase {
 #[component]
 pub fn OnboardingForm() -> Element {
     let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
-    let ctx = use_context::<AppContext>();
+    let mut ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
 
     let prefill = use_hook(dev_form_prefill);
@@ -47,6 +47,10 @@ pub fn OnboardingForm() -> Element {
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
     let mut test_request_id = use_signal(|| None::<AccountId>);
+    // Ignore Ready/Error until we have seen Connecting/Authenticating for this attempt.
+    // Prevents a stale Error from a previous Save from aborting a retry (and missing success).
+    let mut save_seen_progress = use_signal(|| false);
+    let mut test_seen_progress = use_signal(|| false);
 
     // Watch connection_states for Save / Test outcomes.
     // Success: set Ready; AppShell replaces `/onboarding` → `/`.
@@ -57,20 +61,30 @@ pub fn OnboardingForm() -> Element {
             FormPhase::Saving => {
                 if let Some(state) = states.get(&account_id_for_effect) {
                     match state {
+                        ConnectionState::Connecting | ConnectionState::Authenticating => {
+                            save_seen_progress.set(true);
+                        }
                         ConnectionState::Ready => {
+                            if !save_seen_progress() {
+                                return;
+                            }
                             // Wait until core refreshed UI accounts (upsert succeeded).
                             if ctx.accounts.read().contains_key(&account_id_for_effect) {
                                 phase.set(FormPhase::Idle);
+                                save_seen_progress.set(false);
                                 status_message.set(None);
                                 bootstrap.set(AppBootstrapState::Ready);
                             }
                         }
                         ConnectionState::Error { message, kind, .. } => {
+                            if !save_seen_progress() {
+                                return;
+                            }
                             phase.set(FormPhase::Idle);
+                            save_seen_progress.set(false);
                             status_message
                                 .set(Some(StatusMessage::error(kind_label(*kind), message)));
                         }
-                        ConnectionState::Connecting | ConnectionState::Authenticating => {}
                         _ => {}
                     }
                 }
@@ -80,18 +94,33 @@ pub fn OnboardingForm() -> Element {
                     && let Some(state) = states.get(&rid)
                 {
                     match state {
+                        ConnectionState::Connecting | ConnectionState::Authenticating => {
+                            test_seen_progress.set(true);
+                        }
                         ConnectionState::Ready => {
+                            if !test_seen_progress() {
+                                return;
+                            }
                             phase.set(FormPhase::Idle);
+                            test_seen_progress.set(false);
+                            // Drop ephemeral test key (UI-owned cleanup).
+                            ctx.connection_states.write().remove(&rid);
+                            test_request_id.set(None);
                             status_message.set(Some(StatusMessage::success(
                                 "Connection successful. You can save and continue.",
                             )));
                         }
                         ConnectionState::Error { message, kind, .. } => {
+                            if !test_seen_progress() {
+                                return;
+                            }
                             phase.set(FormPhase::Idle);
+                            test_seen_progress.set(false);
+                            ctx.connection_states.write().remove(&rid);
+                            test_request_id.set(None);
                             status_message
                                 .set(Some(StatusMessage::error(kind_label(*kind), message)));
                         }
-                        ConnectionState::Connecting | ConnectionState::Authenticating => {}
                         _ => {}
                     }
                 }
@@ -133,8 +162,18 @@ pub fn OnboardingForm() -> Element {
             &remote_port(),
         ) {
             Ok(config) => {
+                // Clear previous ephemeral test state if any.
+                if let Some(prev) = test_request_id() {
+                    ctx.connection_states.write().remove(&prev);
+                }
                 let request_id = AccountId::new(Uuid::new_v4().to_string());
+                // Optimistic Connecting so the watcher ignores nothing stale and
+                // is armed before core handles the event.
+                ctx.connection_states
+                    .write()
+                    .insert(request_id.clone(), ConnectionState::Connecting);
                 test_request_id.set(Some(request_id.clone()));
+                test_seen_progress.set(true);
                 phase.set(FormPhase::Testing);
                 status_message.set(Some(StatusMessage::info("Testing connection…")));
                 core_tx.send(CoreEvent::TestConnection { request_id, config });
@@ -164,6 +203,12 @@ pub fn OnboardingForm() -> Element {
             &remote_port(),
         ) {
             Ok(config) => {
+                // Replace any stale Error/Ready with Connecting for this form id
+                // so a retry is not terminated by the previous attempt's state.
+                ctx.connection_states
+                    .write()
+                    .insert(account_id_for_save.clone(), ConnectionState::Connecting);
+                save_seen_progress.set(true);
                 phase.set(FormPhase::Saving);
                 status_message.set(Some(StatusMessage::info("Connecting…")));
                 core_tx.send(CoreEvent::CommitNewAccount { config });
@@ -254,10 +299,9 @@ pub fn OnboardingForm() -> Element {
                         }
                     }
 
-                    details {
-                        class: "onboarding-section onboarding-advanced",
-                        open: !prefill.proxy_base_url.is_empty() || !prefill.proxy_token.is_empty(),
-                        summary { "Proxy (WebSocket TCP proxy)" }
+                    fieldset {
+                        class: "onboarding-section",
+                        legend { "Proxy (WebSocket TCP proxy)" }
                         p {
                             class: "bootstrap-muted",
                             "Browsers cannot open plain TCP. Mailiner reaches IMAP through a \
@@ -281,24 +325,29 @@ pub fn OnboardingForm() -> Element {
                             autocomplete: "off",
                             disabled: busy,
                         }
-                        FormField {
-                            label: "Remote host (optional)",
-                            id: "onboarding-remote-host",
-                            value: remote_host(),
-                            oninput: move |v| remote_host.set(v),
-                            placeholder: "Defaults to IMAP host",
-                            autocomplete: "off",
-                            disabled: busy,
-                        }
-                        FormField {
-                            label: "Remote port (optional)",
-                            id: "onboarding-remote-port",
-                            value: remote_port(),
-                            oninput: move |v| remote_port.set(v),
-                            placeholder: "Defaults to IMAP port",
-                            input_type: "number",
-                            autocomplete: "off",
-                            disabled: busy,
+                        details {
+                            class: "onboarding-advanced",
+                            open: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                            summary { "Advanced: remote override" }
+                            FormField {
+                                label: "Remote host (optional)",
+                                id: "onboarding-remote-host",
+                                value: remote_host(),
+                                oninput: move |v| remote_host.set(v),
+                                placeholder: "Defaults to IMAP host",
+                                autocomplete: "off",
+                                disabled: busy,
+                            }
+                            FormField {
+                                label: "Remote port (optional)",
+                                id: "onboarding-remote-port",
+                                value: remote_port(),
+                                oninput: move |v| remote_port.set(v),
+                                placeholder: "Defaults to IMAP port",
+                                input_type: "number",
+                                autocomplete: "off",
+                                disabled: busy,
+                            }
                         }
                     }
 
@@ -414,7 +463,7 @@ fn kind_label(kind: ConnectErrorKind) -> &'static str {
     }
 }
 
-/// Suggest `imap.{domain}` when the user entered an email and left host empty.
+/// Suggest `imap.{domain}` as a **placeholder only** (never auto-submitted).
 fn email_to_imap_host_hint(email: &str) -> String {
     email
         .rsplit_once('@')
@@ -440,7 +489,7 @@ fn build_config_from_form(
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
     let email = email.trim();
-    let mut host = imap_host.trim().to_string();
+    let host = imap_host.trim().to_string();
     let username = imap_username.trim();
     // Do not trim passwords (spaces may be intentional).
     let password = imap_password;
@@ -456,11 +505,7 @@ fn build_config_from_form(
         return Err("Email must look like an address (user@example.com).".into());
     }
     if host.is_empty() {
-        let hint = email_to_imap_host_hint(email);
-        if hint.is_empty() {
-            return Err("IMAP host is required.".into());
-        }
-        host = hint;
+        return Err("IMAP host is required.".into());
     }
     let port: u16 = imap_port
         .trim()

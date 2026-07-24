@@ -331,7 +331,14 @@ async fn handle_commit_new_account(
 ) {
     let account_id = config.id.clone();
 
-    // KeepActiveUntilReady: prior active session stays up through connect **and**
+    // Force a fresh connect so credential edits re-verify (ensure_connected would
+    // otherwise short-circuit when a Ready connector already exists for this id).
+    // Drop connector only; store entry is left intact until Ready + upsert.
+    if manager.get(&account_id).is_some() {
+        manager.disconnect_account(&account_id, ctx).await;
+    }
+
+    // KeepActiveUntilReady: prior *other* active session stays up through connect **and**
     // store writes. disconnect_others only after full commit success (below).
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)

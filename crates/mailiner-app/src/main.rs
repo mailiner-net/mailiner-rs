@@ -10,7 +10,8 @@ use crate::account_store::{
 };
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
-    ConnectionStatusBanner, EmailNavigation, MessageList, MessageView, OnboardingForm,
+    AccountEditPage, AccountNewPage, AccountsSettingsPage, ConnectionStatusBanner, EmailNavigation,
+    MessageList, MessageView, OnboardingForm,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -49,7 +50,7 @@ pub struct AccountStoreContext(pub Rc<dyn AccountStore>);
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 #[allow(clippy::enum_variant_names)] // Route component names end in View by convention.
-enum Route {
+pub(crate) enum Route {
     #[layout(AppShell)]
     #[route("/")]
     MainView {},
@@ -358,104 +359,34 @@ fn redirecting_shell() -> Element {
     }
 }
 
-/// Account list settings placeholder (full UI is PR6).
+/// Account list settings (`/settings/accounts`).
 #[component]
 fn AccountsSettingsView() -> Element {
     let bootstrap = use_context::<Signal<AppBootstrapState>>();
-    // Settings require Ready (and at least the possibility of accounts). Under
-    // NeedsOnboarding the deep-link guard replace()s to /onboarding; avoid flashing
-    // this placeholder for a frame before the effect runs.
+    // Settings require Ready. Under NeedsOnboarding the deep-link guard replace()s
+    // to /onboarding; avoid flashing this view for a frame before the effect runs.
     if !matches!(bootstrap(), AppBootstrapState::Ready) {
         return redirecting_shell();
     }
-
-    let ctx = use_context::<AppContext>();
-    let accounts = ctx.accounts;
-
-    // Stable order: display name then id (matches store list ordering).
-    let mut listed: Vec<_> = accounts.read().values().cloned().collect();
-    listed.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
-    });
-
-    rsx! {
-        div {
-            class: "bootstrap-shell",
-            div {
-                class: "bootstrap-card",
-                h1 { class: "bootstrap-title", "Accounts" }
-                p { class: "bootstrap-muted", "Account management UI (placeholder)." }
-
-                ul {
-                    class: "bootstrap-account-list",
-                    for account in listed.iter() {
-                        li {
-                            Link {
-                                to: Route::AccountEditView { id: account.id.as_str().to_string() },
-                                "{account.name} — {account.email}"
-                            }
-                        }
-                    }
-                }
-
-                nav {
-                    class: "bootstrap-nav",
-                    Link { to: Route::AccountNewView {}, "Add account" }
-                    " · "
-                    Link { to: Route::MainView {}, "Back to mail" }
-                }
-            }
-        }
-    }
+    rsx! { AccountsSettingsPage {} }
 }
 
-/// Add-account placeholder (full form is PR5/PR6).
+/// Add account (`/settings/accounts/new`) — CommitNewAccount path.
 #[component]
 fn AccountNewView() -> Element {
     let bootstrap = use_context::<Signal<AppBootstrapState>>();
     if !matches!(bootstrap(), AppBootstrapState::Ready) {
         return redirecting_shell();
     }
-
-    rsx! {
-        div {
-            class: "bootstrap-shell",
-            div {
-                class: "bootstrap-card",
-                h1 { class: "bootstrap-title", "Add account" }
-                p { class: "bootstrap-muted", "New account form (placeholder)." }
-                nav {
-                    class: "bootstrap-nav",
-                    Link { to: Route::AccountsSettingsView {}, "Back to accounts" }
-                }
-            }
-        }
-    }
+    rsx! { AccountNewPage {} }
 }
 
-/// Edit-account placeholder (full form is PR6).
+/// Edit account (`/settings/accounts/:id`).
 #[component]
 fn AccountEditView(id: String) -> Element {
     let bootstrap = use_context::<Signal<AppBootstrapState>>();
     if !matches!(bootstrap(), AppBootstrapState::Ready) {
         return redirecting_shell();
     }
-
-    rsx! {
-        div {
-            class: "bootstrap-shell",
-            div {
-                class: "bootstrap-card",
-                h1 { class: "bootstrap-title", "Edit account" }
-                p { "Account id: {id}" }
-                p { class: "bootstrap-muted", "Edit account form (placeholder)." }
-                nav {
-                    class: "bootstrap-nav",
-                    Link { to: Route::AccountsSettingsView {}, "Back to accounts" }
-                }
-            }
-        }
-    }
+    rsx! { AccountEditPage { id } }
 }

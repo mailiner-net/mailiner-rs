@@ -292,6 +292,164 @@
     color: #666;
 }
 
+/* —— Account management settings (PR6) —— */
+.accounts-card {
+    max-width: 36rem;
+}
+
+.accounts-list {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+}
+
+.accounts-list-item {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--sidebar-border);
+}
+
+.accounts-list-item.active {
+    background: color-mix(in srgb, var(--item-accent) 6%, transparent);
+    margin: 0 -0.5rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    border-radius: 6px;
+}
+
+.accounts-list-main {
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+.accounts-list-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.accounts-list-name {
+    font-weight: 600;
+}
+
+.accounts-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: #e3f2fd;
+    color: #0d47a1;
+}
+
+.accounts-list-meta,
+.accounts-list-conn {
+    font-size: 0.85rem;
+    margin-top: 0.15rem;
+    word-break: break-word;
+}
+
+.accounts-list-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.accounts-btn-sm {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.65rem;
+}
+
+a.accounts-link-btn {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    box-sizing: border-box;
+}
+
+.accounts-btn-danger {
+    color: #b71c1c;
+    border-color: #ef9a9a;
+}
+
+.accounts-btn-danger:hover:not(:disabled) {
+    background: #fdecea;
+}
+
+.accounts-btn-danger-solid {
+    background: #c62828;
+    border-color: #c62828;
+}
+
+.accounts-btn-danger-solid:hover:not(:disabled) {
+    filter: brightness(0.95);
+}
+
+.accounts-confirm {
+    margin-top: 1rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #ef9a9a;
+    border-radius: 8px;
+    background: #fff8f8;
+}
+
+.accounts-confirm p {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+}
+
+.accounts-security-note {
+    margin-top: 1.25rem;
+}
+
+.accounts-nav {
+    margin-top: 1rem;
+    gap: 0.65rem;
+}
+
+/* Nav header: account name + settings gear */
+.pane-header-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pane-header-account-link {
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.pane-header-account-link:hover {
+    color: var(--item-accent);
+    text-decoration: underline;
+}
+
+.pane-header-settings {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #555;
+    margin-left: auto;
+    flex-shrink: 0;
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.pane-header-settings:hover {
+    color: var(--item-accent);
+    background: var(--item-hover-background);
+}
+
 body {
     margin: 0;
     padding: 0;

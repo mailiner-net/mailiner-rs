@@ -3225,6 +3225,7 @@ name = "mailiner-app"
 version = "0.1.0"
 dependencies = [
  "ammonia",
+ "async-trait",
  "base64",
  "chrono",
  "dioxus",
@@ -3237,8 +3238,11 @@ dependencies = [
  "mailiner-core",
  "mailiner-imap-connector",
  "mailiner-mime",
+ "percent-encoding",
  "regex",
  "send_wrapper",
+ "serde",
+ "serde_json",
  "tokio",
  "uuid",
  "wasm-bindgen",

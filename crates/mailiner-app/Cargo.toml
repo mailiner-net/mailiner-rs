@@ -23,6 +23,10 @@ linkify = "0.10"
 base64 = "0.22"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+percent-encoding = "2"
 
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
 send_wrapper = "0.6"

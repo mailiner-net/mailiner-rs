@@ -9,6 +9,8 @@ use crate::context::AppContext;
 use crate::core_event::{core_loop, CoreEvent};
 
 mod account;
+mod account_config;
+mod account_store;
 mod components;
 mod context;
 mod core_event;

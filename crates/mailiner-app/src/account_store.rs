@@ -39,6 +39,11 @@ impl std::error::Error for AccountStoreError {}
 /// `?Send` because the browser/WASM target is single-threaded.
 #[async_trait(?Send)]
 pub trait AccountStore {
+    /// List all stored account configs.
+    ///
+    /// Order is implementation-defined. Callers that need a stable UI order
+    /// should sort (e.g. by `display_name` then `id`). `InMemoryAccountStore`
+    /// already returns that stable order.
     async fn list(&self) -> Result<Vec<AccountConfig>, AccountStoreError>;
     async fn get(&self, id: &AccountId) -> Result<Option<AccountConfig>, AccountStoreError>;
     async fn upsert(&self, config: &AccountConfig) -> Result<(), AccountStoreError>;
@@ -48,6 +53,8 @@ pub trait AccountStore {
 }
 
 /// In-memory store for unit tests and session-only fallback.
+///
+/// `Debug` is derived; nested [`AccountConfig`] redacts passwords/tokens.
 #[derive(Debug, Default)]
 pub struct InMemoryAccountStore {
     accounts: RefCell<HashMap<AccountId, AccountConfig>>,
@@ -63,7 +70,14 @@ impl InMemoryAccountStore {
 #[async_trait(?Send)]
 impl AccountStore for InMemoryAccountStore {
     async fn list(&self) -> Result<Vec<AccountConfig>, AccountStoreError> {
-        Ok(self.accounts.borrow().values().cloned().collect())
+        let mut configs: Vec<AccountConfig> = self.accounts.borrow().values().cloned().collect();
+        // Stable order for UI / tests: display_name, then id.
+        configs.sort_by(|a, b| {
+            a.display_name
+                .cmp(&b.display_name)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        });
+        Ok(configs)
     }
 
     async fn get(&self, id: &AccountId) -> Result<Option<AccountConfig>, AccountStoreError> {
@@ -146,10 +160,11 @@ mod tests {
             store.upsert(&a).await.unwrap();
             store.upsert(&b).await.unwrap();
 
-            let mut list = store.list().await.unwrap();
-            list.sort_by(|x, y| x.id.as_str().cmp(y.id.as_str()));
+            // InMemoryAccountStore returns stable order by display_name then id.
+            let list = store.list().await.unwrap();
             assert_eq!(list.len(), 2);
             assert_eq!(list[0].id.as_str(), "a1");
+            assert_eq!(list[0].display_name, "alice");
             assert_eq!(list[1].display_name, "bob");
 
             let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
@@ -158,6 +173,24 @@ mod tests {
             store.delete(&AccountId::new("a1")).await.unwrap();
             assert!(store.get(&AccountId::new("a1")).await.unwrap().is_none());
             assert_eq!(store.list().await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn list_stable_order_by_display_name() {
+        let store = InMemoryAccountStore::new();
+        block_on(async {
+            store.upsert(&sample_config("z", "zeta")).await.unwrap();
+            store.upsert(&sample_config("a", "alpha")).await.unwrap();
+            store.upsert(&sample_config("m", "mu")).await.unwrap();
+            let names: Vec<_> = store
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.display_name)
+                .collect();
+            assert_eq!(names, vec!["alpha", "mu", "zeta"]);
         });
     }
 
@@ -204,5 +237,22 @@ mod tests {
             assert_eq!(got.imap.password, "new-pw");
             assert_eq!(store.list().await.unwrap().len(), 1);
         });
+    }
+
+    #[test]
+    fn debug_redacts_secrets_in_store() {
+        let store = InMemoryAccountStore::new();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+        });
+        let dbg = format!("{store:?}");
+        assert!(
+            !dbg.contains("\"pw\""),
+            "password leaked via store Debug: {dbg}"
+        );
+        assert!(
+            !dbg.contains("token: \"t\""),
+            "token leaked via store Debug: {dbg}"
+        );
     }
 }

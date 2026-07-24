@@ -9,7 +9,10 @@ use crate::context::AppContext;
 use crate::core_event::{core_loop, CoreEvent};
 
 mod account;
+// Wired for later PRs; unused by the binary runtime until connection/bootstrap land.
+#[allow(dead_code)]
 mod account_config;
+#[allow(dead_code)]
 mod account_store;
 mod components;
 mod context;

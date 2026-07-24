@@ -25,7 +25,7 @@ const QUERY_VALUE: &AsciiSet = &NON_ALPHANUMERIC
 pub enum AccountConfigError {
     /// IMAP or proxy remote host is empty.
     EmptyHost,
-    /// Proxy `base_url` is empty or missing a scheme.
+    /// Proxy `base_url` is empty, missing a scheme, or otherwise malformed.
     InvalidProxyUrl(String),
     /// Proxy scheme is not `ws` or `wss`.
     InvalidProxyScheme(String),
@@ -46,6 +46,9 @@ impl fmt::Display for AccountConfigError {
 impl std::error::Error for AccountConfigError {}
 
 /// Full account configuration including connection secrets.
+///
+/// `Debug` is derived; secret-bearing nested fields implement redacting `Debug`
+/// so passwords and proxy tokens never appear in logs/panic messages.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccountConfig {
     pub id: AccountId,
@@ -62,7 +65,7 @@ pub struct AccountConfig {
 }
 
 /// IMAP connection settings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImapSettings {
     /// Hostname for TLS SNI and display (e.g. "imap.example.com").
     pub host: String,
@@ -77,8 +80,20 @@ pub struct ImapSettings {
     pub use_tls: bool,
 }
 
+impl fmt::Debug for ImapSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ImapSettings")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"***")
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
+}
+
 /// SMTP connection settings (optional until send is implemented).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SmtpSettings {
     pub host: String,
     pub port: u16,
@@ -88,8 +103,20 @@ pub struct SmtpSettings {
     pub use_tls: bool,
 }
 
+impl fmt::Debug for SmtpSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SmtpSettings")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .field("use_tls", &self.use_tls)
+            .finish()
+    }
+}
+
 /// WebSocket TCP-proxy settings used to reach IMAP from the browser.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProxySettings {
     /// e.g. "ws://localhost:9400/proxy" or "wss://proxy.example/proxy"
     pub base_url: String,
@@ -101,6 +128,17 @@ pub struct ProxySettings {
     pub remote_port: Option<u16>,
 }
 
+impl fmt::Debug for ProxySettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxySettings")
+            .field("base_url", &self.base_url)
+            .field("token", &"***")
+            .field("remote_host", &self.remote_host)
+            .field("remote_port", &self.remote_port)
+            .finish()
+    }
+}
+
 impl ProxySettings {
     /// Build full WebSocket URL for `WebSocketStream`.
     ///
@@ -110,7 +148,8 @@ impl ProxySettings {
     /// - Reject empty IMAP/remote host.
     /// - Do not append a second `?` if `base_url` already has a query; use `&`.
     /// - Trim a single trailing `/` on the path when there is no query string.
-    /// - Scheme must be `ws` or `wss`.
+    /// - Scheme must be `ws` or `wss` (compared case-insensitively).
+    /// - Reject `#fragment` on `base_url` (would swallow query params).
     pub fn websocket_url(&self, imap: &ImapSettings) -> Result<String, AccountConfigError> {
         let remote_host = self
             .remote_host
@@ -128,12 +167,17 @@ impl ProxySettings {
                 "base_url is empty".into(),
             ));
         }
+        if base.contains('#') {
+            return Err(AccountConfigError::InvalidProxyUrl(
+                "base_url must not contain a fragment".into(),
+            ));
+        }
 
         let scheme = base
             .split_once("://")
             .map(|(s, _)| s)
             .ok_or_else(|| AccountConfigError::InvalidProxyUrl("missing scheme".into()))?;
-        if scheme != "ws" && scheme != "wss" {
+        if !scheme.eq_ignore_ascii_case("ws") && !scheme.eq_ignore_ascii_case("wss") {
             return Err(AccountConfigError::InvalidProxyScheme(scheme.to_string()));
         }
 
@@ -150,18 +194,25 @@ impl ProxySettings {
         Ok(format!("{base}{sep}token={encoded_token}&remote={remote}"))
     }
 
-    /// True when `base_url` is `ws://` and the host is not a loopback address.
+    /// True when `base_url` is `ws://` (case-insensitive) and the host is not loopback.
+    ///
+    /// Loopback hosts: `localhost`, `127.0.0.1`, `::1`. IPv6 authorities must be
+    /// bracketed per RFC 3986 (e.g. `ws://[::1]:9400/proxy`).
     pub fn is_insecure_remote_ws(&self) -> bool {
         let base = self.base_url.trim();
-        let Some(rest) = base.strip_prefix("ws://") else {
+        // Case-insensitive `ws://` prefix (5 chars).
+        let rest = if base.len() >= 5 && base.as_bytes()[..5].eq_ignore_ascii_case(b"ws://") {
+            &base[5..]
+        } else {
             return false;
         };
         // Path starts after first `/`; host[:port] is before that.
-        let host_port = rest.split('/').next().unwrap_or(rest);
+        // Also stop at `?` / `#` if present without a path.
+        let host_port = rest.split(['/', '?', '#']).next().unwrap_or(rest);
         // Drop userinfo if present (`user@host`).
         let host_port = host_port.rsplit('@').next().unwrap_or(host_port);
         let host = if let Some(inner) = host_port.strip_prefix('[') {
-            // IPv6 literal: [::1]:port
+            // IPv6 literal: [::1]:port — RFC 3986 requires brackets.
             inner.split(']').next().unwrap_or(inner)
         } else {
             host_port.split(':').next().unwrap_or(host_port)
@@ -173,6 +224,9 @@ impl ProxySettings {
 
 impl AccountConfig {
     /// Map to the thin UI account type (no secrets).
+    ///
+    /// Secret exclusion is structural: UI [`crate::account::Account`] only has
+    /// `id` / `name` / `email`. If that type gains fields, extend the mapping and tests.
     pub fn to_ui_account(&self) -> crate::account::Account {
         crate::account::Account {
             id: self.id.clone(),
@@ -182,6 +236,9 @@ impl AccountConfig {
     }
 
     /// Validate required fields that would break connect / URL building.
+    ///
+    /// PR1 checks hosts + proxy URL only. Fuller form validation (email, username,
+    /// password non-empty) lands with the onboarding UI (PR5).
     pub fn validate(&self) -> Result<(), AccountConfigError> {
         if self.imap.host.trim().is_empty() {
             return Err(AccountConfigError::EmptyHost);
@@ -330,6 +387,48 @@ mod tests {
     }
 
     #[test]
+    fn websocket_url_accepts_uppercase_scheme() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "WS://localhost:9400/proxy".into();
+        let url = proxy.websocket_url(&sample_imap()).unwrap();
+        assert!(
+            url.starts_with("WS://localhost:9400/proxy?token="),
+            "url={url}"
+        );
+
+        proxy.base_url = "WSS://proxy.example/proxy".into();
+        let url = proxy.websocket_url(&sample_imap()).unwrap();
+        assert!(
+            url.starts_with("WSS://proxy.example/proxy?token="),
+            "url={url}"
+        );
+    }
+
+    #[test]
+    fn websocket_url_rejects_fragment() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "ws://localhost:9400/proxy#frag".into();
+        match proxy.websocket_url(&sample_imap()) {
+            Err(AccountConfigError::InvalidProxyUrl(msg)) => {
+                assert!(msg.contains("fragment"), "msg={msg}");
+            }
+            other => panic!("expected InvalidProxyUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn websocket_url_rejects_empty_base() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "  ".into();
+        match proxy.websocket_url(&sample_imap()) {
+            Err(AccountConfigError::InvalidProxyUrl(msg)) => {
+                assert!(msg.contains("empty"), "msg={msg}");
+            }
+            other => panic!("expected InvalidProxyUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn is_insecure_remote_ws_detects_non_loopback() {
         let mut proxy = sample_proxy();
         proxy.base_url = "ws://proxy.example/proxy".into();
@@ -343,6 +442,64 @@ mod tests {
 
         proxy.base_url = "wss://proxy.example/proxy".into();
         assert!(!proxy.is_insecure_remote_ws());
+    }
+
+    #[test]
+    fn is_insecure_remote_ws_loopback_ipv6_bracketed() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "ws://[::1]:9400/proxy".into();
+        assert!(
+            !proxy.is_insecure_remote_ws(),
+            "bracketed ::1 should be loopback"
+        );
+
+        proxy.base_url = "ws://[::1]/proxy".into();
+        assert!(!proxy.is_insecure_remote_ws());
+
+        // Case-insensitive scheme
+        proxy.base_url = "WS://[::1]:9400/proxy".into();
+        assert!(!proxy.is_insecure_remote_ws());
+    }
+
+    #[test]
+    fn is_insecure_remote_ws_case_insensitive_scheme() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "WS://proxy.example/proxy".into();
+        assert!(proxy.is_insecure_remote_ws());
+
+        proxy.base_url = "WS://localhost:9400/proxy".into();
+        assert!(!proxy.is_insecure_remote_ws());
+    }
+
+    #[test]
+    fn is_insecure_remote_ws_userinfo_localhost() {
+        let mut proxy = sample_proxy();
+        proxy.base_url = "ws://user@localhost:9400/proxy".into();
+        assert!(!proxy.is_insecure_remote_ws());
+    }
+
+    #[test]
+    fn debug_redacts_passwords_and_token() {
+        let mut config = sample_config();
+        config.smtp = Some(SmtpSettings {
+            host: "smtp.example.com".into(),
+            port: 465,
+            username: "user@example.com".into(),
+            password: Some("smtp-secret".into()),
+            use_tls: true,
+        });
+        let dbg = format!("{config:?}");
+        assert!(!dbg.contains("s3cret"), "imap password leaked: {dbg}");
+        assert!(!dbg.contains("smtp-secret"), "smtp password leaked: {dbg}");
+        assert!(!dbg.contains("testtoken"), "proxy token leaked: {dbg}");
+        assert!(
+            dbg.contains("password: \"***\""),
+            "missing redaction: {dbg}"
+        );
+        assert!(
+            dbg.contains("token: \"***\""),
+            "missing token redaction: {dbg}"
+        );
     }
 
     #[test]
@@ -387,6 +544,8 @@ mod tests {
 
     #[test]
     fn to_ui_account_strips_secrets() {
+        // Secret exclusion is structural: UI Account has only id/name/email.
+        // This test documents the mapping; the type system prevents secret fields.
         let config = sample_config();
         let ui = config.to_ui_account();
         assert_eq!(ui.id, config.id);
@@ -398,6 +557,25 @@ mod tests {
     fn validate_rejects_empty_imap_host() {
         let mut config = sample_config();
         config.imap.host.clear();
+        assert_eq!(
+            config.validate().unwrap_err(),
+            AccountConfigError::EmptyHost
+        );
+    }
+
+    #[test]
+    fn validate_success_and_empty_smtp_host() {
+        let config = sample_config();
+        assert!(config.validate().is_ok());
+
+        let mut config = sample_config();
+        config.smtp = Some(SmtpSettings {
+            host: "".into(),
+            port: 465,
+            username: "u".into(),
+            password: None,
+            use_tls: true,
+        });
         assert_eq!(
             config.validate().unwrap_err(),
             AccountConfigError::EmptyHost

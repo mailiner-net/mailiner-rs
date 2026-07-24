@@ -5,3 +5,5 @@ pub mod account_store;
 pub mod download;
 pub mod formatter;
 pub mod message_loader;
+
+// connection / core_loop are binary-only (Dioxus signals + WASM WebSocket).

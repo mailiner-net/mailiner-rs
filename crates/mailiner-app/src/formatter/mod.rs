@@ -108,9 +108,11 @@ mod tests {
 
     #[test]
     fn prefers_html_when_present() {
-        let parts = vec![
-            part(PartKind::TextHtml, "text/html", "<p>Hi<script>alert(1)</script></p>"),
-        ];
+        let parts = vec![part(
+            PartKind::TextHtml,
+            "text/html",
+            "<p>Hi<script>alert(1)</script></p>",
+        )];
         let mut f = MessageFormatter::with_defaults();
         let r = f.format(&parts).unwrap();
         assert!(r.html.contains("Hi"));

@@ -6,7 +6,7 @@ use mailiner_core::connector::EmailConnector;
 use mailiner_core::error::{MailinerError, Result};
 use mailiner_core::ids::{FolderId, MessageId};
 use mailiner_core::models::{LoadedMessage, MessageContent};
-use mailiner_mime::{decode_part_content, MessageParser};
+use mailiner_mime::{MessageParser, decode_part_content};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Load a message: BODYSTRUCTURE → parse parts → FETCH content sections → decode.
@@ -19,9 +19,7 @@ where
     C: EmailConnector<S>,
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send + Sync,
 {
-    let structure = connector
-        .get_body_structure(folder_id, message_id)
-        .await?;
+    let structure = connector.get_body_structure(folder_id, message_id).await?;
     let parser = MessageParser::with_defaults();
     let mut parts = parser.parse(message_id, &structure);
 
@@ -73,9 +71,9 @@ where
         }
     }
 
-    let any_content = parts.iter().any(|p| {
-        p.should_prefetch() && !matches!(p.content, MessageContent::Empty)
-    });
+    let any_content = parts
+        .iter()
+        .any(|p| p.should_prefetch() && !matches!(p.content, MessageContent::Empty));
     if !any_content && !sections.is_empty() {
         return Err(MailinerError::Connector(format!(
             "failed to load content sections: {}",
@@ -173,6 +171,10 @@ mod tests {
         for p in loaded.attachments() {
             assert!(matches!(p.content, MessageContent::Empty));
         }
-        assert!(loaded.content_parts().any(|p| !matches!(p.content, MessageContent::Empty)));
+        assert!(
+            loaded
+                .content_parts()
+                .any(|p| !matches!(p.content, MessageContent::Empty))
+        );
     }
 }

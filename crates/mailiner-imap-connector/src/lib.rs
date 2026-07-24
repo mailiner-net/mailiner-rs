@@ -19,11 +19,11 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
-use std::collections::HashMap;
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
     FolderId, Group, MailinerError, MessageId, PartChunk, PartStream, Result as MailinerResult,
 };
+use std::collections::HashMap;
 
 use tokio::sync::Mutex;
 
@@ -57,7 +57,7 @@ impl From<ImapError> for MailinerError {
 
 struct ImapClient<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     client: Client<TlsStream<S>>,
     session: Option<Session<TlsStream<S>>>,
@@ -66,7 +66,7 @@ where
 #[derive(Debug)]
 enum ImapSession<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     Disconnected,
     Unauthenticated(Client<TlsStream<S>>),
@@ -74,10 +74,12 @@ where
     Authenticated(Session<TlsStream<S>>),
 }
 
-pub struct ImapConnector<S> 
+pub struct ImapConnector<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Debug
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
+    /// App-owned stable account id (not `imap-{username}`).
+    account_id: AccountId,
     host: String,
     port: u16,
     username: String,
@@ -90,10 +92,17 @@ where
 
 impl<S> ImapConnector<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Debug + Send
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
-    pub fn new(host: String, port: u16, username: String, password: String) -> Self {
+    pub fn new(
+        account_id: AccountId,
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+    ) -> Self {
         Self {
+            account_id,
             host,
             port,
             username,
@@ -276,9 +285,7 @@ where
     /// lower peak memory. 512 KiB is a pragmatic default until adaptive sizing.
     const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
-
 }
-
 
 #[async_trait]
 impl<S> EmailConnector<S> for ImapConnector<S>
@@ -286,8 +293,7 @@ where
     // `'static` required so partial-fetch streams can own `Arc<Mutex<ImapSession<S>>>`.
     S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync + 'static,
 {
-    async fn connect(&self, stream: S) -> MailinerResult<()>
-    {
+    async fn connect(&self, stream: S) -> MailinerResult<()> {
         self.ensure_connected(stream).await.map_err(|e| e.into())
     }
 
@@ -321,7 +327,7 @@ where
                 ));
             }
             Ok(Account {
-                id: AccountId::new(format!("imap-{}", self.username)),
+                id: self.account_id.clone(),
                 name: self.username.clone(),
                 email: self.username.clone(),
                 created_at: Utc::now(),
@@ -329,7 +335,7 @@ where
             })
         } else if let ImapSession::Authenticated(_) = &*imap {
             Ok(Account {
-                id: AccountId::new(format!("imap-{}", self.username)),
+                id: self.account_id.clone(),
                 name: self.username.clone(),
                 email: self.username.clone(),
                 created_at: Utc::now(),
@@ -353,13 +359,18 @@ where
                 let mailbox =
                     result.map_err(|e| ImapError::Imap(format!("Failed to get mailbox: {}", e)))?;
                 let full_name = mailbox.name().to_string();
-                let name_chunked = full_name.split(mailbox.delimiter().unwrap_or("/")).collect::<Vec<&str>>();
+                let name_chunked = full_name
+                    .split(mailbox.delimiter().unwrap_or("/"))
+                    .collect::<Vec<&str>>();
                 mailboxes.push(Folder {
                     id: FolderId::new(mailbox.name().to_string()),
                     account_id: account_id.clone(),
                     name: name_chunked.last().unwrap_or(&mailbox.name()).to_string(),
                     parent_id: if name_chunked.len() > 1 {
-                        Some(FolderId::new(name_chunked[..name_chunked.len() - 1].join(mailbox.delimiter().unwrap_or("/"))))
+                        Some(FolderId::new(
+                            name_chunked[..name_chunked.len() - 1]
+                                .join(mailbox.delimiter().unwrap_or("/")),
+                        ))
                     } else {
                         None
                     },
@@ -479,9 +490,9 @@ where
                     .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
                 let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
                     Self::parse_flags(fetch.flags());
-                let uid = fetch
-                    .uid
-                    .ok_or_else(|| ImapError::InvalidData("No UID in FETCH response".to_string()))?;
+                let uid = fetch.uid.ok_or_else(|| {
+                    ImapError::InvalidData("No UID in FETCH response".to_string())
+                })?;
 
                 let parser = MessageParser::new();
                 let parsed_headers = parser.parse_headers(header).ok_or::<MailinerError>(
@@ -500,7 +511,7 @@ where
 
                 envelopes.push(Envelope {
                     id: mid,
-                    account_id: AccountId::new(self.username.clone()),
+                    account_id: self.account_id.clone(),
                     folder_id: folder_id.clone(),
                     subject: parsed_headers.subject().map(|s| s.to_string()),
                     from: Self::parse_email_address(parsed_headers.from()),
@@ -567,9 +578,12 @@ where
             let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
                 Self::parse_flags(fetch.flags());
 
-            let parsed_headers = MessageParser::new()
-                .parse_headers(header)
-                .ok_or(ImapError::InvalidData("Failed to parse headers".to_string()))?;
+            let parsed_headers =
+                MessageParser::new()
+                    .parse_headers(header)
+                    .ok_or(ImapError::InvalidData(
+                        "Failed to parse headers".to_string(),
+                    ))?;
 
             let (has_attachments, structure) = if let Some(bs) = fetch.bodystructure() {
                 let part = bodystructure::convert_body_structure(bs);
@@ -582,7 +596,7 @@ where
             (
                 Envelope {
                     id: message_id.clone(),
-                    account_id: AccountId::new(self.username.clone()),
+                    account_id: self.account_id.clone(),
                     folder_id: FolderId::new("INBOX"),
                     subject: parsed_headers.subject().map(|s| s.to_string()),
                     from: Self::parse_email_address(parsed_headers.from()),
@@ -634,9 +648,7 @@ where
                 "is_draft" => Flag::Draft,
                 "is_deleted" => Flag::Deleted,
                 "is_starred" => Flag::Custom("\\Starred".into()),
-                _ => {
-                    return Err(ImapError::InvalidData(format!("Unknown flag: {}", flag)).into())
-                }
+                _ => return Err(ImapError::InvalidData(format!("Unknown flag: {}", flag)).into()),
             };
 
             let stream = if *value {
@@ -650,9 +662,10 @@ where
                     .await
                     .map_err(|e| ImapError::Imap(format!("Failed to remove flag: {}", e)))?
             };
-            let _updates = stream.try_collect::<Vec<_>>().await.map_err(|e| {
-                ImapError::Imap(format!("Failed to update envelope flags: {}", e))
-            })?;
+            let _updates = stream
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to update envelope flags: {}", e)))?;
         }
 
         Ok(())
@@ -715,10 +728,7 @@ where
             return Ok(HashMap::new());
         }
 
-        let query_items: Vec<String> = sections
-            .iter()
-            .map(|s| format!("BODY.PEEK[{s}]"))
-            .collect();
+        let query_items: Vec<String> = sections.iter().map(|s| format!("BODY.PEEK[{s}]")).collect();
         let query = format!("({})", query_items.join(" "));
 
         let mut imap = self.imap.lock().await;

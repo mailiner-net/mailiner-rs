@@ -243,14 +243,71 @@ impl AccountConfig {
         if self.imap.host.trim().is_empty() {
             return Err(AccountConfigError::EmptyHost);
         }
-        if let Some(ref smtp) = self.smtp {
-            if smtp.host.trim().is_empty() {
-                return Err(AccountConfigError::EmptyHost);
-            }
+        if let Some(ref smtp) = self.smtp
+            && smtp.host.trim().is_empty()
+        {
+            return Err(AccountConfigError::EmptyHost);
         }
         // Ensure proxy URL can be built (also validates scheme / remote host).
         self.proxy.websocket_url(&self.imap)?;
         Ok(())
+    }
+}
+
+/// Interim hard-coded-like defaults for local development (PR2–PR4).
+///
+/// When the account store is empty and this returns `Some`, bootstrap treats the
+/// app as Ready with a **memory-only** UI account and soft-fail connect — **no**
+/// store write. Removed from the empty-store path in PR5.
+///
+/// Enabled under `debug_assertions` or feature `dev-defaults`. Returns `None`
+/// in release without that feature, or when `IMAP_PASSWORD` is unset/empty.
+pub fn dev_default_config() -> Option<AccountConfig> {
+    #[cfg(any(debug_assertions, feature = "dev-defaults"))]
+    {
+        // Prefer build-injected IMAP_PASSWORD (build.rs); fall back to option_env.
+        let password = option_env!("IMAP_PASSWORD")
+            .filter(|p| !p.is_empty())
+            .map(|s| s.to_string())?;
+
+        let host = option_env!("MAILINER_DEV_IMAP_HOST").unwrap_or("dvratil.cz");
+        let username = option_env!("MAILINER_DEV_IMAP_USER").unwrap_or("me@dvratil.cz");
+        let email = option_env!("MAILINER_DEV_EMAIL").unwrap_or(username);
+        let display_name = option_env!("MAILINER_DEV_DISPLAY_NAME").unwrap_or("Valhalla");
+        let proxy_base =
+            option_env!("MAILINER_DEV_PROXY_URL").unwrap_or("ws://localhost:9400/proxy");
+        let proxy_token = option_env!("MAILINER_DEV_PROXY_TOKEN").unwrap_or("testtoken");
+        let port: u16 = option_env!("MAILINER_DEV_IMAP_PORT")
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(993);
+
+        let now = Utc::now();
+        Some(AccountConfig {
+            // Stable interim id so UI/Bootstrap stay consistent across reloads in-memory.
+            id: AccountId::new("1"),
+            display_name: display_name.into(),
+            email: email.into(),
+            imap: ImapSettings {
+                host: host.into(),
+                port,
+                username: username.into(),
+                password,
+                use_tls: true,
+            },
+            smtp: None,
+            proxy: ProxySettings {
+                base_url: proxy_base.into(),
+                token: proxy_token.into(),
+                remote_host: None,
+                remote_port: None,
+            },
+            created_at: now,
+            updated_at: now,
+        })
+    }
+    #[cfg(not(any(debug_assertions, feature = "dev-defaults")))]
+    {
+        None
     }
 }
 

@@ -1,20 +1,20 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use crate::account::{Account, AccountId};
+use crate::account_config::dev_default_config;
+use crate::account_store::InMemoryAccountStore;
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{EmailNavigation, MessageList, MessageView};
 use crate::context::AppContext;
-use crate::core_event::{core_loop, CoreEvent};
+use crate::core_event::{CoreEvent, core_loop};
 
 mod account;
-// Wired for later PRs; unused by the binary runtime until connection/bootstrap land.
-#[allow(dead_code)]
 mod account_config;
-#[allow(dead_code)]
 mod account_store;
 mod components;
+mod connection;
 mod context;
 mod core_event;
 mod download;
@@ -48,29 +48,31 @@ fn MainLayout() -> Element {
 
 #[component]
 fn App() -> Element {
-    let dummy_account_id = AccountId::new("1");
+    // Interim (PR2–PR4): empty InMemory store + optional dev_default synthetic account.
+    // No store write for dev_default; BrowserAccountStore lands in PR3.
+    let store: Rc<dyn crate::account_store::AccountStore> = Rc::new(InMemoryAccountStore::new());
 
-    let selected_account = use_signal(|| Some(dummy_account_id.clone()));
-    let accounts = use_signal(|| {
-        HashMap::from([(
-            dummy_account_id.clone(),
-            Account {
-                id: dummy_account_id.clone(),
-                name: "Valhalla".to_string(),
-                email: "me@dvratil.cz".to_string(),
-            },
-        )])
-    });
+    let (initial_accounts, initial_selected) = if let Some(cfg) = dev_default_config() {
+        let id = cfg.id.clone();
+        let ui = cfg.to_ui_account();
+        (HashMap::from([(id.clone(), ui)]), Some(id))
+    } else {
+        (HashMap::new(), None)
+    };
 
-    let mailbox_nodes = use_signal(|| HashMap::new());
-    let mailbox_roots = use_signal(|| { Vec::new() });
+    let selected_account = use_signal(|| initial_selected.clone());
+    let accounts = use_signal(|| initial_accounts);
+    let connection_states = use_signal(HashMap::new);
+
+    let mailbox_nodes = use_signal(HashMap::new);
+    let mailbox_roots = use_signal(Vec::new);
     let selected_mailbox = use_signal(|| None);
 
     let messages = use_signal(|| SparseList::new(0));
     let messages_loading = use_signal(|| false);
     let selected_message = use_signal(|| None);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
-    let download_status = use_signal(std::collections::HashMap::new);
+    let download_status = use_signal(HashMap::new);
 
     let ctx = AppContext {
         accounts,
@@ -84,15 +86,22 @@ fn App() -> Element {
         selected_message,
         message_view,
         download_status,
+        connection_states,
     };
     let ctx_clone = ctx.clone();
+    let store_for_core = store.clone();
 
     use_context_provider(|| ctx);
     let tx = use_coroutine(move |core_rx| {
         let ctx = ctx_clone.clone();
-        async move { core_loop(core_rx, ctx).await }
+        let store = store_for_core.clone();
+        async move { core_loop(core_rx, ctx, store).await }
     });
-    tx.send(CoreEvent::SelectAccount(dummy_account_id.clone()));
+
+    // Bootstrap: connect active (dev_default or later store-backed) with soft-fail.
+    tx.send(CoreEvent::Bootstrap {
+        active: initial_selected,
+    });
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }

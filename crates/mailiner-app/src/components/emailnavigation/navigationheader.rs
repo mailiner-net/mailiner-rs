@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dioxus_heroicons::{solid::Shape, Icon};
+use dioxus_heroicons::{Icon, solid::Shape};
 
 use crate::context::AppContext;
 
@@ -22,9 +22,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let current_mailbox_id = ctx.selected_mailbox.read();
     let current_account_id = ctx.selected_account.read();
 
-    let current_mailbox = current_mailbox_id
-        .as_ref()
-        .and_then(|id| mailboxes.get(id));
+    let current_mailbox = current_mailbox_id.as_ref().and_then(|id| mailboxes.get(id));
     let current_account = current_account_id.as_ref().and_then(|id| accounts.get(id));
     rsx! {
         header {

@@ -21,7 +21,6 @@ impl ToString for MailboxId {
     }
 }
 
-
 pub struct MailboxNode {
     pub id: MailboxId,
     pub name: String,

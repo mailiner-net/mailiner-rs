@@ -1,12 +1,12 @@
 //! Safe HTML formatter with cid resolution and remote-resource blocking.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use mailiner_core::models::{MessageContent, MessagePart};
 use regex::Regex;
 use std::sync::OnceLock;
 
 use super::sanitize::sanitize_css;
-use super::{text_content, FormatOptions, FormatResult};
+use super::{FormatOptions, FormatResult, text_content};
 
 const SAFE_IMAGE_TYPES: &[&str] = &[
     "image/png",
@@ -23,10 +23,7 @@ fn re_style_block() -> &'static Regex {
 }
 
 fn re_attr(attr: &str) -> Regex {
-    Regex::new(&format!(
-        r#"(?i)(\s{attr}\s*=\s*)(["'])([^"']*)(["'])"#
-    ))
-    .unwrap()
+    Regex::new(&format!(r#"(?i)(\s{attr}\s*=\s*)(["'])([^"']*)(["'])"#)).unwrap()
 }
 
 pub fn format_html(
@@ -125,9 +122,7 @@ fn resolve_cid(cid: &str, parts: &[MessagePart]) -> Option<(String, String)> {
             .unwrap_or(false)
             || p.description
                 .as_deref()
-                .map(|d| {
-                    d.trim().trim_matches(|c| c == '<' || c == '>') == cid_norm
-                })
+                .map(|d| d.trim().trim_matches(|c| c == '<' || c == '>') == cid_norm)
                 .unwrap_or(false)
     })?;
 
@@ -185,9 +180,8 @@ fn ammonia_clean(html: &str) -> String {
 
     static RE_SVG: OnceLock<Regex> = OnceLock::new();
     // `regex` crate does not support backreferences; match svg and math separately.
-    let re = RE_SVG.get_or_init(|| {
-        Regex::new(r"(?is)<svg\b[^>]*>.*?</svg>|<math\b[^>]*>.*?</math>").unwrap()
-    });
+    let re = RE_SVG
+        .get_or_init(|| Regex::new(r"(?is)<svg\b[^>]*>.*?</svg>|<math\b[^>]*>.*?</math>").unwrap());
     clean = re.replace_all(&clean, "").into_owned();
     clean
 }

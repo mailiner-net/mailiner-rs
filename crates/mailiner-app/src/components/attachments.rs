@@ -5,7 +5,7 @@ use mailiner_core::models::TransferEncoding;
 
 use crate::context::{AppContext, MessageViewState};
 use crate::core_event::CoreEvent;
-use crate::download::{size_to_human, DownloadStatus};
+use crate::download::{DownloadStatus, size_to_human};
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 
@@ -26,13 +26,7 @@ pub fn AttachmentsFooter() -> Element {
     let mailbox = ctx.selected_mailbox.read().clone();
 
     let (message_id, mailbox_id, rows) = match (view, mailbox) {
-        (
-            MessageViewState::Ready {
-                message_id,
-                loaded,
-            },
-            Some(mailbox_id),
-        ) => {
+        (MessageViewState::Ready { message_id, loaded }, Some(mailbox_id)) => {
             let rows: Vec<AttachmentRow> = loaded
                 .parts
                 .iter()
@@ -92,11 +86,7 @@ pub fn AttachmentsFooter() -> Element {
 }
 
 #[component]
-fn AttachmentItem(
-    message_id: MessageId,
-    mailbox_id: MailboxId,
-    row: AttachmentRow,
-) -> Element {
+fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentRow) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let section = row.section.clone();

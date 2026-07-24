@@ -6,6 +6,7 @@ use mailiner_core::models::LoadedMessage;
 
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
+use crate::connection::ConnectionState;
 use crate::download::DownloadStatus;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
@@ -35,6 +36,7 @@ impl Default for MessageViewState {
 
 #[derive(Clone)]
 pub struct AppContext {
+    /// UI accounts only (`id` / `name` / `email`) — **never** passwords or proxy tokens.
     pub accounts: Signal<HashMap<AccountId, Account>>,
     pub mailbox_nodes: Signal<HashMap<MailboxId, MailboxNode>>,
     pub mailbox_roots: Signal<Vec<MailboxId>>,
@@ -50,4 +52,6 @@ pub struct AppContext {
     pub message_view: Signal<MessageViewState>,
     /// Per-section attachment download progress (section path → status).
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
+    /// Per-account connection lifecycle (no secrets).
+    pub connection_states: Signal<HashMap<AccountId, ConnectionState>>,
 }

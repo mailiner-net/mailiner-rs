@@ -2,9 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use imap_proto::types::{
-    BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentEncoding,
-};
+use imap_proto::types::{BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentEncoding};
 use mailiner_core::body::{BodyPart, ContentDisposition};
 use mailiner_mime::params::normalize_params;
 
@@ -22,9 +20,7 @@ pub fn convert_body_structure(bs: &BodyStructure<'_>) -> BodyPart {
             part.nested_message = Some(Box::new(convert_body_structure(body)));
             part
         }
-        BodyStructure::Multipart {
-            common, bodies, ..
-        } => BodyPart {
+        BodyStructure::Multipart { common, bodies, .. } => BodyPart {
             type_: "multipart".into(),
             subtype: common.ty.subtype.to_ascii_lowercase(),
             parameters: params_to_map(common.ty.params.as_ref()),

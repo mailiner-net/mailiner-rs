@@ -1,7 +1,7 @@
 //! Attachment download: stream wire chunks → TE decode → progressive Blob parts.
 
 use mailiner_core::models::TransferEncoding;
-use mailiner_mime::{StreamingTransferDecoder, MAX_BINARY_DECODE_BYTES};
+use mailiner_mime::{MAX_BINARY_DECODE_BYTES, StreamingTransferDecoder};
 
 /// Hard cap for attachment downloads (decoded size). Larger than cid image cap.
 pub const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;

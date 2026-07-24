@@ -1,8 +1,16 @@
 //! Connection state machine and per-account connector manager.
 //!
 //! Owned solely by `core_loop` (single-task; avoids `Send` issues with `SendWrapper`).
+//!
+//! # Serial connect policy (v1)
+//!
+//! `core_loop` fully awaits each event handler before reading the next event, so at most
+//! one connect attempt is in flight. Generation counters still guard against stale results
+//! if connect is ever made concurrent (or if a disconnect bumps generation mid-attempt).
+//! Rapid `SelectAccount` switches are serialized: the second waits for the first to finish
+//! (up to [`CONNECT_TIMEOUT_MS`]), then runs with a fresh generation — not a mid-flight cancel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::logger::tracing::{error, info, warn};
@@ -122,6 +130,17 @@ impl From<ConnectError> for ConnectionState {
     }
 }
 
+/// How `ensure_connected` treats other active sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnsureConnectedMode {
+    /// Active-only switch: tear down other sessions **before** connecting
+    /// (`SelectAccount`, `ConnectExisting`, `Bootstrap`, `Reconnect`).
+    Switch,
+    /// Trial connect for first-save / add-account: keep existing sessions until Ready,
+    /// then switch. On failure the prior session is left intact.
+    KeepActiveUntilReady,
+}
+
 /// Classify connector / I/O failures into UI-facing kinds.
 pub fn classify_mailiner_error(err: &MailinerError) -> ConnectError {
     let text = err.to_string();
@@ -174,12 +193,21 @@ pub fn set_connection_state(ctx: &mut AppContext, account_id: &AccountId, state:
         .insert(account_id.clone(), state);
 }
 
+/// Remove a connection-state entry (e.g. ephemeral test `request_id` after UI dismisses).
+pub fn clear_connection_state(ctx: &mut AppContext, account_id: &AccountId) {
+    ctx.connection_states.write().remove(account_id);
+}
+
 /// Per-account connector manager. Owned only by `core_loop`.
 pub struct AccountConnectionManager {
     connectors: HashMap<AccountId, ImapConnector<WebSocketStream>>,
     /// Cached configs for reconnect; dropped on delete/disconnect.
     configs: HashMap<AccountId, AccountConfig>,
+    /// Ids present only in process memory (not store) — e.g. interim `dev_default`.
+    /// These are the only non-store accounts allowed to appear in the UI account map.
+    memory_only: HashSet<AccountId>,
     /// Generation counter for switch debounce / stale result ignore.
+    /// See module docs: v1 serializes connects; generation is defensive / future-proof.
     connect_generation: HashMap<AccountId, u64>,
     store: Rc<dyn AccountStore>,
 }
@@ -189,6 +217,7 @@ impl AccountConnectionManager {
         Self {
             connectors: HashMap::new(),
             configs: HashMap::new(),
+            memory_only: HashSet::new(),
             connect_generation: HashMap::new(),
             store,
         }
@@ -210,8 +239,20 @@ impl AccountConnectionManager {
         self.configs.get(account_id)
     }
 
-    /// Cache a config in memory (e.g. dev_default) without writing the store.
+    /// Ids that are allowed in the UI without being in the store.
+    pub fn memory_only_ids(&self) -> &HashSet<AccountId> {
+        &self.memory_only
+    }
+
+    /// Cache a config in memory without writing the store (e.g. interim `dev_default`).
+    pub fn cache_config_memory_only(&mut self, config: AccountConfig) {
+        self.memory_only.insert(config.id.clone());
+        self.configs.insert(config.id.clone(), config);
+    }
+
+    /// Cache a config for reconnect after it is (or will be) store-backed.
     pub fn cache_config(&mut self, config: AccountConfig) {
+        self.memory_only.remove(&config.id);
         self.configs.insert(config.id.clone(), config);
     }
 
@@ -273,6 +314,7 @@ impl AccountConnectionManager {
             warn!("disconnect failed for {}: {}", account_id, e);
         }
         self.configs.remove(account_id);
+        self.memory_only.remove(account_id);
         // Bump generation so any in-flight connect is ignored.
         self.bump_generation(account_id);
         set_connection_state(ctx, account_id, ConnectionState::Disconnected);
@@ -286,6 +328,7 @@ impl AccountConnectionManager {
         &mut self,
         config: &AccountConfig,
         ctx: &mut AppContext,
+        mode: EnsureConnectedMode,
     ) -> Result<(), ConnectError> {
         let account_id = &config.id;
 
@@ -304,10 +347,18 @@ impl AccountConnectionManager {
             }
         }
 
-        // v1 active-only: tear down other sessions.
-        self.disconnect_others(Some(account_id), ctx).await;
+        match mode {
+            EnsureConnectedMode::Switch => {
+                // Intentional account switch: tear down other sessions first.
+                self.disconnect_others(Some(account_id), ctx).await;
+            }
+            EnsureConnectedMode::KeepActiveUntilReady => {
+                // Trial / first-save: leave existing active session alone until Ready.
+            }
+        }
 
         let my_gen = self.bump_generation(account_id);
+        // Cache for the attempt; may be dropped on failure if not store-backed (see below).
         self.configs.insert(account_id.clone(), config.clone());
         set_connection_state(ctx, account_id, ConnectionState::Connecting);
 
@@ -317,11 +368,20 @@ impl AccountConnectionManager {
             if let Ok(connector) = connect_result {
                 let _ = connector.disconnect().await;
             }
+            // Stale attempt: only surface Cancelled if nothing newer has overwritten state.
+            // Newer ensure_connected always overwrites Connecting/Authenticating; if we are
+            // still the latest for this id we would have matched generation. Leave state
+            // alone when mismatched (newer owner owns the signal).
+            // Still return cancelled to the caller of the abandoned attempt.
             return Err(ConnectError::cancelled());
         }
 
         match connect_result {
             Ok(connector) => {
+                if mode == EnsureConnectedMode::KeepActiveUntilReady {
+                    // Now that the new account is Ready, drop other sessions (active-only).
+                    self.disconnect_others(Some(account_id), ctx).await;
+                }
                 self.connectors.insert(account_id.clone(), connector);
                 set_connection_state(ctx, account_id, ConnectionState::Ready);
                 info!("Account {} connected and authenticated", account_id);
@@ -332,13 +392,43 @@ impl AccountConnectionManager {
                     "Failed to connect account {}: {:?} — {}",
                     account_id, err.kind, err.message
                 );
+                // Drop unpersisted secrets from the manager cache (failed CommitNewAccount).
+                self.drop_config_if_not_persisted(account_id).await;
                 set_connection_state(ctx, account_id, err.to_state());
                 Err(err)
             }
         }
     }
 
+    /// Remove `configs` entry when the account is not in the store and not memory-only
+    /// (e.g. failed first-save whose id was only used for the attempt).
+    async fn drop_config_if_not_persisted(&mut self, account_id: &AccountId) {
+        if self.memory_only.contains(account_id) {
+            return;
+        }
+        let in_store = match self.store.get(account_id).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                warn!(
+                    "store get failed while cleaning config for {}: {}",
+                    account_id, e
+                );
+                // Be conservative: keep cache if store is unavailable.
+                true
+            }
+        };
+        if !in_store {
+            self.configs.remove(account_id);
+        }
+    }
+
     /// Ephemeral test connect: never persists; always disconnects; uses `request_id` for state.
+    ///
+    /// On success the state is set to `Ready` then immediately to `Disconnected` so the map
+    /// does not retain permanent Ready badges. UI should observe success during the
+    /// Connecting→Ready transition (or via a dedicated test-status signal in PR5); call
+    /// [`clear_connection_state`] to remove the ephemeral key after the user dismisses.
     pub async fn test_connection(
         &mut self,
         request_id: &AccountId,
@@ -346,6 +436,7 @@ impl AccountConnectionManager {
         ctx: &mut AppContext,
     ) -> Result<(), ConnectError> {
         // Do not reuse long-lived map entries under real account ids for tests.
+        // Does not touch other active connectors.
         set_connection_state(ctx, request_id, ConnectionState::Connecting);
 
         let mut test_config = config.clone();
@@ -355,11 +446,13 @@ impl AccountConnectionManager {
 
         match result {
             Ok(connector) => {
+                // Brief Ready so any reactive observer can note success, then clear to
+                // Disconnected so ephemeral request_ids do not linger as Ready forever.
                 set_connection_state(ctx, request_id, ConnectionState::Ready);
                 if let Err(e) = connector.disconnect().await {
                     warn!("test connection disconnect: {}", e);
                 }
-                // Ready is shown briefly; UI may then clear. Leave Ready so UI can show success.
+                set_connection_state(ctx, request_id, ConnectionState::Disconnected);
                 Ok(())
             }
             Err(err) => {
@@ -391,12 +484,12 @@ async fn connect_account(
             .await
             .map_err(|e| classify_io_error(&e))?;
 
+        // Password is not stored on the connector — only passed to authenticate.
         let connector = ImapConnector::new(
             account_id.clone(),
             config.imap.host.clone(),
             config.imap.port,
             config.imap.username.clone(),
-            config.imap.password.clone(),
         );
 
         info!("TLS + IMAP greeting for account {}…", account_id);
@@ -423,6 +516,7 @@ async fn connect_account(
     match select(connect_fut, timeout_fut).await {
         Either::Left((result, _)) => result,
         Either::Right((_, _)) => {
+            // Dropping connect_fut drops WebSocketStream; Drop closes the socket.
             error!(
                 "Connect timed out after {}ms for account {}",
                 CONNECT_TIMEOUT_MS, account_id

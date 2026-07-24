@@ -10,12 +10,13 @@ use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::{Folder, FolderId, MessageId as CoreMessageId};
 
-use crate::account::{Account, AccountId};
+use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::{
-    AccountConnectionManager, ConnectErrorKind, ConnectionState, set_connection_state,
+    AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
+    set_connection_state,
 };
 use crate::context::{AppContext, MessageViewState};
 use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
@@ -80,6 +81,12 @@ pub enum CoreEvent {
     AccountsChanged,
 }
 
+/// Application core task: handles mail ops and account connection lifecycle.
+///
+/// **Serial event processing (v1):** each handler is fully awaited before the next
+/// event is taken from the channel. Connect attempts therefore do not run concurrently;
+/// generation debounce in the manager is defensive (stale-result guard if connect is
+/// later made concurrent) rather than a mid-flight cancel of an in-progress connect.
 pub async fn core_loop(
     mut core_rx: UnboundedReceiver<CoreEvent>,
     mut ctx: AppContext,
@@ -173,7 +180,18 @@ async fn handle_bootstrap(
     };
 
     // Memory-only path: keep config in manager without store write.
-    manager.cache_config(config.clone());
+    let is_memory_only = manager
+        .store()
+        .get(&account_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none();
+    if is_memory_only {
+        manager.cache_config_memory_only(config.clone());
+    } else {
+        manager.cache_config(config.clone());
+    }
     // Ensure UI has the account even if store was empty.
     {
         let mut accounts = ctx.accounts.write();
@@ -183,7 +201,10 @@ async fn handle_bootstrap(
     }
 
     ctx.selected_account.set(Some(account_id.clone()));
-    match manager.ensure_connected(&config, ctx).await {
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
         Ok(()) => {
             list_folders_soft(manager, ctx, &account_id).await;
         }
@@ -219,7 +240,10 @@ async fn handle_select_account(
         return;
     };
 
-    match manager.ensure_connected(&config, ctx).await {
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
         Ok(()) => {
             list_folders_soft(manager, ctx, &account_id).await;
         }
@@ -244,9 +268,23 @@ async fn handle_reconnect(
         error!("Reconnect: unknown account {}", account_id);
         return;
     };
-    manager.cache_config(config.clone());
+    let is_memory_only = manager
+        .store()
+        .get(&account_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none();
+    if is_memory_only {
+        manager.cache_config_memory_only(config.clone());
+    } else {
+        manager.cache_config(config.clone());
+    }
 
-    match manager.ensure_connected(&config, ctx).await {
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
         Ok(()) => {
             if ctx.selected_account.read().as_ref() == Some(&account_id) {
                 list_folders_soft(manager, ctx, &account_id).await;
@@ -268,7 +306,12 @@ async fn handle_commit_new_account(
 ) {
     let account_id = config.id.clone();
 
-    match manager.ensure_connected(&config, ctx).await {
+    // KeepActiveUntilReady: do not tear down the current active session until Ready.
+    // On connect failure the prior session remains intact.
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)
+        .await
+    {
         Ok(()) => {
             // Connect-before-persist: only write store on Ready.
             if let Err(e) = manager.store().upsert(&config).await {
@@ -286,17 +329,34 @@ async fn handle_commit_new_account(
                 return;
             }
             if let Err(e) = manager.store().set_active_id(Some(&account_id)).await {
-                warn!("CommitNewAccount: set_active_id failed: {}", e);
+                error!("CommitNewAccount: set_active_id failed: {}", e);
+                // Treat like upsert failure for the session: disconnect and surface Error.
+                // Account remains in the store (upsert already succeeded) so the user can
+                // retry via SelectAccount / set_active without re-entering credentials.
+                manager.disconnect_account(&account_id, ctx).await;
+                set_connection_state(
+                    ctx,
+                    &account_id,
+                    ConnectionState::Error {
+                        message: format!(
+                            "Connected and saved, but failed to set active account: {e}"
+                        ),
+                        kind: ConnectErrorKind::Internal,
+                        retryable: true,
+                    },
+                );
+                refresh_ui_accounts(manager, ctx).await;
+                return;
             }
 
-            // Keep connector + config in manager (already there).
+            // Keep connector + config in manager (store-backed now).
             manager.cache_config(config.clone());
             refresh_ui_accounts(manager, ctx).await;
             ctx.selected_account.set(Some(account_id.clone()));
             list_folders_soft(manager, ctx, &account_id).await;
         }
         Err(e) => {
-            // No store write on failure.
+            // No store write on failure; prior active session left intact.
             error!(
                 "CommitNewAccount connect failed: {} ({:?})",
                 e.message, e.kind
@@ -306,10 +366,20 @@ async fn handle_commit_new_account(
 }
 
 async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &mut AppContext) {
-    refresh_ui_accounts(manager, ctx).await;
-
-    // Drop connectors for accounts no longer in store or UI set.
-    let known: std::collections::HashSet<AccountId> = ctx.accounts.read().keys().cloned().collect();
+    // Store list is authoritative for persisted accounts; memory_only is explicit.
+    // Tear down connectors for ids that are neither in the store nor memory-only.
+    let store_ids: std::collections::HashSet<AccountId> = match manager.store().list().await {
+        Ok(list) => list.into_iter().map(|c| c.id).collect(),
+        Err(e) => {
+            warn!("AccountsChanged: failed to list store: {}", e);
+            std::collections::HashSet::new()
+        }
+    };
+    let known: std::collections::HashSet<AccountId> = store_ids
+        .iter()
+        .cloned()
+        .chain(manager.memory_only_ids().iter().cloned())
+        .collect();
     let orphaned: Vec<AccountId> = manager
         .connector_account_ids()
         .into_iter()
@@ -318,8 +388,14 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     for id in orphaned {
         manager.disconnect_account(&id, ctx).await;
     }
+
+    refresh_ui_accounts(manager, ctx).await;
 }
 
+/// Rebuild UI accounts from the store plus explicitly memory-only configs.
+///
+/// Does **not** re-insert the previous `ctx.accounts` map (that resurrected deleted
+/// accounts). Only store list + `manager.memory_only` are authoritative.
 async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppContext) {
     let mut map = HashMap::new();
     match manager.store().list().await {
@@ -332,13 +408,11 @@ async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppCo
             warn!("Failed to list accounts from store: {}", e);
         }
     }
-    // Preserve memory-only accounts already shown (e.g. dev_default) if not in store.
-    for (id, acct) in ctx.accounts.read().iter() {
-        map.entry(id.clone()).or_insert_with(|| Account {
-            id: acct.id.clone(),
-            name: acct.name.clone(),
-            email: acct.email.clone(),
-        });
+    // Explicit memory-only (e.g. interim dev_default) — not the previous UI map.
+    for id in manager.memory_only_ids() {
+        if let Some(cfg) = manager.config(id) {
+            map.entry(id.clone()).or_insert_with(|| cfg.to_ui_account());
+        }
     }
     ctx.accounts.set(map);
 }

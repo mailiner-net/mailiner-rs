@@ -219,6 +219,35 @@ impl WebSocketStream {
             inner: Arc::clone(&self.inner),
         }
     }
+
+    /// Close the socket and clear JS event handlers (idempotent).
+    fn shutdown_socket(&mut self) {
+        let mut inner = self.inner.lock().expect("Failed to lock web socket");
+        if let Some(ws) = inner.web_socket.as_ref() {
+            ws.set_onopen(None);
+            ws.set_onmessage(None);
+            ws.set_onerror(None);
+            ws.set_onclose(None);
+        }
+        if let Some(ws) = std::mem::take(&mut *inner.web_socket) {
+            let _ = ws.close();
+        }
+        if !matches!(
+            inner.ready_state,
+            WsReadyState::Closed | WsReadyState::Error
+        ) {
+            inner.ready_state = WsReadyState::Closed;
+        }
+        inner.wake_all();
+    }
+}
+
+impl Drop for WebSocketStream {
+    fn drop(&mut self) {
+        // Ensure timeout/cancel paths close the browser WebSocket and drop JS callbacks
+        // rather than relying on GC of half-open proxy connections.
+        self.shutdown_socket();
+    }
 }
 
 /// Future that completes when the underlying WebSocket reaches `Open`, or fails on error/close.

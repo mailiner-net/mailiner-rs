@@ -83,7 +83,6 @@ where
     host: String,
     port: u16,
     username: String,
-    password: String,
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by message UID.
@@ -94,19 +93,13 @@ impl<S> ImapConnector<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
-    pub fn new(
-        account_id: AccountId,
-        host: String,
-        port: u16,
-        username: String,
-        password: String,
-    ) -> Self {
+    /// Create a connector. Password is **not** stored; pass it only to [`EmailConnector::authenticate`].
+    pub fn new(account_id: AccountId, host: String, port: u16, username: String) -> Self {
         Self {
             account_id,
             host,
             port,
             username,
-            password,
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
         }

@@ -48,9 +48,10 @@ impl std::error::Error for AccountStoreError {}
 pub trait AccountStore {
     /// List all stored account configs.
     ///
-    /// Order is implementation-defined. Callers that need a stable UI order
-    /// should sort (e.g. by `display_name` then `id`). `InMemoryAccountStore`
-    /// already returns that stable order.
+    /// Order is implementation-defined for external implementors. Both in-tree
+    /// stores (`InMemoryAccountStore` and `BrowserAccountStore`) return a stable
+    /// order by `display_name` then `id`. Callers that need a specific order
+    /// against an unknown backend should sort themselves.
     async fn list(&self) -> Result<Vec<AccountConfig>, AccountStoreError>;
     async fn get(&self, id: &AccountId) -> Result<Option<AccountConfig>, AccountStoreError>;
     async fn upsert(&self, config: &AccountConfig) -> Result<(), AccountStoreError>;
@@ -145,8 +146,21 @@ impl AccountsStoreBlob {
     }
 
     /// Deserialize from a JSON string.
+    ///
+    /// Rejects blobs whose `schema_version` is **greater** than
+    /// [`ACCOUNT_STORE_SCHEMA_VERSION`] so a future format is not silently
+    /// loaded and then rewritten as v1 (data loss). Older or equal versions
+    /// are accepted; upgrades happen by stamping the current version on write.
     pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
-        serde_json::from_str(json).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > ACCOUNT_STORE_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported account store schema_version {} (max supported {})",
+                blob.schema_version, ACCOUNT_STORE_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
     }
 
     fn sort_accounts(accounts: &mut [AccountConfig]) {
@@ -193,49 +207,70 @@ impl StringKvStore for MemoryKvStore {
     }
 }
 
+/// Sentinel key used only to probe write access during [`WebLocalStorage::try_open`].
+#[cfg(target_arch = "wasm32")]
+const LOCAL_STORAGE_PROBE_KEY: &str = "mailiner.accounts.__probe";
+
 /// Browser `window.localStorage` backend.
 ///
-/// Construction probes access so private-mode / SecurityError surfaces as
-/// [`AccountStoreError::Unavailable`] rather than on the first write.
+/// Construction probes read **and** write access so private-mode / SecurityError /
+/// quota-on-write surfaces as [`AccountStoreError::Unavailable`] at open time
+/// rather than on the first account save.
 pub struct WebLocalStorage {
     storage: web_sys::Storage,
 }
 
 impl WebLocalStorage {
     /// Open `window.localStorage`, or [`AccountStoreError::Unavailable`].
+    ///
+    /// On host (non-WASM) targets this always returns
+    /// [`AccountStoreError::Unavailable`] without touching `web_sys` (which
+    /// panics on imported statics outside wasm).
     pub fn try_open() -> Result<Self, AccountStoreError> {
-        let window = web_sys::window().ok_or(AccountStoreError::Unavailable)?;
-        let storage = window
-            .local_storage()
-            .map_err(|_| AccountStoreError::Unavailable)?
-            .ok_or(AccountStoreError::Unavailable)?;
-        // Probe: some environments throw only on first property access.
-        let _ = storage
-            .length()
-            .map_err(|_| AccountStoreError::Unavailable)?;
-        Ok(Self { storage })
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Err(AccountStoreError::Unavailable)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let window = web_sys::window().ok_or(AccountStoreError::Unavailable)?;
+            let storage = window
+                .local_storage()
+                .map_err(|_| AccountStoreError::Unavailable)?
+                .ok_or(AccountStoreError::Unavailable)?;
+            // Probe: some environments throw only on first property access.
+            let _ = storage
+                .length()
+                .map_err(|_| AccountStoreError::Unavailable)?;
+            // Reversible write probe: private/strict modes may allow `length()`
+            // but throw SecurityError / QuotaExceededError only on `setItem`.
+            storage
+                .set_item(LOCAL_STORAGE_PROBE_KEY, "1")
+                .map_err(|_| AccountStoreError::Unavailable)?;
+            let _ = storage.remove_item(LOCAL_STORAGE_PROBE_KEY);
+            Ok(Self { storage })
+        }
     }
 }
 
 impl StringKvStore for WebLocalStorage {
     fn get_item(&self, key: &str) -> Result<Option<String>, AccountStoreError> {
+        // Any failure means we cannot read persisted accounts → Unavailable
+        // (bootstrap can fall back to session-only memory).
         self.storage
             .get_item(key)
             .map_err(|_| AccountStoreError::Unavailable)
     }
 
     fn set_item(&self, key: &str, value: &str) -> Result<(), AccountStoreError> {
-        self.storage.set_item(key, value).map_err(|err| {
-            // Prefer Unavailable for blocked storage; otherwise report detail.
-            let msg = err
-                .as_string()
-                .unwrap_or_else(|| "localStorage setItem failed".into());
-            if msg.to_ascii_lowercase().contains("security") {
-                AccountStoreError::Unavailable
-            } else {
-                AccountStoreError::Other(msg)
-            }
-        })
+        // Account configs are tiny; any `setItem` failure (SecurityError,
+        // QuotaExceededError, private-mode, etc.) means we cannot persist.
+        // Map all failures to Unavailable so UI can offer session-only fallback.
+        // Note: `JsValue::as_string()` is None for DOMException objects, so
+        // classifying by message string is unreliable — do not use it here.
+        self.storage
+            .set_item(key, value)
+            .map_err(|_| AccountStoreError::Unavailable)
     }
 }
 
@@ -550,6 +585,25 @@ mod tests {
         assert!(matches!(err, AccountStoreError::Serialization(_)));
     }
 
+    #[test]
+    fn blob_decode_rejects_future_schema_version() {
+        let json = r#"{
+            "schema_version": 99,
+            "active_account_id": null,
+            "accounts": []
+        }"#;
+        let err = AccountsStoreBlob::decode(json).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
     // ── BrowserAccountStore via MemoryKvStore ───────────────────────────────
 
     #[test]
@@ -683,5 +737,63 @@ mod tests {
     #[test]
     fn storage_key_is_versioned() {
         assert_eq!(ACCOUNTS_LOCAL_STORAGE_KEY, "mailiner.accounts.v1");
+    }
+
+    /// KV backend that always fails with [`AccountStoreError::Unavailable`].
+    struct UnavailableKv;
+
+    impl StringKvStore for UnavailableKv {
+        fn get_item(&self, _key: &str) -> Result<Option<String>, AccountStoreError> {
+            Err(AccountStoreError::Unavailable)
+        }
+
+        fn set_item(&self, _key: &str, _value: &str) -> Result<(), AccountStoreError> {
+            Err(AccountStoreError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn browser_store_propagates_unavailable_from_kv() {
+        let store = BrowserAccountStore::with_kv(UnavailableKv);
+        let a = sample_config("a1", "alice");
+
+        block_on(async {
+            assert_eq!(
+                store.list().await.unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+            assert_eq!(
+                store.get(&AccountId::new("a1")).await.unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+            assert_eq!(
+                store.upsert(&a).await.unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+            assert_eq!(
+                store.delete(&AccountId::new("a1")).await.unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+            assert_eq!(
+                store.get_active_id().await.unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+            assert_eq!(
+                store
+                    .set_active_id(Some(&AccountId::new("a1")))
+                    .await
+                    .unwrap_err(),
+                AccountStoreError::Unavailable
+            );
+        });
+    }
+
+    #[test]
+    fn browser_store_open_on_host_is_unavailable() {
+        // Host unit tests have no DOM `window`; open must not panic.
+        block_on(async {
+            let err = BrowserAccountStore::open().await.unwrap_err();
+            assert_eq!(err, AccountStoreError::Unavailable);
+        });
     }
 }

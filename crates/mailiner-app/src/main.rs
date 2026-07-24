@@ -67,6 +67,36 @@ pub(crate) enum Route {
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
+/// Baseline Content-Security-Policy for the Mailiner origin (PR7).
+///
+/// Goals: reduce XSS impact (script injection → local secrets) while keeping
+/// the Dioxus/WASM runtime and user-defined mail proxies working.
+///
+/// Tradeoffs:
+/// - `script-src 'self' 'wasm-unsafe-eval'`: WASM instantiation needs
+///   `wasm-unsafe-eval` (not full `unsafe-eval`). No third-party scripts.
+/// - `style-src 'self' 'unsafe-inline'`: Dioxus components (e.g. virtual list)
+///   use inline `style=` attributes; strict style-src breaks layout.
+/// - `img-src 'self' data: blob:`: message HTML may inline images as `data:`
+///   (cid rehydration); downloads use `blob:` URLs.
+/// - `connect-src 'self' ws: wss: http: https:`: user-entered proxy hosts make
+///   a strict host allowlist impossible without dynamic CSP (limited in browsers).
+///   Schemes stay open so self-hosted proxies work; IMAP traffic is still
+///   TLS-wrapped client-side. This mitigates script XSS, not proxy diversity.
+/// - Prefer deployment-level CSP headers when hosting static assets; the meta
+///   tag is the in-app baseline for `dx serve` and simple static hosts.
+const CONTENT_SECURITY_POLICY: &str = "\
+default-src 'self'; \
+script-src 'self' 'wasm-unsafe-eval'; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob:; \
+font-src 'self'; \
+connect-src 'self' ws: wss: http: https:; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'\
+";
+
 fn main() {
     dioxus::launch(App);
 }
@@ -247,6 +277,10 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Meta {
+            http_equiv: "Content-Security-Policy",
+            content: CONTENT_SECURITY_POLICY,
+        }
 
         Router::<Route> {}
     }

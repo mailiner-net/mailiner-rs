@@ -266,10 +266,69 @@
 /* Minimal connection banner on main content (PR5). */
 .connection-banner {
     flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
     font-size: 0.8rem;
     line-height: 1.3;
-    padding: 0.35rem 0.75rem;
+    padding: 0.4rem 0.75rem;
     border-bottom: 1px solid var(--sidebar-border);
+    min-height: 1.75rem;
+    box-sizing: border-box;
+}
+
+.connection-banner-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+}
+
+.connection-banner-label {
+    font-weight: 600;
+}
+
+.connection-banner-detail {
+    font-weight: 400;
+    opacity: 0.92;
+    min-width: 0;
+    flex: 1 1 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.connection-banner-dot {
+    flex: 0 0 auto;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.connection-banner-dot-pulse {
+    animation: connection-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes connection-dot-pulse {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.45;
+        transform: scale(0.85);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .connection-banner-dot-pulse {
+        animation: none;
+    }
 }
 
 .connection-banner-info {
@@ -290,6 +349,50 @@
 .connection-banner-muted {
     background: #f5f5f5;
     color: #666;
+}
+
+.connection-banner-dot-info {
+    background: #1565c0;
+}
+
+.connection-banner-dot-ready {
+    background: #2e7d32;
+}
+
+.connection-banner-dot-error {
+    background: #c62828;
+}
+
+.connection-banner-dot-muted {
+    background: #9e9e9e;
+}
+
+.connection-banner-retry {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.65);
+    color: inherit;
+    cursor: pointer;
+}
+
+.connection-banner-retry:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+.connection-banner-retry:disabled {
+    opacity: 0.65;
+    cursor: default;
+}
+
+.connection-banner-retry:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
 }
 
 /* —— Account management settings (PR6) —— */
@@ -454,447 +557,4 @@ body {
     margin: 0;
     padding: 0;
     background-color: #fff;
-}
-
-button.flat {
-    border: none;
-    padding: 0;
-    margin: 0;
-    height: 24px;
-    background-color: unset;
-    cursor: pointer;
-}
-
-/* Standalone so the asset pipeline keeps these (nested-only blocks drop them). */
-#app {
-    display: flex;
-    flex-direction: row;
-    width: 100%;
-    height: 100vh;
-    overflow: hidden;
-}
-
-#app > section,
-#app > #content {
-    border-right: 1px solid var(--sidebar-border);
-    min-height: 0;
-}
-
-#app > section:last-child,
-#app > #content {
-    border-right: none;
-}
-
-#app {
-    #sidebar {
-        flex: 0 0 auto;
-        background-color: var(--sidebar);
-        padding: var(--margin);
-    }
-
-    #emailnavigation {
-        flex: 0 0 var(--folder-pane-width);
-        display: flex;
-        flex-direction: column;
-        background-color: var(--sidebar);
-        overflow: hidden;
-
-        .pane-header {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing);
-            padding: var(--margin);
-            flex-shrink: 0;
-            border-bottom: 1px solid var(--sidebar-border);
-            font-weight: 600;
-        }
-
-        #mailboxtreeview {
-            display: flex;
-            flex-direction: column;
-            flex: 1;
-            overflow-y: auto;
-            
-            .mailbox-tree-view-item {
-                display: flex;
-                flex-direction: column;
-                min-height: 32px;
-
-                >div:first-child {
-                    display: flex;
-                    flex-direction: row;
-                    align-items: center;
-                    gap: var(--spacing-small);
-                    cursor: pointer;
-                    height: 40px;
-                    padding-right: var(--margin);
-                    position: relative;
-
-                    div {
-                        display: block;
-                        flex-grow: 1;
-                        line-height: 40px;
-                        white-space: nowrap;
-                        overflow: hidden;
-                        text-overflow: ellipsis;
-                    }
-
-                    &:hover {
-                        background-color: var(--item-hover-background);
-                    }
-
-                    &.selected {
-                        background-color: #e3f2fd;
-                    }
-
-                    &.selected::before {
-                        content: "";
-                        display: block;
-                        width: 2px;
-                        height: 100%;
-                        background-color: var(--item-accent);
-                        position: absolute;
-                        left: 0;
-                        top: 0;
-                    }
-                }
-
-                >div:last-child {
-                    display: none;
-                    padding-left: calc(2 * var(--margin));
-                }
-            }
-        }
-    }
-
-    #content {
-        flex: 1 1 auto;
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-        overflow: hidden;
-    }
-
-    #messagelist {
-        flex: 0 0 var(--message-list-height);
-        display: flex;
-        flex-direction: column;
-        min-height: 120px;
-        overflow: hidden;
-        border-bottom: 1px solid var(--sidebar-border);
-
-        .pane-header {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing);
-            padding: var(--margin);
-            flex-shrink: 0;
-            border-bottom: 1px solid var(--sidebar-border);
-            font-weight: 600;
-            background-color: var(--sidebar);
-        }
-
-        .message-list-body {
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .message-list-empty {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            padding: calc(2 * var(--margin));
-            color: #666;
-        }
-
-        .message-list-item {
-            box-sizing: border-box;
-            height: 100%;
-            padding: var(--margin);
-            cursor: pointer;
-            position: relative;
-            border-bottom: 1px solid #e0e0e0;
-
-            &:hover {
-                background-color: var(--item-hover-background);
-            }
-
-            &.selected {
-                background-color: #e3f2fd;
-            }
-
-            &.selected::before {
-                content: "";
-                display: block;
-                width: 2px;
-                height: 100%;
-                background-color: var(--item-accent);
-                position: absolute;
-                left: 0;
-                top: 0;
-            }
-
-            .message-list-item-content {
-                .message-from {
-                    font-weight: 600;
-                    margin-bottom: 4px;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-
-                .message-subject {
-                    color: #333;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }
-            }
-        }
-    }
-
-    #messageview {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow: auto;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-
-        .message-view-empty,
-        .message-view-loading,
-        .message-view-error {
-            padding: var(--margin);
-            color: #666;
-        }
-
-        .message-view-error {
-            color: #b00020;
-        }
-
-        .message-view-header {
-            padding: 12px 24px;
-            border-bottom: 1px solid var(--sidebar-border);
-            flex-shrink: 0;
-
-            .message-view-subject {
-                margin: 0 0 8px 0;
-                font-size: 1.15rem;
-                font-weight: 600;
-                word-break: break-word;
-            }
-
-            .message-view-meta {
-                list-style: none;
-                padding: 0;
-                margin: 0;
-                font-size: 0.9rem;
-                color: #444;
-
-                li {
-                    margin-bottom: 2px;
-                }
-            }
-        }
-
-        .message-privacy-banner {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 24px;
-            background: #e8f4fd;
-            border-bottom: 1px solid #b6d9f0;
-            font-size: 0.9rem;
-            flex-shrink: 0;
-
-            .message-privacy-allow {
-                border: 1px solid var(--item-accent);
-                background: var(--item-accent);
-                color: #fff;
-                border-radius: 4px;
-                padding: 2px 10px;
-                cursor: pointer;
-                font-size: 0.85rem;
-            }
-        }
-
-        .mlnr-msg-host {
-            flex: 1 1 auto;
-            min-height: 120px;
-            padding: 12px 24px;
-            overflow: auto;
-        }
-
-        .message-attachments {
-            flex-shrink: 0;
-            border-top: 1px solid var(--sidebar-border);
-            padding: 8px 24px 16px;
-            background: #fafafa;
-        }
-
-        .message-attachments-details {
-            width: 100%;
-        }
-
-        .message-attachments-summary {
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.95rem;
-            padding: 6px 0;
-            user-select: none;
-        }
-
-        .message-attachments-list {
-            list-style: none;
-            margin: 8px 0 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .attachment-item {
-            background: #fff;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 10px 12px;
-        }
-
-        .attachment-item-main {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        .attachment-item-title {
-            font-weight: 600;
-            word-break: break-word;
-        }
-
-        .attachment-item-meta {
-            font-size: 0.85rem;
-            color: #666;
-            margin-top: 2px;
-        }
-
-        .attachment-item-error {
-            font-size: 0.85rem;
-            color: #b00020;
-            margin-top: 4px;
-        }
-
-        .attachment-download-btn {
-            flex-shrink: 0;
-            border: 1px solid var(--item-accent);
-            background: var(--item-accent);
-            color: #fff;
-            border-radius: 4px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.85rem;
-        }
-
-        .attachment-download-btn:disabled {
-            opacity: 0.6;
-            cursor: default;
-        }
-
-        .attachment-progress-track {
-            margin-top: 8px;
-            height: 4px;
-            background: #e0e0e0;
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .attachment-progress-bar {
-            height: 100%;
-            background: var(--item-accent);
-            transition: width 0.15s ease-out;
-        }
-    }
-
-    /* Virtual scroll styles */
-    .virtual-scroll-container {
-        position: relative;
-        overflow-y: auto;
-        height: 100%;
-    }
-
-    .virtual-scroll-spacer {
-        position: relative;
-    }
-
-    .virtual-scroll-content {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-    }
-
-    .virtual-scroll-item {
-        box-sizing: border-box;
-    }
-
-    .virtual-scroll-placeholder {
-        display: flex;
-        align-items: center;
-        padding: 8px;
-    }
-
-    .loading-skeleton {
-        height: 60%;
-        width: 100%;
-        background: linear-gradient(90deg, #f0f0f0 25%, #f8f8f8 50%, #f0f0f0 75%);
-        background-size: 200% 100%;
-        animation: shimmer 1.5s infinite;
-        border-radius: 4px;
-    }
-
-    @keyframes shimmer {
-        0% {
-            background-position: -200% 0;
-        }
-        100% {
-            background-position: 200% 0;
-        }
-    }
-
-    #virtual-messagelist {
-        .message-list-item {
-            padding: 12px;
-            border-bottom: 1px solid #e0e0e0;
-            cursor: pointer;
-            transition: background-color 0.2s;
-
-            &:hover {
-                background-color: var(--item-hover-background);
-            }
-
-            &.selected {
-                background-color: #e3f2fd;
-            }
-
-            .message-list-item-content {
-                .message-from {
-                    font-weight: 600;
-                    margin-bottom: 4px;
-                }
-
-                .message-subject {
-                    color: #333;
-                    margin-bottom: 2px;
-                }
-
-                .message-cc {
-                    font-size: 0.9em;
-                    color: #666;
-                }
-            }
-        }
-    }
 }

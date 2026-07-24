@@ -39,6 +39,28 @@ remove them.
 Mailiner also prevents malicious emails from executing JavaScript code or loading
 remote references that could reveal details about the user to the sender.
 
+### Content-Security-Policy (baseline)
+
+The app ships a baseline CSP via a document `<meta>` tag (see `mailiner-app`
+`CONTENT_SECURITY_POLICY`):
+
+| Directive | Policy | Why |
+|-----------|--------|-----|
+| `default-src` | `'self'` | Deny unexpected origins by default |
+| `script-src` | `'self' 'wasm-unsafe-eval'` | App WASM only; no third-party JS. `wasm-unsafe-eval` is required to instantiate WASM (not full `unsafe-eval`) |
+| `style-src` | `'self' 'unsafe-inline'` | Dioxus uses inline `style=` (virtual list, layout). Strict style-src would break the UI |
+| `img-src` | `'self' data: blob:` | Inline message images (`data:` from cid rehydration); download previews (`blob:`) |
+| `connect-src` | `'self' ws: wss: http: https:` | User-configured proxies can be any host; a strict host allowlist is not feasible without dynamic CSP. IMAP remains TLS-wrapped in the client |
+| `object-src` | `'none'` | No plugins |
+| `base-uri` / `form-action` | `'self'` | Limit base URL and form targets |
+
+**Tradeoff:** CSP here is primarily XSS hardening for secrets stored in the origin.
+It does **not** pin proxy destinations — that would break self-hosted / custom
+proxies. When deploying behind a reverse proxy, you may also send an equivalent
+(or stricter) CSP HTTP header; keep `connect-src` open enough for your users’
+proxy hosts and retain `wasm-unsafe-eval` + `style-src 'unsafe-inline'` for the
+Dioxus runtime.
+
 ## Running Mailiner locally
 
 Step 1: run the ws-tcp-proxy (from the separate `mailiner/ws-tcp-proxy` repo):

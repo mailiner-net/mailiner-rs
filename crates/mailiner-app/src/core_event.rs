@@ -291,6 +291,15 @@ async fn handle_reconnect(
     // disconnect_account clears cached config — re-resolve from store / cache.
     let Some(config) = manager.resolve_config(&account_id).await else {
         error!("Reconnect: unknown account {}", account_id);
+        set_connection_state(
+            ctx,
+            &account_id,
+            ConnectionState::Error {
+                message: "Account configuration not found.".into(),
+                kind: ConnectErrorKind::Internal,
+                retryable: false,
+            },
+        );
         return;
     };
     let is_memory_only = manager

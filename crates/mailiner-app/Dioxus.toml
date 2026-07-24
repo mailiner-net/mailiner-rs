@@ -14,6 +14,10 @@ style = []
 # Additional JavaScript files
 script = []
 
+# Content-Security-Policy is set in-app via document::Meta (CONTENT_SECURITY_POLICY
+# in main.rs). Dioxus.toml has no first-class CSP field; prefer the meta baseline
+# (and/or HTTP headers at deploy time). See README "Content-Security-Policy".
+
 [web.resource.dev]
 
 # Javascript code file

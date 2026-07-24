@@ -254,60 +254,89 @@ impl AccountConfig {
     }
 }
 
-/// Interim hard-coded-like defaults for local development (PR2–PR4).
+/// Optional onboarding form prefill (debug / `dev-defaults` only).
 ///
-/// When the account store is empty and this returns `Some`, bootstrap treats the
-/// app as Ready with a **memory-only** UI account and soft-fail connect — **no**
-/// store write. Removed from the empty-store path in PR5.
+/// **Never** used to auto-connect or write the account store. Empty-store
+/// bootstrap always goes to onboarding; these values only seed form fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevFormPrefill {
+    pub display_name: String,
+    pub email: String,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub imap_username: String,
+    /// May be empty — never auto-connects.
+    pub imap_password: String,
+    pub proxy_base_url: String,
+    pub proxy_token: String,
+    pub remote_host: String,
+    /// Empty string means “use IMAP port”.
+    pub remote_port: String,
+}
+
+impl Default for DevFormPrefill {
+    fn default() -> Self {
+        Self {
+            display_name: String::new(),
+            email: String::new(),
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_username: String::new(),
+            imap_password: String::new(),
+            proxy_base_url: String::new(),
+            proxy_token: String::new(),
+            remote_host: String::new(),
+            remote_port: String::new(),
+        }
+    }
+}
+
+/// Prefill values for the first-run form.
 ///
-/// Enabled under `debug_assertions` or feature `dev-defaults`. Returns `None`
-/// in release without that feature, or when `IMAP_PASSWORD` is unset/empty.
-pub fn dev_default_config() -> Option<AccountConfig> {
+/// Under `debug_assertions` or feature `dev-defaults`, proxy defaults to a local
+/// `ws-tcp-proxy` URL and optional `MAILINER_DEV_*` env vars (compile-time
+/// `option_env!`) seed the remaining fields. In release without the feature,
+/// returns empty fields with IMAP port `993` only.
+///
+/// Does **not** auto-connect and does **not** require a build-time password.
+pub fn dev_form_prefill() -> DevFormPrefill {
     #[cfg(any(debug_assertions, feature = "dev-defaults"))]
     {
-        // Prefer build-injected IMAP_PASSWORD (build.rs); fall back to option_env.
-        let password = option_env!("IMAP_PASSWORD")
-            .filter(|p| !p.is_empty())
-            .map(|s| s.to_string())?;
-
-        let host = option_env!("MAILINER_DEV_IMAP_HOST").unwrap_or("dvratil.cz");
-        let username = option_env!("MAILINER_DEV_IMAP_USER").unwrap_or("me@dvratil.cz");
-        let email = option_env!("MAILINER_DEV_EMAIL").unwrap_or(username);
-        let display_name = option_env!("MAILINER_DEV_DISPLAY_NAME").unwrap_or("Valhalla");
-        let proxy_base =
-            option_env!("MAILINER_DEV_PROXY_URL").unwrap_or("ws://localhost:9400/proxy");
-        let proxy_token = option_env!("MAILINER_DEV_PROXY_TOKEN").unwrap_or("testtoken");
         let port: u16 = option_env!("MAILINER_DEV_IMAP_PORT")
             .and_then(|p| p.parse().ok())
             .unwrap_or(993);
-
-        let now = Utc::now();
-        Some(AccountConfig {
-            // Stable interim id so UI/Bootstrap stay consistent across reloads in-memory.
-            id: AccountId::new("1"),
-            display_name: display_name.into(),
-            email: email.into(),
-            imap: ImapSettings {
-                host: host.into(),
-                port,
-                username: username.into(),
-                password,
-                use_tls: true,
-            },
-            smtp: None,
-            proxy: ProxySettings {
-                base_url: proxy_base.into(),
-                token: proxy_token.into(),
-                remote_host: None,
-                remote_port: None,
-            },
-            created_at: now,
-            updated_at: now,
-        })
+        DevFormPrefill {
+            display_name: option_env!("MAILINER_DEV_DISPLAY_NAME")
+                .unwrap_or("")
+                .to_string(),
+            email: option_env!("MAILINER_DEV_EMAIL").unwrap_or("").to_string(),
+            imap_host: option_env!("MAILINER_DEV_IMAP_HOST")
+                .unwrap_or("")
+                .to_string(),
+            imap_port: port,
+            imap_username: option_env!("MAILINER_DEV_IMAP_USER")
+                .unwrap_or("")
+                .to_string(),
+            imap_password: option_env!("MAILINER_DEV_IMAP_PASSWORD")
+                .unwrap_or("")
+                .to_string(),
+            proxy_base_url: option_env!("MAILINER_DEV_PROXY_URL")
+                .unwrap_or("ws://localhost:9400/proxy")
+                .to_string(),
+            proxy_token: option_env!("MAILINER_DEV_PROXY_TOKEN")
+                .unwrap_or("testtoken")
+                .to_string(),
+            remote_host: option_env!("MAILINER_DEV_PROXY_REMOTE_HOST")
+                .unwrap_or("")
+                .to_string(),
+            remote_port: option_env!("MAILINER_DEV_PROXY_REMOTE_PORT")
+                .unwrap_or("")
+                .to_string(),
+        }
     }
     #[cfg(not(any(debug_assertions, feature = "dev-defaults")))]
     {
-        None
+        DevFormPrefill::default()
     }
 }
 

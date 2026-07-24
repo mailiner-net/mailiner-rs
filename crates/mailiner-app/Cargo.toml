@@ -52,13 +52,11 @@ web-sys = { version = "0.3", features = [
 ] }
 tokio = { workspace = true }
 
-[build-dependencies]
-dotenv = "0.15"
-
 [features]
 default = ["web"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
-# Enable interim dev_default_config() in release builds (also on under debug_assertions).
+# Prefill onboarding form fields in release builds (also on under debug_assertions).
+# Does not auto-connect or write the account store.
 dev-defaults = []

@@ -5,12 +5,13 @@ use dioxus::logger::tracing::{info, warn};
 use dioxus::prelude::*;
 use mailiner_core::ids::AccountId;
 
-use crate::account_config::dev_default_config;
 use crate::account_store::{
     AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
 };
 use crate::components::virtual_scroll::SparseList;
-use crate::components::{EmailNavigation, MessageList, MessageView};
+use crate::components::{
+    ConnectionStatusBanner, EmailNavigation, MessageList, MessageView, OnboardingForm,
+};
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
 
@@ -33,9 +34,9 @@ mod websocket_stream;
 pub enum AppBootstrapState {
     /// Store open + list in flight. Full-page spinner; no mail chrome.
     LoadingStore,
-    /// Zero accounts (and no interim `dev_default`). Only onboarding is valid.
+    /// Zero accounts. Only onboarding is valid.
     NeedsOnboarding,
-    /// Accounts loaded (store or memory-only dev_default); main app allowed.
+    /// Accounts loaded from store; main app allowed.
     Ready,
     /// localStorage unavailable or unreadable.
     StoreError { message: String },
@@ -77,11 +78,9 @@ struct BootstrapOutcome {
 
 /// Open `BrowserAccountStore`, resolve bootstrap state, populate UI accounts (no secrets).
 ///
-/// Algorithm (design doc):
+/// Algorithm:
 /// - open failure → StoreError
-/// - empty + `dev_default_config()` → Ready + memory-only UI account + Bootstrap { active }
-///   (no localStorage write)
-/// - empty otherwise → NeedsOnboarding
+/// - empty → NeedsOnboarding (form may be prefilled via `dev-defaults`; no auto-connect)
 /// - non-empty → Ready, UI from `to_ui_account`, resolve active, Bootstrap { active }
 async fn run_bootstrap(
     ctx: &mut AppContext,
@@ -124,23 +123,6 @@ async fn run_bootstrap(
     };
 
     if list.is_empty() {
-        // Interim (PR2–PR4): empty store + dev_default ⇒ Ready/main, memory-only, no write.
-        if let Some(cfg) = dev_default_config() {
-            info!(
-                "Bootstrap: empty store + dev_default → Ready (memory-only account {})",
-                cfg.id
-            );
-            let id = cfg.id.clone();
-            let ui = cfg.to_ui_account();
-            ctx.accounts.set(HashMap::from([(id.clone(), ui)]));
-            ctx.selected_account.set(Some(id.clone()));
-            bootstrap.set(AppBootstrapState::Ready);
-            return BootstrapOutcome {
-                store,
-                initial_bootstrap: InitialBootstrap::Run { active: Some(id) },
-            };
-        }
-
         info!("Bootstrap: empty store → NeedsOnboarding");
         ctx.accounts.set(HashMap::new());
         ctx.selected_account.set(None);
@@ -288,7 +270,7 @@ fn AppShell() -> Element {
                 }
             }
             AppBootstrapState::Ready => {
-                // Non-empty (or dev_default) + /onboarding → /
+                // Non-empty store (or post-commit Ready) + /onboarding → /
                 if matches!(route, Route::OnboardingView {}) {
                     nav.replace(Route::MainView {});
                 }
@@ -348,6 +330,8 @@ fn MainView() -> Element {
             div {
                 id: "content",
 
+                ConnectionStatusBanner {}
+
                 MessageList {}
 
                 MessageView {}
@@ -356,26 +340,11 @@ fn MainView() -> Element {
     }
 }
 
-/// First-run placeholder (full form is PR5). No mail chrome.
+/// First-run onboarding form (connect-before-persist). No mail chrome.
 #[component]
 fn OnboardingView() -> Element {
     rsx! {
-        div {
-            class: "bootstrap-shell",
-            div {
-                class: "bootstrap-card",
-                h1 { class: "bootstrap-title", "Welcome to Mailiner" }
-                p {
-                    "Add your first email account to get started. \
-                     Full onboarding form arrives in a follow-up."
-                }
-                p {
-                    class: "bootstrap-muted",
-                    "Your IMAP password will be stored only in this browser on this device. \
-                     Mailiner has no server account."
-                }
-            }
-        }
+        OnboardingForm {}
     }
 }
 

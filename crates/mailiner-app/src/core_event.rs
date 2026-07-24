@@ -198,9 +198,9 @@ async fn handle_bootstrap(
         return;
     };
 
-    // Cache config **before** refresh so memory-only (e.g. interim `dev_default`) is
-    // already registered when `refresh_ui_accounts` rebuilds the UI map. Otherwise
-    // Ready can briefly observe `accounts == {}` across store-get awaits.
+    // Cache config **before** refresh so memory-only entries are already registered
+    // when `refresh_ui_accounts` rebuilds the UI map. Otherwise Ready can briefly
+    // observe `accounts == {}` across store-get awaits.
     let is_memory_only = manager
         .store()
         .get(&account_id)
@@ -288,7 +288,7 @@ async fn handle_reconnect(
 ) {
     manager.disconnect_account(&account_id, ctx).await;
 
-    // disconnect_account clears cached config — re-resolve from store/dev_default.
+    // disconnect_account clears cached config — re-resolve from store / cache.
     let Some(config) = manager.resolve_config(&account_id).await else {
         error!("Reconnect: unknown account {}", account_id);
         return;
@@ -444,7 +444,7 @@ async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppCo
             return;
         }
     }
-    // Explicit memory-only (e.g. interim dev_default) — not the previous UI map.
+    // Explicit memory-only configs — not the previous UI map.
     for id in manager.memory_only_ids() {
         if let Some(cfg) = manager.config(id) {
             map.entry(id.clone()).or_insert_with(|| cfg.to_ui_account());

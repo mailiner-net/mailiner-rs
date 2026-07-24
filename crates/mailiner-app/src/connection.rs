@@ -206,7 +206,7 @@ pub struct AccountConnectionManager {
     connectors: HashMap<AccountId, ImapConnector<WebSocketStream>>,
     /// Cached configs for reconnect; dropped on delete/disconnect.
     configs: HashMap<AccountId, AccountConfig>,
-    /// Ids present only in process memory (not store) — e.g. interim `dev_default`.
+    /// Ids present only in process memory (not store).
     /// These are the only non-store accounts allowed to appear in the UI account map.
     memory_only: HashSet<AccountId>,
     /// Generation counter for switch debounce / stale result ignore.
@@ -247,7 +247,7 @@ impl AccountConnectionManager {
         &self.memory_only
     }
 
-    /// Cache a config in memory without writing the store (e.g. interim `dev_default`).
+    /// Cache a config in memory without writing the store.
     pub fn cache_config_memory_only(&mut self, config: AccountConfig) {
         self.memory_only.insert(config.id.clone());
         self.configs.insert(config.id.clone(), config);
@@ -259,7 +259,7 @@ impl AccountConnectionManager {
         self.configs.insert(config.id.clone(), config);
     }
 
-    /// Resolve config: store → manager cache → interim dev_default.
+    /// Resolve config: store → manager cache (no hard-coded / env fallbacks).
     pub async fn resolve_config(&self, account_id: &AccountId) -> Option<AccountConfig> {
         match self.store.get(account_id).await {
             Ok(Some(cfg)) => return Some(cfg),
@@ -268,15 +268,7 @@ impl AccountConnectionManager {
                 warn!("account store get failed for {}: {}", account_id, e);
             }
         }
-        if let Some(cfg) = self.configs.get(account_id) {
-            return Some(cfg.clone());
-        }
-        if let Some(cfg) = crate::account_config::dev_default_config()
-            && &cfg.id == account_id
-        {
-            return Some(cfg);
-        }
-        None
+        self.configs.get(account_id).cloned()
     }
 
     fn bump_generation(&mut self, account_id: &AccountId) -> u64 {

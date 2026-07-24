@@ -1,6 +1,9 @@
 //! Account configuration store (secrets + connection settings).
 //!
 //! Separate from `mailiner_core::Storage` (mail cache, no secrets).
+//!
+//! Browser persistence uses a single `localStorage` JSON blob
+//! ([`ACCOUNTS_LOCAL_STORAGE_KEY`]); IndexedDB is deferred.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -8,8 +11,12 @@ use std::fmt;
 
 use async_trait::async_trait;
 use mailiner_core::ids::AccountId;
+use serde::{Deserialize, Serialize};
 
-use crate::account_config::AccountConfig;
+use crate::account_config::{ACCOUNT_STORE_SCHEMA_VERSION, AccountConfig};
+
+/// `localStorage` key for the v1 account-configs blob.
+pub const ACCOUNTS_LOCAL_STORAGE_KEY: &str = "mailiner.accounts.v1";
 
 /// Errors from account config persistence backends.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +117,239 @@ impl AccountStore for InMemoryAccountStore {
     }
 }
 
+// ── Persisted blob schema (localStorage JSON v1) ────────────────────────────
+
+/// Single JSON document stored under [`ACCOUNTS_LOCAL_STORAGE_KEY`].
+///
+/// Pure encode/decode helpers are unit-tested on the host without a browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccountsStoreBlob {
+    pub schema_version: u32,
+    pub active_account_id: Option<AccountId>,
+    pub accounts: Vec<AccountConfig>,
+}
+
+impl AccountsStoreBlob {
+    /// Empty blob at the current schema version.
+    pub fn empty() -> Self {
+        Self {
+            schema_version: ACCOUNT_STORE_SCHEMA_VERSION,
+            active_account_id: None,
+            accounts: Vec::new(),
+        }
+    }
+
+    /// Serialize to a JSON string for `localStorage`.
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    /// Deserialize from a JSON string.
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        serde_json::from_str(json).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    fn sort_accounts(accounts: &mut [AccountConfig]) {
+        accounts.sort_by(|a, b| {
+            a.display_name
+                .cmp(&b.display_name)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        });
+    }
+}
+
+// ── String key-value backend (localStorage abstraction) ─────────────────────
+
+/// Minimal string key-value API matching browser `Storage` (`getItem` / `setItem`).
+///
+/// Implemented for `web_sys::Storage` and an in-process map for host unit tests.
+pub trait StringKvStore {
+    fn get_item(&self, key: &str) -> Result<Option<String>, AccountStoreError>;
+    fn set_item(&self, key: &str, value: &str) -> Result<(), AccountStoreError>;
+}
+
+/// In-process `StringKvStore` for unit tests (same blob format as the browser).
+#[derive(Debug, Default)]
+pub struct MemoryKvStore {
+    map: RefCell<HashMap<String, String>>,
+}
+
+impl MemoryKvStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl StringKvStore for MemoryKvStore {
+    fn get_item(&self, key: &str) -> Result<Option<String>, AccountStoreError> {
+        Ok(self.map.borrow().get(key).cloned())
+    }
+
+    fn set_item(&self, key: &str, value: &str) -> Result<(), AccountStoreError> {
+        self.map
+            .borrow_mut()
+            .insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+}
+
+/// Browser `window.localStorage` backend.
+///
+/// Construction probes access so private-mode / SecurityError surfaces as
+/// [`AccountStoreError::Unavailable`] rather than on the first write.
+pub struct WebLocalStorage {
+    storage: web_sys::Storage,
+}
+
+impl WebLocalStorage {
+    /// Open `window.localStorage`, or [`AccountStoreError::Unavailable`].
+    pub fn try_open() -> Result<Self, AccountStoreError> {
+        let window = web_sys::window().ok_or(AccountStoreError::Unavailable)?;
+        let storage = window
+            .local_storage()
+            .map_err(|_| AccountStoreError::Unavailable)?
+            .ok_or(AccountStoreError::Unavailable)?;
+        // Probe: some environments throw only on first property access.
+        let _ = storage
+            .length()
+            .map_err(|_| AccountStoreError::Unavailable)?;
+        Ok(Self { storage })
+    }
+}
+
+impl StringKvStore for WebLocalStorage {
+    fn get_item(&self, key: &str) -> Result<Option<String>, AccountStoreError> {
+        self.storage
+            .get_item(key)
+            .map_err(|_| AccountStoreError::Unavailable)
+    }
+
+    fn set_item(&self, key: &str, value: &str) -> Result<(), AccountStoreError> {
+        self.storage.set_item(key, value).map_err(|err| {
+            // Prefer Unavailable for blocked storage; otherwise report detail.
+            let msg = err
+                .as_string()
+                .unwrap_or_else(|| "localStorage setItem failed".into());
+            if msg.to_ascii_lowercase().contains("security") {
+                AccountStoreError::Unavailable
+            } else {
+                AccountStoreError::Other(msg)
+            }
+        })
+    }
+}
+
+impl fmt::Debug for WebLocalStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WebLocalStorage").finish_non_exhaustive()
+    }
+}
+
+// ── BrowserAccountStore (blob over StringKvStore) ───────────────────────────
+
+/// Account store backed by a single JSON blob in string key-value storage.
+///
+/// Production path: [`BrowserAccountStore::open`] → browser `localStorage`.
+/// Tests: [`BrowserAccountStore::with_kv`] + [`MemoryKvStore`].
+pub struct BrowserAccountStore<K: StringKvStore = WebLocalStorage> {
+    kv: K,
+}
+
+impl BrowserAccountStore<WebLocalStorage> {
+    /// Open the browser `localStorage` backend.
+    ///
+    /// Returns [`AccountStoreError::Unavailable`] when there is no window or
+    /// storage is blocked. Async for symmetry with a future IndexedDB backend.
+    pub async fn open() -> Result<Self, AccountStoreError> {
+        Ok(Self {
+            kv: WebLocalStorage::try_open()?,
+        })
+    }
+}
+
+impl BrowserAccountStore<MemoryKvStore> {
+    /// Host-test / session helper using an in-memory string map.
+    pub fn open_memory() -> Self {
+        Self {
+            kv: MemoryKvStore::new(),
+        }
+    }
+}
+
+impl<K: StringKvStore> BrowserAccountStore<K> {
+    /// Wrap an arbitrary [`StringKvStore`] (tests, alternate backends).
+    pub fn with_kv(kv: K) -> Self {
+        Self { kv }
+    }
+
+    fn load_blob(&self) -> Result<AccountsStoreBlob, AccountStoreError> {
+        match self.kv.get_item(ACCOUNTS_LOCAL_STORAGE_KEY)? {
+            None => Ok(AccountsStoreBlob::empty()),
+            Some(s) if s.trim().is_empty() => Ok(AccountsStoreBlob::empty()),
+            Some(s) => AccountsStoreBlob::decode(&s),
+        }
+    }
+
+    fn save_blob(&self, blob: &AccountsStoreBlob) -> Result<(), AccountStoreError> {
+        let json = blob.encode()?;
+        self.kv.set_item(ACCOUNTS_LOCAL_STORAGE_KEY, &json)
+    }
+}
+
+impl<K: StringKvStore> fmt::Debug for BrowserAccountStore<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Do not load the blob (would surface secrets in Debug).
+        f.debug_struct("BrowserAccountStore")
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait(?Send)]
+impl<K: StringKvStore> AccountStore for BrowserAccountStore<K> {
+    async fn list(&self) -> Result<Vec<AccountConfig>, AccountStoreError> {
+        let mut blob = self.load_blob()?;
+        AccountsStoreBlob::sort_accounts(&mut blob.accounts);
+        Ok(blob.accounts)
+    }
+
+    async fn get(&self, id: &AccountId) -> Result<Option<AccountConfig>, AccountStoreError> {
+        let blob = self.load_blob()?;
+        Ok(blob.accounts.into_iter().find(|a| &a.id == id))
+    }
+
+    async fn upsert(&self, config: &AccountConfig) -> Result<(), AccountStoreError> {
+        let mut blob = self.load_blob()?;
+        if let Some(slot) = blob.accounts.iter_mut().find(|a| a.id == config.id) {
+            *slot = config.clone();
+        } else {
+            blob.accounts.push(config.clone());
+        }
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        self.save_blob(&blob)
+    }
+
+    async fn delete(&self, id: &AccountId) -> Result<(), AccountStoreError> {
+        let mut blob = self.load_blob()?;
+        blob.accounts.retain(|a| &a.id != id);
+        if blob.active_account_id.as_ref() == Some(id) {
+            blob.active_account_id = None;
+        }
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        self.save_blob(&blob)
+    }
+
+    async fn get_active_id(&self) -> Result<Option<AccountId>, AccountStoreError> {
+        Ok(self.load_blob()?.active_account_id)
+    }
+
+    async fn set_active_id(&self, id: Option<&AccountId>) -> Result<(), AccountStoreError> {
+        let mut blob = self.load_blob()?;
+        blob.active_account_id = id.cloned();
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        self.save_blob(&blob)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +389,8 @@ mod tests {
             updated_at: ts,
         }
     }
+
+    // ── InMemoryAccountStore ────────────────────────────────────────────────
 
     #[test]
     fn upsert_list_get_delete_roundtrip() {
@@ -254,5 +496,192 @@ mod tests {
             !dbg.contains("token: \"t\""),
             "token leaked via store Debug: {dbg}"
         );
+    }
+
+    // ── AccountsStoreBlob pure helpers ──────────────────────────────────────
+
+    #[test]
+    fn blob_encode_decode_roundtrip_preserves_password_and_schema() {
+        let mut blob = AccountsStoreBlob::empty();
+        assert_eq!(blob.schema_version, ACCOUNT_STORE_SCHEMA_VERSION);
+        assert!(blob.active_account_id.is_none());
+        assert!(blob.accounts.is_empty());
+
+        let a = sample_config("550e8400-e29b-41d4-a716-446655440000", "alice");
+        blob.accounts.push(a.clone());
+        blob.active_account_id = Some(a.id.clone());
+
+        let json = blob.encode().expect("encode");
+        // Schema meta present in JSON
+        assert!(
+            json.contains("\"schema_version\":1"),
+            "schema_version missing: {json}"
+        );
+        assert!(
+            json.contains("\"active_account_id\":\"550e8400-e29b-41d4-a716-446655440000\""),
+            "active id missing: {json}"
+        );
+        // Password survives serialization (never log in production)
+        assert!(
+            json.contains("\"password\":\"pw\""),
+            "password lost: {json}"
+        );
+
+        let back = AccountsStoreBlob::decode(&json).expect("decode");
+        assert_eq!(back, blob);
+        assert_eq!(back.accounts[0].imap.password, "pw");
+        assert_eq!(back.accounts[0].proxy.token, "t");
+        assert_eq!(back.schema_version, 1);
+    }
+
+    #[test]
+    fn blob_decode_rejects_invalid_json() {
+        let err = AccountsStoreBlob::decode("not-json").unwrap_err();
+        match err {
+            AccountStoreError::Serialization(_) => {}
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blob_empty_json_object_is_not_valid_v1_blob() {
+        // Missing required fields → serialization error (no silent empty).
+        let err = AccountsStoreBlob::decode("{}").unwrap_err();
+        assert!(matches!(err, AccountStoreError::Serialization(_)));
+    }
+
+    // ── BrowserAccountStore via MemoryKvStore ───────────────────────────────
+
+    #[test]
+    fn browser_store_upsert_list_get_delete_roundtrip() {
+        let store = BrowserAccountStore::open_memory();
+        let a = sample_config("a1", "alice");
+        let b = sample_config("b2", "bob");
+
+        block_on(async {
+            store.upsert(&a).await.unwrap();
+            store.upsert(&b).await.unwrap();
+
+            let list = store.list().await.unwrap();
+            assert_eq!(list.len(), 2);
+            assert_eq!(list[0].display_name, "alice");
+            assert_eq!(list[1].display_name, "bob");
+
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.imap.password, "pw");
+
+            store.delete(&AccountId::new("a1")).await.unwrap();
+            assert!(store.get(&AccountId::new("a1")).await.unwrap().is_none());
+            assert_eq!(store.list().await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn browser_store_active_id_and_schema_version_after_write() {
+        let store = BrowserAccountStore::open_memory();
+        let a = sample_config("a1", "alice");
+
+        block_on(async {
+            assert!(store.get_active_id().await.unwrap().is_none());
+
+            store.upsert(&a).await.unwrap();
+            store
+                .set_active_id(Some(&AccountId::new("a1")))
+                .await
+                .unwrap();
+            assert_eq!(store.get_active_id().await.unwrap().unwrap().as_str(), "a1");
+
+            // Raw blob under the canonical key has schema_version + active id.
+            let raw = store
+                .kv
+                .get_item(ACCOUNTS_LOCAL_STORAGE_KEY)
+                .unwrap()
+                .expect("blob written");
+            let blob = AccountsStoreBlob::decode(&raw).unwrap();
+            assert_eq!(blob.schema_version, ACCOUNT_STORE_SCHEMA_VERSION);
+            assert_eq!(
+                blob.active_account_id.as_ref().map(|i| i.as_str()),
+                Some("a1")
+            );
+            assert_eq!(blob.accounts.len(), 1);
+            assert_eq!(blob.accounts[0].imap.password, "pw");
+
+            store.delete(&AccountId::new("a1")).await.unwrap();
+            assert!(store.get_active_id().await.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn browser_store_upsert_overwrites_and_password_roundtrip() {
+        let store = BrowserAccountStore::open_memory();
+        let mut a = sample_config("a1", "alice");
+
+        block_on(async {
+            store.upsert(&a).await.unwrap();
+            a.display_name = "Alice Updated".into();
+            a.imap.password = "new-secret-password".into();
+            store.upsert(&a).await.unwrap();
+
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.display_name, "Alice Updated");
+            assert_eq!(got.imap.password, "new-secret-password");
+            assert_eq!(store.list().await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn browser_store_list_stable_order() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("z", "zeta")).await.unwrap();
+            store.upsert(&sample_config("a", "alpha")).await.unwrap();
+            store.upsert(&sample_config("m", "mu")).await.unwrap();
+            let names: Vec<_> = store
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.display_name)
+                .collect();
+            assert_eq!(names, vec!["alpha", "mu", "zeta"]);
+        });
+    }
+
+    #[test]
+    fn browser_store_empty_key_yields_empty_list() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            assert!(store.list().await.unwrap().is_empty());
+            assert!(store.get_active_id().await.unwrap().is_none());
+            assert!(
+                store
+                    .get(&AccountId::new("missing"))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn browser_store_debug_does_not_load_secrets() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+        });
+        let dbg = format!("{store:?}");
+        assert!(
+            !dbg.contains("pw"),
+            "password leaked via BrowserAccountStore Debug: {dbg}"
+        );
+        assert!(
+            dbg.contains("BrowserAccountStore"),
+            "unexpected Debug: {dbg}"
+        );
+    }
+
+    #[test]
+    fn storage_key_is_versioned() {
+        assert_eq!(ACCOUNTS_LOCAL_STORAGE_KEY, "mailiner.accounts.v1");
     }
 }

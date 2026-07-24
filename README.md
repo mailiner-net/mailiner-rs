@@ -34,6 +34,20 @@ look like it comes from the proxy.
 Mailiner also prevents malicious emails from executing JavaScript code or loading
 remote references that could reveal details about the user to the sender. 
 
+## Account storage (browser)
+
+Account connection settings (including IMAP passwords and the proxy token) are
+persisted **only in this browser** under the origin’s `localStorage` key
+`mailiner.accounts.v1` (single JSON blob: schema version, active account id,
+account list). Mailiner has no server-side account vault.
+
+- Clearing site data removes saved accounts.
+- Private / strict modes may block `localStorage`; the app treats that as
+  storage unavailable (session-only fallback is planned with onboarding UI).
+- Anyone with access to this browser profile (or XSS on this origin) can read
+  stored credentials — use a private device and app passwords where possible.
+- IndexedDB persistence is deferred; configs are small enough for `localStorage`.
+
 ## Running Mailiner locally
 
 Step 1: run the ws-tcp-proxy (from `mailiner/ws-tcp-proxy` repo):

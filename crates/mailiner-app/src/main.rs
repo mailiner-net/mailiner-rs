@@ -12,7 +12,7 @@ use crate::account_store::{
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{EmailNavigation, MessageList, MessageView};
 use crate::context::AppContext;
-use crate::core_event::core_loop;
+use crate::core_event::{InitialBootstrap, core_loop};
 
 mod account;
 mod account_config;
@@ -72,9 +72,7 @@ fn main() {
 /// Result of opening the store and applying the bootstrap resolution algorithm.
 struct BootstrapOutcome {
     store: Rc<dyn AccountStore>,
-    /// `Some` → run `CoreEvent::Bootstrap` with this active id (possibly `None`).
-    /// `None` → store failed; skip bootstrap connect.
-    initial_bootstrap: Option<Option<AccountId>>,
+    initial_bootstrap: InitialBootstrap,
 }
 
 /// Open `BrowserAccountStore`, resolve bootstrap state, populate UI accounts (no secrets).
@@ -105,7 +103,7 @@ async fn run_bootstrap(
             bootstrap.set(AppBootstrapState::StoreError { message });
             return BootstrapOutcome {
                 store: Rc::new(InMemoryAccountStore::new()),
-                initial_bootstrap: None,
+                initial_bootstrap: InitialBootstrap::Skip,
             };
         }
     };
@@ -120,7 +118,7 @@ async fn run_bootstrap(
             bootstrap.set(AppBootstrapState::StoreError { message });
             return BootstrapOutcome {
                 store,
-                initial_bootstrap: None,
+                initial_bootstrap: InitialBootstrap::Skip,
             };
         }
     };
@@ -139,7 +137,7 @@ async fn run_bootstrap(
             bootstrap.set(AppBootstrapState::Ready);
             return BootstrapOutcome {
                 store,
-                initial_bootstrap: Some(Some(id)),
+                initial_bootstrap: InitialBootstrap::Run { active: Some(id) },
             };
         }
 
@@ -149,7 +147,7 @@ async fn run_bootstrap(
         bootstrap.set(AppBootstrapState::NeedsOnboarding);
         return BootstrapOutcome {
             store,
-            initial_bootstrap: Some(None),
+            initial_bootstrap: InitialBootstrap::Run { active: None },
         };
     }
 
@@ -171,7 +169,7 @@ async fn run_bootstrap(
 
     BootstrapOutcome {
         store,
-        initial_bootstrap: Some(active),
+        initial_bootstrap: InitialBootstrap::Run { active },
     }
 }
 
@@ -338,12 +336,7 @@ fn MainView() -> Element {
 
     // While NeedsOnboarding, guard redirects away; avoid mounting mail chrome.
     if !matches!(bootstrap(), AppBootstrapState::Ready) {
-        return rsx! {
-            div {
-                class: "bootstrap-shell",
-                p { class: "bootstrap-muted", "Redirecting…" }
-            }
-        };
+        return redirecting_shell();
     }
 
     rsx! {
@@ -386,11 +379,37 @@ fn OnboardingView() -> Element {
     }
 }
 
+/// Minimal shell while deep-link guards redirect away from settings/main.
+fn redirecting_shell() -> Element {
+    rsx! {
+        div {
+            class: "bootstrap-shell",
+            p { class: "bootstrap-muted", "Redirecting…" }
+        }
+    }
+}
+
 /// Account list settings placeholder (full UI is PR6).
 #[component]
 fn AccountsSettingsView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    // Settings require Ready (and at least the possibility of accounts). Under
+    // NeedsOnboarding the deep-link guard replace()s to /onboarding; avoid flashing
+    // this placeholder for a frame before the effect runs.
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+
     let ctx = use_context::<AppContext>();
     let accounts = ctx.accounts;
+
+    // Stable order: display name then id (matches store list ordering).
+    let mut listed: Vec<_> = accounts.read().values().cloned().collect();
+    listed.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
 
     rsx! {
         div {
@@ -402,7 +421,7 @@ fn AccountsSettingsView() -> Element {
 
                 ul {
                     class: "bootstrap-account-list",
-                    for (_id, account) in accounts.read().iter() {
+                    for account in listed.iter() {
                         li {
                             Link {
                                 to: Route::AccountEditView { id: account.id.as_str().to_string() },
@@ -426,6 +445,11 @@ fn AccountsSettingsView() -> Element {
 /// Add-account placeholder (full form is PR5/PR6).
 #[component]
 fn AccountNewView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+
     rsx! {
         div {
             class: "bootstrap-shell",
@@ -445,6 +469,11 @@ fn AccountNewView() -> Element {
 /// Edit-account placeholder (full form is PR6).
 #[component]
 fn AccountEditView(id: String) -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+
     rsx! {
         div {
             class: "bootstrap-shell",

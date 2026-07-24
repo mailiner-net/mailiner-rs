@@ -81,6 +81,17 @@ pub enum CoreEvent {
     AccountsChanged,
 }
 
+/// Cold-start prelude for [`core_loop`]: skip connect, or run bootstrap with an active id.
+///
+/// Prefer this over `Option<Option<AccountId>>` so call sites are not ambiguous.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialBootstrap {
+    /// Store open/list failed — do not connect; event loop stays idle until a later event.
+    Skip,
+    /// Run [`CoreEvent::Bootstrap`] once with the resolved active account (or `None`).
+    Run { active: Option<AccountId> },
+}
+
 /// Application core task: handles mail ops and account connection lifecycle.
 ///
 /// **Serial event processing (v1):** each handler is fully awaited before the next
@@ -88,18 +99,17 @@ pub enum CoreEvent {
 /// generation debounce in the manager is defensive (stale-result guard if connect is
 /// later made concurrent) rather than a mid-flight cancel of an in-progress connect.
 ///
-/// `initial_bootstrap`: when `Some`, runs [`CoreEvent::Bootstrap`] once before the
-/// event loop (App opens the store, then passes the resolved active id). `None`
-/// skips that prelude (e.g. store open failure — idle until a later event).
+/// `initial_bootstrap`: App opens the store and passes [`InitialBootstrap::Run`] with
+/// the resolved active id, or [`InitialBootstrap::Skip`] on store failure.
 pub async fn core_loop(
     mut core_rx: UnboundedReceiver<CoreEvent>,
     mut ctx: AppContext,
     store: Rc<dyn AccountStore>,
-    initial_bootstrap: Option<Option<AccountId>>,
+    initial_bootstrap: InitialBootstrap,
 ) {
     let mut manager = AccountConnectionManager::new(store);
 
-    if let Some(active) = initial_bootstrap {
+    if let InitialBootstrap::Run { active } = initial_bootstrap {
         handle_bootstrap(&mut manager, &mut ctx, active).await;
     }
 
@@ -175,20 +185,22 @@ async fn handle_bootstrap(
     ctx: &mut AppContext,
     active: Option<AccountId>,
 ) {
-    // Refresh UI accounts from store (no secrets). Merge memory-only configs.
-    refresh_ui_accounts(manager, ctx).await;
-
     let Some(account_id) = active else {
+        // No active account: still sync UI map from store (and any prior memory-only).
+        refresh_ui_accounts(manager, ctx).await;
         info!("Bootstrap: no active account");
         return;
     };
 
     let Some(config) = manager.resolve_config(&account_id).await else {
         warn!("Bootstrap: no config for active account {}", account_id);
+        refresh_ui_accounts(manager, ctx).await;
         return;
     };
 
-    // Memory-only path: keep config in manager without store write.
+    // Cache config **before** refresh so memory-only (e.g. interim `dev_default`) is
+    // already registered when `refresh_ui_accounts` rebuilds the UI map. Otherwise
+    // Ready can briefly observe `accounts == {}` across store-get awaits.
     let is_memory_only = manager
         .store()
         .get(&account_id)
@@ -201,7 +213,11 @@ async fn handle_bootstrap(
     } else {
         manager.cache_config(config.clone());
     }
-    // Ensure UI has the account even if store was empty.
+
+    // Refresh UI accounts from store (no secrets). Merge memory-only configs.
+    refresh_ui_accounts(manager, ctx).await;
+
+    // Ensure UI has the active account even if refresh missed it.
     {
         let mut accounts = ctx.accounts.write();
         accounts

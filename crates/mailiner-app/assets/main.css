@@ -16,6 +16,83 @@
     --message-list-height: 40%;
 }
 
+/* Full-page shells: loading, store error, onboarding, settings placeholders.
+   No mail chrome (#app toolbar / mailbox panes). */
+.bootstrap-shell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+    box-sizing: border-box;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--foreground);
+    background: var(--background);
+}
+
+.bootstrap-card {
+    max-width: 28rem;
+    width: 100%;
+    padding: 1.5rem 1.75rem;
+    border: 1px solid var(--sidebar-border);
+    border-radius: 8px;
+    background: var(--sidebar);
+}
+
+.bootstrap-card.bootstrap-error {
+    border-color: #c62828;
+}
+
+.bootstrap-title {
+    margin: 0 0 0.75rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.bootstrap-muted {
+    color: #666;
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.bootstrap-nav {
+    margin-top: 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.5rem;
+    align-items: center;
+}
+
+.bootstrap-nav a {
+    color: var(--item-accent);
+    text-decoration: none;
+}
+
+.bootstrap-nav a:hover {
+    text-decoration: underline;
+}
+
+.bootstrap-account-list {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+}
+
+.bootstrap-account-list li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--sidebar-border);
+}
+
+.bootstrap-account-list a {
+    color: var(--foreground);
+    text-decoration: none;
+}
+
+.bootstrap-account-list a:hover {
+    color: var(--item-accent);
+}
+
 body {
     margin: 0;
     padding: 0;

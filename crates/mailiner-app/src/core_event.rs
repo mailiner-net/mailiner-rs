@@ -87,12 +87,21 @@ pub enum CoreEvent {
 /// event is taken from the channel. Connect attempts therefore do not run concurrently;
 /// generation debounce in the manager is defensive (stale-result guard if connect is
 /// later made concurrent) rather than a mid-flight cancel of an in-progress connect.
+///
+/// `initial_bootstrap`: when `Some`, runs [`CoreEvent::Bootstrap`] once before the
+/// event loop (App opens the store, then passes the resolved active id). `None`
+/// skips that prelude (e.g. store open failure — idle until a later event).
 pub async fn core_loop(
     mut core_rx: UnboundedReceiver<CoreEvent>,
     mut ctx: AppContext,
     store: Rc<dyn AccountStore>,
+    initial_bootstrap: Option<Option<AccountId>>,
 ) {
     let mut manager = AccountConnectionManager::new(store);
+
+    if let Some(active) = initial_bootstrap {
+        handle_bootstrap(&mut manager, &mut ctx, active).await;
+    }
 
     while let Some(event) = core_rx.next().await {
         match event {

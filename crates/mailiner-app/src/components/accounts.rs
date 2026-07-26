@@ -107,6 +107,7 @@ pub fn AccountsSettingsPage() -> Element {
                                         div {
                                             class: "accounts-list-meta",
                                             span { "{account.email}" }
+                                            span { class: "bootstrap-muted", " · {account.host}" }
                                         }
                                         div {
                                             class: "accounts-list-conn bootstrap-muted",
@@ -141,9 +142,15 @@ pub fn AccountsSettingsPage() -> Element {
                                                             return;
                                                         }
                                                         pending_switch_btn.set(None);
-                                                        if let Some(store) = store_switch()
-                                                            && let Err(e) =
-                                                                store.0.set_active_id(Some(&id)).await
+                                                        let Some(store) = store_switch() else {
+                                                            action_error_btn.set(Some(
+                                                                "Account storage is not available."
+                                                                    .into(),
+                                                            ));
+                                                            return;
+                                                        };
+                                                        if let Err(e) =
+                                                            store.0.set_active_id(Some(&id)).await
                                                         {
                                                             warn!("set_active_id failed on switch: {e}");
                                                             action_error_btn.set(Some(format!(
@@ -243,13 +250,19 @@ fn DeleteAccountConfirm(
     let nav = use_navigator();
     let selected = ctx.selected_account;
     let id_for_delete = account_id.clone();
+    let account_name = ctx
+        .accounts
+        .read()
+        .get(&account_id)
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "this account".into());
 
     rsx! {
         div {
             class: "accounts-confirm",
             role: "alertdialog",
             p {
-                "Delete this account from this browser? Mail on the server is not affected."
+                "Delete \"{account_name}\" from this browser? Mail on the server is not affected."
             }
             div {
                 class: "onboarding-actions",
@@ -629,6 +642,8 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut save_seen_progress = use_signal(|| false);
     let mut test_seen_progress = use_signal(|| false);
     let mut save_via_commit = use_signal(|| false);
+    // Prior store `updated_at` when credential save starts; success requires a newer value.
+    let mut save_baseline_updated_at = use_signal(|| None::<chrono::DateTime<Utc>>);
 
     // Load secrets only into component-local state.
     use_future(move || {
@@ -667,29 +682,57 @@ pub fn AccountEditPage(id: String) -> Element {
         }
     });
 
+    // Watch connection_states for Save (credential commit) and Test independently.
+    // Test must not require save_via_commit (BUG-1). Save waits for upsert via store
+    // updated_at (and/or final Ready after demoted Connecting) — not connect-Ready alone.
     use_effect(move || {
-        if !save_via_commit() {
-            return;
-        }
         let states = ctx.connection_states.read().clone();
         match phase() {
-            FormPhase::Saving => {
+            FormPhase::Saving if save_via_commit() => {
                 if let Some(state) = states.get(&account_id_effect) {
                     match state {
                         ConnectionState::Connecting | ConnectionState::Authenticating => {
                             save_seen_progress.set(true);
                         }
-                        ConnectionState::Ready => {
+                        ConnectionState::Ready | ConnectionState::Disconnected => {
                             if !save_seen_progress() {
                                 return;
                             }
-                            // Upsert completed when UI account map still has id (always for edit)
-                            // and connection is Ready after CommitNewAccount.
-                            phase.set(FormPhase::Idle);
-                            save_seen_progress.set(false);
-                            save_via_commit.set(false);
-                            status_message.set(None);
-                            nav.replace(Route::AccountsSettingsView {});
+                            // Confirm store upsert finished (background edits end Disconnected;
+                            // active edits end Ready after upsert — not mid-connect Ready).
+                            let baseline = save_baseline_updated_at();
+                            let id = account_id_effect.clone();
+                            let store_ctx = store_ctx;
+                            let nav = nav;
+                            spawn(async move {
+                                if phase() != FormPhase::Saving || !save_via_commit() {
+                                    return;
+                                }
+                                let Some(baseline) = baseline else {
+                                    return;
+                                };
+                                let Some(store) = store_ctx() else {
+                                    return;
+                                };
+                                match store.0.get(&id).await {
+                                    Ok(Some(cfg)) if cfg.updated_at > baseline => {
+                                        if phase() != FormPhase::Saving {
+                                            return;
+                                        }
+                                        phase.set(FormPhase::Idle);
+                                        save_seen_progress.set(false);
+                                        save_via_commit.set(false);
+                                        save_baseline_updated_at.set(None);
+                                        status_message.set(None);
+                                        original.set(Some(cfg));
+                                        nav.replace(Route::AccountsSettingsView {});
+                                    }
+                                    _ => {
+                                        // Not persisted yet (still connecting) or failed
+                                        // restore without upsert — keep watching.
+                                    }
+                                }
+                            });
                         }
                         ConnectionState::Error { message, kind, .. } => {
                             if !save_seen_progress() {
@@ -698,6 +741,7 @@ pub fn AccountEditPage(id: String) -> Element {
                             phase.set(FormPhase::Idle);
                             save_seen_progress.set(false);
                             save_via_commit.set(false);
+                            save_baseline_updated_at.set(None);
                             status_message
                                 .set(Some(StatusMessage::error(kind_label(*kind), message)));
                         }
@@ -706,6 +750,7 @@ pub fn AccountEditPage(id: String) -> Element {
                 }
             }
             FormPhase::Testing => {
+                // Independent of save_via_commit (BUG-1).
                 if let Some(rid) = test_request_id()
                     && let Some(state) = states.get(&rid)
                 {
@@ -740,7 +785,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     }
                 }
             }
-            FormPhase::Idle => {}
+            FormPhase::Saving | FormPhase::Idle => {}
         }
     });
 
@@ -875,6 +920,7 @@ pub fn AccountEditPage(id: String) -> Element {
                 .insert(account_id_save.clone(), ConnectionState::Connecting);
             save_seen_progress.set(true);
             save_via_commit.set(true);
+            save_baseline_updated_at.set(Some(orig.updated_at));
             phase.set(FormPhase::Saving);
             status_message.set(Some(StatusMessage::info("Connecting…")));
             core_tx.send(CoreEvent::CommitNewAccount { config });
@@ -904,10 +950,11 @@ pub fn AccountEditPage(id: String) -> Element {
                     return;
                 }
                 original.set(Some(config.clone()));
-                // Refresh UI account display names without reconnect.
+                // Refresh UI account display fields without reconnect.
                 if let Some(ui) = ctx.accounts.write().get_mut(&config.id) {
                     ui.name = config.display_name.clone();
                     ui.email = config.email.clone();
+                    ui.host = config.imap.host.clone();
                 }
                 core_tx.send(CoreEvent::AccountsChanged);
                 phase.set(FormPhase::Idle);

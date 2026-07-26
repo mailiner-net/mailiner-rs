@@ -331,69 +331,148 @@ async fn handle_commit_new_account(
 ) {
     let account_id = config.id.clone();
 
+    // Existing store entry ⇒ credential edit (or re-save); absent ⇒ first-time add.
+    let was_in_store = manager
+        .store()
+        .get(&account_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let was_selected = ctx.selected_account.read().as_ref() == Some(&account_id);
+    let had_connector = manager.get(&account_id).is_some();
+
     // Force a fresh connect so credential edits re-verify (ensure_connected would
     // otherwise short-circuit when a Ready connector already exists for this id).
     // Drop connector only; store entry is left intact until Ready + upsert.
-    if manager.get(&account_id).is_some() {
+    if had_connector {
         manager.disconnect_account(&account_id, ctx).await;
     }
 
     // KeepActiveUntilReady: prior *other* active session stays up through connect **and**
-    // store writes. disconnect_others only after full commit success (below).
+    // store writes. disconnect_others only after full commit success when we activate.
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)
         .await
     {
         Ok(()) => {
-            // Connect-before-persist: only write store on Ready.
+            // Demote Ready → Connecting across the upsert await so the UI does not treat
+            // connect-Ready as “commit finished” (edit navigate-before-persist race).
+            set_connection_state(ctx, &account_id, ConnectionState::Connecting);
+
+            // Connect-before-persist: only write store after a successful connect.
             if let Err(e) = manager.store().upsert(&config).await {
                 error!("CommitNewAccount: store upsert failed: {}", e);
-                // Drop only the new trial session; prior active session is still live.
                 manager.disconnect_account(&account_id, ctx).await;
-                set_connection_state(
-                    ctx,
-                    &account_id,
-                    ConnectionState::Error {
-                        message: format!("Connected, but failed to save account: {e}"),
-                        kind: ConnectErrorKind::Internal,
-                        retryable: true,
-                    },
-                );
+                let err_state = ConnectionState::Error {
+                    message: format!("Connected, but failed to save account: {e}"),
+                    kind: ConnectErrorKind::Internal,
+                    retryable: true,
+                };
+                set_connection_state(ctx, &account_id, err_state.clone());
+                // Restore prior live session for mail, then re-surface Error for the form
+                // (restore sets Ready and would otherwise look like commit success).
+                if was_in_store && was_selected {
+                    restore_store_session(manager, ctx, &account_id).await;
+                    set_connection_state(ctx, &account_id, err_state);
+                }
                 return;
             }
-            if let Err(e) = manager.store().set_active_id(Some(&account_id)).await {
-                error!("CommitNewAccount: set_active_id failed: {}", e);
-                // Drop only the new trial session; prior remains. Account stays in store
-                // for retry via SelectAccount / set_active without re-entering credentials.
-                manager.disconnect_account(&account_id, ctx).await;
-                set_connection_state(
-                    ctx,
-                    &account_id,
-                    ConnectionState::Error {
+
+            manager.cache_config(config.clone());
+            refresh_ui_accounts(manager, ctx).await;
+
+            // New account, or edit of the already-selected account → make/keep active.
+            // Edit of a background account: persist only; do not steal the active session.
+            let should_activate = !was_in_store || was_selected;
+            if should_activate {
+                if let Err(e) = manager.store().set_active_id(Some(&account_id)).await {
+                    error!("CommitNewAccount: set_active_id failed: {}", e);
+                    manager.disconnect_account(&account_id, ctx).await;
+                    let err_state = ConnectionState::Error {
                         message: format!(
                             "Connected and saved, but failed to set active account: {e}. \
                              The account may already be saved — reload the page or try again."
                         ),
                         kind: ConnectErrorKind::Internal,
                         retryable: true,
-                    },
-                );
-                refresh_ui_accounts(manager, ctx).await;
-                return;
-            }
+                    };
+                    set_connection_state(ctx, &account_id, err_state.clone());
+                    if was_in_store && was_selected {
+                        restore_store_session(manager, ctx, &account_id).await;
+                        set_connection_state(ctx, &account_id, err_state);
+                    }
+                    // Account is in store from upsert; UI accounts already refreshed.
+                    return;
+                }
 
-            // Full commit success: switch active-only (tear down prior sessions).
-            manager.disconnect_others(Some(&account_id), ctx).await;
-            manager.cache_config(config.clone());
-            refresh_ui_accounts(manager, ctx).await;
-            ctx.selected_account.set(Some(account_id.clone()));
-            list_folders_soft(manager, ctx, &account_id).await;
+                manager.disconnect_others(Some(&account_id), ctx).await;
+                ctx.selected_account.set(Some(account_id.clone()));
+                set_connection_state(ctx, &account_id, ConnectionState::Ready);
+                list_folders_soft(manager, ctx, &account_id).await;
+            } else {
+                // Background edit: drop the trial connector; leave the prior active session.
+                manager.disconnect_account(&account_id, ctx).await;
+                // Keep store-backed config cached for a later switch (no live connector).
+                manager.cache_config(config.clone());
+                // Disconnected (not Ready): no connector. Edit form confirms via store
+                // `updated_at` bump after upsert, not connection Ready alone.
+                set_connection_state(ctx, &account_id, ConnectionState::Disconnected);
+            }
         }
         Err(e) => {
-            // No store write on failure; prior active session left intact.
+            // No store write on failure. Restore selected store-backed session if we
+            // tore it down for re-verify (BUG-3). Re-surface Error after restore so the
+            // form does not treat restore-Ready as commit success.
             error!(
                 "CommitNewAccount connect failed: {} ({:?})",
                 e.message, e.kind
+            );
+            let err_state = e.to_state();
+            if was_in_store {
+                if was_selected {
+                    restore_store_session(manager, ctx, &account_id).await;
+                    set_connection_state(ctx, &account_id, err_state);
+                } else if let Some(store_cfg) =
+                    manager.store().get(&account_id).await.ok().flatten()
+                {
+                    // Replace draft cache with store config; leave disconnected.
+                    manager.cache_config(store_cfg);
+                }
+            }
+        }
+    }
+}
+
+/// Re-resolve store config and reconnect when this account is still selected.
+async fn restore_store_session(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) {
+    let Some(store_cfg) = manager.store().get(account_id).await.ok().flatten() else {
+        warn!(
+            "restore_store_session: no store config for {} — cannot restore",
+            account_id
+        );
+        return;
+    };
+    manager.cache_config(store_cfg.clone());
+    if ctx.selected_account.read().as_ref() != Some(account_id) {
+        set_connection_state(ctx, account_id, ConnectionState::Disconnected);
+        return;
+    }
+    match manager
+        .ensure_connected(&store_cfg, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
+        Ok(()) => {
+            list_folders_soft(manager, ctx, account_id).await;
+        }
+        Err(re) => {
+            error!(
+                "restore_store_session reconnect failed for {}: {} ({:?})",
+                account_id, re.message, re.kind
             );
         }
     }

@@ -226,12 +226,13 @@ impl AccountConfig {
     /// Map to the thin UI account type (no secrets).
     ///
     /// Secret exclusion is structural: UI [`crate::account::Account`] only has
-    /// `id` / `name` / `email`. If that type gains fields, extend the mapping and tests.
+    /// non-secret display fields. If that type gains fields, extend the mapping and tests.
     pub fn to_ui_account(&self) -> crate::account::Account {
         crate::account::Account {
             id: self.id.clone(),
             name: self.display_name.clone(),
             email: self.email.clone(),
+            host: self.imap.host.clone(),
         }
     }
 
@@ -630,13 +631,14 @@ mod tests {
 
     #[test]
     fn to_ui_account_strips_secrets() {
-        // Secret exclusion is structural: UI Account has only id/name/email.
+        // Secret exclusion is structural: UI Account has only non-secret display fields.
         // This test documents the mapping; the type system prevents secret fields.
         let config = sample_config();
         let ui = config.to_ui_account();
         assert_eq!(ui.id, config.id);
         assert_eq!(ui.name, "Work");
         assert_eq!(ui.email, "user@example.com");
+        assert_eq!(ui.host, config.imap.host);
     }
 
     #[test]

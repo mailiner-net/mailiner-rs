@@ -4,7 +4,9 @@ use chrono::Utc;
 use dioxus::prelude::*;
 
 use crate::account::AccountId;
-use crate::account_config::{AccountConfig, ImapSettings, ProxySettings};
+use crate::account_config::{
+    AccountConfig, DEFAULT_SMTP_PORT, ImapSettings, ProxySettings, optional_smtp_from_fields,
+};
 use crate::connection::ConnectErrorKind;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,6 +88,11 @@ pub fn build_config_from_form(
     proxy_token: &str,
     remote_host: &str,
     remote_port: &str,
+    smtp_host: &str,
+    smtp_port: &str,
+    smtp_username: &str,
+    smtp_password: &str,
+    smtp_use_tls: bool,
     created_at: chrono::DateTime<Utc>,
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
@@ -148,6 +155,14 @@ pub fn build_config_from_form(
         }
     };
 
+    let smtp = optional_smtp_from_fields(
+        smtp_host,
+        smtp_port,
+        smtp_username,
+        smtp_password,
+        smtp_use_tls,
+    )?;
+
     let now = Utc::now();
     let config = AccountConfig {
         id: account_id.clone(),
@@ -160,7 +175,7 @@ pub fn build_config_from_form(
             password: password.to_string(),
             use_tls: true,
         },
-        smtp: None,
+        smtp,
         proxy: ProxySettings {
             base_url: proxy_base.to_string(),
             token: proxy_token.to_string(),
@@ -220,7 +235,8 @@ pub fn FormField(
     }
 }
 
-/// Identity + IMAP + proxy fieldsets (no SMTP). Shared by onboarding and accounts.
+/// Identity + IMAP + proxy fieldsets. Shared by onboarding and accounts.
+/// SMTP is a separate [`AccountSmtpFields`] section.
 #[component]
 pub fn AccountConnectionFields(
     id_prefix: String,
@@ -388,6 +404,96 @@ pub fn AccountConnectionFields(
              Mailiner has no server account. Anyone with access to this browser \
              profile (or a compromised page on this origin) can read it. Use a \
              private device; clear site data to remove it."
+        }
+    }
+}
+
+/// Optional SMTP fields (collapsed advanced). Always shows the not-implemented notice.
+///
+/// Empty section persists as `smtp: None`. Leave password blank to reuse IMAP password later.
+#[component]
+pub fn AccountSmtpFields(
+    id_prefix: String,
+    smtp_host: String,
+    smtp_port: String,
+    smtp_username: String,
+    smtp_password: String,
+    smtp_use_tls: bool,
+    set_smtp_host: EventHandler<String>,
+    set_smtp_port: EventHandler<String>,
+    set_smtp_username: EventHandler<String>,
+    set_smtp_password: EventHandler<String>,
+    set_smtp_use_tls: EventHandler<bool>,
+    busy: bool,
+    #[props(default)] open: bool,
+) -> Element {
+    let port_placeholder = DEFAULT_SMTP_PORT.to_string();
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "SMTP (sending)" }
+            p {
+                class: "onboarding-notice",
+                role: "note",
+                "Sending is not implemented yet. These settings are saved for future use."
+            }
+            details {
+                class: "onboarding-advanced",
+                open: open,
+                summary { "Optional SMTP settings" }
+                FormField {
+                    label: "SMTP host",
+                    id: "{id_prefix}-smtp-host",
+                    value: smtp_host,
+                    oninput: move |v| set_smtp_host.call(v),
+                    placeholder: "smtp.example.com",
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                FormField {
+                    label: "SMTP port",
+                    id: "{id_prefix}-smtp-port",
+                    value: smtp_port,
+                    oninput: move |v| set_smtp_port.call(v),
+                    placeholder: port_placeholder,
+                    input_type: "number",
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                FormField {
+                    label: "SMTP username",
+                    id: "{id_prefix}-smtp-user",
+                    value: smtp_username,
+                    oninput: move |v| set_smtp_username.call(v),
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                FormField {
+                    label: "SMTP password",
+                    id: "{id_prefix}-smtp-password",
+                    value: smtp_password,
+                    oninput: move |v| set_smtp_password.call(v),
+                    input_type: "password",
+                    placeholder: "Leave empty to reuse IMAP password",
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                div {
+                    class: "onboarding-field onboarding-checkbox-field",
+                    label {
+                        class: "onboarding-checkbox-label",
+                        input {
+                            id: "{id_prefix}-smtp-tls",
+                            name: "{id_prefix}-smtp-tls",
+                            r#type: "checkbox",
+                            checked: smtp_use_tls,
+                            disabled: busy,
+                            onchange: move |e| set_smtp_use_tls.call(e.checked()),
+                        }
+                        " Use TLS"
+                    }
+                }
+            }
         }
     }
 }

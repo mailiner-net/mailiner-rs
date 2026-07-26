@@ -255,6 +255,69 @@ impl AccountConfig {
     }
 }
 
+/// Default SMTP port used when the form leaves port blank but host is set.
+pub const DEFAULT_SMTP_PORT: u16 = 465;
+
+/// Build optional SMTP settings from form field strings.
+///
+/// - All fields empty / default → `Ok(None)` (section unused).
+/// - Any non-default field set without a host → error (partial fill requires host).
+/// - Host set → `Ok(Some(...))`; blank port defaults to [`DEFAULT_SMTP_PORT`];
+///   blank password → `None` (reuse IMAP password at send time later).
+pub fn optional_smtp_from_fields(
+    host: &str,
+    port: &str,
+    username: &str,
+    password: &str,
+    use_tls: bool,
+) -> Result<Option<SmtpSettings>, String> {
+    let host = host.trim();
+    let username = username.trim();
+    // Do not trim passwords (spaces may be intentional).
+    let password_raw = password;
+    let port_trim = port.trim();
+
+    let port_is_default = port_trim.is_empty() || port_trim == DEFAULT_SMTP_PORT.to_string();
+    let password_empty = password_raw.is_empty();
+    let section_empty =
+        host.is_empty() && username.is_empty() && password_empty && port_is_default && use_tls;
+
+    if section_empty {
+        return Ok(None);
+    }
+
+    if host.is_empty() {
+        return Err("SMTP host is required when other SMTP fields are filled. \
+             Clear SMTP fields to skip outbound settings."
+            .into());
+    }
+
+    let port: u16 = if port_trim.is_empty() {
+        DEFAULT_SMTP_PORT
+    } else {
+        port_trim
+            .parse()
+            .map_err(|_| "SMTP port must be a number between 1 and 65535.".to_string())?
+    };
+    if port == 0 {
+        return Err("SMTP port must be a number between 1 and 65535.".into());
+    }
+
+    let password = if password_empty {
+        None
+    } else {
+        Some(password_raw.to_string())
+    };
+
+    Ok(Some(SmtpSettings {
+        host: host.to_string(),
+        port,
+        username: username.to_string(),
+        password,
+        use_tls,
+    }))
+}
+
 /// Optional onboarding form prefill (debug / `dev-defaults` only).
 ///
 /// **Never** used to auto-connect or write the account store. Empty-store
@@ -673,5 +736,63 @@ mod tests {
     #[test]
     fn schema_version_is_one() {
         assert_eq!(ACCOUNT_STORE_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn optional_smtp_empty_section_is_none() {
+        assert_eq!(
+            optional_smtp_from_fields("", "", "", "", true).unwrap(),
+            None
+        );
+        assert_eq!(
+            optional_smtp_from_fields("", "465", "", "", true).unwrap(),
+            None
+        );
+        assert_eq!(
+            optional_smtp_from_fields("  ", "465", "  ", "", true).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn optional_smtp_partial_requires_host() {
+        let err = optional_smtp_from_fields("", "465", "user", "", true).unwrap_err();
+        assert!(err.contains("SMTP host"), "err={err}");
+
+        let err = optional_smtp_from_fields("", "", "", "secret", true).unwrap_err();
+        assert!(err.contains("SMTP host"), "err={err}");
+
+        let err = optional_smtp_from_fields("", "587", "", "", true).unwrap_err();
+        assert!(err.contains("SMTP host"), "err={err}");
+
+        let err = optional_smtp_from_fields("", "", "", "", false).unwrap_err();
+        assert!(err.contains("SMTP host"), "err={err}");
+    }
+
+    #[test]
+    fn optional_smtp_with_host_defaults_and_password() {
+        let smtp = optional_smtp_from_fields("smtp.example.com", "", "u@ex.com", "", true)
+            .unwrap()
+            .expect("Some");
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.port, DEFAULT_SMTP_PORT);
+        assert_eq!(smtp.username, "u@ex.com");
+        assert!(smtp.password.is_none());
+        assert!(smtp.use_tls);
+
+        let smtp = optional_smtp_from_fields("smtp.example.com", "587", "u", "pw", false)
+            .unwrap()
+            .expect("Some");
+        assert_eq!(smtp.port, 587);
+        assert_eq!(smtp.password.as_deref(), Some("pw"));
+        assert!(!smtp.use_tls);
+    }
+
+    #[test]
+    fn optional_smtp_rejects_invalid_port() {
+        let err = optional_smtp_from_fields("smtp.example.com", "0", "", "", true).unwrap_err();
+        assert!(err.contains("port"), "err={err}");
+        let err = optional_smtp_from_fields("smtp.example.com", "nope", "", "", true).unwrap_err();
+        assert!(err.contains("port"), "err={err}");
     }
 }

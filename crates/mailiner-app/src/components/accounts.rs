@@ -9,10 +9,10 @@ use crate::AccountStoreContext;
 use crate::AppBootstrapState;
 use crate::Route;
 use crate::account::AccountId;
-use crate::account_config::{AccountConfig, dev_form_prefill};
+use crate::account_config::{AccountConfig, DEFAULT_SMTP_PORT, dev_form_prefill};
 use crate::components::account_form::{
-    AccountConnectionFields, FormPhase, FormStatusBanner, StatusMessage, build_config_from_form,
-    credentials_changed, kind_label,
+    AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
+    build_config_from_form, credentials_changed, kind_label,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -373,6 +373,11 @@ pub fn AccountNewPage() -> Element {
     let mut proxy_token = use_signal(|| prefill.proxy_token.clone());
     let mut remote_host = use_signal(|| prefill.remote_host.clone());
     let mut remote_port = use_signal(|| prefill.remote_port.clone());
+    let mut smtp_host = use_signal(String::new);
+    let mut smtp_port = use_signal(|| DEFAULT_SMTP_PORT.to_string());
+    let mut smtp_username = use_signal(String::new);
+    let mut smtp_password = use_signal(String::new);
+    let mut smtp_use_tls = use_signal(|| true);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -471,6 +476,11 @@ pub fn AccountNewPage() -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -510,6 +520,11 @@ pub fn AccountNewPage() -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -567,6 +582,21 @@ pub fn AccountNewPage() -> Element {
                         set_remote_port: move |v| remote_port.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountSmtpFields {
+                        id_prefix: "account-new",
+                        smtp_host: smtp_host(),
+                        smtp_port: smtp_port(),
+                        smtp_username: smtp_username(),
+                        smtp_password: smtp_password(),
+                        smtp_use_tls: smtp_use_tls(),
+                        set_smtp_host: move |v| smtp_host.set(v),
+                        set_smtp_port: move |v| smtp_port.set(v),
+                        set_smtp_username: move |v| smtp_username.set(v),
+                        set_smtp_password: move |v| smtp_password.set(v),
+                        set_smtp_use_tls: move |v| smtp_use_tls.set(v),
+                        busy: busy,
                     }
 
                     FormStatusBanner { message: status_message() }
@@ -635,6 +665,12 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut proxy_token = use_signal(String::new);
     let mut remote_host = use_signal(String::new);
     let mut remote_port = use_signal(String::new);
+    let mut smtp_host = use_signal(String::new);
+    let mut smtp_port = use_signal(|| DEFAULT_SMTP_PORT.to_string());
+    let mut smtp_username = use_signal(String::new);
+    let mut smtp_password = use_signal(String::new);
+    let mut smtp_use_tls = use_signal(|| true);
+    let mut open_smtp = use_signal(|| false);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -673,6 +709,21 @@ pub fn AccountEditPage(id: String) -> Element {
                             .map(|p| p.to_string())
                             .unwrap_or_default(),
                     );
+                    if let Some(ref smtp) = cfg.smtp {
+                        smtp_host.set(smtp.host.clone());
+                        smtp_port.set(smtp.port.to_string());
+                        smtp_username.set(smtp.username.clone());
+                        smtp_password.set(smtp.password.clone().unwrap_or_default());
+                        smtp_use_tls.set(smtp.use_tls);
+                        open_smtp.set(true);
+                    } else {
+                        smtp_host.set(String::new());
+                        smtp_port.set(DEFAULT_SMTP_PORT.to_string());
+                        smtp_username.set(String::new());
+                        smtp_password.set(String::new());
+                        smtp_use_tls.set(true);
+                        open_smtp.set(false);
+                    }
                     original.set(Some(cfg));
                     load_state.set(EditLoadState::Ready);
                 }
@@ -860,6 +911,11 @@ pub fn AccountEditPage(id: String) -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             orig.created_at,
         ) {
             Ok(config) => {
@@ -890,7 +946,7 @@ pub fn AccountEditPage(id: String) -> Element {
             return;
         };
         status_message.set(None);
-        let mut config = match build_config_from_form(
+        let config = match build_config_from_form(
             &account_id_save,
             &display_name(),
             &email(),
@@ -902,6 +958,11 @@ pub fn AccountEditPage(id: String) -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             orig.created_at,
         ) {
             Ok(c) => c,
@@ -910,8 +971,6 @@ pub fn AccountEditPage(id: String) -> Element {
                 return;
             }
         };
-        // Preserve optional SMTP until PR8 UI exists.
-        config.smtp = orig.smtp.clone();
 
         if credentials_changed(&orig, &config) {
             // Connect-before-persist (reuse CommitNewAccount; core force-reconnects).
@@ -1004,6 +1063,22 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_remote_port: move |v| remote_port.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
+                    }
+
+                    AccountSmtpFields {
+                        id_prefix: "account-edit",
+                        smtp_host: smtp_host(),
+                        smtp_port: smtp_port(),
+                        smtp_username: smtp_username(),
+                        smtp_password: smtp_password(),
+                        smtp_use_tls: smtp_use_tls(),
+                        set_smtp_host: move |v| smtp_host.set(v),
+                        set_smtp_port: move |v| smtp_port.set(v),
+                        set_smtp_username: move |v| smtp_username.set(v),
+                        set_smtp_password: move |v| smtp_password.set(v),
+                        set_smtp_use_tls: move |v| smtp_use_tls.set(v),
+                        busy: busy,
+                        open: open_smtp(),
                     }
 
                     FormStatusBanner { message: status_message() }

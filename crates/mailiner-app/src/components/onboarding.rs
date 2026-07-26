@@ -6,16 +6,17 @@ use uuid::Uuid;
 
 use crate::AppBootstrapState;
 use crate::account::AccountId;
+use crate::account_config::DEFAULT_SMTP_PORT;
 use crate::account_config::dev_form_prefill;
 use crate::components::account_form::{
-    AccountConnectionFields, FormPhase, FormStatusBanner, StatusMessage, build_config_from_form,
-    kind_label,
+    AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
+    build_config_from_form, kind_label,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 
-/// Full first-run account form (identity, IMAP, proxy). No SMTP fields.
+/// Full first-run account form (identity, IMAP, proxy, optional SMTP).
 #[component]
 pub fn OnboardingForm() -> Element {
     let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
@@ -40,6 +41,11 @@ pub fn OnboardingForm() -> Element {
     let mut proxy_token = use_signal(|| prefill.proxy_token.clone());
     let mut remote_host = use_signal(|| prefill.remote_host.clone());
     let mut remote_port = use_signal(|| prefill.remote_port.clone());
+    let mut smtp_host = use_signal(String::new);
+    let mut smtp_port = use_signal(|| DEFAULT_SMTP_PORT.to_string());
+    let mut smtp_username = use_signal(String::new);
+    let mut smtp_password = use_signal(String::new);
+    let mut smtp_use_tls = use_signal(|| true);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -145,6 +151,11 @@ pub fn OnboardingForm() -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -187,6 +198,11 @@ pub fn OnboardingForm() -> Element {
             &proxy_token(),
             &remote_host(),
             &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -248,6 +264,21 @@ pub fn OnboardingForm() -> Element {
                         set_remote_port: move |v| remote_port.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountSmtpFields {
+                        id_prefix: "onboarding",
+                        smtp_host: smtp_host(),
+                        smtp_port: smtp_port(),
+                        smtp_username: smtp_username(),
+                        smtp_password: smtp_password(),
+                        smtp_use_tls: smtp_use_tls(),
+                        set_smtp_host: move |v| smtp_host.set(v),
+                        set_smtp_port: move |v| smtp_port.set(v),
+                        set_smtp_username: move |v| smtp_username.set(v),
+                        set_smtp_password: move |v| smtp_password.set(v),
+                        set_smtp_use_tls: move |v| smtp_use_tls.set(v),
+                        busy: busy,
                     }
 
                     FormStatusBanner { message: status_message() }

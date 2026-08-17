@@ -4,6 +4,7 @@ members = [
     "crates/mailiner-app",
     "crates/mailiner-core",
     "crates/mailiner-imap-connector",
+    "crates/mailiner-smtp-connector",
     "crates/mailiner-mime",
     "crates/mailiner-composer",
     "crates/mailiner-html"

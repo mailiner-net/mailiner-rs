@@ -1,0 +1,358 @@
+//! Short-lived SMTP submission over a caller-owned stream (plus rustls).
+
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use async_smtp::authentication::{Credentials, Mechanism};
+use async_smtp::extension::{ClientId, ServerInfo};
+use async_smtp::{Envelope, SendableEmail, SmtpClient, SmtpTransport};
+use mailiner_core::{AccountId, SendErrorKind, SubmitReceipt, SubmitRequest};
+use rustls::{ClientConfig, RootCertStore};
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::{client::TlsStream, TlsConnector};
+use tracing::info;
+
+/// SMTP connector errors (no secrets).
+#[derive(Debug, Error)]
+pub enum SmtpError {
+    #[error("{message}")]
+    Classified {
+        kind: SendErrorKind,
+        message: String,
+    },
+}
+
+impl SmtpError {
+    pub fn kind(&self) -> SendErrorKind {
+        match self {
+            Self::Classified { kind, .. } => *kind,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Classified { message, .. } => message,
+        }
+    }
+
+    fn classified(kind: SendErrorKind, message: impl Into<String>) -> Self {
+        Self::Classified {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+/// One-shot SMTP client. Password is never stored.
+pub struct SmtpConnector {
+    account_id: AccountId,
+    host: String,
+    #[allow(dead_code)]
+    port: u16,
+    username: String,
+    hello_name: String,
+}
+
+impl SmtpConnector {
+    pub fn new(
+        account_id: AccountId,
+        host: String,
+        port: u16,
+        username: String,
+        hello_name: String,
+    ) -> Self {
+        Self {
+            account_id,
+            host,
+            port,
+            username,
+            hello_name,
+        }
+    }
+
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Implicit TLS over the provided byte stream (SNI = `host`).
+    pub async fn wrap_tls<S>(&self, stream: S) -> Result<TlsStream<S>, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let root_store = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let tls = TlsConnector::from(Arc::new(config));
+        let server_name = ServerName::try_from(self.host.clone()).map_err(|e| {
+            SmtpError::classified(SendErrorKind::TlsOrSni, format!("Invalid SMTP server name: {e}"))
+        })?;
+        info!(host = %self.host, "SMTP implicit TLS");
+        tls.connect(server_name, stream).await.map_err(|e| {
+            SmtpError::classified(SendErrorKind::TlsOrSni, format!("SMTP TLS failed: {e}"))
+        })
+    }
+
+    /// EHLO + AUTH + MAIL/RCPT/DATA + QUIT on an already-secure stream.
+    pub async fn submit<S>(
+        &self,
+        stream: S,
+        password: &str,
+        request: &SubmitRequest,
+    ) -> Result<SubmitReceipt, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let mut transport = self.open_and_auth(stream, password).await?;
+        let envelope = build_envelope(request)?;
+        let email = SendableEmail::new(envelope, request.rfc822.clone());
+        let response = transport.send(email).await.map_err(map_smtp_send)?;
+        let reply = response.message.first().cloned();
+        let _ = transport.quit().await;
+        Ok(SubmitReceipt {
+            message_id: request.message_id.clone(),
+            server_reply: reply,
+        })
+    }
+
+    /// EHLO + AUTH + QUIT (no MAIL/DATA).
+    pub async fn test<S>(&self, stream: S, password: &str) -> Result<(), SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let mut transport = self.open_and_auth(stream, password).await?;
+        let _ = transport.quit().await;
+        Ok(())
+    }
+
+    async fn open_and_auth<S>(
+        &self,
+        stream: S,
+        password: &str,
+    ) -> Result<SmtpTransport<BufReader<S>>, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let hello = ClientId::new(self.hello_name.clone());
+        let client = SmtpClient::new()
+            .hello_name(hello.clone())
+            .smtp_utf8(true)
+            .pipelining(false);
+        let buffered = BufReader::new(stream);
+        let mut transport = SmtpTransport::new(client, buffered)
+            .await
+            .map_err(map_smtp_connect)?;
+
+        // Second EHLO so we can parse AUTH without relying on private server_info.
+        let ehlo = transport
+            .get_mut()
+            .ehlo(hello)
+            .await
+            .map_err(map_smtp_connect)?;
+        let info = ServerInfo::from_response(&ehlo).map_err(|e| {
+            SmtpError::classified(SendErrorKind::Internal, format!("EHLO parse failed: {e}"))
+        })?;
+
+        let mechanism = if info.supports_auth_mechanism(Mechanism::Plain) {
+            Mechanism::Plain
+        } else if info.supports_auth_mechanism(Mechanism::Login) {
+            Mechanism::Login
+        } else {
+            return Err(SmtpError::classified(
+                SendErrorKind::Auth,
+                "Server advertised no supported AUTH mechanism (PLAIN/LOGIN).",
+            ));
+        };
+
+        let creds = Credentials::new(self.username.clone(), password.to_string());
+        transport.auth(mechanism, &creds).await.map_err(map_smtp_auth)?;
+        Ok(transport)
+    }
+}
+
+fn build_envelope(request: &SubmitRequest) -> Result<Envelope, SmtpError> {
+    let from = async_smtp::EmailAddress::new(request.mail_from.clone()).map_err(|e| {
+        SmtpError::classified(SendErrorKind::Internal, format!("Invalid MAIL FROM: {e}"))
+    })?;
+    let mut to = Vec::new();
+    for rcpt in &request.rcpt_to {
+        to.push(async_smtp::EmailAddress::new(rcpt.clone()).map_err(|e| {
+            SmtpError::classified(SendErrorKind::Internal, format!("Invalid RCPT TO: {e}"))
+        })?);
+    }
+    Envelope::new(Some(from), to).map_err(|e| {
+        SmtpError::classified(SendErrorKind::Internal, format!("Invalid envelope: {e}"))
+    })
+}
+
+fn map_smtp_connect(err: async_smtp::error::Error) -> SmtpError {
+    SmtpError::classified(SendErrorKind::NetworkOrProxy, err.to_string())
+}
+
+fn map_smtp_auth(_err: async_smtp::error::Error) -> SmtpError {
+    SmtpError::classified(SendErrorKind::Auth, "SMTP authentication failed.")
+}
+
+fn map_smtp_send(err: async_smtp::error::Error) -> SmtpError {
+    let text = err.to_string();
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("552") || lower.contains("message too large") || lower.contains("size") {
+        return SmtpError::classified(SendErrorKind::MessageTooLarge, text);
+    }
+    if text.contains("550") || text.contains("553") || lower.contains("recipient") {
+        return SmtpError::classified(SendErrorKind::RecipientRejected, text);
+    }
+    // async-smtp Error Display may include the SMTP code.
+    if let Some(code) = extract_smtp_code(&text) {
+        if (400..500).contains(&code) {
+            return SmtpError::classified(SendErrorKind::Transient, text);
+        }
+        if (500..600).contains(&code) {
+            return SmtpError::classified(SendErrorKind::Permanent, text);
+        }
+    }
+    SmtpError::classified(SendErrorKind::Permanent, text)
+}
+
+fn extract_smtp_code(text: &str) -> Option<u16> {
+    text.split(|c: char| !c.is_ascii_digit())
+        .find(|s| s.len() == 3)
+        .and_then(|s| s.parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+
+    fn connector() -> SmtpConnector {
+        SmtpConnector::new(
+            AccountId::new("acc"),
+            "smtp.example.com".into(),
+            465,
+            "user@example.com".into(),
+            "example.com".into(),
+        )
+    }
+
+    fn request() -> SubmitRequest {
+        SubmitRequest {
+            mail_from: "me@example.com".into(),
+            rcpt_to: vec!["you@example.com".into()],
+            rfc822: b"From: me@example.com\r\nTo: you@example.com\r\nSubject: Hi\r\n\r\nHello\r\n"
+                .to_vec(),
+            message_id: "<id@example.com>".into(),
+        }
+    }
+
+    async fn write_all(w: &mut (impl AsyncWriteExt + Unpin), s: &str) {
+        w.write_all(s.as_bytes()).await.unwrap();
+        w.flush().await.unwrap();
+    }
+
+    async fn read_cmd(r: &mut (impl AsyncReadExt + Unpin), buf: &mut Vec<u8>) -> String {
+        buf.clear();
+        let mut tmp = [0u8; 512];
+        loop {
+            let n = r.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(2).any(|w| w == b"\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(buf).into_owned()
+    }
+
+    #[tokio::test]
+    async fn submit_plain_auth_and_data() {
+        let (client, mut server) = duplex(64 * 1024);
+        let conn = connector();
+        let req = request();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            // first EHLO (SmtpTransport::new)
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+            // second EHLO
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+            // AUTH
+            let auth = read_cmd(&mut server, &mut buf).await;
+            assert!(auth.to_ascii_uppercase().contains("AUTH"), "{auth}");
+            write_all(&mut server, "235 2.7.0 Authentication successful\r\n").await;
+            // MAIL
+            let mail = read_cmd(&mut server, &mut buf).await;
+            assert!(mail.to_ascii_uppercase().contains("MAIL FROM"), "{mail}");
+            write_all(&mut server, "250 2.1.0 OK\r\n").await;
+            // RCPT
+            let rcpt = read_cmd(&mut server, &mut buf).await;
+            assert!(rcpt.to_ascii_uppercase().contains("RCPT TO"), "{rcpt}");
+            write_all(&mut server, "250 2.1.5 OK\r\n").await;
+            // DATA
+            let data = read_cmd(&mut server, &mut buf).await;
+            assert!(data.to_ascii_uppercase().contains("DATA"), "{data}");
+            write_all(&mut server, "354 End data with <CR><LF>.<CR><LF>\r\n").await;
+            // message until .\r\n
+            let mut body = Vec::new();
+            let mut tmp = [0u8; 1024];
+            loop {
+                let n = server.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&tmp[..n]);
+                if body.windows(5).any(|w| w == b"\r\n.\r\n") {
+                    break;
+                }
+            }
+            write_all(&mut server, "250 2.0.0 OK queued\r\n").await;
+            let quit = read_cmd(&mut server, &mut buf).await;
+            assert!(quit.to_ascii_uppercase().contains("QUIT"), "{quit}");
+            write_all(&mut server, "221 2.0.0 Bye\r\n").await;
+        });
+
+        let receipt = conn.submit(client, "secret", &req).await.unwrap();
+        assert_eq!(receipt.message_id, "<id@example.com>");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_auth_mechanism_is_auth_error() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(&mut server, "250-smtp.example.com\r\n250 SIZE 10000\r\n").await;
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(&mut server, "250-smtp.example.com\r\n250 SIZE 10000\r\n").await;
+        });
+
+        let err = conn.test(client, "secret").await.unwrap_err();
+        assert_eq!(err.kind(), SendErrorKind::Auth);
+        let _ = server_task.await;
+    }
+}

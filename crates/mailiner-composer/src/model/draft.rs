@@ -67,7 +67,7 @@ pub struct DraftDocument {
     pub to: Vec<ComposerAddress>,
     /// Cc recipients.
     pub cc: Vec<ComposerAddress>,
-    /// Bcc recipients (included in v1 .eml export).
+    /// Bcc recipients (envelope only at send; omitted from RFC 5322 headers).
     pub bcc: Vec<ComposerAddress>,
     /// Subject line (may be empty).
     pub subject: String,

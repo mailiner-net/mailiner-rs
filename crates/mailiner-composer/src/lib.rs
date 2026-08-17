@@ -28,6 +28,7 @@ pub mod reply;
 pub mod sanitize;
 pub mod shell;
 
+pub use export::{PrepareSubmitError, PreparedMessage, SubmitEnvelope, prepare_submit};
 pub use identity::FromIdentity;
 pub use model::{
     caps, dedupe_addresses, emails_equal, exclude_self, flatten_addresses, html_to_plain,

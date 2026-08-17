@@ -85,6 +85,54 @@ pub fn qp_decode(raw: &[u8]) -> Result<Vec<u8>, DecodeError> {
     Ok(out)
 }
 
+/// Encode raw octets as quoted-printable (RFC 2045 §6.7).
+///
+/// Soft-wraps at 76 columns with `=\r\n`. Hard newlines in `raw` should already
+/// be CRLF; a lone `LF` is emitted as a hard CRLF so WASM `\n` bodies stay legal.
+pub fn qp_encode(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len() + raw.len() / 8);
+    let mut col = 0usize;
+    let mut i = 0;
+    while i < raw.len() {
+        let b = raw[i];
+        if b == b'\r' && i + 1 < raw.len() && raw[i + 1] == b'\n' {
+            out.extend_from_slice(b"\r\n");
+            col = 0;
+            i += 2;
+            continue;
+        }
+        if b == b'\n' {
+            out.extend_from_slice(b"\r\n");
+            col = 0;
+            i += 1;
+            continue;
+        }
+        if b == b'\r' {
+            out.extend_from_slice(b"\r\n");
+            col = 0;
+            i += 1;
+            continue;
+        }
+
+        let encode = b == b'=' || b < 32 || b > 126;
+        let token: Vec<u8> = if encode {
+            format!("={b:02X}").into_bytes()
+        } else {
+            vec![b]
+        };
+
+        // Leave room for a soft break (`=\r\n` is 3). Encoded tokens are 3 bytes.
+        if col + token.len() > 75 {
+            out.extend_from_slice(b"=\r\n");
+            col = 0;
+        }
+        out.extend_from_slice(&token);
+        col += token.len();
+        i += 1;
+    }
+    out
+}
+
 fn from_hex(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -138,5 +186,28 @@ mod tests {
     #[test]
     fn mid_line_spaces_kept() {
         assert_eq!(qp_decode(b"a b c").unwrap(), b"a b c");
+    }
+
+    #[test]
+    fn encode_roundtrip_ascii() {
+        let raw = b"hello world";
+        assert_eq!(qp_decode(&qp_encode(raw)).unwrap(), raw);
+    }
+
+    #[test]
+    fn encode_utf8_and_equals() {
+        let raw = "café = tea".as_bytes();
+        let enc = qp_encode(raw);
+        assert_eq!(qp_decode(&enc).unwrap(), raw);
+        assert!(enc.windows(3).any(|w| w == b"=C3"));
+        assert!(enc.windows(3).any(|w| w == b"=3D"));
+    }
+
+    #[test]
+    fn encode_soft_wraps() {
+        let raw = vec![b'a'; 200];
+        let enc = qp_encode(&raw);
+        assert!(enc.windows(3).any(|w| w == b"=\r\n"));
+        assert_eq!(qp_decode(&enc).unwrap(), raw);
     }
 }

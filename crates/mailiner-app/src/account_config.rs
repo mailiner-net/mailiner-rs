@@ -92,15 +92,106 @@ impl fmt::Debug for ImapSettings {
     }
 }
 
+/// How the SMTP session is wrapped in TLS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpTlsMode {
+    /// Implicit TLS (typically port 465). v1 send/test path.
+    #[default]
+    Implicit,
+    /// STARTTLS after a plaintext greeting (typically port 587). Persisted, not spoken in v1.
+    StartTls,
+    /// No TLS. Persisted, refused at send/test.
+    None,
+}
+
+impl SmtpTlsMode {
+    /// `true` when the session is expected to be encrypted (implicit or STARTTLS).
+    pub fn uses_tls(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+/// Map a v1 `use_tls` + port pair. `true` + 587 → [`SmtpTlsMode::StartTls`].
+pub fn tls_mode_from_legacy(use_tls: bool, port: u16) -> SmtpTlsMode {
+    match (use_tls, port) {
+        (false, _) => SmtpTlsMode::None,
+        (true, 587) => SmtpTlsMode::StartTls,
+        (true, _) => SmtpTlsMode::Implicit,
+    }
+}
+
+/// Nominal default port for a TLS mode (form auto-fill only).
+pub fn default_port_for_tls_mode(mode: SmtpTlsMode) -> u16 {
+    match mode {
+        SmtpTlsMode::Implicit => DEFAULT_SMTP_PORT,
+        SmtpTlsMode::StartTls => 587,
+        SmtpTlsMode::None => 25,
+    }
+}
+
 /// SMTP connection settings (optional until send is implemented).
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq)]
 pub struct SmtpSettings {
     pub host: String,
     pub port: u16,
     pub username: String,
     /// If None, reuse IMAP password at send time.
     pub password: Option<String>,
+    pub tls_mode: SmtpTlsMode,
+    /// Dual-written for schema-1 readers. Always derived from [`Self::tls_mode`].
     pub use_tls: bool,
+}
+
+impl SmtpSettings {
+    /// Construct settings and derive `use_tls` from `tls_mode`.
+    pub fn new(
+        host: String,
+        port: u16,
+        username: String,
+        password: Option<String>,
+        tls_mode: SmtpTlsMode,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            username,
+            password,
+            tls_mode,
+            use_tls: tls_mode.uses_tls(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SmtpSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            host: String,
+            port: u16,
+            username: String,
+            password: Option<String>,
+            /// Absent on v1 blobs. Must **not** use `#[serde(default)]` on the
+            /// public field — missing key must stay distinguishable.
+            tls_mode: Option<SmtpTlsMode>,
+            use_tls: Option<bool>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let tls_mode = match raw.tls_mode {
+            Some(mode) => mode,
+            None => tls_mode_from_legacy(raw.use_tls.unwrap_or(true), raw.port),
+        };
+        Ok(SmtpSettings::new(
+            raw.host,
+            raw.port,
+            raw.username,
+            raw.password,
+            tls_mode,
+        ))
+    }
 }
 
 impl fmt::Debug for SmtpSettings {
@@ -110,6 +201,7 @@ impl fmt::Debug for SmtpSettings {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "***"))
+            .field("tls_mode", &self.tls_mode)
             .field("use_tls", &self.use_tls)
             .finish()
     }
@@ -156,10 +248,23 @@ impl ProxySettings {
             .as_deref()
             .unwrap_or(imap.host.as_str())
             .trim();
+        let remote_port = self.remote_port.unwrap_or(imap.port);
+        self.websocket_url_for(remote_host, remote_port)
+    }
+
+    /// Build a proxy WebSocket URL for an arbitrary `remote=host:port`.
+    ///
+    /// SMTP must call this with `smtp.host` / `smtp.port` — never IMAP
+    /// `remote_host` / `remote_port` overrides.
+    pub fn websocket_url_for(
+        &self,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<String, AccountConfigError> {
+        let remote_host = remote_host.trim();
         if remote_host.is_empty() {
             return Err(AccountConfigError::EmptyHost);
         }
-        let remote_port = self.remote_port.unwrap_or(imap.port);
 
         let mut base = self.base_url.trim().to_string();
         if base.is_empty() {
@@ -309,13 +414,57 @@ pub fn optional_smtp_from_fields(
         Some(password_raw.to_string())
     };
 
-    Ok(Some(SmtpSettings {
-        host: host.to_string(),
+    let tls_mode = tls_mode_from_legacy(use_tls, port);
+    Ok(Some(SmtpSettings::new(
+        host.to_string(),
         port,
-        username: username.to_string(),
+        username.to_string(),
         password,
-        use_tls,
-    }))
+        tls_mode,
+    )))
+}
+
+/// SMTP LOGIN username: SMTP username if set, else IMAP username, else account email.
+pub fn smtp_username(config: &AccountConfig) -> String {
+    if let Some(smtp) = &config.smtp {
+        let u = smtp.username.trim();
+        if !u.is_empty() {
+            return smtp.username.clone();
+        }
+    }
+    let imap_user = config.imap.username.trim();
+    if !imap_user.is_empty() {
+        return config.imap.username.clone();
+    }
+    config.email.clone()
+}
+
+/// SMTP password: explicit SMTP secret if non-empty, else IMAP password.
+pub fn smtp_password(config: &AccountConfig) -> String {
+    if let Some(smtp) = &config.smtp {
+        if let Some(p) = &smtp.password {
+            if !p.is_empty() {
+                return p.clone();
+            }
+        }
+    }
+    config.imap.password.clone()
+}
+
+/// EHLO domain: account email domain, else `smtp.host`. Never `127.0.0.1`.
+pub fn ehlo_domain(config: &AccountConfig) -> String {
+    if let Some((_, domain)) = config.email.rsplit_once('@') {
+        let d = domain.trim().to_ascii_lowercase();
+        if !d.is_empty() && d.contains('.') && d != "localhost" && d != "127.0.0.1" {
+            return d;
+        }
+    }
+    config
+        .smtp
+        .as_ref()
+        .map(|s| s.host.clone())
+        .filter(|h| !h.trim().is_empty() && h != "127.0.0.1")
+        .unwrap_or_else(|| "localhost".into())
 }
 
 /// Optional onboarding form prefill (debug / `dev-defaults` only).
@@ -631,13 +780,13 @@ mod tests {
     #[test]
     fn debug_redacts_passwords_and_token() {
         let mut config = sample_config();
-        config.smtp = Some(SmtpSettings {
-            host: "smtp.example.com".into(),
-            port: 465,
-            username: "user@example.com".into(),
-            password: Some("smtp-secret".into()),
-            use_tls: true,
-        });
+        config.smtp = Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user@example.com".into(),
+            Some("smtp-secret".into()),
+            SmtpTlsMode::Implicit,
+        ));
         let dbg = format!("{config:?}");
         assert!(!dbg.contains("s3cret"), "imap password leaked: {dbg}");
         assert!(!dbg.contains("smtp-secret"), "smtp password leaked: {dbg}");
@@ -679,13 +828,13 @@ mod tests {
     #[test]
     fn serde_preserves_password_and_optional_smtp() {
         let mut config = sample_config();
-        config.smtp = Some(SmtpSettings {
-            host: "smtp.example.com".into(),
-            port: 465,
-            username: "user@example.com".into(),
-            password: None,
-            use_tls: true,
-        });
+        config.smtp = Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user@example.com".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        ));
         let json = serde_json::to_string(&config).unwrap();
         let back: AccountConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.imap.password, "s3cret");
@@ -720,13 +869,13 @@ mod tests {
         assert!(config.validate().is_ok());
 
         let mut config = sample_config();
-        config.smtp = Some(SmtpSettings {
-            host: "".into(),
-            port: 465,
-            username: "u".into(),
-            password: None,
-            use_tls: true,
-        });
+        config.smtp = Some(SmtpSettings::new(
+            "".into(),
+            465,
+            "u".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        ));
         assert_eq!(
             config.validate().unwrap_err(),
             AccountConfigError::EmptyHost
@@ -779,6 +928,7 @@ mod tests {
         assert_eq!(smtp.username, "u@ex.com");
         assert!(smtp.password.is_none());
         assert!(smtp.use_tls);
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::Implicit);
 
         let smtp = optional_smtp_from_fields("smtp.example.com", "587", "u", "pw", false)
             .unwrap()
@@ -786,6 +936,57 @@ mod tests {
         assert_eq!(smtp.port, 587);
         assert_eq!(smtp.password.as_deref(), Some("pw"));
         assert!(!smtp.use_tls);
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::None);
+
+        let smtp = optional_smtp_from_fields("smtp.example.com", "587", "", "", true)
+            .unwrap()
+            .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
+        assert!(smtp.use_tls);
+    }
+
+    #[test]
+    fn v1_json_587_use_tls_true_becomes_starttls() {
+        let json = r#"{
+            "host": "smtp.example.com",
+            "port": 587,
+            "username": "u",
+            "password": null,
+            "use_tls": true
+        }"#;
+        let smtp: SmtpSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
+        assert!(smtp.use_tls);
+        let out = serde_json::to_string(&smtp).unwrap();
+        assert!(out.contains("\"tls_mode\":\"start_tls\""));
+        assert!(out.contains("\"use_tls\":true"));
+    }
+
+    #[test]
+    fn websocket_url_for_smtp_ignores_imap_overrides() {
+        let mut proxy = sample_proxy();
+        proxy.remote_host = Some("imap-override.example".into());
+        proxy.remote_port = Some(993);
+        let url = proxy
+            .websocket_url_for("smtp.example.com", 465)
+            .unwrap();
+        assert!(url.contains("remote=smtp.example.com:465"), "{url}");
+        assert!(!url.contains("imap-override"));
+    }
+
+    #[test]
+    fn credential_helpers_fallback() {
+        let mut config = sample_config();
+        config.smtp = Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        ));
+        assert_eq!(smtp_username(&config), "user@example.com");
+        assert_eq!(smtp_password(&config), "s3cret");
+        assert_eq!(ehlo_domain(&config), "example.com");
     }
 
     #[test]

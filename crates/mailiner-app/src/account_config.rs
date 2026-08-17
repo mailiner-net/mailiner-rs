@@ -376,29 +376,49 @@ pub fn optional_smtp_from_fields(
     password: &str,
     use_tls: bool,
 ) -> Result<Option<SmtpSettings>, String> {
+    let port_trim = port.trim();
+    let parsed_port: u16 = if port_trim.is_empty() {
+        DEFAULT_SMTP_PORT
+    } else {
+        port_trim
+            .parse()
+            .unwrap_or(DEFAULT_SMTP_PORT)
+    };
+    let tls_mode = tls_mode_from_legacy(use_tls, parsed_port);
+    optional_smtp_from_tls_mode(host, port, username, password, tls_mode)
+}
+
+/// Like [`optional_smtp_from_fields`] but with an explicit TLS mode (settings `<select>`).
+pub fn optional_smtp_from_tls_mode(
+    host: &str,
+    port: &str,
+    username: &str,
+    password: &str,
+    tls_mode: SmtpTlsMode,
+) -> Result<Option<SmtpSettings>, String> {
     let host = host.trim();
     let username = username.trim();
-    // Do not trim passwords (spaces may be intentional).
     let password_raw = password;
     let port_trim = port.trim();
-
-    let port_is_default = port_trim.is_empty() || port_trim == DEFAULT_SMTP_PORT.to_string();
+    let default_port = default_port_for_tls_mode(tls_mode);
+    let port_is_default = port_trim.is_empty() || port_trim == default_port.to_string();
     let password_empty = password_raw.is_empty();
-    let section_empty =
-        host.is_empty() && username.is_empty() && password_empty && port_is_default && use_tls;
+    let section_empty = host.is_empty()
+        && username.is_empty()
+        && password_empty
+        && port_is_default
+        && tls_mode == SmtpTlsMode::Implicit;
 
     if section_empty {
         return Ok(None);
     }
-
     if host.is_empty() {
         return Err("SMTP host is required when other SMTP fields are filled. \
              Clear SMTP fields to skip outbound settings."
             .into());
     }
-
     let port: u16 = if port_trim.is_empty() {
-        DEFAULT_SMTP_PORT
+        default_port
     } else {
         port_trim
             .parse()
@@ -407,14 +427,11 @@ pub fn optional_smtp_from_fields(
     if port == 0 {
         return Err("SMTP port must be a number between 1 and 65535.".into());
     }
-
     let password = if password_empty {
         None
     } else {
         Some(password_raw.to_string())
     };
-
-    let tls_mode = tls_mode_from_legacy(use_tls, port);
     Ok(Some(SmtpSettings::new(
         host.to_string(),
         port,

@@ -15,6 +15,7 @@ use crate::components::account_form::{
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::send::{SendState, send_kind_label};
 
 /// Full first-run account form (identity, IMAP, proxy, optional SMTP).
 #[component]
@@ -29,6 +30,7 @@ pub fn OnboardingForm() -> Element {
     let account_id = use_hook(|| AccountId::new(Uuid::new_v4().to_string()));
     let account_id_for_effect = account_id.clone();
     let account_id_for_test = account_id.clone();
+    let account_id_for_smtp_test = account_id.clone();
     let account_id_for_save = account_id.clone();
 
     let mut display_name = use_signal(|| prefill.display_name.clone());
@@ -128,6 +130,29 @@ pub fn OnboardingForm() -> Element {
                     }
                 }
             }
+            FormPhase::TestingSmtp => {
+                if let Some(rid) = test_request_id() {
+                    let outcome = ctx.smtp_test_status.read().get(&rid).cloned();
+                    match outcome {
+                        Some(SendState::Sending { .. }) | Some(SendState::Idle) | None => {}
+                        Some(SendState::Sent { .. }) => {
+                            phase.set(FormPhase::Idle);
+                            ctx.smtp_test_status.write().remove(&rid);
+                            test_request_id.set(None);
+                            status_message.set(Some(StatusMessage::success(
+                                "SMTP sign-in succeeded.",
+                            )));
+                        }
+                        Some(SendState::Failed { kind, message, .. }) => {
+                            phase.set(FormPhase::Idle);
+                            ctx.smtp_test_status.write().remove(&rid);
+                            test_request_id.set(None);
+                            status_message
+                                .set(Some(StatusMessage::error(send_kind_label(kind), message)));
+                        }
+                    }
+                }
+            }
             FormPhase::Idle => {}
         }
     });
@@ -174,6 +199,49 @@ pub fn OnboardingForm() -> Element {
                 phase.set(FormPhase::Testing);
                 status_message.set(Some(StatusMessage::info("Testing connection…")));
                 core_tx.send(CoreEvent::TestConnection { request_id, config });
+            }
+            Err(msg) => {
+                status_message.set(Some(StatusMessage::error("Validation", &msg)));
+            }
+        }
+    };
+
+    let on_test_smtp = move |_| {
+        if !matches!(phase(), FormPhase::Idle) {
+            return;
+        }
+        match build_config_from_form(
+            &account_id_for_smtp_test,
+            &display_name(),
+            &email(),
+            &imap_host(),
+            &imap_port(),
+            &imap_username(),
+            &imap_password(),
+            &proxy_base_url(),
+            &proxy_token(),
+            &remote_host(),
+            &remote_port(),
+            &smtp_host(),
+            &smtp_port(),
+            &smtp_username(),
+            &smtp_password(),
+            smtp_use_tls(),
+            Utc::now(),
+        ) {
+            Ok(config) => {
+                if config.smtp.is_none() {
+                    status_message.set(Some(StatusMessage::error(
+                        "SMTP",
+                        "Fill in an SMTP host first.",
+                    )));
+                    return;
+                }
+                let request_id = AccountId::new(Uuid::new_v4().to_string());
+                test_request_id.set(Some(request_id.clone()));
+                phase.set(FormPhase::TestingSmtp);
+                status_message.set(Some(StatusMessage::info("Testing SMTP…")));
+                core_tx.send(CoreEvent::TestSmtpConnection { request_id, config });
             }
             Err(msg) => {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));
@@ -294,6 +362,17 @@ pub fn OnboardingForm() -> Element {
                                 "Testing…"
                             } else {
                                 "Test connection"
+                            }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy,
+                            onclick: on_test_smtp,
+                            if matches!(phase(), FormPhase::TestingSmtp) {
+                                "Testing SMTP…"
+                            } else {
+                                "Test SMTP"
                             }
                         }
                         button {

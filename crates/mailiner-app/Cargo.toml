@@ -29,6 +29,11 @@ async-trait = "0.1"
 percent-encoding = "2"
 
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
+mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
+mailiner-composer = { path = "../mailiner-composer" }
+futures-channel = "0.3"
+futures-executor = "0.3"
+wasm-bindgen-futures = "0.4"
 send_wrapper = "0.6"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
@@ -60,3 +65,6 @@ mobile = ["dioxus/mobile"]
 # Prefill onboarding form fields in release builds (also on under debug_assertions).
 # Does not auto-connect or write the account store.
 dev-defaults = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

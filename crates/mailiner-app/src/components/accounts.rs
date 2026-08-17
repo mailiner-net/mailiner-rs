@@ -453,7 +453,7 @@ pub fn AccountNewPage() -> Element {
                     }
                 }
             }
-            FormPhase::Idle => {}
+            FormPhase::Idle | FormPhase::TestingSmtp => {}
         }
     });
 
@@ -836,7 +836,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     }
                 }
             }
-            FormPhase::Saving | FormPhase::Idle => {}
+            FormPhase::Saving | FormPhase::Idle | FormPhase::TestingSmtp => {}
         }
     });
 

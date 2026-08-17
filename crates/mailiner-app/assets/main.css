@@ -1034,3 +1034,118 @@ a.accounts-link-btn {
     background: var(--item-hover-background);
 }
 
+.compose-fab {
+    position: fixed;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 20;
+    padding: 0.7rem 1.1rem;
+    border: none;
+    border-radius: 999px;
+    background: var(--item-accent, #2563eb);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.compose-fab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.compose-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.compose-dialog {
+    background: var(--surface, #fff);
+    color: inherit;
+    width: min(36rem, 94vw);
+    padding: 1.25rem;
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+}
+
+.compose-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0.6rem 0;
+}
+
+.compose-field input,
+.compose-field textarea {
+    padding: 0.4rem 0.5rem;
+}
+
+.compose-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.compose-error {
+    color: #b91c1c;
+}
+
+.outbox-panel {
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border, #ddd);
+}
+
+.outbox-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.outbox-item {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border, #eee);
+}
+
+.outbox-item-main {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+}
+
+.outbox-state {
+    font-size: 0.85rem;
+    color: #555;
+}
+
+.outbox-error {
+    margin: 0.2rem 0;
+    font-size: 0.85rem;
+    color: #b91c1c;
+}
+
+.outbox-actions {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.toast {
+    position: fixed;
+    bottom: 5rem;
+    right: 1.5rem;
+    z-index: 40;
+    background: #111;
+    color: #fff;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+

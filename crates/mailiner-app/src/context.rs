@@ -8,6 +8,8 @@ use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
 use crate::download::DownloadStatus;
+use crate::outbox_store::OutboxListEntry;
+use crate::send::SendState;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 
@@ -54,4 +56,12 @@ pub struct AppContext {
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
     /// Per-account connection lifecycle (no secrets).
     pub connection_states: Signal<HashMap<AccountId, ConnectionState>>,
+    /// Composer send progress (at most one globally).
+    pub send_status: Signal<Option<SendState>>,
+    /// Form Test SMTP, keyed by ephemeral request id.
+    pub smtp_test_status: Signal<HashMap<AccountId, SendState>>,
+    /// Outbox list (no rfc822 / no passwords).
+    pub outbox: Signal<Vec<OutboxListEntry>>,
+    /// Ephemeral toast (e.g. “Sent”).
+    pub toast: Signal<Option<String>>,
 }

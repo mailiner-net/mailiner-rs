@@ -13,6 +13,7 @@ use crate::connection::ConnectErrorKind;
 pub enum FormPhase {
     Idle,
     Testing,
+    TestingSmtp,
     Saving,
 }
 
@@ -428,6 +429,8 @@ pub fn AccountSmtpFields(
     #[props(default)] open: bool,
 ) -> Element {
     let port_placeholder = DEFAULT_SMTP_PORT.to_string();
+    let warn_starttls = smtp_use_tls && smtp_port.trim() == "587";
+    let warn_plain = !smtp_use_tls && !smtp_host.trim().is_empty();
     rsx! {
         fieldset {
             class: "onboarding-section",
@@ -435,7 +438,8 @@ pub fn AccountSmtpFields(
             p {
                 class: "onboarding-notice",
                 role: "note",
-                "Sending is not implemented yet. These settings are saved for future use."
+                "Used when you click Send. Leave password empty to reuse the IMAP password. \
+                 v1 submits with implicit TLS (port 465)."
             }
             details {
                 class: "onboarding-advanced",
@@ -490,7 +494,22 @@ pub fn AccountSmtpFields(
                             disabled: busy,
                             onchange: move |e| set_smtp_use_tls.call(e.checked()),
                         }
-                        " Use TLS"
+                        " Use TLS (implicit TLS on port 465)"
+                    }
+                }
+                if warn_starttls {
+                    p {
+                        class: "onboarding-notice",
+                        role: "alert",
+                        "This account is set to STARTTLS (port 587), which cannot send or Test yet. \
+                         Switch to implicit TLS / port 465."
+                    }
+                }
+                if warn_plain {
+                    p {
+                        class: "onboarding-notice",
+                        role: "alert",
+                        "Plaintext SMTP cannot send or Test yet. Enable TLS and use port 465."
                     }
                 }
             }

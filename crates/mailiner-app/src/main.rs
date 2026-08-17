@@ -8,10 +8,11 @@ use mailiner_core::ids::AccountId;
 use crate::account_store::{
     AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
 };
+use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
-    AccountEditPage, AccountNewPage, AccountsSettingsPage, ConnectionStatusBanner, EmailNavigation,
-    MessageList, MessageView, OnboardingForm,
+    AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
+    EmailNavigation, MessageList, MessageView, OnboardingForm, OutboxPanel, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -25,6 +26,9 @@ mod context;
 mod core_event;
 mod download;
 mod formatter;
+mod outbox_store;
+mod send;
+mod smtp_session;
 mod mailbox;
 mod message;
 mod message_loader;
@@ -111,6 +115,7 @@ fn main() {
 /// Result of opening the store and applying the bootstrap resolution algorithm.
 struct BootstrapOutcome {
     store: Rc<dyn AccountStore>,
+    outbox: Rc<dyn OutboxStore>,
     initial_bootstrap: InitialBootstrap,
 }
 
@@ -125,6 +130,14 @@ async fn run_bootstrap(
     mut bootstrap: Signal<AppBootstrapState>,
     mut store_ctx: Signal<Option<AccountStoreContext>>,
 ) -> BootstrapOutcome {
+    let outbox: Rc<dyn OutboxStore> = match BrowserOutboxStore::open().await {
+        Ok(s) => Rc::new(s),
+        Err(e) => {
+            warn!("BrowserOutboxStore open failed ({e}); using in-memory outbox");
+            Rc::new(InMemoryOutboxStore::new())
+        }
+    };
+
     let store: Rc<dyn AccountStore> = match BrowserAccountStore::open().await {
         Ok(s) => Rc::new(s),
         Err(e) => {
@@ -140,6 +153,7 @@ async fn run_bootstrap(
             bootstrap.set(AppBootstrapState::StoreError { message });
             return BootstrapOutcome {
                 store: Rc::new(InMemoryAccountStore::new()),
+                outbox,
                 initial_bootstrap: InitialBootstrap::Skip,
             };
         }
@@ -155,6 +169,7 @@ async fn run_bootstrap(
             bootstrap.set(AppBootstrapState::StoreError { message });
             return BootstrapOutcome {
                 store,
+                outbox,
                 initial_bootstrap: InitialBootstrap::Skip,
             };
         }
@@ -167,6 +182,7 @@ async fn run_bootstrap(
         bootstrap.set(AppBootstrapState::NeedsOnboarding);
         return BootstrapOutcome {
             store,
+            outbox,
             initial_bootstrap: InitialBootstrap::Run { active: None },
         };
     }
@@ -189,6 +205,7 @@ async fn run_bootstrap(
 
     BootstrapOutcome {
         store,
+        outbox,
         initial_bootstrap: InitialBootstrap::Run { active },
     }
 }
@@ -249,6 +266,10 @@ fn App() -> Element {
     let selected_message = use_signal(|| None);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
     let download_status = use_signal(HashMap::new);
+    let send_status = use_signal(|| None);
+    let smtp_test_status = use_signal(HashMap::new);
+    let outbox = use_signal(Vec::new);
+    let toast = use_signal(|| None);
 
     let ctx = AppContext {
         accounts,
@@ -262,6 +283,10 @@ fn App() -> Element {
         message_view,
         download_status,
         connection_states,
+        send_status,
+        smtp_test_status,
+        outbox,
+        toast,
     };
     let ctx_clone = ctx.clone();
 
@@ -277,7 +302,17 @@ fn App() -> Element {
         let store_ctx = store_ctx;
         async move {
             let outcome = run_bootstrap(&mut ctx, bootstrap_state, store_ctx).await;
-            core_loop(core_rx, ctx, outcome.store, outcome.initial_bootstrap).await;
+            let (smtp_tx, smtp_rx) = futures_channel::mpsc::unbounded();
+            core_loop(
+                core_rx,
+                smtp_rx,
+                smtp_tx,
+                ctx,
+                outcome.store,
+                outcome.outbox,
+                outcome.initial_bootstrap,
+            )
+            .await;
         }
     });
 
@@ -377,7 +412,12 @@ fn MainView() -> Element {
                 MessageList {}
 
                 MessageView {}
+
+                OutboxPanel {}
             }
+
+            ComposeOverlay {}
+            ToastHost {}
         }
     }
 }

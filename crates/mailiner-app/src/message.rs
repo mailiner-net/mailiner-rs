@@ -33,6 +33,8 @@ pub struct Message {
     pub bcc: Option<String>,
     pub date: DateTime<Utc>,
     pub has_attachments: bool,
+    /// Original IMAP envelope for reply/forward prefill.
+    pub envelope: Envelope,
 }
 
 impl Message {
@@ -73,7 +75,7 @@ impl From<Envelope> for Message {
     fn from(envelope: Envelope) -> Self {
         Self {
             id: MessageId::from(envelope.id.to_string()),
-            subject: envelope.subject.unwrap_or_default(),
+            subject: envelope.subject.clone().unwrap_or_default(),
             from: envelope
                 .from
                 .as_ref()
@@ -88,6 +90,7 @@ impl From<Envelope> for Message {
             bcc: envelope.bcc.as_ref().map(EmailAddress::to_string),
             date: envelope.date,
             has_attachments: envelope.has_attachments,
+            envelope,
         }
     }
 }

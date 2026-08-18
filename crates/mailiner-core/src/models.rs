@@ -64,7 +64,7 @@ pub struct Folder {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailAddr {
     pub name: Option<String>,
     pub email: Option<String>,
@@ -81,7 +81,7 @@ impl ToString for EmailAddr {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Group {
     pub name: Option<String>,
     pub members: Vec<EmailAddr>,
@@ -109,7 +109,7 @@ impl ToString for Group {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EmailAddress {
     List(Vec<EmailAddr>),
     Group(Vec<Group>),
@@ -124,7 +124,7 @@ impl ToString for EmailAddress {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub id: MessageId,
     pub account_id: AccountId,

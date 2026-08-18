@@ -1,8 +1,18 @@
 //! Composer send / Test SMTP UI state (no secrets).
 
+use mailiner_composer::DraftDocument;
 use mailiner_core::submit::SendErrorKind;
 
 use crate::account::AccountId;
+
+/// Open compose session (owned by [`crate::context::AppContext::compose_draft`]).
+#[derive(Clone, Debug)]
+pub struct ComposeSession {
+    /// Dialog title (`New message`, `Reply`, `Forward`).
+    pub title: String,
+    /// Prefill document.
+    pub draft: DraftDocument,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendPhase {

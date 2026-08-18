@@ -3,10 +3,14 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
+use mailiner_composer::ComposeIntent;
+
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
 use crate::formatter::{FormatOptions, MessageFormatter};
 use crate::message::{Message, MessageId};
+
+use super::compose::open_reply_or_forward;
 
 /// Format a UTC date for the message header.
 fn format_date(dt: &DateTime<Utc>) -> String {
@@ -116,7 +120,6 @@ pub fn MessageView() -> Element {
         | MessageViewState::Error { message_id, .. } => find_envelope(&ctx, message_id),
         MessageViewState::Empty => None,
     };
-
     rsx! {
         section {
             id: "messageview",
@@ -181,18 +184,80 @@ pub fn MessageView() -> Element {
     }
 }
 
+fn ready_loaded(
+    ctx: &AppContext,
+    message_id: &MessageId,
+) -> Option<Arc<mailiner_core::models::LoadedMessage>> {
+    match &*ctx.message_view.read() {
+        MessageViewState::Ready {
+            message_id: loaded_id,
+            loaded,
+        } if loaded_id == message_id => Some(loaded.clone()),
+        _ => None,
+    }
+}
+
 #[component]
 fn MessageHeader(message: Arc<Message>) -> Element {
+    let ctx = use_context::<AppContext>();
     let date = format_date(&message.date);
+    let actions_ready = ready_loaded(&ctx, &message.id).is_some();
+
     rsx! {
         header {
             class: "message-view-header",
-            h2 {
-                class: "message-view-subject",
-                if message.subject.trim().is_empty() {
-                    span { class: "message-subject-empty", "(no subject)" }
-                } else {
-                    "{message.subject}"
+            div {
+                class: "message-view-headline",
+                h2 {
+                    class: "message-view-subject",
+                    if message.subject.trim().is_empty() {
+                        span { class: "message-subject-empty", "(no subject)" }
+                    } else {
+                        "{message.subject}"
+                    }
+                }
+                div {
+                    class: "message-view-actions",
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: !actions_ready,
+                        title: "Reply",
+                        onclick: {
+                            let message = message.clone();
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                if let Some(loaded) = ready_loaded(&ctx, &message.id) {
+                                    open_reply_or_forward(
+                                        &mut ctx,
+                                        ComposeIntent::Reply,
+                                        &message.envelope,
+                                        &loaded,
+                                    );
+                                }
+                            }
+                        },
+                        "Reply"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: !actions_ready,
+                        title: "Forward",
+                        onclick: {
+                            let message = message.clone();
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                if let Some(loaded) = ready_loaded(&ctx, &message.id) {
+                                    open_reply_or_forward(
+                                        &mut ctx,
+                                        ComposeIntent::Forward,
+                                        &message.envelope,
+                                        &loaded,
+                                    );
+                                }
+                            }
+                        },
+                        "Forward"
+                    }
                 }
             }
             div {

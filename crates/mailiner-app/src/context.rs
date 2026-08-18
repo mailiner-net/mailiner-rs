@@ -9,7 +9,7 @@ use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
 use crate::download::DownloadStatus;
 use crate::outbox_store::OutboxListEntry;
-use crate::send::SendState;
+use crate::send::{ComposeSession, SendState};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 
@@ -64,4 +64,6 @@ pub struct AppContext {
     pub outbox: Signal<Vec<OutboxListEntry>>,
     /// Ephemeral toast (e.g. “Sent”).
     pub toast: Signal<Option<String>>,
+    /// Open compose session (`None` = closed).
+    pub compose_draft: Signal<Option<ComposeSession>>,
 }

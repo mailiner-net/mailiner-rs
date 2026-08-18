@@ -270,6 +270,7 @@ fn App() -> Element {
     let smtp_test_status = use_signal(HashMap::new);
     let outbox = use_signal(Vec::new);
     let toast = use_signal(|| None);
+    let compose_draft = use_signal(|| None);
 
     let ctx = AppContext {
         accounts,
@@ -287,6 +288,7 @@ fn App() -> Element {
         smtp_test_status,
         outbox,
         toast,
+        compose_draft,
     };
     let ctx_clone = ctx.clone();
 

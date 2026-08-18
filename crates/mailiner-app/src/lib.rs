@@ -5,6 +5,7 @@ pub mod account_store;
 pub mod download;
 pub mod outbox_store;
 pub mod send;
+pub mod mailbox;
 pub mod formatter;
 pub mod message_loader;
 

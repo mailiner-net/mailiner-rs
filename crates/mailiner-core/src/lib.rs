@@ -14,6 +14,7 @@ pub use error::{MailinerError, Result};
 pub use ids::{AccountId, FolderId, MessageId, MessagePartId};
 pub use models::{
     Account, AccountMetadata, EmailAddr, EmailAddress, Envelope, Folder, FolderMetadata, Group,
+    MailboxRole,
     LoadedMessage, MessageContent, MessagePart, PartChunk, PartKind, TransferEncoding,
 };
 pub use storage::{InMemoryStorage, Storage};

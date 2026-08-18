@@ -2,13 +2,13 @@ mod bodystructure;
 mod section_path;
 mod sent;
 
-pub use sent::{ListedMailbox, find_sent_mailbox};
+pub use sent::{ListedMailbox, find_sent_mailbox, role_from_name, special_use_from_attrs};
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_imap::types::{Flag, NameAttribute};
+use async_imap::types::Flag;
 use async_imap::{Client, Session};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,7 +24,8 @@ use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
-    FolderId, Group, MailinerError, MessageId, PartChunk, PartStream, Result as MailinerResult,
+    FolderId, Group, MailboxRole, MailinerError, MessageId, PartChunk, PartStream,
+    Result as MailinerResult,
 };
 use std::collections::HashMap;
 
@@ -140,20 +141,12 @@ where
         while let Some(result) = list.next().await {
             let mailbox =
                 result.map_err(|e| ImapError::Imap(format!("Failed to read LIST row: {e}")))?;
-            let mut no_select = false;
-            let mut special_use_sent = false;
-            for attr in mailbox.attributes() {
-                match attr {
-                    NameAttribute::NoSelect => no_select = true,
-                    NameAttribute::Sent => special_use_sent = true,
-                    _ => {}
-                }
-            }
+            let (no_select, special_use) = special_use_from_attrs(mailbox.attributes());
             mailboxes.push(ListedMailbox {
                 name: mailbox.name().to_string(),
                 delimiter: mailbox.delimiter().map(str::to_string),
                 no_select,
-                special_use_sent,
+                special_use,
             });
         }
         Ok(mailboxes)
@@ -394,6 +387,12 @@ where
     }
 
     async fn list_folders(&self, account_id: &AccountId) -> MailinerResult<Vec<Folder>> {
+        let listed = self.list_all_mailboxes().await.unwrap_or_default();
+        let roles: std::collections::HashMap<String, MailboxRole> = listed
+            .iter()
+            .map(|m| (m.name.clone(), m.role()))
+            .collect();
+
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
             let mut mailboxes = Vec::new();
@@ -406,21 +405,24 @@ where
                 let mailbox =
                     result.map_err(|e| ImapError::Imap(format!("Failed to get mailbox: {}", e)))?;
                 let full_name = mailbox.name().to_string();
-                let name_chunked = full_name
-                    .split(mailbox.delimiter().unwrap_or("/"))
-                    .collect::<Vec<&str>>();
+                let delim = mailbox.delimiter().unwrap_or("/");
+                let name_chunked = full_name.split(delim).collect::<Vec<&str>>();
+                let role = roles
+                    .get(&full_name)
+                    .copied()
+                    .unwrap_or_else(|| role_from_name(&full_name, Some(delim)));
                 mailboxes.push(Folder {
                     id: FolderId::new(mailbox.name().to_string()),
                     account_id: account_id.clone(),
                     name: name_chunked.last().unwrap_or(&mailbox.name()).to_string(),
                     parent_id: if name_chunked.len() > 1 {
                         Some(FolderId::new(
-                            name_chunked[..name_chunked.len() - 1]
-                                .join(mailbox.delimiter().unwrap_or("/")),
+                            name_chunked[..name_chunked.len() - 1].join(delim),
                         ))
                     } else {
                         None
                     },
+                    role,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 });
@@ -452,10 +454,11 @@ where
                 .map_err(|e| ImapError::Imap(format!("Failed to create folder: {}", e)))?;
 
             Ok(Folder {
-                id: FolderId::new(full_name),
+                id: FolderId::new(full_name.clone()),
                 account_id: account_id.clone(),
                 name: name.to_string(),
                 parent_id: parent_id.cloned(),
+                role: role_from_name(&full_name, Some("/")),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             })

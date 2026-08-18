@@ -11,7 +11,7 @@ use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{Folder, FolderId, MessageId as CoreMessageId};
+use mailiner_core::{FolderId, MessageId as CoreMessageId};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -30,7 +30,7 @@ use crate::connection::{
 };
 use crate::context::{AppContext, MessageViewState};
 use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
-use crate::mailbox::{MailboxId, MailboxNode};
+use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
 
@@ -718,7 +718,7 @@ async fn list_folders_soft(
 
     match connector.list_folders(account_id).await {
         Ok(mboxes) => {
-            let (root_ids, mboxes) = build_mailbox_tree(mboxes);
+            let (root_ids, mboxes) = crate::mailbox::build_mailbox_tree(mboxes);
             ctx.mailbox_nodes.set(mboxes);
             ctx.mailbox_roots.set(root_ids);
         }
@@ -1038,48 +1038,6 @@ async fn handle_download_attachment(
                 .insert(section, DownloadStatus::Error(e));
         }
     }
-}
-
-fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<MailboxId, MailboxNode>) {
-    let mut root_ids = Vec::new();
-    let mut mboxes = HashMap::<MailboxId, MailboxNode>::new();
-
-    for folder in folders {
-        let mailbox_id: MailboxId = folder.id.clone().into();
-        mboxes
-            .entry(mailbox_id.clone())
-            .and_modify(|node| {
-                node.parent = folder.parent_id.as_ref().map(|id| id.clone().into());
-                node.name = folder.name.clone();
-            })
-            .or_insert(MailboxNode {
-                id: mailbox_id.clone(),
-                name: folder.name.clone(),
-                parent: folder.parent_id.as_ref().map(|id| id.clone().into()),
-                children: vec![],
-                unread_count: 0,
-                total_count: 0,
-            });
-        mboxes.insert(mailbox_id.clone(), folder.clone().into());
-        if let Some(parent_id) = folder.parent_id.clone() {
-            mboxes
-                .entry(parent_id.clone().into())
-                .or_insert(MailboxNode {
-                    id: parent_id.clone().into(),
-                    name: parent_id.to_string(),
-                    parent: None,
-                    children: vec![],
-                    unread_count: 0,
-                    total_count: 0,
-                })
-                .children
-                .push(mailbox_id);
-        } else {
-            root_ids.push(mailbox_id);
-        }
-    }
-
-    (root_ids, mboxes)
 }
 
 async fn refresh_outbox_signal(outbox: &dyn OutboxStore, ctx: &mut AppContext) {

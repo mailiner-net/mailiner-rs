@@ -230,6 +230,7 @@ where
                 account_id: account_id.clone(),
                 name: "Inbox".to_string(),
                 parent_id: None,
+                role: crate::MailboxRole::Inbox,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },
@@ -238,6 +239,7 @@ where
                 account_id: account_id.clone(),
                 name: "Sent".to_string(),
                 parent_id: None,
+                role: crate::MailboxRole::Sent,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },
@@ -255,6 +257,7 @@ where
             account_id: account_id.clone(),
             name: name.to_string(),
             parent_id: parent_id.cloned(),
+            role: crate::MailboxRole::Other,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })

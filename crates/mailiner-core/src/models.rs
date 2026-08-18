@@ -13,12 +13,41 @@ pub struct Account {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Well-known mailbox role (RFC 6154 special-use, else name heuristics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MailboxRole {
+    Inbox,
+    Drafts,
+    Sent,
+    Outbox,
+    Trash,
+    #[default]
+    Other,
+}
+
+impl MailboxRole {
+    /// Inbox first, then Drafts, Sent, Outbox, Trash, then everything else.
+    pub fn sort_rank(self) -> u8 {
+        match self {
+            Self::Inbox => 0,
+            Self::Drafts => 1,
+            Self::Sent => 2,
+            Self::Outbox => 3,
+            Self::Trash => 4,
+            Self::Other => 5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     pub id: FolderId,
     pub account_id: AccountId,
     pub name: String,
     pub parent_id: Option<FolderId>,
+    #[serde(default)]
+    pub role: MailboxRole,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -1,11 +1,14 @@
 mod bodystructure;
 mod section_path;
+mod sent;
+
+pub use sent::{ListedMailbox, find_sent_mailbox};
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_imap::types::Flag;
+use async_imap::types::{Flag, NameAttribute};
 use async_imap::{Client, Session};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -103,6 +106,57 @@ where
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// LIST all mailboxes and pick Sent (`\Sent`, else name heuristics).
+    pub async fn find_sent_folder(&self) -> Result<Option<String>, ImapError> {
+        let listed = self.list_all_mailboxes().await?;
+        Ok(find_sent_mailbox(&listed).map(str::to_string))
+    }
+
+    /// APPEND `rfc822` to `mailbox` with `\Seen`. Does not change the selected folder.
+    pub async fn append_rfc822_seen(&self, mailbox: &str, rfc822: &[u8]) -> Result<(), ImapError> {
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated);
+        };
+        session
+            .append(mailbox, Some(r"(\Seen)"), None, rfc822)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to APPEND to {mailbox}: {e}")))?;
+        Ok(())
+    }
+
+    async fn list_all_mailboxes(&self) -> Result<Vec<ListedMailbox>, ImapError> {
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated);
+        };
+        let mut list = session
+            .list(Some(""), Some("*"))
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to LIST folders: {e}")))?;
+        let mut mailboxes = Vec::new();
+        while let Some(result) = list.next().await {
+            let mailbox =
+                result.map_err(|e| ImapError::Imap(format!("Failed to read LIST row: {e}")))?;
+            let mut no_select = false;
+            let mut special_use_sent = false;
+            for attr in mailbox.attributes() {
+                match attr {
+                    NameAttribute::NoSelect => no_select = true,
+                    NameAttribute::Sent => special_use_sent = true,
+                    _ => {}
+                }
+            }
+            mailboxes.push(ListedMailbox {
+                name: mailbox.name().to_string(),
+                delimiter: mailbox.delimiter().map(str::to_string),
+                no_select,
+                special_use_sent,
+            });
+        }
+        Ok(mailboxes)
     }
 
     async fn ensure_connected(&self, stream: S) -> Result<(), ImapError> {

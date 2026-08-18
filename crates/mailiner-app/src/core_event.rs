@@ -110,6 +110,11 @@ pub enum CoreEvent {
     DeleteOutboxItem {
         id: crate::outbox_store::OutboxId,
     },
+    /// Best-effort IMAP APPEND to Sent after SMTP success. Failure does not unsend.
+    ArchiveSent {
+        account_id: AccountId,
+        rfc822: Vec<u8>,
+    },
 }
 
 /// Cold-start prelude for [`core_loop`]: skip connect, or run bootstrap with an active id.
@@ -327,6 +332,9 @@ pub async fn core_loop(
                 }
                 let _ = outbox.delete(&id).await;
                 refresh_outbox_signal(outbox.as_ref(), &mut ctx).await;
+            }
+            CoreEvent::ArchiveSent { account_id, rfc822 } => {
+                handle_archive_sent(&manager, &mut ctx, account_id, rfc822).await;
             }
         }
     }
@@ -1400,14 +1408,28 @@ async fn handle_smtp_finished(
     }
     match outcome {
         SmtpOutcome::Send(Ok(receipt)) => {
+            let rfc822 = if let Some(id) = &flight.outbox_id {
+                match outbox.get(id).await {
+                    Ok(Some(item)) => item.rfc822().ok(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             if let Some(id) = flight.outbox_id {
                 let _ = outbox.delete(&id).await;
             }
             ctx.send_status.set(Some(SendState::Sent {
-                account_id: flight.account_id,
+                account_id: flight.account_id.clone(),
             }));
             ctx.toast.set(Some("Sent".into()));
             let _ = receipt;
+            if let Some(rfc822) = rfc822 {
+                let _ = smtp_tx.unbounded_send(CoreEvent::ArchiveSent {
+                    account_id: flight.account_id,
+                    rfc822,
+                });
+            }
         }
         SmtpOutcome::Send(Err(err)) => {
             if let Some(id) = &flight.outbox_id {
@@ -1455,6 +1477,49 @@ async fn handle_smtp_finished(
         smtp_generation,
     )
     .await;
+}
+
+const ARCHIVE_SENT_WARN: &str = "Could not save a copy in Sent.";
+
+async fn handle_archive_sent(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    rfc822: Vec<u8>,
+) {
+    let Some(connector) = manager.get(&account_id) else {
+        warn!("ArchiveSent: no IMAP connector for {account_id}");
+        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        return;
+    };
+    let sent = match connector.find_sent_folder().await {
+        Ok(Some(name)) => name,
+        Ok(None) => {
+            warn!("ArchiveSent: no Sent mailbox for {account_id}");
+            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            return;
+        }
+        Err(e) => {
+            warn!("ArchiveSent: LIST failed for {account_id}: {e}");
+            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            return;
+        }
+    };
+    if let Err(e) = connector.append_rfc822_seen(&sent, &rfc822).await {
+        warn!("ArchiveSent: APPEND failed for {account_id} → {sent}: {e}");
+        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        return;
+    }
+    info!("ArchiveSent: appended to {sent} for {account_id}");
+    let viewing_account = ctx.selected_account.read().as_ref() == Some(&account_id);
+    let viewing_sent = ctx
+        .selected_mailbox
+        .read()
+        .as_ref()
+        .is_some_and(|id| id.to_string() == sent);
+    if viewing_account && viewing_sent {
+        handle_select_mailbox(manager, ctx, MailboxId::from(sent)).await;
+    }
 }
 
 async fn handle_retry_outbox(

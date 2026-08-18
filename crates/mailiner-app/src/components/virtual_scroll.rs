@@ -261,9 +261,7 @@ where
 {
     // Measured content-box height from ResizeObserver; 0 until first observation.
     let mut measured_height = use_signal(|| 0.0f64);
-    let mut viewport_info = use_signal(|| {
-        ViewportInfo::calculate(0.0, 0.0, props.item_height, 0)
-    });
+    let mut viewport_info = use_signal(|| ViewportInfo::calculate(0.0, 0.0, props.item_height, 0));
     // Non-reactive bookkeeping — must not be a Signal (writing Signals inside
     // effects that also read them re-triggers the effect forever and freezes wasm).
     let pending_ranges = use_hook(|| Rc::new(RefCell::new(Vec::<Range<usize>>::new())));
@@ -293,8 +291,7 @@ where
             } else {
                 viewport_info.peek().scroll_top
             };
-            let new_vp =
-                ViewportInfo::calculate(scroll_top, height, props.item_height, total);
+            let new_vp = ViewportInfo::calculate(scroll_top, height, props.item_height, total);
             if new_vp != *viewport_info.peek() {
                 viewport_info.set(new_vp);
             }
@@ -326,12 +323,7 @@ where
                 if let Ok(offset) = element.get_scroll_offset().await {
                     let total = props.items.peek().total_count();
                     let height = *measured_height.peek();
-                    let vp = ViewportInfo::calculate(
-                        offset.y,
-                        height,
-                        props.item_height,
-                        total,
-                    );
+                    let vp = ViewportInfo::calculate(offset.y, height, props.item_height, total);
                     viewport_info.set(vp);
                 }
             }
@@ -368,11 +360,7 @@ where
             .data()
             .get_content_box_size()
             .map(|s| s.height)
-            .or_else(|_| {
-                evt.data()
-                    .get_border_box_size()
-                    .map(|s| s.height)
-            })
+            .or_else(|_| evt.data().get_border_box_size().map(|s| s.height))
             .unwrap_or(0.0);
 
         let prev = *measured_height.peek();

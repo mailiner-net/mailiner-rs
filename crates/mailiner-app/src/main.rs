@@ -1,71 +1,275 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
+use dioxus::logger::tracing::{info, warn};
 use dioxus::prelude::*;
+use mailiner_core::ids::AccountId;
 
-use crate::account::{Account, AccountId};
+use crate::account_store::{
+    AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
+};
+use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 use crate::components::virtual_scroll::SparseList;
-use crate::components::{EmailNavigation, MessageList, MessageView};
+use crate::components::{
+    AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
+    EmailNavigation, MessageList, MessageView, OnboardingForm, OutboxPanel, ToastHost,
+};
 use crate::context::AppContext;
-use crate::core_event::{core_loop, CoreEvent};
+use crate::core_event::{InitialBootstrap, core_loop};
 
 mod account;
+mod account_config;
+mod account_store;
 mod components;
+mod connection;
 mod context;
 mod core_event;
 mod download;
 mod formatter;
+mod outbox_store;
+mod send;
+mod smtp_session;
 mod mailbox;
 mod message;
 mod message_loader;
 mod websocket_stream;
 
+/// UI bootstrap state machine (store open → onboarding vs main).
+#[derive(Clone, Debug, PartialEq)]
+pub enum AppBootstrapState {
+    /// Store open + list in flight. Full-page spinner; no mail chrome.
+    LoadingStore,
+    /// Zero accounts. Only onboarding is valid.
+    NeedsOnboarding,
+    /// Accounts loaded from store; main app allowed.
+    Ready,
+    /// localStorage unavailable or unreadable.
+    StoreError { message: String },
+}
+
+/// Shared handle to the process-lifetime account store (secrets). Opened once.
+#[derive(Clone)]
+pub struct AccountStoreContext(pub Rc<dyn AccountStore>);
+
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
-enum Route {
-    #[layout(MainLayout)]
+#[allow(clippy::enum_variant_names)] // Route component names end in View by convention.
+pub(crate) enum Route {
+    #[layout(AppShell)]
     #[route("/")]
     MainView {},
+    #[route("/onboarding")]
+    OnboardingView {},
+    #[route("/settings/accounts")]
+    AccountsSettingsView {},
+    #[route("/settings/accounts/new")]
+    AccountNewView {},
+    #[route("/settings/accounts/:id")]
+    AccountEditView { id: String },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
+/// Baseline Content-Security-Policy for the Mailiner origin (PR7).
+///
+/// Goals: reduce XSS impact (script injection → local secrets) while keeping
+/// the Dioxus/WASM runtime, user-defined mail proxies, and intentional remote
+/// message images working.
+///
+/// Tradeoffs:
+/// - `script-src 'self' 'wasm-unsafe-eval'`: WASM instantiation needs
+///   `wasm-unsafe-eval` (not full `unsafe-eval`). No third-party scripts.
+/// - `style-src 'self' 'unsafe-inline'`: Dioxus components (e.g. virtual list)
+///   use inline `style=` attributes; strict style-src breaks layout. Remote
+///   stylesheets are not allowed (formatter/sanitizer strips them).
+/// - `img-src 'self' data: blob: http: https:`: cid→`data:` inlines and
+///   `blob:` downloads, plus remote `http(s)` images when the user clicks
+///   **Allow remote resources** in the message viewer. Privacy is gated in the
+///   HTML formatter first; CSP must not veto that path. CSS `url(...)` image
+///   loads are also constrained by `img-src` in most browsers.
+/// - `connect-src 'self' ws: wss: http: https:`: user-entered proxy hosts make
+///   a strict host allowlist impossible without dynamic CSP (limited in browsers).
+///   Schemes stay open so self-hosted proxies work; IMAP traffic is still
+///   TLS-wrapped client-side. This mitigates script XSS, not proxy diversity.
+/// - Meta tag is injected after WASM/`App` mounts, so the initial document +
+///   script load are not covered. Prefer an equivalent **HTTP CSP header** at
+///   deploy time for first-paint coverage (and note HMR/`dx serve` may inject
+///   scripts after mount).
+const CONTENT_SECURITY_POLICY: &str = "\
+default-src 'self'; \
+script-src 'self' 'wasm-unsafe-eval'; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob: http: https:; \
+font-src 'self'; \
+connect-src 'self' ws: wss: http: https:; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'\
+";
+
 fn main() {
     dioxus::launch(App);
 }
 
-#[component]
-fn MainLayout() -> Element {
-    rsx! {
-        Outlet::<Route> {}
+/// Result of opening the store and applying the bootstrap resolution algorithm.
+struct BootstrapOutcome {
+    store: Rc<dyn AccountStore>,
+    outbox: Rc<dyn OutboxStore>,
+    initial_bootstrap: InitialBootstrap,
+}
+
+/// Open `BrowserAccountStore`, resolve bootstrap state, populate UI accounts (no secrets).
+///
+/// Algorithm:
+/// - open failure → StoreError
+/// - empty → NeedsOnboarding (form may be prefilled via `dev-defaults`; no auto-connect)
+/// - non-empty → Ready, UI from `to_ui_account`, resolve active, Bootstrap { active }
+async fn run_bootstrap(
+    ctx: &mut AppContext,
+    mut bootstrap: Signal<AppBootstrapState>,
+    mut store_ctx: Signal<Option<AccountStoreContext>>,
+) -> BootstrapOutcome {
+    let outbox: Rc<dyn OutboxStore> = match BrowserOutboxStore::open().await {
+        Ok(s) => Rc::new(s),
+        Err(e) => {
+            warn!("BrowserOutboxStore open failed ({e}); using in-memory outbox");
+            Rc::new(InMemoryOutboxStore::new())
+        }
+    };
+
+    let store: Rc<dyn AccountStore> = match BrowserAccountStore::open().await {
+        Ok(s) => Rc::new(s),
+        Err(e) => {
+            let message = match e {
+                AccountStoreError::Unavailable => {
+                    "Account storage is unavailable in this browser (blocked or private mode). \
+                     Accounts cannot be saved."
+                        .to_string()
+                }
+                other => format!("Failed to open account storage: {other}"),
+            };
+            warn!("BrowserAccountStore open failed: {message}");
+            bootstrap.set(AppBootstrapState::StoreError { message });
+            return BootstrapOutcome {
+                store: Rc::new(InMemoryAccountStore::new()),
+                outbox,
+                initial_bootstrap: InitialBootstrap::Skip,
+            };
+        }
+    };
+
+    store_ctx.set(Some(AccountStoreContext(store.clone())));
+
+    let list = match store.list().await {
+        Ok(list) => list,
+        Err(e) => {
+            let message = format!("Failed to read accounts from storage: {e}");
+            warn!("{message}");
+            bootstrap.set(AppBootstrapState::StoreError { message });
+            return BootstrapOutcome {
+                store,
+                outbox,
+                initial_bootstrap: InitialBootstrap::Skip,
+            };
+        }
+    };
+
+    if list.is_empty() {
+        info!("Bootstrap: empty store → NeedsOnboarding");
+        ctx.accounts.set(HashMap::new());
+        ctx.selected_account.set(None);
+        bootstrap.set(AppBootstrapState::NeedsOnboarding);
+        return BootstrapOutcome {
+            store,
+            outbox,
+            initial_bootstrap: InitialBootstrap::Run { active: None },
+        };
     }
+
+    // Non-empty: UI accounts from store (to_ui_account only — no secrets).
+    let mut map = HashMap::new();
+    for cfg in &list {
+        map.insert(cfg.id.clone(), cfg.to_ui_account());
+    }
+    ctx.accounts.set(map);
+
+    let active = resolve_active_id(store.as_ref(), &list).await;
+    ctx.selected_account.set(active.clone());
+    info!(
+        "Bootstrap: {} account(s) from store → Ready (active={:?})",
+        list.len(),
+        active.as_ref().map(|a| a.as_str())
+    );
+    bootstrap.set(AppBootstrapState::Ready);
+
+    BootstrapOutcome {
+        store,
+        outbox,
+        initial_bootstrap: InitialBootstrap::Run { active },
+    }
+}
+
+/// Resolve active account: stored id if valid, else first by `created_at` ascending.
+async fn resolve_active_id(
+    store: &dyn AccountStore,
+    accounts: &[crate::account_config::AccountConfig],
+) -> Option<AccountId> {
+    if accounts.is_empty() {
+        return None;
+    }
+
+    match store.get_active_id().await {
+        Ok(Some(id)) if accounts.iter().any(|a| a.id == id) => return Some(id),
+        Ok(Some(id)) => {
+            warn!(
+                "Bootstrap: active_account_id {} missing from store; picking first by created_at",
+                id
+            );
+        }
+        Ok(None) => {
+            info!("Bootstrap: no active_account_id; picking first by created_at");
+        }
+        Err(e) => {
+            warn!("Bootstrap: get_active_id failed ({e}); picking first by created_at");
+        }
+    }
+
+    let mut ordered: Vec<&crate::account_config::AccountConfig> = accounts.iter().collect();
+    ordered.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
+    let id = ordered[0].id.clone();
+    if let Err(e) = store.set_active_id(Some(&id)).await {
+        warn!("Bootstrap: set_active_id({id}) failed: {e}");
+    }
+    Some(id)
 }
 
 #[component]
 fn App() -> Element {
-    let dummy_account_id = AccountId::new("1");
+    let bootstrap_state = use_signal(|| AppBootstrapState::LoadingStore);
+    let store_ctx = use_signal(|| None::<AccountStoreContext>);
 
-    let selected_account = use_signal(|| Some(dummy_account_id.clone()));
-    let accounts = use_signal(|| {
-        HashMap::from([(
-            dummy_account_id.clone(),
-            Account {
-                id: dummy_account_id.clone(),
-                name: "Valhalla".to_string(),
-                email: "me@dvratil.cz".to_string(),
-            },
-        )])
-    });
+    let selected_account = use_signal(|| None);
+    let accounts = use_signal(HashMap::new);
+    let connection_states = use_signal(HashMap::new);
 
-    let mailbox_nodes = use_signal(|| HashMap::new());
-    let mailbox_roots = use_signal(|| { Vec::new() });
+    let mailbox_nodes = use_signal(HashMap::new);
+    let mailbox_roots = use_signal(Vec::new);
     let selected_mailbox = use_signal(|| None);
 
     let messages = use_signal(|| SparseList::new(0));
     let messages_loading = use_signal(|| false);
     let selected_message = use_signal(|| None);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
-    let download_status = use_signal(std::collections::HashMap::new);
+    let download_status = use_signal(HashMap::new);
+    let send_status = use_signal(|| None);
+    let smtp_test_status = use_signal(HashMap::new);
+    let outbox = use_signal(Vec::new);
+    let toast = use_signal(|| None);
 
     let ctx = AppContext {
         accounts,
@@ -73,48 +277,197 @@ fn App() -> Element {
         mailbox_roots,
         messages,
         messages_loading,
-
         selected_mailbox,
         selected_account,
         selected_message,
         message_view,
         download_status,
+        connection_states,
+        send_status,
+        smtp_test_status,
+        outbox,
+        toast,
     };
     let ctx_clone = ctx.clone();
 
     use_context_provider(|| ctx);
-    let tx = use_coroutine(move |core_rx| {
-        let ctx = ctx_clone.clone();
-        async move { core_loop(core_rx, ctx).await }
+    use_context_provider(|| bootstrap_state);
+    use_context_provider(|| store_ctx);
+
+    // Open BrowserAccountStore once; pass clone into core_loop; provide via context.
+    // core_loop stays idle until bootstrap resolves, then runs initial Bootstrap if Ready.
+    let _tx = use_coroutine(move |core_rx| {
+        let mut ctx = ctx_clone.clone();
+        let bootstrap_state = bootstrap_state;
+        let store_ctx = store_ctx;
+        async move {
+            let outcome = run_bootstrap(&mut ctx, bootstrap_state, store_ctx).await;
+            let (smtp_tx, smtp_rx) = futures_channel::mpsc::unbounded();
+            core_loop(
+                core_rx,
+                smtp_rx,
+                smtp_tx,
+                ctx,
+                outcome.store,
+                outcome.outbox,
+                outcome.initial_bootstrap,
+            )
+            .await;
+        }
     });
-    tx.send(CoreEvent::SelectAccount(dummy_account_id.clone()));
 
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Meta {
+            http_equiv: "Content-Security-Policy",
+            content: CONTENT_SECURITY_POLICY,
+        }
 
         Router::<Route> {}
     }
 }
 
+/// Root layout: no mail chrome on loading / store error / onboarding; outlet otherwise.
+#[component]
+fn AppShell() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    let nav = use_navigator();
+
+    // Deep-link guards (prefer replace to avoid back-stack traps).
+    // Reads bootstrap signal + current route (subscribes via router) so both updates re-run.
+    use_effect(move || {
+        let state = bootstrap();
+        let route = router().current::<Route>();
+        match state {
+            AppBootstrapState::NeedsOnboarding => {
+                // Zero accounts + any non-onboarding route (incl. /settings/*) → /onboarding
+                if !matches!(route, Route::OnboardingView {}) {
+                    nav.replace(Route::OnboardingView {});
+                }
+            }
+            AppBootstrapState::Ready => {
+                // Non-empty store (or post-commit Ready) + /onboarding → /
+                if matches!(route, Route::OnboardingView {}) {
+                    nav.replace(Route::MainView {});
+                }
+            }
+            AppBootstrapState::LoadingStore | AppBootstrapState::StoreError { .. } => {}
+        }
+    });
+
+    match bootstrap() {
+        AppBootstrapState::LoadingStore => rsx! {
+            div {
+                class: "bootstrap-shell",
+                div {
+                    class: "bootstrap-card",
+                    p { class: "bootstrap-title", "Loading accounts…" }
+                    p { class: "bootstrap-muted", "Opening local account storage." }
+                }
+            }
+        },
+        AppBootstrapState::StoreError { message } => rsx! {
+            div {
+                class: "bootstrap-shell",
+                div {
+                    class: "bootstrap-card bootstrap-error",
+                    h1 { class: "bootstrap-title", "Account storage unavailable" }
+                    p { "{message}" }
+                    p {
+                        class: "bootstrap-muted",
+                        "Mailiner stores account settings in this browser only. \
+                         Enable storage or try a different browser profile."
+                    }
+                }
+            }
+        },
+        // Onboarding and settings share the outlet; mail chrome is only in MainView.
+        AppBootstrapState::NeedsOnboarding | AppBootstrapState::Ready => rsx! {
+            Outlet::<Route> {}
+        },
+    }
+}
+
 #[component]
 fn MainView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+
+    // While NeedsOnboarding, guard redirects away; avoid mounting mail chrome.
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+
     rsx! {
         div {
             id: "app",
 
-            EmailNavigation {
-            }
+            EmailNavigation {}
 
             div {
                 id: "content",
 
-                MessageList {
-                }
+                ConnectionStatusBanner {}
 
-                MessageView {
-                }
+                MessageList {}
+
+                MessageView {}
+
+                OutboxPanel {}
             }
+
+            ComposeOverlay {}
+            ToastHost {}
         }
     }
+}
+
+/// First-run onboarding form (connect-before-persist). No mail chrome.
+#[component]
+fn OnboardingView() -> Element {
+    rsx! {
+        OnboardingForm {}
+    }
+}
+
+/// Minimal shell while deep-link guards redirect away from settings/main.
+fn redirecting_shell() -> Element {
+    rsx! {
+        div {
+            class: "bootstrap-shell",
+            p { class: "bootstrap-muted", "Redirecting…" }
+        }
+    }
+}
+
+/// Account list settings (`/settings/accounts`).
+#[component]
+fn AccountsSettingsView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    // Settings require Ready. Under NeedsOnboarding the deep-link guard replace()s
+    // to /onboarding; avoid flashing this view for a frame before the effect runs.
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+    rsx! { AccountsSettingsPage {} }
+}
+
+/// Add account (`/settings/accounts/new`) — CommitNewAccount path.
+#[component]
+fn AccountNewView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+    rsx! { AccountNewPage {} }
+}
+
+/// Edit account (`/settings/accounts/:id`).
+#[component]
+fn AccountEditView(id: String) -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+    rsx! { AccountEditPage { id } }
 }

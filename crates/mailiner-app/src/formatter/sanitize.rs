@@ -15,9 +15,7 @@ fn re_expression() -> &'static Regex {
 
 fn re_binding() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)(-moz-binding|behavior)\s*:\s*[^;]+;?").unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r"(?i)(-moz-binding|behavior)\s*:\s*[^;]+;?").unwrap())
 }
 
 fn re_url() -> &'static Regex {

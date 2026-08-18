@@ -30,12 +30,11 @@ This starts `dx serve -p mailiner-app` automatically (see `playwright.config.ts`
 and waits for it to come up before running the tests. The first run can take a
 few minutes since it compiles the whole workspace to WASM.
 
-`mailiner-app`'s `build.rs` bakes an `IMAP_PASSWORD` value in at compile time.
-`playwright.config.ts` loads a repo-root `.env` (if present) and forwards
-`IMAP_PASSWORD` from it, falling back to a placeholder otherwise, so no
-`.env` file is required just to bring the app up. Connecting to a real IMAP
-account still needs the usual local setup described in the top-level
-`README.md` (including running `ws-tcp-proxy`).
+Account credentials are entered via the first-run onboarding form (or loaded
+from browser localStorage). No build-time `IMAP_PASSWORD` is required.
+Connecting to a real IMAP account needs the usual local setup described in
+the top-level `README.md` (including running `ws-tcp-proxy` and completing
+onboarding).
 
 Useful variations:
 

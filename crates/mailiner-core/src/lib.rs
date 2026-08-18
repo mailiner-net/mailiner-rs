@@ -4,6 +4,7 @@ pub mod error;
 pub mod ids;
 pub mod models;
 pub mod storage;
+pub mod submit;
 
 pub use body::{BodyPart, ContentDisposition};
 pub use connector::{
@@ -16,3 +17,4 @@ pub use models::{
     LoadedMessage, MessageContent, MessagePart, PartChunk, PartKind, TransferEncoding,
 };
 pub use storage::{InMemoryStorage, Storage};
+pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};

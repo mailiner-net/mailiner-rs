@@ -1,8 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 import dotenv from 'dotenv';
 
-// Load repo-root .env (the same file build.rs reads via the `dotenv` crate)
-// so a real IMAP_PASSWORD set there is used instead of the placeholder below.
+// Optional repo-root .env for MAILINER_DEV_* form prefill / other tooling.
 dotenv.config();
 
 const PORT = process.env.MAILINER_E2E_PORT ?? '8080';
@@ -41,11 +40,5 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 5 * 60_000,
-    env: {
-      // build.rs bakes IMAP_PASSWORD in at compile time; a real value is
-      // only needed for actually logging into an IMAP account. Falls back
-      // to whatever a local .env already provides.
-      IMAP_PASSWORD: process.env.IMAP_PASSWORD ?? 'e2e-placeholder',
-    },
   },
 });

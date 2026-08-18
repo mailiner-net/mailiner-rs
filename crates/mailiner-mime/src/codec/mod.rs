@@ -5,9 +5,9 @@ mod charset;
 mod qp;
 mod stream;
 
-pub use base64::base64_decode;
+pub use base64::{base64_decode, base64_encode};
 pub use charset::charset_decode;
-pub use qp::qp_decode;
+pub use qp::{qp_decode, qp_encode};
 pub use stream::{decode_transfer_stream, StreamingTransferDecoder};
 
 /// Soft limit for decoded text payloads (WASM safety).

@@ -1,0 +1,19 @@
+[package]
+name = "mailiner-smtp-connector"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-smtp = { version = "0.10.2", default-features = false, features = ["runtime-tokio"] }
+tokio = { workspace = true, features = ["io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["tls12", "std", "ring"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1.12", features = ["web"] }
+webpki-roots = "0.26"
+thiserror = "2.0"
+tracing = "0.1"
+mailiner-core = { path = "../mailiner-core" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "io-util"] }

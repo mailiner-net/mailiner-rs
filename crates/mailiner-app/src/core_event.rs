@@ -1,26 +1,41 @@
 use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use dioxus::logger::tracing::{error, info};
+use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use futures_util::StreamExt;
+use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
+use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
+use mailiner_core::submit::{SendErrorKind, SubmitRequest};
 use mailiner_core::{Folder, FolderId, MessageId as CoreMessageId};
-use mailiner_imap_connector::ImapConnector;
 
 use crate::account::AccountId;
+use crate::account_config::AccountConfig;
+use crate::account_store::AccountStore;
+use crate::outbox_store::{
+    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
+};
+use crate::send::{OutboxDisplay, SendPhase, SendState};
+use crate::smtp_session::{
+    InFlightSmtp, SmtpOutcome, SEND_TIMEOUT_MS, preflight, spawn_submit, spawn_test,
+};
 use crate::components::virtual_scroll::SparseList;
+use crate::connection::{
+    AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
+    set_connection_state,
+};
 use crate::context::{AppContext, MessageViewState};
-use crate::download::{DownloadStatus, StreamingBlobDownload, MAX_DOWNLOAD_BYTES};
+use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::MessageId;
 use crate::message_loader::load_message;
-use crate::websocket_stream::WebSocketStream;
 
 pub enum CoreEvent {
-    SelectAccount(AccountId),
+    // —— mail ops ——
     SelectMailbox(MailboxId),
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
@@ -38,165 +53,178 @@ pub enum CoreEvent {
         encoding: TransferEncoding,
         size_hint: Option<u64>,
     },
+
+    /// Select account for UI + ensure connector + list folders.
+    /// Loads config from store/cache by id.
+    SelectAccount(AccountId),
+
+    /// After store open: seed manager awareness; connect active if present.
+    Bootstrap {
+        active: Option<AccountId>,
+    },
+
+    /// Unsaved form: connect, report state under ephemeral key, disconnect, do not persist.
+    TestConnection {
+        /// Ephemeral id for ConnectionState map / UI correlation (not stored).
+        request_id: AccountId,
+        config: AccountConfig,
+    },
+
+    /// First-run / add-account commit (connect-before-persist).
+    /// On Ready only: store.upsert, set_active_id, keep connector, list folders.
+    CommitNewAccount {
+        config: AccountConfig,
+    },
+
+    /// Account already in store (cold start, switch). Load via store, connect, list folders.
+    ConnectExisting {
+        account_id: AccountId,
+    },
+
+    Reconnect {
+        account_id: AccountId,
+    },
+
+    DisconnectAccount(AccountId),
+
+    /// UI mutated store (edit/delete). Manager drops deleted connectors; does not auto-connect.
+    AccountsChanged,
+
+    SendMessage {
+        account_id: AccountId,
+        request: SubmitRequest,
+        display: OutboxDisplay,
+    },
+    TestSmtpConnection {
+        request_id: AccountId,
+        config: AccountConfig,
+    },
+    SmtpFinished {
+        generation: u64,
+        outcome: SmtpOutcome,
+    },
+    DrainOutbox,
+    RetryOutboxItem {
+        id: crate::outbox_store::OutboxId,
+    },
+    DeleteOutboxItem {
+        id: crate::outbox_store::OutboxId,
+    },
+    /// Best-effort IMAP APPEND to Sent after SMTP success. Failure does not unsend.
+    ArchiveSent {
+        account_id: AccountId,
+        rfc822: Vec<u8>,
+    },
 }
 
-pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppContext) {
-    let password = env!("IMAP_PASSWORD").to_string();
-    let websocket_stream =
-        WebSocketStream::new("ws://localhost:9400/proxy?token=testtoken&remote=dvratil.cz:993");
-    let connector = ImapConnector::new(
-        "dvratil.cz".to_string(),
-        8081,
-        "me@dvratil.cz".to_string(),
-        password.clone(),
-    );
+/// Cold-start prelude for [`core_loop`]: skip connect, or run bootstrap with an active id.
+///
+/// Prefer this over `Option<Option<AccountId>>` so call sites are not ambiguous.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialBootstrap {
+    /// Store open/list failed — do not connect; event loop stays idle until a later event.
+    Skip,
+    /// Run [`CoreEvent::Bootstrap`] once with the resolved active account (or `None`).
+    Run { active: Option<AccountId> },
+}
 
-    info!("Connecting to IMAP server...");
-    connector
-        .connect(websocket_stream)
-        .await
-        .or_else(|e| {
-            error!("Failed to connect to IMAP server: {}", e);
-            Err(e)
-        })
-        .expect("Failed to connect to IMAP server");
-    info!("Connected to IMAP server");
+/// Application core task: handles mail ops and account connection lifecycle.
+///
+/// **Serial event processing (v1):** each handler is fully awaited before the next
+/// event is taken from the channel. Connect attempts therefore do not run concurrently;
+/// generation debounce in the manager is defensive (stale-result guard if connect is
+/// later made concurrent) rather than a mid-flight cancel of an in-progress connect.
+///
+/// `initial_bootstrap`: App opens the store and passes [`InitialBootstrap::Run`] with
+/// the resolved active id, or [`InitialBootstrap::Skip`] on store failure.
+pub async fn core_loop(
+    mut core_rx: UnboundedReceiver<CoreEvent>,
+    mut smtp_rx: SmtpUnboundedReceiver<CoreEvent>,
+    smtp_tx: UnboundedSender<CoreEvent>,
+    mut ctx: AppContext,
+    store: Rc<dyn AccountStore>,
+    outbox: Rc<dyn OutboxStore>,
+    initial_bootstrap: InitialBootstrap,
+) {
+    let mut manager = AccountConnectionManager::new(store);
+    let mut smtp_generation: u64 = 0;
+    let mut inflight: Option<InFlightSmtp> = None;
 
-    connector
-        .authenticate(password.as_str())
-        .await
-        .expect("Failed to authenticate with IMAP server");
-    info!("Authenticated with IMAP server");
+    if let InitialBootstrap::Run { active } = initial_bootstrap {
+        handle_bootstrap(&mut manager, &mut ctx, active).await;
+        recover_outbox(outbox.as_ref(), &mut ctx).await;
+        drain_outbox(
+            &mut manager,
+            &mut ctx,
+            outbox.as_ref(),
+            &smtp_tx,
+            &mut inflight,
+            &mut smtp_generation,
+        )
+        .await;
+    }
 
-    while let Some(event) = core_rx.next().await {
+    loop {
+        let event = {
+            let ui = core_rx.next();
+            let smtp = smtp_rx.next();
+            futures_util::pin_mut!(ui);
+            futures_util::pin_mut!(smtp);
+            match select(ui, smtp).await {
+                Either::Left((Some(ev), _)) | Either::Right((Some(ev), _)) => ev,
+                Either::Left((None, _)) => break,
+                Either::Right((None, _)) => {
+                    // smtp_tx dropped — keep draining UI events
+                    match core_rx.next().await {
+                        Some(ev) => ev,
+                        None => break,
+                    }
+                }
+            }
+        };
         match event {
+            CoreEvent::Bootstrap { active } => {
+                handle_bootstrap(&mut manager, &mut ctx, active).await;
+            }
             CoreEvent::SelectAccount(account_id) => {
-                ctx.selected_account.set(Some(account_id.clone()));
-                let mboxes = connector.list_folders(&account_id).await.unwrap();
-                let (root_ids, mboxes) = build_mailbox_tree(mboxes);
-                ctx.mailbox_nodes.set(mboxes);
-                ctx.mailbox_roots.set(root_ids);
-                ctx.selected_mailbox.set(None);
-                ctx.messages.set(SparseList::new(0));
-                ctx.messages_loading.set(false);
-                ctx.selected_message.set(None);
-                ctx.message_view.set(MessageViewState::Empty);
-                ctx.download_status.set(HashMap::new());
+                handle_select_account(&mut manager, &mut ctx, account_id).await;
+            }
+            CoreEvent::ConnectExisting { account_id } => {
+                handle_select_account(&mut manager, &mut ctx, account_id).await;
+            }
+            CoreEvent::Reconnect { account_id } => {
+                handle_reconnect(&mut manager, &mut ctx, account_id).await;
+            }
+            CoreEvent::DisconnectAccount(account_id) => {
+                cancel_inflight_for(&mut inflight, &mut smtp_generation, &account_id, outbox.as_ref())
+                    .await;
+                manager.disconnect_account(&account_id, &mut ctx).await;
+                if ctx.selected_account.read().as_ref() == Some(&account_id) {
+                    clear_mailbox_ui(&mut ctx);
+                    ctx.selected_account.set(None);
+                }
+            }
+            CoreEvent::TestConnection { request_id, config } => {
+                let _ = manager
+                    .test_connection(&request_id, &config, &mut ctx)
+                    .await;
+            }
+            CoreEvent::CommitNewAccount { config } => {
+                handle_commit_new_account(&mut manager, &mut ctx, config).await;
+            }
+            CoreEvent::AccountsChanged => {
+                handle_accounts_changed(&mut manager, &mut ctx).await;
+                purge_missing_accounts(&manager, outbox.as_ref(), &mut ctx, &mut inflight, &mut smtp_generation)
+                    .await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
-                ctx.selected_message.set(None);
-                ctx.message_view.set(MessageViewState::Empty);
-                ctx.download_status.set(HashMap::new());
-                ctx.messages.set(SparseList::new(0));
-                ctx.messages_loading.set(true);
-                ctx.selected_mailbox.set(Some(mailbox_id.clone()));
-
-                let folder_id = FolderId::new(mailbox_id.to_string());
-                match connector.open_folder(&folder_id).await {
-                    Ok(total) => {
-                        info!(
-                            "Opened mailbox {} with {} messages",
-                            mailbox_id.to_string(),
-                            total
-                        );
-                        ctx.messages.set(SparseList::new(total));
-                        ctx.messages_loading.set(false);
-                        if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
-                            node.total_count = total;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to open mailbox: {}", e);
-                        ctx.messages_loading.set(false);
-                    }
-                }
+                handle_select_mailbox(&manager, &mut ctx, mailbox_id).await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
-                if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
-                    continue;
-                }
-                if range.start >= range.end {
-                    continue;
-                }
-
-                let already = {
-                    let messages = ctx.messages.read();
-                    (range.start..range.end).all(|i| messages.has_item(i))
-                };
-                if already {
-                    continue;
-                }
-
-                let folder_id = FolderId::new(mailbox_id.to_string());
-                info!(
-                    "Fetching messages {}..{} for {}",
-                    range.start,
-                    range.end,
-                    mailbox_id.to_string()
-                );
-                match connector.list_envelopes_range(&folder_id, range.clone()).await {
-                    Ok(envelopes) => {
-                        if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
-                            continue;
-                        }
-                        let batch: Vec<_> = envelopes
-                            .into_iter()
-                            .map(|e| Arc::new(e.into()))
-                            .collect();
-                        ctx.messages.write().insert_batch(range.start, batch);
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to fetch message range {}..{}: {}",
-                            range.start, range.end, e
-                        );
-                    }
-                }
+                handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
             }
             CoreEvent::SelectMessage(message_id) => {
-                ctx.selected_message.set(Some(message_id.clone()));
-                ctx.download_status.set(HashMap::new());
-                ctx.message_view.set(MessageViewState::Loading {
-                    message_id: message_id.clone(),
-                });
-
-                let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
-                    ctx.message_view.set(MessageViewState::Error {
-                        message_id: message_id.clone(),
-                        message: "No mailbox selected".into(),
-                    });
-                    continue;
-                };
-
-                let folder_id = FolderId::new(mailbox_id.to_string());
-                let core_id = CoreMessageId::new(message_id.to_string());
-                info!(
-                    "Loading message {} in {}",
-                    message_id,
-                    mailbox_id.to_string()
-                );
-
-                match load_message(&connector, &folder_id, &core_id).await {
-                    Ok(loaded) => {
-                        if ctx.selected_message.read().as_ref() != Some(&message_id) {
-                            continue;
-                        }
-                        ctx.message_view.set(MessageViewState::Ready {
-                            message_id,
-                            loaded: Arc::new(loaded),
-                        });
-                    }
-                    Err(e) => {
-                        if ctx.selected_message.read().as_ref() != Some(&message_id) {
-                            continue;
-                        }
-                        error!("Failed to load message {}: {}", message_id, e);
-                        ctx.message_view.set(MessageViewState::Error {
-                            message_id,
-                            message: e.to_string(),
-                        });
-                    }
-                }
+                handle_select_message(&manager, &mut ctx, message_id).await;
             }
             CoreEvent::DownloadAttachment {
                 mailbox_id,
@@ -207,115 +235,807 @@ pub async fn core_loop(mut core_rx: UnboundedReceiver<CoreEvent>, mut ctx: AppCo
                 encoding,
                 size_hint,
             } => {
-                // Ignore if user navigated away.
-                if ctx.selected_message.read().as_ref() != Some(&message_id) {
-                    continue;
+                handle_download_attachment(
+                    &manager,
+                    &mut ctx,
+                    mailbox_id,
+                    message_id,
+                    section,
+                    filename,
+                    content_type,
+                    encoding,
+                    size_hint,
+                )
+                .await;
+            }
+            CoreEvent::SendMessage {
+                account_id,
+                request,
+                display,
+            } => {
+                handle_send_message(
+                    &mut manager,
+                    &mut ctx,
+                    outbox.as_ref(),
+                    &smtp_tx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                    account_id,
+                    request,
+                    display,
+                )
+                .await;
+            }
+            CoreEvent::TestSmtpConnection { request_id, config } => {
+                handle_test_smtp(
+                    &mut ctx,
+                    &smtp_tx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                    request_id,
+                    config,
+                )
+                .await;
+            }
+            CoreEvent::SmtpFinished {
+                generation,
+                outcome,
+            } => {
+                handle_smtp_finished(
+                    &mut manager,
+                    &mut ctx,
+                    outbox.as_ref(),
+                    &smtp_tx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                    generation,
+                    outcome,
+                )
+                .await;
+            }
+            CoreEvent::DrainOutbox => {
+                drain_outbox(
+                    &mut manager,
+                    &mut ctx,
+                    outbox.as_ref(),
+                    &smtp_tx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                )
+                .await;
+            }
+            CoreEvent::RetryOutboxItem { id } => {
+                handle_retry_outbox(
+                    &mut manager,
+                    &mut ctx,
+                    outbox.as_ref(),
+                    &smtp_tx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                    id,
+                )
+                .await;
+            }
+            CoreEvent::DeleteOutboxItem { id } => {
+                if let Some(flight) = inflight.as_ref() {
+                    if flight.outbox_id.as_ref() == Some(&id) {
+                        let _ = flight.cancel_tx; // replaced below
+                    }
                 }
-                if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
-                    ctx.download_status.write().insert(
-                        section.clone(),
-                        DownloadStatus::Error(format!(
-                            "attachment too large (max {} bytes)",
-                            MAX_DOWNLOAD_BYTES
-                        )),
-                    );
-                    continue;
+                if let Some(flight) = inflight.take() {
+                    if flight.outbox_id.as_ref() == Some(&id) {
+                        let _ = flight.cancel_tx.send(());
+                        smtp_generation = smtp_generation.wrapping_add(1);
+                    } else {
+                        inflight = Some(flight);
+                    }
+                }
+                let _ = outbox.delete(&id).await;
+                refresh_outbox_signal(outbox.as_ref(), &mut ctx).await;
+            }
+            CoreEvent::ArchiveSent { account_id, rfc822 } => {
+                handle_archive_sent(&manager, &mut ctx, account_id, rfc822).await;
+            }
+        }
+    }
+}
+
+async fn handle_bootstrap(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    active: Option<AccountId>,
+) {
+    let Some(account_id) = active else {
+        // No active account: still sync UI map from store (and any prior memory-only).
+        refresh_ui_accounts(manager, ctx).await;
+        info!("Bootstrap: no active account");
+        return;
+    };
+
+    let Some(config) = manager.resolve_config(&account_id).await else {
+        warn!("Bootstrap: no config for active account {}", account_id);
+        refresh_ui_accounts(manager, ctx).await;
+        return;
+    };
+
+    // Cache config **before** refresh so memory-only entries are already registered
+    // when `refresh_ui_accounts` rebuilds the UI map. Otherwise Ready can briefly
+    // observe `accounts == {}` across store-get awaits.
+    let is_memory_only = manager
+        .store()
+        .get(&account_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none();
+    if is_memory_only {
+        manager.cache_config_memory_only(config.clone());
+    } else {
+        manager.cache_config(config.clone());
+    }
+
+    // Refresh UI accounts from store (no secrets). Merge memory-only configs.
+    refresh_ui_accounts(manager, ctx).await;
+
+    // Ensure UI has the active account even if refresh missed it.
+    {
+        let mut accounts = ctx.accounts.write();
+        accounts
+            .entry(config.id.clone())
+            .or_insert_with(|| config.to_ui_account());
+    }
+
+    ctx.selected_account.set(Some(account_id.clone()));
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
+        Ok(()) => {
+            list_folders_soft(manager, ctx, &account_id).await;
+        }
+        Err(e) => {
+            error!(
+                "Bootstrap connect failed for {}: {} ({:?})",
+                account_id, e.message, e.kind
+            );
+            clear_mailbox_ui(ctx);
+        }
+    }
+}
+
+async fn handle_select_account(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+) {
+    ctx.selected_account.set(Some(account_id.clone()));
+    clear_mailbox_ui(ctx);
+
+    let Some(config) = manager.resolve_config(&account_id).await else {
+        error!("SelectAccount: unknown account {}", account_id);
+        set_connection_state(
+            ctx,
+            &account_id,
+            ConnectionState::Error {
+                message: "Account configuration not found.".into(),
+                kind: ConnectErrorKind::Internal,
+                retryable: false,
+            },
+        );
+        return;
+    };
+
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
+        Ok(()) => {
+            list_folders_soft(manager, ctx, &account_id).await;
+        }
+        Err(e) => {
+            error!(
+                "SelectAccount connect failed for {}: {} ({:?})",
+                account_id, e.message, e.kind
+            );
+        }
+    }
+}
+
+async fn handle_reconnect(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+) {
+    // Snapshot config **before** disconnect: `disconnect_account` drops the
+    // manager cache (including memory-only configs). Store-backed accounts can
+    // re-resolve after disconnect; memory-only ones cannot.
+    let Some(config) = manager.resolve_config(&account_id).await else {
+        error!("Reconnect: unknown account {}", account_id);
+        set_connection_state(
+            ctx,
+            &account_id,
+            ConnectionState::Error {
+                message: "Account configuration not found.".into(),
+                kind: ConnectErrorKind::Internal,
+                retryable: false,
+            },
+        );
+        return;
+    };
+    let was_memory_only = manager.memory_only_ids().contains(&account_id);
+
+    manager.disconnect_account(&account_id, ctx).await;
+
+    if was_memory_only {
+        manager.cache_config_memory_only(config.clone());
+    } else {
+        manager.cache_config(config.clone());
+    }
+
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
+        Ok(()) => {
+            if ctx.selected_account.read().as_ref() == Some(&account_id) {
+                list_folders_soft(manager, ctx, &account_id).await;
+            }
+        }
+        Err(e) => {
+            error!(
+                "Reconnect failed for {}: {} ({:?})",
+                account_id, e.message, e.kind
+            );
+        }
+    }
+}
+
+async fn handle_commit_new_account(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    config: AccountConfig,
+) {
+    let account_id = config.id.clone();
+
+    // Existing store entry ⇒ credential edit (or re-save); absent ⇒ first-time add.
+    let was_in_store = manager
+        .store()
+        .get(&account_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let was_selected = ctx.selected_account.read().as_ref() == Some(&account_id);
+    let had_connector = manager.get(&account_id).is_some();
+
+    // Force a fresh connect so credential edits re-verify (ensure_connected would
+    // otherwise short-circuit when a Ready connector already exists for this id).
+    // Drop connector only; store entry is left intact until Ready + upsert.
+    if had_connector {
+        manager.disconnect_account(&account_id, ctx).await;
+    }
+
+    // KeepActiveUntilReady: prior *other* active session stays up through connect **and**
+    // store writes. disconnect_others only after full commit success when we activate.
+    match manager
+        .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)
+        .await
+    {
+        Ok(()) => {
+            // Demote Ready → Connecting across the upsert await so the UI does not treat
+            // connect-Ready as “commit finished” (edit navigate-before-persist race).
+            set_connection_state(ctx, &account_id, ConnectionState::Connecting);
+
+            // Connect-before-persist: only write store after a successful connect.
+            if let Err(e) = manager.store().upsert(&config).await {
+                error!("CommitNewAccount: store upsert failed: {}", e);
+                manager.disconnect_account(&account_id, ctx).await;
+                let err_state = ConnectionState::Error {
+                    message: format!("Connected, but failed to save account: {e}"),
+                    kind: ConnectErrorKind::Internal,
+                    retryable: true,
+                };
+                set_connection_state(ctx, &account_id, err_state.clone());
+                // Restore prior live session for mail, then re-surface Error for the form
+                // (restore sets Ready and would otherwise look like commit success).
+                if was_in_store && was_selected {
+                    restore_store_session(manager, ctx, &account_id).await;
+                    set_connection_state(ctx, &account_id, err_state);
+                }
+                return;
+            }
+
+            manager.cache_config(config.clone());
+            refresh_ui_accounts(manager, ctx).await;
+
+            // New account, or edit of the already-selected account → make/keep active.
+            // Edit of a background account: persist only; do not steal the active session.
+            let should_activate = !was_in_store || was_selected;
+            if should_activate {
+                if let Err(e) = manager.store().set_active_id(Some(&account_id)).await {
+                    error!("CommitNewAccount: set_active_id failed: {}", e);
+                    manager.disconnect_account(&account_id, ctx).await;
+                    let err_state = ConnectionState::Error {
+                        message: format!(
+                            "Connected and saved, but failed to set active account: {e}. \
+                             The account may already be saved — reload the page or try again."
+                        ),
+                        kind: ConnectErrorKind::Internal,
+                        retryable: true,
+                    };
+                    set_connection_state(ctx, &account_id, err_state.clone());
+                    if was_in_store && was_selected {
+                        restore_store_session(manager, ctx, &account_id).await;
+                        set_connection_state(ctx, &account_id, err_state);
+                    }
+                    // Account is in store from upsert; UI accounts already refreshed.
+                    return;
                 }
 
+                manager.disconnect_others(Some(&account_id), ctx).await;
+                ctx.selected_account.set(Some(account_id.clone()));
+                set_connection_state(ctx, &account_id, ConnectionState::Ready);
+                list_folders_soft(manager, ctx, &account_id).await;
+            } else {
+                // Background edit: drop the trial connector; leave the prior active session.
+                manager.disconnect_account(&account_id, ctx).await;
+                // Keep store-backed config cached for a later switch (no live connector).
+                manager.cache_config(config.clone());
+                // Disconnected (not Ready): no connector. Edit form confirms via store
+                // `updated_at` bump after upsert, not connection Ready alone.
+                set_connection_state(ctx, &account_id, ConnectionState::Disconnected);
+            }
+        }
+        Err(e) => {
+            // No store write on failure. Restore selected store-backed session if we
+            // tore it down for re-verify (BUG-3). Re-surface Error after restore so the
+            // form does not treat restore-Ready as commit success.
+            error!(
+                "CommitNewAccount connect failed: {} ({:?})",
+                e.message, e.kind
+            );
+            let err_state = e.to_state();
+            if was_in_store {
+                if was_selected {
+                    restore_store_session(manager, ctx, &account_id).await;
+                    set_connection_state(ctx, &account_id, err_state);
+                } else if let Some(store_cfg) =
+                    manager.store().get(&account_id).await.ok().flatten()
+                {
+                    // Replace draft cache with store config; leave disconnected.
+                    manager.cache_config(store_cfg);
+                }
+            }
+        }
+    }
+}
+
+/// Re-resolve store config and reconnect when this account is still selected.
+async fn restore_store_session(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) {
+    let Some(store_cfg) = manager.store().get(account_id).await.ok().flatten() else {
+        warn!(
+            "restore_store_session: no store config for {} — cannot restore",
+            account_id
+        );
+        return;
+    };
+    manager.cache_config(store_cfg.clone());
+    if ctx.selected_account.read().as_ref() != Some(account_id) {
+        set_connection_state(ctx, account_id, ConnectionState::Disconnected);
+        return;
+    }
+    match manager
+        .ensure_connected(&store_cfg, ctx, EnsureConnectedMode::Switch)
+        .await
+    {
+        Ok(()) => {
+            list_folders_soft(manager, ctx, account_id).await;
+        }
+        Err(re) => {
+            error!(
+                "restore_store_session reconnect failed for {}: {} ({:?})",
+                account_id, re.message, re.kind
+            );
+        }
+    }
+}
+
+async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &mut AppContext) {
+    // Store list is authoritative for persisted accounts; memory_only is explicit.
+    // On list **error**, do not treat as empty (would mass-disconnect all connectors).
+    let store_ids: std::collections::HashSet<AccountId> = match manager.store().list().await {
+        Ok(list) => list.into_iter().map(|c| c.id).collect(),
+        Err(e) => {
+            warn!(
+                "AccountsChanged: failed to list store (skipping orphan teardown and UI wipe): {}",
+                e
+            );
+            return;
+        }
+    };
+    let known: std::collections::HashSet<AccountId> = store_ids
+        .iter()
+        .cloned()
+        .chain(manager.memory_only_ids().iter().cloned())
+        .collect();
+    let orphaned: Vec<AccountId> = manager
+        .connector_account_ids()
+        .into_iter()
+        .filter(|id| !known.contains(id))
+        .collect();
+    for id in orphaned {
+        manager.disconnect_account(&id, ctx).await;
+    }
+
+    refresh_ui_accounts(manager, ctx).await;
+}
+
+/// Rebuild UI accounts from the store plus explicitly memory-only configs.
+///
+/// Does **not** re-insert the previous `ctx.accounts` map (that resurrected deleted
+/// accounts). Only store list + `manager.memory_only` are authoritative.
+///
+/// On `store.list()` **error**, leaves current UI accounts unchanged (does not treat
+/// the failure as an empty store).
+async fn refresh_ui_accounts(manager: &AccountConnectionManager, ctx: &mut AppContext) {
+    let mut map = HashMap::new();
+    match manager.store().list().await {
+        Ok(list) => {
+            for cfg in list {
+                map.insert(cfg.id.clone(), cfg.to_ui_account());
+            }
+        }
+        Err(e) => {
+            warn!(
+                "Failed to list accounts from store (leaving UI accounts unchanged): {}",
+                e
+            );
+            return;
+        }
+    }
+    // Explicit memory-only configs — not the previous UI map.
+    for id in manager.memory_only_ids() {
+        if let Some(cfg) = manager.config(id) {
+            map.entry(id.clone()).or_insert_with(|| cfg.to_ui_account());
+        }
+    }
+    ctx.accounts.set(map);
+}
+
+async fn list_folders_soft(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) {
+    let Some(connector) = manager.get(account_id) else {
+        error!("list_folders: no connector for {}", account_id);
+        return;
+    };
+
+    match connector.list_folders(account_id).await {
+        Ok(mboxes) => {
+            let (root_ids, mboxes) = build_mailbox_tree(mboxes);
+            ctx.mailbox_nodes.set(mboxes);
+            ctx.mailbox_roots.set(root_ids);
+        }
+        Err(e) => {
+            error!("Failed to list folders for {}: {}", account_id, e);
+            ctx.mailbox_nodes.set(HashMap::new());
+            ctx.mailbox_roots.set(Vec::new());
+            // Soft-fail: keep Ready connection but surface list failure on state if desired.
+            // Leave connection Ready; empty tree is the UI signal.
+        }
+    }
+}
+
+fn clear_mailbox_ui(ctx: &mut AppContext) {
+    ctx.selected_mailbox.set(None);
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(false);
+    ctx.selected_message.set(None);
+    ctx.message_view.set(MessageViewState::Empty);
+    ctx.download_status.set(HashMap::new());
+    ctx.mailbox_nodes.set(HashMap::new());
+    ctx.mailbox_roots.set(Vec::new());
+}
+
+async fn handle_select_mailbox(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+) {
+    ctx.selected_message.set(None);
+    ctx.message_view.set(MessageViewState::Empty);
+    ctx.download_status.set(HashMap::new());
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
+    ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        error!("SelectMailbox: no account selected");
+        ctx.messages_loading.set(false);
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        error!("SelectMailbox: no connector for {}", account_id);
+        ctx.messages_loading.set(false);
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    match connector.open_folder(&folder_id).await {
+        Ok(total) => {
+            info!(
+                "Opened mailbox {} with {} messages",
+                mailbox_id.to_string(),
+                total
+            );
+            ctx.messages.set(SparseList::new(total));
+            ctx.messages_loading.set(false);
+            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
+                node.total_count = total;
+            }
+        }
+        Err(e) => {
+            error!("Failed to open mailbox: {}", e);
+            ctx.messages_loading.set(false);
+        }
+    }
+}
+
+async fn handle_fetch_message_range(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    range: Range<usize>,
+) {
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    if range.start >= range.end {
+        return;
+    }
+
+    let already = {
+        let messages = ctx.messages.read();
+        (range.start..range.end).all(|i| messages.has_item(i))
+    };
+    if already {
+        return;
+    }
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        error!("FetchMessageRange: no connector for {}", account_id);
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    info!(
+        "Fetching messages {}..{} for {}",
+        range.start,
+        range.end,
+        mailbox_id.to_string()
+    );
+    match connector
+        .list_envelopes_range(&folder_id, range.clone())
+        .await
+    {
+        Ok(envelopes) => {
+            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+                return;
+            }
+            let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
+            ctx.messages.write().insert_batch(range.start, batch);
+        }
+        Err(e) => {
+            error!(
+                "Failed to fetch message range {}..{}: {}",
+                range.start, range.end, e
+            );
+        }
+    }
+}
+
+async fn handle_select_message(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_id: MessageId,
+) {
+    ctx.selected_message.set(Some(message_id.clone()));
+    ctx.download_status.set(HashMap::new());
+    ctx.message_view.set(MessageViewState::Loading {
+        message_id: message_id.clone(),
+    });
+
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        ctx.message_view.set(MessageViewState::Error {
+            message_id: message_id.clone(),
+            message: "No mailbox selected".into(),
+        });
+        return;
+    };
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.message_view.set(MessageViewState::Error {
+            message_id: message_id.clone(),
+            message: "No account selected".into(),
+        });
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.message_view.set(MessageViewState::Error {
+            message_id: message_id.clone(),
+            message: "Not connected".into(),
+        });
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_id = CoreMessageId::new(message_id.to_string());
+    info!(
+        "Loading message {} in {}",
+        message_id,
+        mailbox_id.to_string()
+    );
+
+    match load_message(connector, &folder_id, &core_id).await {
+        Ok(loaded) => {
+            if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                return;
+            }
+            ctx.message_view.set(MessageViewState::Ready {
+                message_id,
+                loaded: Arc::new(loaded),
+            });
+        }
+        Err(e) => {
+            if ctx.selected_message.read().as_ref() != Some(&message_id) {
+                return;
+            }
+            error!("Failed to load message {}: {}", message_id, e);
+            ctx.message_view.set(MessageViewState::Error {
+                message_id,
+                message: e.to_string(),
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_download_attachment(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_id: MessageId,
+    section: String,
+    filename: String,
+    content_type: String,
+    encoding: TransferEncoding,
+    size_hint: Option<u64>,
+) {
+    // Ignore if user navigated away.
+    if ctx.selected_message.read().as_ref() != Some(&message_id) {
+        return;
+    }
+    if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
+        ctx.download_status.write().insert(
+            section.clone(),
+            DownloadStatus::Error(format!(
+                "attachment too large (max {} bytes)",
+                MAX_DOWNLOAD_BYTES
+            )),
+        );
+        return;
+    }
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.download_status
+            .write()
+            .insert(section, DownloadStatus::Error("No account selected".into()));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.download_status
+            .write()
+            .insert(section, DownloadStatus::Error("Not connected".into()));
+        return;
+    };
+
+    ctx.download_status.write().insert(
+        section.clone(),
+        DownloadStatus::InProgress {
+            received: 0,
+            total: size_hint,
+        },
+    );
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_id = CoreMessageId::new(message_id.to_string());
+    info!(
+        "Downloading attachment section {} for message {}",
+        section, message_id
+    );
+
+    let stream_result = connector
+        .stream_raw_part(&folder_id, &core_id, &section)
+        .await;
+
+    let mut stream = match stream_result {
+        Ok(s) => s,
+        Err(e) => {
+            error!("stream_raw_part failed: {}", e);
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Error(e.to_string()));
+            return;
+        }
+    };
+
+    // Stream wire → TE decode → Blob parts (no full-file Vec in Rust).
+    let mut download = StreamingBlobDownload::new(encoding, filename, content_type);
+    let mut total_hint = size_hint;
+    let mut failed = false;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(chunk) => {
+                if let Some(h) = chunk.total_hint {
+                    total_hint = Some(h);
+                }
+                if let Err(e) = download.push_wire_chunk(&chunk.data) {
+                    error!("download stream error: {}", e);
+                    ctx.download_status
+                        .write()
+                        .insert(section.clone(), DownloadStatus::Error(e));
+                    failed = true;
+                    break;
+                }
+                // Drop wire chunk after decode; only Blob parts retain decoded data.
+                drop(chunk);
                 ctx.download_status.write().insert(
                     section.clone(),
                     DownloadStatus::InProgress {
-                        received: 0,
-                        total: size_hint,
+                        received: download.wire_received,
+                        total: total_hint,
                     },
                 );
-
-                let folder_id = FolderId::new(mailbox_id.to_string());
-                let core_id = CoreMessageId::new(message_id.to_string());
-                info!(
-                    "Downloading attachment section {} for message {}",
-                    section, message_id
-                );
-
-                let stream_result = connector
-                    .stream_raw_part(&folder_id, &core_id, &section)
-                    .await;
-
-                let mut stream = match stream_result {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("stream_raw_part failed: {}", e);
-                        ctx.download_status.write().insert(
-                            section,
-                            DownloadStatus::Error(e.to_string()),
-                        );
-                        continue;
-                    }
-                };
-
-                // Stream wire → TE decode → Blob parts (no full-file Vec in Rust).
-                let mut download =
-                    StreamingBlobDownload::new(encoding, filename, content_type);
-                let mut total_hint = size_hint;
-                let mut failed = false;
-
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(chunk) => {
-                            if let Some(h) = chunk.total_hint {
-                                total_hint = Some(h);
-                            }
-                            if let Err(e) = download.push_wire_chunk(&chunk.data) {
-                                error!("download stream error: {}", e);
-                                ctx.download_status
-                                    .write()
-                                    .insert(section.clone(), DownloadStatus::Error(e));
-                                failed = true;
-                                break;
-                            }
-                            // Drop wire chunk after decode; only Blob parts retain decoded data.
-                            drop(chunk);
-                            ctx.download_status.write().insert(
-                                section.clone(),
-                                DownloadStatus::InProgress {
-                                    received: download.wire_received,
-                                    total: total_hint,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            error!("download chunk error: {}", e);
-                            ctx.download_status.write().insert(
-                                section.clone(),
-                                DownloadStatus::Error(e.to_string()),
-                            );
-                            failed = true;
-                            break;
-                        }
-                    }
-                }
-
-                if failed {
-                    continue;
-                }
-                if ctx.selected_message.read().as_ref() != Some(&message_id) {
-                    continue;
-                }
-
-                match download.finish_and_save() {
-                    Ok(()) => {
-                        ctx.download_status
-                            .write()
-                            .insert(section, DownloadStatus::Finished);
-                    }
-                    Err(e) => {
-                        error!("save download failed: {}", e);
-                        ctx.download_status
-                            .write()
-                            .insert(section, DownloadStatus::Error(e));
-                    }
-                }
             }
+            Err(e) => {
+                error!("download chunk error: {}", e);
+                ctx.download_status
+                    .write()
+                    .insert(section.clone(), DownloadStatus::Error(e.to_string()));
+                failed = true;
+                break;
+            }
+        }
+    }
+
+    if failed {
+        return;
+    }
+    if ctx.selected_message.read().as_ref() != Some(&message_id) {
+        return;
+    }
+
+    match download.finish_and_save() {
+        Ok(()) => {
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Finished);
+        }
+        Err(e) => {
+            error!("save download failed: {}", e);
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Error(e));
         }
     }
 }
@@ -361,3 +1081,474 @@ fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<MailboxI
 
     (root_ids, mboxes)
 }
+
+async fn refresh_outbox_signal(outbox: &dyn OutboxStore, ctx: &mut AppContext) {
+    match outbox.list().await {
+        Ok(items) => {
+            ctx.outbox
+                .set(items.iter().map(OutboxListEntry::from).collect());
+        }
+        Err(e) => {
+            warn!("outbox list failed: {e}");
+        }
+    }
+}
+
+async fn recover_outbox(outbox: &dyn OutboxStore, ctx: &mut AppContext) {
+    if let Ok(items) = outbox.list().await {
+        for mut item in items {
+            if item.state == OutboxItemState::Sending {
+                item.state = OutboxItemState::Queued;
+                item.last_error = Some("Sending was interrupted. Will retry.".into());
+                item.updated_at = chrono::Utc::now();
+                let _ = outbox.upsert(&item).await;
+            }
+        }
+    }
+    refresh_outbox_signal(outbox, ctx).await;
+}
+
+async fn cancel_inflight_for(
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    account_id: &AccountId,
+    outbox: &dyn OutboxStore,
+) {
+    let Some(flight) = inflight.take() else {
+        return;
+    };
+    if flight.account_id != *account_id {
+        *inflight = Some(flight);
+        return;
+    }
+    let _ = flight.cancel_tx.send(());
+    *smtp_generation = smtp_generation.wrapping_add(1);
+    if let Some(id) = flight.outbox_id {
+        if let Ok(Some(mut item)) = outbox.get(&id).await {
+            item.state = OutboxItemState::Queued;
+            item.updated_at = chrono::Utc::now();
+            let _ = outbox.upsert(&item).await;
+        }
+    }
+}
+
+async fn purge_missing_accounts(
+    manager: &AccountConnectionManager,
+    outbox: &dyn OutboxStore,
+    ctx: &mut AppContext,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+) {
+    let known: Vec<AccountId> = match manager.store().list().await {
+        Ok(list) => list.into_iter().map(|c| c.id).collect(),
+        Err(_) => return,
+    };
+    if let Ok(items) = outbox.list().await {
+        for item in items {
+            if !known.iter().any(|id| *id == item.account_id) {
+                if inflight
+                    .as_ref()
+                    .map(|f| f.account_id == item.account_id)
+                    .unwrap_or(false)
+                {
+                    cancel_inflight_for(inflight, smtp_generation, &item.account_id, outbox).await;
+                }
+                let _ = outbox.delete_for_account(&item.account_id).await;
+            }
+        }
+    }
+    refresh_outbox_signal(outbox, ctx).await;
+}
+
+fn bump_smtp_gen(smtp_generation: &mut u64) -> u64 {
+    *smtp_generation = smtp_generation.wrapping_add(1);
+    *smtp_generation
+}
+
+async fn handle_send_message(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    outbox: &dyn OutboxStore,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    account_id: AccountId,
+    request: SubmitRequest,
+    display: OutboxDisplay,
+) {
+    let Some(config) = manager.resolve_config(&account_id).await else {
+        ctx.send_status.set(Some(SendState::Failed {
+            account_id,
+            kind: SendErrorKind::NotConfigured,
+            message: "Account not found.".into(),
+            retryable: false,
+        }));
+        return;
+    };
+    if let Err(err) = preflight(&config) {
+        ctx.send_status.set(Some(SendState::Failed {
+            account_id,
+            kind: err.kind,
+            message: err.message,
+            retryable: false,
+        }));
+        return;
+    }
+    let mut item = match OutboxItem::from_request(
+        account_id.clone(),
+        &request,
+        display.subject,
+        display.to_preview,
+    ) {
+        Ok(i) => i,
+        Err(e) => {
+            ctx.send_status.set(Some(SendState::Failed {
+                account_id,
+                kind: SendErrorKind::MessageTooLarge,
+                message: e.to_string(),
+                retryable: false,
+            }));
+            return;
+        }
+    };
+    if let Err(e) = outbox.upsert(&item).await {
+        ctx.send_status.set(Some(SendState::Failed {
+            account_id,
+            kind: SendErrorKind::Internal,
+            message: e.to_string(),
+            retryable: false,
+        }));
+        return;
+    }
+    refresh_outbox_signal(outbox, ctx).await;
+    if inflight.is_some() {
+        ctx.send_status.set(Some(SendState::Idle));
+        return;
+    }
+    item.attempts = 1;
+    persist_sending(outbox, &mut item).await;
+    refresh_outbox_signal(outbox, ctx).await;
+    start_send_item(
+        ctx,
+        smtp_tx,
+        inflight,
+        smtp_generation,
+        config,
+        item,
+        request,
+    );
+}
+
+fn start_send_item(
+    ctx: &mut AppContext,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    config: AccountConfig,
+    item: OutboxItem,
+    request: SubmitRequest,
+) {
+    let generation = bump_smtp_gen(smtp_generation);
+    let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel();
+    let account_id = config.id.clone();
+    *inflight = Some(InFlightSmtp {
+        account_id: account_id.clone(),
+        generation,
+        cancel_tx,
+        outbox_id: Some(item.id.clone()),
+        is_test: false,
+    });
+    ctx.send_status.set(Some(SendState::Sending {
+        account_id,
+        phase: SendPhase::Connecting,
+    }));
+    let _ = item;
+    spawn_submit(
+        config,
+        request,
+        generation,
+        cancel_rx,
+        smtp_tx.clone(),
+        SEND_TIMEOUT_MS,
+    );
+}
+
+async fn persist_sending(outbox: &dyn OutboxStore, item: &mut OutboxItem) {
+    item.state = OutboxItemState::Sending;
+    item.updated_at = chrono::Utc::now();
+    let _ = outbox.upsert(item).await;
+}
+
+async fn drain_outbox(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    outbox: &dyn OutboxStore,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+) {
+    if inflight.is_some() {
+        return;
+    }
+    let Some(mut item) = (match outbox.oldest_queued().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("oldest_queued failed: {e}");
+            return;
+        }
+    }) else {
+        return;
+    };
+    let Some(config) = manager.resolve_config(&item.account_id).await else {
+        item.state = OutboxItemState::Failed;
+        item.last_error = Some("Account is no longer available.".into());
+        let _ = outbox.upsert(&item).await;
+        refresh_outbox_signal(outbox, ctx).await;
+        return;
+    };
+    if let Err(err) = preflight(&config) {
+        item.state = OutboxItemState::Failed;
+        item.last_error_kind = Some(err.kind);
+        item.last_error = Some(err.message);
+        let _ = outbox.upsert(&item).await;
+        refresh_outbox_signal(outbox, ctx).await;
+        return;
+    }
+    let request = match item.to_request() {
+        Ok(r) => r,
+        Err(e) => {
+            item.state = OutboxItemState::Failed;
+            item.last_error = Some(e.to_string());
+            let _ = outbox.upsert(&item).await;
+            refresh_outbox_signal(outbox, ctx).await;
+            return;
+        }
+    };
+    item.attempts = item.attempts.saturating_add(1);
+    persist_sending(outbox, &mut item).await;
+    refresh_outbox_signal(outbox, ctx).await;
+    start_send_item(
+        ctx,
+        smtp_tx,
+        inflight,
+        smtp_generation,
+        config,
+        item,
+        request,
+    );
+}
+
+async fn handle_test_smtp(
+    ctx: &mut AppContext,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    request_id: AccountId,
+    config: AccountConfig,
+) {
+    if inflight.is_some() {
+        ctx.smtp_test_status.write().insert(
+            request_id,
+            SendState::Failed {
+                account_id: config.id.clone(),
+                kind: SendErrorKind::Internal,
+                message: "A send is already in progress.".into(),
+                retryable: true,
+            },
+        );
+        return;
+    }
+    if let Err(err) = preflight(&config) {
+        ctx.smtp_test_status.write().insert(
+            request_id.clone(),
+            SendState::Failed {
+                account_id: config.id.clone(),
+                kind: err.kind,
+                message: err.message,
+                retryable: false,
+            },
+        );
+        return;
+    }
+    let generation = bump_smtp_gen(smtp_generation);
+    let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel();
+    *inflight = Some(InFlightSmtp {
+        account_id: config.id.clone(),
+        generation,
+        cancel_tx,
+        outbox_id: None,
+        is_test: true,
+    });
+    ctx.smtp_test_status.write().insert(
+        request_id.clone(),
+        SendState::Sending {
+            account_id: config.id.clone(),
+            phase: SendPhase::Connecting,
+        },
+    );
+    spawn_test(config, request_id, generation, cancel_rx, smtp_tx.clone());
+}
+
+async fn handle_smtp_finished(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    outbox: &dyn OutboxStore,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    generation: u64,
+    outcome: SmtpOutcome,
+) {
+    let Some(flight) = inflight.take() else {
+        return;
+    };
+    if flight.generation != generation {
+        *inflight = Some(flight);
+        return;
+    }
+    match outcome {
+        SmtpOutcome::Send(Ok(receipt)) => {
+            let rfc822 = if let Some(id) = &flight.outbox_id {
+                match outbox.get(id).await {
+                    Ok(Some(item)) => item.rfc822().ok(),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(id) = flight.outbox_id {
+                let _ = outbox.delete(&id).await;
+            }
+            ctx.send_status.set(Some(SendState::Sent {
+                account_id: flight.account_id.clone(),
+            }));
+            ctx.toast.set(Some("Sent".into()));
+            let _ = receipt;
+            if let Some(rfc822) = rfc822 {
+                let _ = smtp_tx.unbounded_send(CoreEvent::ArchiveSent {
+                    account_id: flight.account_id,
+                    rfc822,
+                });
+            }
+        }
+        SmtpOutcome::Send(Err(err)) => {
+            if let Some(id) = &flight.outbox_id {
+                if let Ok(Some(mut item)) = outbox.get(id).await {
+                    item.last_error_kind = Some(err.kind);
+                    item.last_error = Some(err.message.clone());
+                    item.updated_at = chrono::Utc::now();
+                    if err.kind.is_retryable() && item.attempts < MAX_OUTBOX_AUTO_ATTEMPTS {
+                        item.state = OutboxItemState::Queued;
+                    } else {
+                        item.state = OutboxItemState::Failed;
+                    }
+                    let _ = outbox.upsert(&item).await;
+                }
+            }
+            ctx.send_status.set(Some(SendState::Failed {
+                account_id: flight.account_id,
+                kind: err.kind,
+                message: err.message,
+                retryable: err.kind.is_retryable(),
+            }));
+        }
+        SmtpOutcome::Test { request_id, result } => {
+            let state = match result {
+                Ok(()) => SendState::Sent {
+                    account_id: flight.account_id,
+                },
+                Err(err) => SendState::Failed {
+                    account_id: flight.account_id,
+                    kind: err.kind,
+                    message: err.message,
+                    retryable: err.kind.is_retryable(),
+                },
+            };
+            ctx.smtp_test_status.write().insert(request_id, state);
+        }
+    }
+    refresh_outbox_signal(outbox, ctx).await;
+    drain_outbox(
+        manager,
+        ctx,
+        outbox,
+        smtp_tx,
+        inflight,
+        smtp_generation,
+    )
+    .await;
+}
+
+const ARCHIVE_SENT_WARN: &str = "Could not save a copy in Sent.";
+
+async fn handle_archive_sent(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    rfc822: Vec<u8>,
+) {
+    let Some(connector) = manager.get(&account_id) else {
+        warn!("ArchiveSent: no IMAP connector for {account_id}");
+        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        return;
+    };
+    let sent = match connector.find_sent_folder().await {
+        Ok(Some(name)) => name,
+        Ok(None) => {
+            warn!("ArchiveSent: no Sent mailbox for {account_id}");
+            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            return;
+        }
+        Err(e) => {
+            warn!("ArchiveSent: LIST failed for {account_id}: {e}");
+            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            return;
+        }
+    };
+    if let Err(e) = connector.append_rfc822_seen(&sent, &rfc822).await {
+        warn!("ArchiveSent: APPEND failed for {account_id} → {sent}: {e}");
+        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        return;
+    }
+    info!("ArchiveSent: appended to {sent} for {account_id}");
+    let viewing_account = ctx.selected_account.read().as_ref() == Some(&account_id);
+    let viewing_sent = ctx
+        .selected_mailbox
+        .read()
+        .as_ref()
+        .is_some_and(|id| id.to_string() == sent);
+    if viewing_account && viewing_sent {
+        handle_select_mailbox(manager, ctx, MailboxId::from(sent)).await;
+    }
+}
+
+async fn handle_retry_outbox(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    outbox: &dyn OutboxStore,
+    smtp_tx: &UnboundedSender<CoreEvent>,
+    inflight: &mut Option<InFlightSmtp>,
+    smtp_generation: &mut u64,
+    id: crate::outbox_store::OutboxId,
+) {
+    let Ok(Some(mut item)) = outbox.get(&id).await else {
+        return;
+    };
+    item.state = OutboxItemState::Queued;
+    item.attempts = 0;
+    item.last_error = None;
+    item.last_error_kind = None;
+    item.updated_at = chrono::Utc::now();
+    let _ = outbox.upsert(&item).await;
+    refresh_outbox_signal(outbox, ctx).await;
+    drain_outbox(
+        manager,
+        ctx,
+        outbox,
+        smtp_tx,
+        inflight,
+        smtp_generation,
+    )
+    .await;
+}
+

@@ -28,6 +28,23 @@ pub fn base64_decode(raw: &[u8]) -> Result<Vec<u8>, DecodeError> {
         .map_err(|e| DecodeError::Base64(e.to_string()))
 }
 
+/// Encode raw octets as base64 with 76-column CRLF wrapping (RFC 2045).
+pub fn base64_encode(raw: &[u8]) -> Vec<u8> {
+    let enc = STANDARD.encode(raw);
+    let bytes = enc.as_bytes();
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 19);
+    for (i, chunk) in bytes.chunks(76).enumerate() {
+        if i > 0 {
+            out.extend_from_slice(b"\r\n");
+        }
+        out.extend_from_slice(chunk);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +81,19 @@ mod tests {
     #[test]
     fn empty() {
         assert_eq!(base64_decode(b"").unwrap(), b"");
+    }
+
+    #[test]
+    fn encode_roundtrip() {
+        let raw = b"PNGDATA";
+        assert_eq!(base64_decode(&base64_encode(raw)).unwrap(), raw);
+    }
+
+    #[test]
+    fn encode_wraps_at_76() {
+        let raw = vec![0u8; 80];
+        let enc = base64_encode(&raw);
+        assert!(enc.windows(2).any(|w| w == b"\r\n"));
+        assert_eq!(base64_decode(&enc).unwrap(), raw);
     }
 }

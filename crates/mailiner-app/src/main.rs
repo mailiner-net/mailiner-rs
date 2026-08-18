@@ -415,10 +415,10 @@ fn MainView() -> Element {
 
                 OutboxPanel {}
             }
-
-            ComposeOverlay {}
-            ToastHost {}
         }
+
+        ComposeOverlay {}
+        ToastHost {}
     }
 }
 

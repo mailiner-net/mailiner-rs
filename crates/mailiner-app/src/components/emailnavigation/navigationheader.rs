@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
-use dioxus_heroicons::{Icon, solid::Shape};
+
+use super::super::icons::{Icon, IconKind};
 
 use crate::Route;
 use crate::context::AppContext;
@@ -31,7 +32,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
 
             Icon {
                 size: 24,
-                icon: if props.mode == Mode::MailboxTreeView { Shape::User } else { Shape::Folder },
+                icon: if props.mode == Mode::MailboxTreeView { IconKind::User } else { IconKind::Folder },
             }
 
             div {
@@ -68,7 +69,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                     aria_label: "Account settings",
                     Icon {
                         size: 22,
-                        icon: Shape::Cog6Tooth,
+                        icon: IconKind::Cog6Tooth,
                     }
                 }
             }

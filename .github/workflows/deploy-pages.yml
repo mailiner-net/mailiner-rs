@@ -48,7 +48,7 @@ jobs:
           dx --version
 
       - name: Build mailiner-app (release web)
-        run: dx build -p mailiner-app --release --web --locked
+        run: dx build -p mailiner-app --release --web --debug-symbols=false --locked
 
       - name: Prepare deploy directory
         run: |

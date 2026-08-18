@@ -82,6 +82,18 @@ Step 2: run Mailiner
 cd mailiner-rs && dx serve -p mailiner-app
 ```
 
+That is a debug WASM build (`wasm-dev`, ~100 MB). For a size-optimized release
+bundle (what CI deploys):
+
+```
+dx build -p mailiner-app --release --web --debug-symbols=false
+```
+
+Output lands in `target/dx/mailiner-app/release/web/public/`. Release uses the
+workspace `wasm-release` profile (`opt-level = "s"`, LTO) and runs `wasm-opt`
+without DWARF. Pass `--debug-symbols=false` so the CLI default does not
+re-enable debug info and skip optimization.
+
 Optional form prefill for local development (does **not** auto-connect):
 
 ```

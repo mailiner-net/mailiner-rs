@@ -1,20 +1,20 @@
 use dioxus::prelude::*;
-use dioxus_heroicons::{Icon, IconButton};
-use dioxus_heroicons::solid::Shape;
 use mailiner_core::MailboxRole;
+
+use super::super::icons::{Icon, IconButton, IconKind};
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 
-fn role_icon(role: MailboxRole) -> Shape {
+fn role_icon(role: MailboxRole) -> IconKind {
     match role {
-        MailboxRole::Inbox => Shape::Inbox,
-        MailboxRole::Drafts => Shape::PencilSquare,
-        MailboxRole::Sent => Shape::PaperAirplane,
-        MailboxRole::Outbox => Shape::InboxStack,
-        MailboxRole::Trash => Shape::Trash,
-        MailboxRole::Other => Shape::Folder,
+        MailboxRole::Inbox => IconKind::Inbox,
+        MailboxRole::Drafts => IconKind::PencilSquare,
+        MailboxRole::Sent => IconKind::PaperAirplane,
+        MailboxRole::Outbox => IconKind::InboxStack,
+        MailboxRole::Trash => IconKind::Trash,
+        MailboxRole::Other => IconKind::Folder,
     }
 }
 
@@ -69,7 +69,7 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 if mailbox.children.len() > 0 {
                     IconButton {
                         class: "flat mailbox-chevron",
-                        icon: if children_visible() { Shape::ChevronDown } else { Shape::ChevronRight },
+                        icon: if children_visible() { IconKind::ChevronDown } else { IconKind::ChevronRight },
                         size: 16,
                         onclick: move |e: MouseEvent| {
                             children_visible.set(!children_visible());

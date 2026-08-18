@@ -23,3 +23,10 @@ script = []
 # Javascript code file
 # serve: [dev-server] only
 script = []
+
+# Release wasm-opt. `debug = false` is required: DWARF makes the official
+# binaryen build abort (`compile unit size was incorrect`), so dx would
+# otherwise ship the unoptimized 6.7 MB file.
+[web.wasm_opt]
+level = "s"
+debug = false

@@ -1,8 +1,8 @@
 //! Plain-text compose overlay (v1 send).
 
 use dioxus::prelude::*;
-use dioxus_heroicons::{Icon, IconButton};
-use dioxus_heroicons::solid::Shape;
+
+use super::icons::{Icon, IconButton, IconKind};
 
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument, BodyMode};
@@ -155,7 +155,7 @@ pub fn ComposeOverlay() -> Element {
                 let mut ctx = ctx.clone();
                 move |_| open_new_message(&mut ctx)
             },
-            Icon { size: 18, icon: Shape::PencilSquare }
+            Icon { size: 18, icon: IconKind::PencilSquare }
             "Compose"
         }
 
@@ -175,7 +175,7 @@ pub fn ComposeOverlay() -> Element {
                             class: "flat ui-icon-btn",
                             title: "Close",
                             size: 20,
-                            icon: Shape::XMark,
+                            icon: IconKind::XMark,
                             onclick: close,
                         }
                     }

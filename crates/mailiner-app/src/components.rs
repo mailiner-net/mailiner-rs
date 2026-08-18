@@ -1,6 +1,7 @@
 mod account_form;
 mod accounts;
 mod compose;
+mod icons;
 mod outbox;
 mod attachments;
 mod connection_status;

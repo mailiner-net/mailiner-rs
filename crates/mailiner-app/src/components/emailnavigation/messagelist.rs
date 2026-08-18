@@ -8,6 +8,18 @@ use crate::components::virtual_scroll::VirtualScroll;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::message::Message;
+use chrono::{DateTime, Utc};
+
+fn list_date(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    if dt.date_naive() == now.date_naive() {
+        dt.format("%H:%M").to_string()
+    } else if dt.format("%Y").to_string() == now.format("%Y").to_string() {
+        dt.format("%d %b").to_string()
+    } else {
+        dt.format("%d %b %Y").to_string()
+    }
+}
 
 const ITEM_HEIGHT: f64 = 72.0;
 const BUFFER_SIZE: usize = 5;
@@ -50,13 +62,24 @@ pub fn MessageList() -> Element {
                     class: "message-list-item-content",
 
                     div {
-                        class: "message-from",
-                        "{message.from}"
+                        class: "message-list-item-top",
+                        div {
+                            class: "message-from",
+                            "{message.from_preview()}"
+                        }
+                        div {
+                            class: "message-date",
+                            "{list_date(&message.date)}"
+                        }
                     }
 
                     div {
                         class: "message-subject",
-                        "{message.subject}"
+                        if message.subject.trim().is_empty() {
+                            span { class: "message-subject-empty", "(no subject)" }
+                        } else {
+                            "{message.subject}"
+                        }
                     }
                 }
             }
@@ -77,7 +100,7 @@ pub fn MessageList() -> Element {
                 if selected_mailbox.is_none() {
                     div {
                         class: "message-list-empty",
-                        "Select a mailbox to view messages"
+                        "Select a mailbox"
                     }
                 } else if loading {
                     div {

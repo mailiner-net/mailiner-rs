@@ -38,6 +38,18 @@ impl MailboxRole {
             Self::Other => 5,
         }
     }
+
+    /// Canonical label for special-use folders (`None` keeps the server name).
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Inbox => Some("Inbox"),
+            Self::Drafts => Some("Drafts"),
+            Self::Sent => Some("Sent"),
+            Self::Outbox => Some("Outbox"),
+            Self::Trash => Some("Trash"),
+            Self::Other => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

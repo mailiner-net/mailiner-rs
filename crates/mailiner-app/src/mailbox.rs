@@ -33,6 +33,13 @@ pub struct MailboxNode {
     pub role: MailboxRole,
 }
 
+impl MailboxNode {
+    /// Special-use label when we know the role, otherwise the server name.
+    pub fn title(&self) -> &str {
+        self.role.label().unwrap_or(self.name.as_str())
+    }
+}
+
 impl From<Folder> for MailboxNode {
     fn from(folder: Folder) -> Self {
         Self {
@@ -138,6 +145,15 @@ mod tests {
             created_at: ts,
             updated_at: ts,
         }
+    }
+
+    #[test]
+    fn title_uses_role_label() {
+        let inbox = folder("INBOX", "INBOX", None, MailboxRole::Inbox);
+        let node = MailboxNode::from(inbox);
+        assert_eq!(node.title(), "Inbox");
+        let junk = folder("Junk", "Junk", None, MailboxRole::Other);
+        assert_eq!(MailboxNode::from(junk).title(), "Junk");
     }
 
     #[test]

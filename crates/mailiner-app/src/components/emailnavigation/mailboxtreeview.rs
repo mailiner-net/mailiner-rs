@@ -1,11 +1,22 @@
-use dioxus::logger::tracing::info;
 use dioxus::prelude::*;
-use dioxus_heroicons::IconButton;
+use dioxus_heroicons::{Icon, IconButton};
 use dioxus_heroicons::solid::Shape;
+use mailiner_core::MailboxRole;
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
+
+fn role_icon(role: MailboxRole) -> Shape {
+    match role {
+        MailboxRole::Inbox => Shape::Inbox,
+        MailboxRole::Drafts => Shape::PencilSquare,
+        MailboxRole::Sent => Shape::PaperAirplane,
+        MailboxRole::Outbox => Shape::InboxStack,
+        MailboxRole::Trash => Shape::Trash,
+        MailboxRole::Other => Shape::Folder,
+    }
+}
 
 #[component]
 pub fn MailboxTreeView() -> Element {
@@ -48,6 +59,7 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
             class: "mailbox-tree-view-item",
 
             div {
+                class: "mailbox-row",
                 class: if is_selected { "selected" },
 
                 onclick: move |_| {
@@ -56,25 +68,29 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
 
                 if mailbox.children.len() > 0 {
                     IconButton {
-                        class: "flat",
+                        class: "flat mailbox-chevron",
                         icon: if children_visible() { Shape::ChevronDown } else { Shape::ChevronRight },
-                        size: 24,
-
+                        size: 16,
                         onclick: move |e: MouseEvent| {
                             children_visible.set(!children_visible());
                             e.stop_propagation();
                         }
                     }
-                } else {
-                    span {
-                        style: "width: 24px",
+                }
+
+                span {
+                    class: "mailbox-icon",
+                    Icon {
+                        size: 18,
+                        icon: role_icon(mailbox.role),
                     }
                 }
 
                 div {
-                    "{mailbox.name}"
+                    class: "mailbox-name",
+                    "{mailbox.title()}"
                     if mailbox.unread_count > 0 {
-                        " ({mailbox.unread_count})"
+                        span { class: "mailbox-unread", " {mailbox.unread_count}" }
                     }
                 }
             }

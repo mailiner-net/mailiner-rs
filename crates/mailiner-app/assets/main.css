@@ -1,12 +1,40 @@
 :root {
     --background: #fff;
-    --foreground: #0a0a0a; 
-    
+    --foreground: #0a0a0a;
+    --surface: #fff;
+
     --sidebar: #fafafa;
     --sidebar-border: #c7c7c7;
+    --border: #d8d8d8;
+    --border-subtle: #ececec;
+
+    --text-muted: #5f6368;
+    --text-subtle: #888;
 
     --item-hover-background: #f5f5f5;
     --item-accent: #007bff;
+    --accent-soft: #e3f2fd;
+
+    --danger: #b71c1c;
+    --danger-soft: #fdecea;
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-pill: 999px;
+
+    --shadow-fab: 0 4px 14px rgba(0, 0, 0, 0.18);
+    --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.2);
+
+    --text-xs: 0.75rem;
+    --text-sm: 0.85rem;
+    --text-md: 0.95rem;
+    --text-lg: 1.2rem;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
 
     --margin: 10px;
     --spacing: 10px;
@@ -20,6 +48,8 @@ body {
     margin: 0;
     padding: 0;
     background-color: #fff;
+    color: var(--foreground);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 button.flat {
@@ -302,10 +332,10 @@ button.flat {
 
 .onboarding-btn {
     font: inherit;
-    font-size: 0.95rem;
+    font-size: var(--text-md);
     font-weight: 500;
     padding: 0.5rem 1rem;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     border: 1px solid transparent;
     cursor: pointer;
 }
@@ -624,19 +654,174 @@ a.accounts-link-btn {
     background: var(--item-hover-background);
 }
 
+/* —— Shared UI primitives (keep above the nested #app block) —— */
+.ui-btn {
+    font: inherit;
+    font-size: var(--text-md);
+    font-weight: 500;
+    padding: 0.45rem 0.9rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    background: none;
+}
+
+.ui-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.ui-btn-primary {
+    background: var(--item-accent);
+    color: #fff;
+}
+
+.ui-btn-primary:hover:not(:disabled) {
+    filter: brightness(0.95);
+}
+
+.ui-btn-secondary {
+    background: var(--surface);
+    border-color: var(--sidebar-border);
+    color: var(--foreground);
+}
+
+.ui-btn-secondary:hover:not(:disabled) {
+    background: var(--item-hover-background);
+}
+
+.ui-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+
+.ui-icon-btn:hover {
+    color: var(--foreground);
+    background: var(--item-hover-background);
+}
+
+.ui-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.ui-field > span {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.ui-input {
+    font: inherit;
+    font-size: var(--text-md);
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--sidebar-border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--foreground);
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.ui-input:focus {
+    outline: 2px solid color-mix(in srgb, var(--item-accent) 45%, transparent);
+    outline-offset: 1px;
+    border-color: var(--item-accent);
+}
+
+.ui-input:disabled {
+    opacity: 0.65;
+    background: #f0f0f0;
+}
+
+textarea.ui-input {
+    resize: vertical;
+    min-height: 10rem;
+    line-height: 1.45;
+}
+
+.ui-dialog {
+    background: var(--surface);
+    color: var(--foreground);
+    width: min(36rem, 94vw);
+    max-height: min(90vh, 52rem);
+    padding: var(--space-5);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-dialog);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    box-sizing: border-box;
+}
+
+.ui-dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.ui-dialog-title {
+    margin: 0;
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.ui-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+}
+
+.ui-kv {
+    display: grid;
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: 0.2rem;
+    font-size: var(--text-sm);
+}
+
+.ui-kv-k {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.ui-kv-v {
+    color: var(--foreground);
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.ui-alert-error {
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--text-sm);
+}
+
 .compose-fab {
     position: fixed;
     right: 1.5rem;
     bottom: 1.5rem;
     z-index: 20;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
     padding: 0.7rem 1.1rem;
     border: none;
-    border-radius: 999px;
-    background: var(--item-accent, #2563eb);
+    border-radius: var(--radius-pill);
+    background: var(--item-accent);
     color: #fff;
+    font: inherit;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-fab);
 }
 
 .compose-fab:disabled {
@@ -652,38 +837,37 @@ a.accounts-link-btn {
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: var(--space-4);
+    box-sizing: border-box;
 }
 
 .compose-dialog {
-    background: var(--surface, #fff);
-    color: inherit;
-    width: min(36rem, 94vw);
-    padding: 1.25rem;
-    border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+    width: min(40rem, 94vw);
 }
 
-.compose-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin: 0.6rem 0;
+.ui-field-grow {
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
-.compose-field input,
-.compose-field textarea {
-    padding: 0.4rem 0.5rem;
+.ui-field-grow .ui-input {
+    flex: 1 1 auto;
+    min-height: 12rem;
 }
 
-.compose-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
+.message-view-header {
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--sidebar-border);
+    flex-shrink: 0;
+    background: var(--surface);
 }
 
-.compose-error {
-    color: #b91c1c;
+.message-view-subject {
+    margin: 0 0 var(--space-3) 0;
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: 1.3;
+    word-break: break-word;
 }
 
 .outbox-panel {
@@ -737,6 +921,98 @@ a.accounts-link-btn {
     display: flex;
     align-items: center;
     gap: 0.6rem;
+}
+
+.mailbox-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.35rem;
+    height: 36px;
+    padding: 0 0.7rem 0 0.45rem;
+    cursor: pointer;
+    position: relative;
+}
+
+.mailbox-row:hover {
+    background-color: var(--item-hover-background);
+}
+
+.mailbox-row.selected {
+    background-color: #e3f2fd;
+}
+
+.mailbox-row.selected::before {
+    content: "";
+    display: block;
+    width: 2px;
+    height: 100%;
+    background-color: var(--item-accent);
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.mailbox-chevron {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.mailbox-icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    color: #5f6368;
+}
+
+.mailbox-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+    line-height: 36px;
+}
+
+.mailbox-unread {
+    color: var(--item-accent);
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+
+.message-list-item-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.message-list-item-top .message-from {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-date {
+    flex: 0 0 auto;
+    font-size: 0.75rem;
+    color: #666;
+}
+
+.message-subject-empty {
+    color: #888;
+    font-style: italic;
+}
+
+.message-list-empty,
+.message-view-empty,
+.message-view-loading {
+    color: #888;
+    font-size: 0.9rem;
+    padding: 2rem 1.25rem;
+    text-align: center;
 }
 
 
@@ -931,28 +1207,7 @@ a.accounts-link-btn {
         }
 
         .message-view-header {
-            padding: 12px 24px;
-            border-bottom: 1px solid var(--sidebar-border);
             flex-shrink: 0;
-
-            .message-view-subject {
-                margin: 0 0 8px 0;
-                font-size: 1.15rem;
-                font-weight: 600;
-                word-break: break-word;
-            }
-
-            .message-view-meta {
-                list-style: none;
-                padding: 0;
-                margin: 0;
-                font-size: 0.9rem;
-                color: #444;
-
-                li {
-                    margin-bottom: 2px;
-                }
-            }
         }
 
         .message-privacy-banner {

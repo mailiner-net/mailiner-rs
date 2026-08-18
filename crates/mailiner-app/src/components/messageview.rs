@@ -10,7 +10,7 @@ use crate::message::{Message, MessageId};
 
 /// Format a UTC date for the message header.
 fn format_date(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M UTC").to_string()
+    dt.format("%d %b %Y, %H:%M").to_string()
 }
 
 fn mount_shadow_html(host_id: &str, html: &str) {
@@ -125,7 +125,7 @@ pub fn MessageView() -> Element {
                 MessageViewState::Empty => rsx! {
                     div {
                         class: "message-view-empty",
-                        "Select a message to read"
+                        "Select a message"
                     }
                 },
                 MessageViewState::Loading { .. } => rsx! {
@@ -189,18 +189,22 @@ fn MessageHeader(message: Arc<Message>) -> Element {
             class: "message-view-header",
             h2 {
                 class: "message-view-subject",
-                "{message.subject}"
+                if message.subject.trim().is_empty() {
+                    span { class: "message-subject-empty", "(no subject)" }
+                } else {
+                    "{message.subject}"
+                }
             }
-            ul {
-                class: "message-view-meta",
-                li {
-                    strong { "From: " }
-                    "{message.from}"
+            div {
+                class: "ui-kv",
+                span { class: "ui-kv-k", "From" }
+                span { class: "ui-kv-v", title: "{message.from}", "{message.from_preview()}" }
+                if !message.to.trim().is_empty() {
+                    span { class: "ui-kv-k", "To" }
+                    span { class: "ui-kv-v", title: "{message.to}", "{message.to_preview()}" }
                 }
-                li {
-                    strong { "Date: " }
-                    "{date}"
-                }
+                span { class: "ui-kv-k", "Date" }
+                span { class: "ui-kv-v", "{date}" }
             }
         }
     }

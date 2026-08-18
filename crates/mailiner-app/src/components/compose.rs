@@ -1,6 +1,8 @@
 //! Plain-text compose overlay (v1 send).
 
 use dioxus::prelude::*;
+use dioxus_heroicons::{Icon, IconButton};
+use dioxus_heroicons::solid::Shape;
 
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument, BodyMode};
@@ -36,66 +38,87 @@ pub fn ComposeOverlay() -> Element {
         }
     });
 
+    let close = move |_| open.set(false);
+
     rsx! {
         button {
             class: "compose-fab",
             title: "Compose",
             disabled: ctx.selected_account.read().is_none(),
             onclick: move |_| open.set(true),
+            Icon { size: 18, icon: Shape::PencilSquare }
             "Compose"
         }
 
         if open() {
             div {
                 class: "compose-backdrop",
+                onclick: close,
                 div {
-                    class: "compose-dialog",
+                    class: "ui-dialog compose-dialog",
                     role: "dialog",
                     aria_label: "New message",
-                    h2 { "New message" }
+                    onclick: move |evt| evt.stop_propagation(),
+                    div {
+                        class: "ui-dialog-head",
+                        h2 { class: "ui-dialog-title", "New message" }
+                        IconButton {
+                            class: "flat ui-icon-btn",
+                            title: "Close",
+                            size: 20,
+                            icon: Shape::XMark,
+                            onclick: close,
+                        }
+                    }
                     label {
-                        class: "compose-field",
-                        "To"
+                        class: "ui-field",
+                        span { "To" }
                         input {
+                            class: "ui-input",
                             r#type: "email",
                             value: to(),
                             disabled: sending,
+                            placeholder: "name@example.com",
                             oninput: move |e| to.set(e.value()),
                         }
                     }
                     label {
-                        class: "compose-field",
-                        "Subject"
+                        class: "ui-field",
+                        span { "Subject" }
                         input {
+                            class: "ui-input",
                             value: subject(),
                             disabled: sending,
                             oninput: move |e| subject.set(e.value()),
                         }
                     }
                     label {
-                        class: "compose-field",
-                        "Message"
+                        class: "ui-field ui-field-grow",
+                        span { "Message" }
                         textarea {
+                            class: "ui-input",
                             value: body(),
                             disabled: sending,
-                            rows: 8,
+                            rows: 10,
                             oninput: move |e| body.set(e.value()),
                         }
                     }
                     if let Some(err) = error() {
-                        p { class: "compose-error", "{err}" }
+                        p { class: "ui-alert-error", "{err}" }
                     }
                     if let Some(SendState::Failed { message, .. }) = ctx.send_status.read().as_ref() {
-                        p { class: "compose-error", "{message}" }
+                        p { class: "ui-alert-error", "{message}" }
                     }
                     div {
-                        class: "compose-actions",
+                        class: "ui-dialog-actions",
                         button {
+                            class: "ui-btn ui-btn-secondary",
                             disabled: sending,
-                            onclick: move |_| open.set(false),
+                            onclick: close,
                             "Cancel"
                         }
                         button {
+                            class: "ui-btn ui-btn-primary",
                             disabled: sending,
                             onclick: move |_| {
                                 error.set(None);

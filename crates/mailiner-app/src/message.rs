@@ -35,6 +35,40 @@ pub struct Message {
     pub has_attachments: bool,
 }
 
+impl Message {
+    /// Display name when the address is `Name <email>`, otherwise the raw string.
+    pub fn from_preview(&self) -> &str {
+        preview_mailbox(&self.from)
+    }
+
+    pub fn to_preview(&self) -> &str {
+        preview_mailbox(&self.to)
+    }
+}
+
+fn preview_mailbox(value: &str) -> &str {
+    if let Some((name, rest)) = value.split_once(" <") {
+        if !name.is_empty() && rest.ends_with('>') {
+            return name;
+        }
+    }
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_mailbox;
+
+    #[test]
+    fn preview_strips_angle_addr() {
+        assert_eq!(
+            preview_mailbox("Mailiner Test <mailiner@dvratil.cz>"),
+            "Mailiner Test"
+        );
+        assert_eq!(preview_mailbox("solo@example.com"), "solo@example.com");
+    }
+}
+
 impl From<Envelope> for Message {
     fn from(envelope: Envelope) -> Self {
         Self {

@@ -409,7 +409,7 @@ pub fn AccountConnectionFields(
     }
 }
 
-/// Optional SMTP fields (collapsed advanced). Always shows the not-implemented notice.
+/// Optional SMTP fields (collapsed advanced).
 ///
 /// Empty section persists as `smtp: None`. Leave password blank to reuse IMAP password later.
 #[component]
@@ -439,7 +439,7 @@ pub fn AccountSmtpFields(
                 class: "onboarding-notice",
                 role: "note",
                 "Used when you click Send. Leave password empty to reuse the IMAP password. \
-                 v1 submits with implicit TLS (port 465)."
+                 Implicit TLS (port 465) or STARTTLS (port 587)."
             }
             details {
                 class: "onboarding-advanced",
@@ -494,22 +494,25 @@ pub fn AccountSmtpFields(
                             disabled: busy,
                             onchange: move |e| set_smtp_use_tls.call(e.checked()),
                         }
-                        " Use TLS (implicit TLS on port 465)"
+                        " Use TLS (implicit on port 465, STARTTLS on port 587)"
                     }
                 }
                 if warn_starttls {
                     p {
                         class: "onboarding-notice",
-                        role: "alert",
-                        "This account is set to STARTTLS (port 587), which cannot send or Test yet. \
-                         Switch to implicit TLS / port 465."
+                        role: "note",
+                        "STARTTLS (port 587) sends the server greeting, EHLO, and STARTTLS \
+                         in the clear, including through the proxy. AUTH and the message \
+                         are encrypted after the upgrade. Prefer implicit TLS on port 465 \
+                         when the server supports it."
                     }
                 }
                 if warn_plain {
                     p {
                         class: "onboarding-notice",
                         role: "alert",
-                        "Plaintext SMTP cannot send or Test yet. Enable TLS and use port 465."
+                        "Plaintext SMTP cannot send or Test. Enable TLS (implicit on port 465, \
+                         or STARTTLS on port 587)."
                     }
                 }
             }

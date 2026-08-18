@@ -60,9 +60,9 @@ pub fn preflight(config: &AccountConfig) -> Result<(), ClassifiedSendError> {
             message: "This account has no SMTP settings. Add them in account settings to send."
                 .into(),
         }),
-        Some(smtp) if smtp.tls_mode != SmtpTlsMode::Implicit => Err(ClassifiedSendError {
+        Some(smtp) if smtp.tls_mode == SmtpTlsMode::None => Err(ClassifiedSendError {
             kind: SendErrorKind::TlsModeUnsupported,
-            message: "This account is set to STARTTLS or no TLS, which cannot send yet. Switch to implicit TLS / port 465.".into(),
+            message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
         }),
         Some(smtp) if smtp.host.trim().is_empty() => Err(ClassifiedSendError {
             kind: SendErrorKind::NotConfigured,
@@ -122,11 +122,28 @@ async fn run_submit(
     timeout_ms: u32,
 ) -> Result<SubmitReceipt, ClassifiedSendError> {
     let work = async {
-        let (connector, tls) = open_tls(&config).await?;
-        connector
-            .submit(tls, &smtp_password(&config), &request)
-            .await
-            .map_err(ClassifiedSendError::from)
+        let (connector, stream, mode) = open_stream(&config).await?;
+        let password = smtp_password(&config);
+        match mode {
+            SmtpTlsMode::Implicit => {
+                let tls = connector
+                    .wrap_tls(stream)
+                    .await
+                    .map_err(ClassifiedSendError::from)?;
+                connector
+                    .submit(tls, &password, &request)
+                    .await
+                    .map_err(ClassifiedSendError::from)
+            }
+            SmtpTlsMode::StartTls => connector
+                .submit_starttls(stream, &password, &request)
+                .await
+                .map_err(ClassifiedSendError::from),
+            SmtpTlsMode::None => Err(ClassifiedSendError {
+                kind: SendErrorKind::TlsModeUnsupported,
+                message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
+            }),
+        }
     };
     race(work, cancel_rx, timeout_ms).await
 }
@@ -136,19 +153,42 @@ async fn run_test(
     cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(), ClassifiedSendError> {
     let work = async {
-        let (connector, tls) = open_tls(&config).await?;
-        connector
-            .test(tls, &smtp_password(&config))
-            .await
-            .map_err(ClassifiedSendError::from)
+        let (connector, stream, mode) = open_stream(&config).await?;
+        let password = smtp_password(&config);
+        match mode {
+            SmtpTlsMode::Implicit => {
+                let tls = connector
+                    .wrap_tls(stream)
+                    .await
+                    .map_err(ClassifiedSendError::from)?;
+                connector
+                    .test(tls, &password)
+                    .await
+                    .map_err(ClassifiedSendError::from)
+            }
+            SmtpTlsMode::StartTls => connector
+                .test_starttls(stream, &password)
+                .await
+                .map_err(ClassifiedSendError::from),
+            SmtpTlsMode::None => Err(ClassifiedSendError {
+                kind: SendErrorKind::TlsModeUnsupported,
+                message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
+            }),
+        }
     };
     race(work, cancel_rx, CONNECT_TIMEOUT_MS).await
 }
 
-async fn open_tls(
+async fn open_stream(
     config: &AccountConfig,
-) -> Result<(SmtpConnector, impl AsyncRead + AsyncWrite + Unpin + Debug), ClassifiedSendError>
-{
+) -> Result<
+    (
+        SmtpConnector,
+        impl AsyncRead + AsyncWrite + Unpin + Debug,
+        SmtpTlsMode,
+    ),
+    ClassifiedSendError,
+> {
     let smtp = config.smtp.as_ref().ok_or(ClassifiedSendError {
         kind: SendErrorKind::NotConfigured,
         message: "SMTP is not configured.".into(),
@@ -176,8 +216,7 @@ async fn open_tls(
         smtp_username(config),
         ehlo_domain(config),
     );
-    let tls = connector.wrap_tls(stream).await.map_err(ClassifiedSendError::from)?;
-    Ok((connector, tls))
+    Ok((connector, stream, smtp.tls_mode))
 }
 
 async fn race<T, F>(
@@ -205,5 +244,77 @@ where
                 message: "Sending timed out. Try again or check the proxy and SMTP host.".into(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account_config::{ImapSettings, ProxySettings, SmtpSettings};
+    use chrono::{TimeZone, Utc};
+
+    fn config_with(smtp: Option<SmtpSettings>) -> AccountConfig {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 12, 0, 0).unwrap();
+        AccountConfig {
+            id: AccountId::new("acc"),
+            display_name: "Work".into(),
+            email: "user@example.com".into(),
+            imap: ImapSettings {
+                host: "imap.example.com".into(),
+                port: 993,
+                username: "user".into(),
+                password: "secret".into(),
+                use_tls: true,
+            },
+            smtp,
+            proxy: ProxySettings {
+                base_url: "ws://localhost:9400/proxy".into(),
+                token: "tok".into(),
+                remote_host: None,
+                remote_port: None,
+            },
+            created_at: ts,
+            updated_at: ts,
+        }
+    }
+
+    #[test]
+    fn preflight_allows_implicit_and_starttls() {
+        let implicit = config_with(Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        )));
+        assert!(preflight(&implicit).is_ok());
+
+        let starttls = config_with(Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            587,
+            "user".into(),
+            None,
+            SmtpTlsMode::StartTls,
+        )));
+        assert!(preflight(&starttls).is_ok());
+    }
+
+    #[test]
+    fn preflight_rejects_plaintext() {
+        let cfg = config_with(Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            25,
+            "user".into(),
+            None,
+            SmtpTlsMode::None,
+        )));
+        let err = preflight(&cfg).unwrap_err();
+        assert_eq!(err.kind, SendErrorKind::TlsModeUnsupported);
+    }
+
+    #[test]
+    fn preflight_rejects_missing_smtp() {
+        let err = preflight(&config_with(None)).unwrap_err();
+        assert_eq!(err.kind, SendErrorKind::NotConfigured);
     }
 }

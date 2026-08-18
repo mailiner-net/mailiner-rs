@@ -96,10 +96,10 @@ impl fmt::Debug for ImapSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SmtpTlsMode {
-    /// Implicit TLS (typically port 465). v1 send/test path.
+    /// Implicit TLS (typically port 465).
     #[default]
     Implicit,
-    /// STARTTLS after a plaintext greeting (typically port 587). Persisted, not spoken in v1.
+    /// STARTTLS after a plaintext greeting (typically port 587).
     StartTls,
     /// No TLS. Persisted, refused at send/test.
     None,

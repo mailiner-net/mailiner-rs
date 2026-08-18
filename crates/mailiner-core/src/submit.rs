@@ -40,7 +40,7 @@ pub enum SendErrorKind {
     Cancelled,
     /// Account has no SMTP settings.
     NotConfigured,
-    /// STARTTLS / plaintext — not spoken in v1.
+    /// Plaintext SMTP — not spoken.
     TlsModeUnsupported,
     /// A RCPT TO was rejected (5xx).
     RecipientRejected,

@@ -80,7 +80,8 @@ impl SmtpConnector {
         &self.host
     }
 
-    /// Implicit TLS over the provided byte stream (SNI = `host`).
+    /// rustls over the provided byte stream (SNI = `host`). Used after implicit
+    /// TLS connect and after STARTTLS.
     pub async fn wrap_tls<S>(&self, stream: S) -> Result<TlsStream<S>, SmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -95,10 +96,30 @@ impl SmtpConnector {
         let server_name = ServerName::try_from(self.host.clone()).map_err(|e| {
             SmtpError::classified(SendErrorKind::TlsOrSni, format!("Invalid SMTP server name: {e}"))
         })?;
-        info!(host = %self.host, "SMTP implicit TLS");
+        info!(host = %self.host, "SMTP TLS handshake");
         tls.connect(server_name, stream).await.map_err(|e| {
             SmtpError::classified(SendErrorKind::TlsOrSni, format!("SMTP TLS failed: {e}"))
         })
+    }
+
+    /// Speak 220 + EHLO + STARTTLS on a plaintext stream. Returns the inner
+    /// stream ready for rustls. Does not AUTH.
+    pub async fn starttls_handshake<S>(&self, stream: S) -> Result<S, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let hello = ClientId::new(self.hello_name.clone());
+        let client = SmtpClient::new()
+            .hello_name(hello)
+            .smtp_utf8(true)
+            .pipelining(false);
+        let buffered = BufReader::new(stream);
+        let transport = SmtpTransport::new(client, buffered)
+            .await
+            .map_err(map_smtp_connect)?;
+        info!(host = %self.host, "SMTP STARTTLS");
+        let upgraded = transport.starttls().await.map_err(map_smtp_starttls)?;
+        Ok(upgraded.into_inner())
     }
 
     /// EHLO + AUTH + MAIL/RCPT/DATA + QUIT on an already-secure stream.
@@ -111,7 +132,57 @@ impl SmtpConnector {
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
-        let mut transport = self.open_and_auth(stream, password).await?;
+        self.submit_on(stream, password, request, true).await
+    }
+
+    /// Plaintext stream: EHLO + STARTTLS + rustls, then AUTH + DATA. Never AUTH
+    /// before the TLS wrap.
+    pub async fn submit_starttls<S>(
+        &self,
+        stream: S,
+        password: &str,
+        request: &SubmitRequest,
+    ) -> Result<SubmitReceipt, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let plain = self.starttls_handshake(stream).await?;
+        let tls = self.wrap_tls(plain).await?;
+        self.submit_on(tls, password, request, false).await
+    }
+
+    /// EHLO + AUTH + QUIT (no MAIL/DATA) on an already-secure stream.
+    pub async fn test<S>(&self, stream: S, password: &str) -> Result<(), SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        self.test_on(stream, password, true).await
+    }
+
+    /// Plaintext stream: EHLO + STARTTLS + rustls, then AUTH + QUIT. Never AUTH
+    /// before the TLS wrap.
+    pub async fn test_starttls<S>(&self, stream: S, password: &str) -> Result<(), SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let plain = self.starttls_handshake(stream).await?;
+        let tls = self.wrap_tls(plain).await?;
+        self.test_on(tls, password, false).await
+    }
+
+    async fn submit_on<S>(
+        &self,
+        stream: S,
+        password: &str,
+        request: &SubmitRequest,
+        expect_greeting: bool,
+    ) -> Result<SubmitReceipt, SmtpError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let mut transport = self
+            .open_and_auth(stream, password, expect_greeting)
+            .await?;
         let envelope = build_envelope(request)?;
         let email = SendableEmail::new(envelope, request.rfc822.clone());
         let response = transport.send(email).await.map_err(map_smtp_send)?;
@@ -123,12 +194,18 @@ impl SmtpConnector {
         })
     }
 
-    /// EHLO + AUTH + QUIT (no MAIL/DATA).
-    pub async fn test<S>(&self, stream: S, password: &str) -> Result<(), SmtpError>
+    async fn test_on<S>(
+        &self,
+        stream: S,
+        password: &str,
+        expect_greeting: bool,
+    ) -> Result<(), SmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
-        let mut transport = self.open_and_auth(stream, password).await?;
+        let mut transport = self
+            .open_and_auth(stream, password, expect_greeting)
+            .await?;
         let _ = transport.quit().await;
         Ok(())
     }
@@ -137,15 +214,19 @@ impl SmtpConnector {
         &self,
         stream: S,
         password: &str,
+        expect_greeting: bool,
     ) -> Result<SmtpTransport<BufReader<S>>, SmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
         let hello = ClientId::new(self.hello_name.clone());
-        let client = SmtpClient::new()
+        let mut client = SmtpClient::new()
             .hello_name(hello.clone())
             .smtp_utf8(true)
             .pipelining(false);
+        if !expect_greeting {
+            client = client.without_greeting();
+        }
         let buffered = BufReader::new(stream);
         let mut transport = SmtpTransport::new(client, buffered)
             .await
@@ -195,6 +276,17 @@ fn build_envelope(request: &SubmitRequest) -> Result<Envelope, SmtpError> {
 
 fn map_smtp_connect(err: async_smtp::error::Error) -> SmtpError {
     SmtpError::classified(SendErrorKind::NetworkOrProxy, err.to_string())
+}
+
+fn map_smtp_starttls(err: async_smtp::error::Error) -> SmtpError {
+    let text = err.to_string();
+    if text.to_ascii_lowercase().contains("does not support starttls") {
+        return SmtpError::classified(
+            SendErrorKind::TlsOrSni,
+            "SMTP server did not advertise STARTTLS.",
+        );
+    }
+    SmtpError::classified(SendErrorKind::NetworkOrProxy, text)
 }
 
 fn map_smtp_auth(_err: async_smtp::error::Error) -> SmtpError {
@@ -354,5 +446,121 @@ mod tests {
         let err = conn.test(client, "secret").await.unwrap_err();
         assert_eq!(err.kind(), SendErrorKind::Auth);
         let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn starttls_handshake_issues_command_and_returns_stream() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let ehlo = read_cmd(&mut server, &mut buf).await;
+            assert!(ehlo.to_ascii_uppercase().contains("EHLO"), "{ehlo}");
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n",
+            )
+            .await;
+            let starttls = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                starttls.to_ascii_uppercase().contains("STARTTLS"),
+                "{starttls}"
+            );
+            write_all(&mut server, "220 2.0.0 Ready to start TLS\r\n").await;
+        });
+
+        let _stream = conn.starttls_handshake(client).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn starttls_not_advertised_is_tls_error() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+        });
+
+        let err = conn.starttls_handshake(client).await.unwrap_err();
+        assert_eq!(err.kind(), SendErrorKind::TlsOrSni);
+        assert!(
+            err.message().contains("did not advertise STARTTLS"),
+            "{}",
+            err.message()
+        );
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn starttls_handshake_does_not_auth() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250-STARTTLS\r\n250 AUTH PLAIN\r\n",
+            )
+            .await;
+            let second = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                second.to_ascii_uppercase().contains("STARTTLS"),
+                "expected STARTTLS, got {second}"
+            );
+            assert!(
+                !second.to_ascii_uppercase().contains("AUTH"),
+                "AUTH must not run before TLS wrap: {second}"
+            );
+            write_all(&mut server, "220 2.0.0 Ready to start TLS\r\n").await;
+        });
+
+        let _stream = conn.starttls_handshake(client).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_without_greeting_starts_with_ehlo() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            // No 220 — post-STARTTLS SmtpClient::without_greeting.
+            let ehlo = read_cmd(&mut server, &mut buf).await;
+            assert!(ehlo.to_ascii_uppercase().contains("EHLO"), "{ehlo}");
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+            let auth = read_cmd(&mut server, &mut buf).await;
+            assert!(auth.to_ascii_uppercase().contains("AUTH"), "{auth}");
+            write_all(&mut server, "235 2.7.0 Authentication successful\r\n").await;
+            let quit = read_cmd(&mut server, &mut buf).await;
+            assert!(quit.to_ascii_uppercase().contains("QUIT"), "{quit}");
+            write_all(&mut server, "221 2.0.0 Bye\r\n").await;
+        });
+
+        conn.test_on(client, "secret", false).await.unwrap();
+        server_task.await.unwrap();
     }
 }

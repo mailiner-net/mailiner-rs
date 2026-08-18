@@ -67,7 +67,7 @@ pub fn send_kind_user_message(kind: SendErrorKind) -> &'static str {
             "This account has no SMTP settings. Add them in account settings to send."
         }
         SendErrorKind::TlsModeUnsupported => {
-            "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587)."
+            "This SMTP TLS mode is not supported."
         }
         SendErrorKind::RecipientRejected => "The server rejected a recipient.",
         SendErrorKind::MessageTooLarge => "The server rejected the message as too large.",

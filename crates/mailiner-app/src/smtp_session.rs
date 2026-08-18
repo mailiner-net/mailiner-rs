@@ -3,6 +3,7 @@
 use std::fmt::Debug;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use dioxus::logger::tracing::info;
 use futures_channel::mpsc::UnboundedSender;
 use futures_channel::oneshot;
 use futures_util::future::{Either, select};
@@ -59,10 +60,6 @@ pub fn preflight(config: &AccountConfig) -> Result<(), ClassifiedSendError> {
             kind: SendErrorKind::NotConfigured,
             message: "This account has no SMTP settings. Add them in account settings to send."
                 .into(),
-        }),
-        Some(smtp) if smtp.tls_mode == SmtpTlsMode::None => Err(ClassifiedSendError {
-            kind: SendErrorKind::TlsModeUnsupported,
-            message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
         }),
         Some(smtp) if smtp.host.trim().is_empty() => Err(ClassifiedSendError {
             kind: SendErrorKind::NotConfigured,
@@ -139,10 +136,13 @@ async fn run_submit(
                 .submit_starttls(stream, &password, &request)
                 .await
                 .map_err(ClassifiedSendError::from),
-            SmtpTlsMode::None => Err(ClassifiedSendError {
-                kind: SendErrorKind::TlsModeUnsupported,
-                message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
-            }),
+            SmtpTlsMode::None => {
+                info!(host = %connector.host(), "SMTP plaintext");
+                connector
+                    .submit(stream, &password, &request)
+                    .await
+                    .map_err(ClassifiedSendError::from)
+            }
         }
     };
     race(work, cancel_rx, timeout_ms).await
@@ -170,10 +170,13 @@ async fn run_test(
                 .test_starttls(stream, &password)
                 .await
                 .map_err(ClassifiedSendError::from),
-            SmtpTlsMode::None => Err(ClassifiedSendError {
-                kind: SendErrorKind::TlsModeUnsupported,
-                message: "This account is set to no TLS, which cannot send. Enable TLS (implicit on port 465, or STARTTLS on port 587).".into(),
-            }),
+            SmtpTlsMode::None => {
+                info!(host = %connector.host(), "SMTP plaintext");
+                connector
+                    .test(stream, &password)
+                    .await
+                    .map_err(ClassifiedSendError::from)
+            }
         }
     };
     race(work, cancel_rx, CONNECT_TIMEOUT_MS).await
@@ -279,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_allows_implicit_and_starttls() {
+    fn preflight_allows_all_tls_modes() {
         let implicit = config_with(Some(SmtpSettings::new(
             "smtp.example.com".into(),
             465,
@@ -297,19 +300,15 @@ mod tests {
             SmtpTlsMode::StartTls,
         )));
         assert!(preflight(&starttls).is_ok());
-    }
 
-    #[test]
-    fn preflight_rejects_plaintext() {
-        let cfg = config_with(Some(SmtpSettings::new(
+        let plain = config_with(Some(SmtpSettings::new(
             "smtp.example.com".into(),
             25,
             "user".into(),
             None,
             SmtpTlsMode::None,
         )));
-        let err = preflight(&cfg).unwrap_err();
-        assert_eq!(err.kind, SendErrorKind::TlsModeUnsupported);
+        assert!(preflight(&plain).is_ok());
     }
 
     #[test]

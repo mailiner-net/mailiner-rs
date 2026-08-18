@@ -101,7 +101,7 @@ pub enum SmtpTlsMode {
     Implicit,
     /// STARTTLS after a plaintext greeting (typically port 587).
     StartTls,
-    /// No TLS. Persisted, refused at send/test.
+    /// No TLS. AUTH and DATA travel in the clear (including through the proxy).
     None,
 }
 

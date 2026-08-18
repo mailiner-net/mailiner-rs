@@ -430,7 +430,7 @@ pub fn AccountSmtpFields(
 ) -> Element {
     let port_placeholder = DEFAULT_SMTP_PORT.to_string();
     let warn_starttls = smtp_use_tls && smtp_port.trim() == "587";
-    let warn_plain = !smtp_use_tls && !smtp_host.trim().is_empty();
+    let warn_plain = !smtp_use_tls;
     rsx! {
         fieldset {
             class: "onboarding-section",
@@ -439,7 +439,7 @@ pub fn AccountSmtpFields(
                 class: "onboarding-notice",
                 role: "note",
                 "Used when you click Send. Leave password empty to reuse the IMAP password. \
-                 Implicit TLS (port 465) or STARTTLS (port 587)."
+                 Implicit TLS (port 465), STARTTLS (port 587), or plaintext."
             }
             details {
                 class: "onboarding-advanced",
@@ -511,8 +511,9 @@ pub fn AccountSmtpFields(
                     p {
                         class: "onboarding-notice",
                         role: "alert",
-                        "Plaintext SMTP cannot send or Test. Enable TLS (implicit on port 465, \
-                         or STARTTLS on port 587)."
+                        "Plaintext SMTP sends AUTH and the message in the clear, including \
+                         through the proxy. Prefer implicit TLS on port 465 or STARTTLS \
+                         on port 587."
                     }
                 }
             }

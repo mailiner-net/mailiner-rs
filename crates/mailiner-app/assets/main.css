@@ -133,12 +133,12 @@ button.flat {
     align-items: center;
 }
 
-.bootstrap-nav a {
+.bootstrap-nav a:not(.onboarding-btn) {
     color: var(--item-accent);
     text-decoration: none;
 }
 
-.bootstrap-nav a:hover {
+.bootstrap-nav a:not(.onboarding-btn):hover {
     text-decoration: underline;
 }
 

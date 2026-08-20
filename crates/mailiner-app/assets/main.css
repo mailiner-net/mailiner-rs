@@ -654,6 +654,53 @@ a.accounts-link-btn {
     background: var(--item-hover-background);
 }
 
+.split-handle {
+    position: relative;
+    z-index: 4;
+    flex: 0 0 6px;
+    touch-action: none;
+    user-select: none;
+    background: transparent;
+}
+
+.split-handle:focus {
+    outline: none;
+}
+
+.split-handle-col {
+    cursor: col-resize;
+    align-self: stretch;
+}
+
+.split-handle-col:hover,
+.split-handle-col:focus-visible {
+    background: var(--item-accent);
+}
+
+.split-handle-row {
+    cursor: row-resize;
+    width: 100%;
+}
+
+.split-handle-row:hover,
+.split-handle-row:focus-visible {
+    background: var(--item-accent);
+}
+
+.split-drag-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+}
+
+.split-drag-overlay-col {
+    cursor: col-resize;
+}
+
+.split-drag-overlay-row {
+    cursor: row-resize;
+}
+
 /* —— Shared UI primitives (keep above the nested #app block) —— */
 .ui-btn {
     font: inherit;

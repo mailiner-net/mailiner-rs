@@ -9,6 +9,7 @@ mod emailnavigation;
 mod messageview;
 mod onboarding;
 mod sidebar;
+mod split;
 pub mod virtual_scroll;
 
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
@@ -19,3 +20,4 @@ pub use emailnavigation::{EmailNavigation, MessageList};
 pub use messageview::MessageView;
 pub use onboarding::OnboardingForm;
 pub use sidebar::Sidebar;
+pub use split::{SplitAxis, SplitHandle};

@@ -12,7 +12,8 @@ use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, MessageList, MessageView, OnboardingForm, OutboxPanel, ToastHost,
+    EmailNavigation, MessageList, MessageView, OnboardingForm, OutboxPanel, SplitAxis, SplitHandle,
+    ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -26,6 +27,7 @@ mod context;
 mod core_event;
 mod download;
 mod formatter;
+mod layout;
 mod outbox_store;
 mod send;
 mod smtp_session;
@@ -403,8 +405,10 @@ fn MainView() -> Element {
     rsx! {
         div {
             id: "app",
+            onmounted: move |_| crate::layout::apply_saved_layout(),
 
             EmailNavigation {}
+            SplitHandle { axis: SplitAxis::Folder }
 
             div {
                 id: "content",
@@ -412,7 +416,7 @@ fn MainView() -> Element {
                 ConnectionStatusBanner {}
 
                 MessageList {}
-
+                SplitHandle { axis: SplitAxis::List }
                 MessageView {}
 
                 OutboxPanel {}

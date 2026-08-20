@@ -8,6 +8,7 @@ pub mod send;
 pub mod mailbox;
 pub mod message;
 pub mod formatter;
+pub mod layout;
 pub mod message_loader;
 
 // connection / core_loop are binary-only (Dioxus signals + WASM WebSocket).

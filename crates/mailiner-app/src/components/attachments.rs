@@ -64,7 +64,6 @@ pub fn AttachmentsFooter() -> Element {
             class: "message-attachments",
             details {
                 class: "message-attachments-details",
-                open: true,
                 summary {
                     class: "message-attachments-summary",
                     "{summary}"

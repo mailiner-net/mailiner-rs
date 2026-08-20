@@ -234,6 +234,7 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                 class: "message-view-headline",
                 h2 {
                     class: "message-view-subject",
+                    title: "{message.subject}",
                     if message.subject.trim().is_empty() {
                         span { class: "message-subject-empty", "(no subject)" }
                     } else {
@@ -285,15 +286,26 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                 }
             }
             div {
-                class: "ui-kv",
-                span { class: "ui-kv-k", "From" }
-                span { class: "ui-kv-v", title: "{message.from}", "{message.from_preview()}" }
-                if !message.to.trim().is_empty() {
-                    span { class: "ui-kv-k", "To" }
-                    span { class: "ui-kv-v", title: "{message.to}", "{message.to_preview()}" }
+                class: "message-view-meta",
+                span {
+                    class: "message-view-meta-item",
+                    title: "{message.from}",
+                    span { class: "message-view-meta-k", "From" }
+                    " {message.from_preview()}"
                 }
-                span { class: "ui-kv-k", "Date" }
-                span { class: "ui-kv-v", "{date}" }
+                if !message.to.trim().is_empty() {
+                    span {
+                        class: "message-view-meta-item",
+                        title: "{message.to}",
+                        span { class: "message-view-meta-k", "To" }
+                        " {message.to_preview()}"
+                    }
+                }
+                span {
+                    class: "message-view-meta-item",
+                    span { class: "message-view-meta-k", "Date" }
+                    " {date}"
+                }
             }
         }
     }

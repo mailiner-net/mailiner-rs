@@ -17,10 +17,18 @@ fn format_date(dt: &DateTime<Utc>) -> String {
     dt.format("%d %b %Y, %H:%M").to_string()
 }
 
+/// Mount sanitized message HTML as a standalone document inside an open
+/// shadow root.
+///
+/// `DOMParser` (`text/html`) rebuilds a real `<html>` / `<head>` / `<body>`
+/// tree (same as the old TypeScript viewer). Adopting that document element
+/// into the shadow root:
+/// - lets email CSS targeting `html` / `body` match real elements
+/// - keeps those rules from restyling Mailiner chrome (shadow isolation)
 fn mount_shadow_html(host_id: &str, html: &str) {
     #[cfg(feature = "web")]
     {
-        use web_sys::{ShadowRootInit, ShadowRootMode};
+        use web_sys::{DomParser, ShadowRootInit, ShadowRootMode, SupportedType};
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -40,7 +48,23 @@ fn mount_shadow_html(host_id: &str, html: &str) {
                 }
             }
         };
-        shadow.set_inner_html(html);
+        shadow.set_inner_html("");
+        if html.is_empty() {
+            return;
+        }
+        let Ok(parser) = DomParser::new() else {
+            return;
+        };
+        let Ok(parsed) = parser.parse_from_string(html, SupportedType::TextHtml) else {
+            return;
+        };
+        let Some(root) = parsed.document_element() else {
+            return;
+        };
+        let Ok(adopted) = document.adopt_node(&root) else {
+            return;
+        };
+        let _ = shadow.append_child(&adopted);
     }
     #[cfg(not(feature = "web"))]
     {

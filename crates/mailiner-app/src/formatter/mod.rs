@@ -16,7 +16,8 @@ pub struct FormatOptions {
 
 #[derive(Debug, Clone)]
 pub struct FormatResult {
-    /// Sanitized HTML fragment suitable for mounting (or wrapping in shadow DOM).
+    /// Sanitized HTML. The viewer parses this as a document (`DOMParser`) and
+    /// adopts `<html>` into an open shadow root.
     pub html: String,
     /// True if any remote resource attribute was stripped.
     pub prevented_remote_resources: bool,

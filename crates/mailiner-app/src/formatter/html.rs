@@ -1,12 +1,12 @@
 //! Safe HTML formatter with cid resolution and remote-resource blocking.
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use mailiner_core::models::{MessageContent, MessagePart};
 use regex::Regex;
 use std::sync::OnceLock;
 
 use super::sanitize::sanitize_css;
-use super::{FormatOptions, FormatResult, text_content};
+use super::{text_content, FormatOptions, FormatResult};
 
 const SAFE_IMAGE_TYPES: &[&str] = &[
     "image/png",
@@ -35,7 +35,8 @@ pub fn format_html(
     let mut prevented = false;
     let mut inlined = Vec::new();
 
-    // 1) Sanitize <style> blocks
+    // 1) Sanitize <style> blocks. `html` / `body` selectors are left intact:
+    // the viewer mounts the result as a real document inside a shadow root.
     let mut body = re_style_block()
         .replace_all(html, |caps: &regex::Captures| {
             let css = caps.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -95,7 +96,7 @@ pub fn format_html(
             .into_owned();
     }
 
-    let cleaned = ammonia_clean(&body);
+    let cleaned = ammonia_clean(&body, opts.allow_remote_resources);
 
     Some(FormatResult {
         html: cleaned,
@@ -145,20 +146,51 @@ fn resolve_cid(cid: &str, parts: &[MessagePart]) -> Option<(String, String)> {
     Some((url, part.id.to_string()))
 }
 
-fn ammonia_clean(html: &str) -> String {
+/// HTML-email presentational attributes (tables / fonts / images).
+const EMAIL_PRESENTATIONAL_ATTRS: &[&str] = &[
+    "class",
+    "style",
+    "id",
+    "dir",
+    "width",
+    "height",
+    "align",
+    "valign",
+    "bgcolor",
+    "background",
+    "border",
+    "cellpadding",
+    "cellspacing",
+    "color",
+    "face",
+    "size",
+    "nowrap",
+];
+
+fn ammonia_clean(html: &str, allow_remote: bool) -> String {
     use ammonia::Builder;
 
     let mut b = Builder::default();
     // `style` is in default clean_content_tags; remove before allowing the tag.
     b.rm_clean_content_tags(["style"]);
-    b.add_tags(["style"]);
-    b.add_generic_attributes(["class"]);
+    b.add_tags(["style", "font"]);
+    // HTML mail (LinkedIn, newsletters) is almost entirely inline `style=` plus
+    // table presentational attrs. Ammonia's defaults drop all of those.
+    b.add_generic_attributes(EMAIL_PRESENTATIONAL_ATTRS);
+    b.add_tag_attributes("font", ["color", "face", "size"]);
     // Default schemes are http/https/mailto — allow data: for cid→data:image inlines.
     b.add_url_schemes(["data"]);
 
-    b.attribute_filter(|_element, attribute, value| {
+    b.attribute_filter(move |_element, attribute, value| {
         let attr = attribute.to_ascii_lowercase();
         let val = value.to_ascii_lowercase();
+        if attr == "style" {
+            let clean = sanitize_css(value, allow_remote);
+            if clean.trim().is_empty() {
+                return None;
+            }
+            return Some(clean.into());
+        }
         if matches!(
             attr.as_str(),
             "href" | "src" | "srcset" | "background" | "poster"
@@ -284,5 +316,61 @@ mod tests {
         let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
         assert!(r.html.contains("Hi"));
         assert!(!r.html.to_ascii_lowercase().contains("<script"));
+    }
+
+    #[test]
+    fn keeps_inline_styles() {
+        let html = html_part(r#"<p class="lead" style="color:#c00;font-size:16px">Hi</p>"#);
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(r.html.contains("style="), "{r:?}");
+        assert!(r.html.contains("color"), "{r:?}");
+        assert!(r.html.contains("font-size"), "{r:?}");
+        assert!(r.html.contains("lead"), "{r:?}");
+    }
+
+    #[test]
+    fn strips_remote_url_from_inline_style_by_default() {
+        let html =
+            html_part(r#"<p style="background:url(https://evil.example/x.png);color:red">Hi</p>"#);
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(!r.html.contains("evil.example"), "{r:?}");
+        assert!(r.html.contains("color"), "{r:?}");
+    }
+
+    #[test]
+    fn keeps_remote_url_in_inline_style_when_allowed() {
+        let html = html_part(r#"<p style="background:url(https://ok.example/x.png)">Hi</p>"#);
+        let r = format_html(
+            &html,
+            &[html.clone()],
+            &FormatOptions {
+                allow_remote_resources: true,
+            },
+        )
+        .unwrap();
+        assert!(r.html.contains("ok.example"), "{r:?}");
+    }
+
+    #[test]
+    fn keeps_table_presentational_attrs() {
+        let html = html_part(
+            r##"<table width="512" cellpadding="0" cellspacing="0" bgcolor="#ffffff"><tr><td align="center" valign="top">x</td></tr></table>"##,
+        );
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(r.html.contains("width="), "{r:?}");
+        assert!(r.html.contains("cellpadding="), "{r:?}");
+        assert!(r.html.contains("cellspacing="), "{r:?}");
+        assert!(r.html.contains("bgcolor="), "{r:?}");
+        assert!(r.html.contains("align="), "{r:?}");
+        assert!(r.html.contains("valign="), "{r:?}");
+    }
+
+    #[test]
+    fn keeps_body_selector_for_document_mount() {
+        let html = html_part("<style>body {font-family: Arial}</style><p>Hi</p>");
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let lower = r.html.to_ascii_lowercase();
+        assert!(lower.contains("body {") || lower.contains("body{"), "{r:?}");
+        assert!(!lower.contains(":host"), "{r:?}");
     }
 }

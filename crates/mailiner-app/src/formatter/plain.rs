@@ -3,7 +3,7 @@
 use linkify::{LinkFinder, LinkKind};
 use mailiner_core::models::MessagePart;
 
-use super::{FormatResult, text_content};
+use super::{text_content, FormatResult};
 
 pub fn format_plain(part: &MessagePart) -> Option<FormatResult> {
     let text = text_content(part)?;

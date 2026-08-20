@@ -64,6 +64,16 @@ fn mount_shadow_html(host_id: &str, html: &str) {
         let Ok(adopted) = document.adopt_node(&root) else {
             return;
         };
+        // UA `body { margin: 8px }` and `cursor: auto` (I-beam over text) make
+        // the pointer appear to jump when crossing the header → body edge,
+        // especially on Linux cursor themes with off-center hotspots.
+        if let Ok(reset) = document.create_element("style") {
+            reset.set_text_content(Some(
+                ":host { display: block; }\n\
+                 html, body { margin: 0; cursor: default; overflow: visible; }\n",
+            ));
+            let _ = shadow.append_child(&reset);
+        }
         let _ = shadow.append_child(&adopted);
     }
     #[cfg(not(feature = "web"))]

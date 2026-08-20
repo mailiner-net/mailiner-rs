@@ -27,16 +27,66 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
         SplitAxis::List => "horizontal",
     };
 
+    let class = if dragging() {
+        format!("{class} is-dragging")
+    } else {
+        class.to_string()
+    };
+    // `col-resize` / `row-resize` are stripped from `main.css` by the Dioxus
+    // asset pipeline; set them inline so hover still shows the right cursor.
+    let cursor = match axis {
+        SplitAxis::Folder => "cursor: col-resize;",
+        SplitAxis::List => "cursor: row-resize;",
+    };
+    let mut handle_el = use_signal(|| None::<web_sys::Element>);
+
     rsx! {
         div {
             class: class,
+            style: cursor,
             role: "separator",
             aria_orientation: orientation,
             tabindex: "0",
-            title: "Drag to resize. Double-click to reset.",
+            aria_label: "Drag to resize. Double-click to reset.",
+            onmounted: move |evt| {
+                if let Some(el) = evt.data().downcast::<web_sys::Element>() {
+                    let _ = el.set_attribute("style", cursor);
+                    handle_el.set(Some(el.clone()));
+                }
+            },
             onpointerdown: move |evt| {
                 evt.prevent_default();
+                let id = evt.data().pointer_id();
+                if let Some(el) = handle_el.peek().as_ref() {
+                    let _ = el.set_pointer_capture(id);
+                }
                 dragging.set(true);
+            },
+            onpointermove: move |evt| {
+                if !*dragging.peek() {
+                    return;
+                }
+                let pt = evt.data().client_coordinates();
+                match axis {
+                    SplitAxis::Folder => {
+                        set_folder_width_px(clamp_folder_width_px(pt.x));
+                    }
+                    SplitAxis::List => apply_list_drag(pt.y),
+                }
+            },
+            onpointerup: move |_| {
+                if !*dragging.peek() {
+                    return;
+                }
+                persist_layout();
+                dragging.set(false);
+            },
+            onpointercancel: move |_| {
+                if !*dragging.peek() {
+                    return;
+                }
+                persist_layout();
+                dragging.set(false);
             },
             ondoubleclick: move |_| {
                 match axis {
@@ -44,31 +94,6 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
                     SplitAxis::List => reset_list_height(),
                 }
             },
-        }
-        if dragging() {
-            div {
-                class: match axis {
-                    SplitAxis::Folder => "split-drag-overlay split-drag-overlay-col",
-                    SplitAxis::List => "split-drag-overlay split-drag-overlay-row",
-                },
-                onpointermove: move |evt| {
-                    let pt = evt.data().client_coordinates();
-                    match axis {
-                        SplitAxis::Folder => {
-                            set_folder_width_px(clamp_folder_width_px(pt.x));
-                        }
-                        SplitAxis::List => apply_list_drag(pt.y),
-                    }
-                },
-                onpointerup: move |_| {
-                    persist_layout();
-                    dragging.set(false);
-                },
-                onpointercancel: move |_| {
-                    persist_layout();
-                    dragging.set(false);
-                },
-            }
         }
     }
 }

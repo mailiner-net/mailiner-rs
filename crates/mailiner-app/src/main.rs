@@ -405,7 +405,9 @@ fn MainView() -> Element {
     rsx! {
         div {
             id: "app",
-            onmounted: move |_| crate::layout::apply_saved_layout(),
+            onmounted: move |_| {
+                crate::layout::apply_saved_layout();
+            },
 
             EmailNavigation {}
             SplitHandle { axis: SplitAxis::Folder }

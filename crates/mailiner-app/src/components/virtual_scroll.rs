@@ -397,7 +397,7 @@ where
         div {
             class: "virtual-scroll-container",
             // Fill the parent; height is measured via ResizeObserver (onresize).
-            style: "position: relative; height: 100%; width: 100%; overflow-y: auto;",
+            style: "position: relative; height: 100%; width: 100%; overflow-y: auto; scrollbar-gutter: stable;",
             onscroll: handle_scroll,
             onresize: handle_resize,
             onmounted: move |node_ref| {

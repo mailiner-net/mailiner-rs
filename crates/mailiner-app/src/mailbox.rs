@@ -125,6 +125,110 @@ pub fn find_mailbox_with_role(
         .map(|(id, _)| id.clone())
 }
 
+/// One mailbox in tree order, with a display path for filtering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailboxEntry {
+    pub id: MailboxId,
+    pub title: String,
+    pub name: String,
+    pub path: String,
+    pub depth: usize,
+    pub role: MailboxRole,
+}
+
+/// Depth-first list of every selectable mailbox.
+pub fn collect_mailbox_entries(
+    roots: &[MailboxId],
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> Vec<MailboxEntry> {
+    let mut out = Vec::new();
+    fn walk(
+        id: &MailboxId,
+        depth: usize,
+        parent_path: &str,
+        nodes: &HashMap<MailboxId, MailboxNode>,
+        out: &mut Vec<MailboxEntry>,
+    ) {
+        let Some(node) = nodes.get(id) else {
+            return;
+        };
+        let title = node.title().to_string();
+        let path = if parent_path.is_empty() {
+            title.clone()
+        } else {
+            format!("{parent_path} / {title}")
+        };
+        out.push(MailboxEntry {
+            id: id.clone(),
+            title: title.clone(),
+            name: node.name.clone(),
+            path: path.clone(),
+            depth,
+            role: node.role,
+        });
+        for child in &node.children {
+            walk(child, depth + 1, &path, nodes, out);
+        }
+    }
+    for root in roots {
+        walk(root, 0, "", nodes, &mut out);
+    }
+    out
+}
+
+/// Case-insensitive AND of whitespace-separated words against title, path, and id.
+/// Rank: exact title, title prefix, title contains, path/id contains. Tree order breaks ties.
+pub fn filter_mailbox_entries<'a>(
+    entries: &'a [MailboxEntry],
+    query: &str,
+) -> Vec<&'a MailboxEntry> {
+    let words: Vec<String> = query
+        .split_whitespace()
+        .map(|w| w.to_ascii_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() {
+        return entries.iter().collect();
+    }
+    let mut scored: Vec<(u8, usize, &MailboxEntry)> = Vec::new();
+    for (ord, entry) in entries.iter().enumerate() {
+        if let Some(rank) = mailbox_match_rank(entry, &words) {
+            scored.push((rank, ord, entry));
+        }
+    }
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, _, e)| e).collect()
+}
+
+fn mailbox_match_rank(entry: &MailboxEntry, words: &[String]) -> Option<u8> {
+    let title = entry.title.to_ascii_lowercase();
+    let name = entry.name.to_ascii_lowercase();
+    let path = entry.path.to_ascii_lowercase();
+    let id = entry.id.to_string().to_ascii_lowercase();
+    let joined = query_join(words);
+    if title == joined || name == joined {
+        return Some(0);
+    }
+    if title.starts_with(&joined) || name.starts_with(&joined) {
+        return Some(1);
+    }
+    if contains_all(&title, words) || contains_all(&name, words) {
+        return Some(2);
+    }
+    if contains_all(&path, words) || contains_all(&id, words) {
+        return Some(3);
+    }
+    None
+}
+
+fn query_join(words: &[String]) -> String {
+    words.join(" ")
+}
+
+fn contains_all(hay: &str, words: &[String]) -> bool {
+    words.iter().all(|w| hay.contains(w.as_str()))
+}
+
 /// Depth-first list of `(id, indented title)` for move pickers.
 pub fn flatten_mailboxes(
     roots: &[MailboxId],
@@ -253,5 +357,61 @@ mod tests {
         let flat = flatten_mailboxes(&roots, &nodes);
         let titles: Vec<_> = flat.iter().map(|(_, t)| t.as_str()).collect();
         assert_eq!(titles, ["Inbox", "\u{00a0}\u{00a0}Work", "Trash"]);
+    }
+
+    #[test]
+    fn collect_builds_paths() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("KDE", "KDE", None, MailboxRole::Other),
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+        ]);
+        let entries = collect_mailbox_entries(&roots, &nodes);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "KDE");
+        assert_eq!(entries[1].path, "KDE / pim");
+        assert_eq!(entries[1].depth, 1);
+    }
+
+    #[test]
+    fn filter_empty_keeps_tree_order() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        let entries = collect_mailbox_entries(&roots, &nodes);
+        let filtered = filter_mailbox_entries(&entries, "  ");
+        assert_eq!(filtered.len(), entries.len());
+        assert_eq!(filtered[0].title, "Inbox");
+    }
+
+    #[test]
+    fn filter_ranks_title_above_path() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("KDE", "KDE", None, MailboxRole::Other),
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+        ]);
+        let entries = collect_mailbox_entries(&roots, &nodes);
+        let filtered = filter_mailbox_entries(&entries, "pim");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "pim");
+        let multi = filter_mailbox_entries(&entries, "kde pim");
+        assert_eq!(multi.len(), 1);
+        assert_eq!(multi[0].path, "KDE / pim");
+        assert!(filter_mailbox_entries(&entries, "nope").is_empty());
+    }
+
+    #[test]
+    fn filter_inbox_special_use_title() {
+        let (roots, nodes) = build_mailbox_tree(vec![folder(
+            "INBOX",
+            "INBOX",
+            None,
+            MailboxRole::Inbox,
+        )]);
+        let entries = collect_mailbox_entries(&roots, &nodes);
+        let filtered = filter_mailbox_entries(&entries, "inbox");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "Inbox");
     }
 }

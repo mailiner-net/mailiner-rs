@@ -12,8 +12,8 @@ use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, MessageList, MessageView, OnboardingForm, OutboxPanel, SplitAxis, SplitHandle,
-    ToastHost,
+    EmailNavigation, MailboxPickerHost, MessageList, MessageView, OnboardingForm, OutboxPanel,
+    SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -274,6 +274,7 @@ fn App() -> Element {
     let outbox = use_signal(Vec::new);
     let toast = use_signal(|| None);
     let compose_draft = use_signal(|| None);
+    let mailbox_picker = use_signal(|| None);
 
     let ctx = AppContext {
         accounts,
@@ -292,6 +293,7 @@ fn App() -> Element {
         outbox,
         toast,
         compose_draft,
+        mailbox_picker,
     };
     let ctx_clone = ctx.clone();
 
@@ -428,6 +430,7 @@ fn MainView() -> Element {
 
         ComposeOverlay {}
         ToastHost {}
+        MailboxPickerHost {}
     }
 }
 

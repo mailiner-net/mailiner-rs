@@ -14,6 +14,13 @@ use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 use crate::toast::{Toast, ToastAction};
 
+/// KMail-style folder jumper: **J** goes to a mailbox, **M** moves the current message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailboxPickerMode {
+    Jump,
+    Move,
+}
+
 /// Viewer panel state driven by core_loop load pipeline.
 #[derive(Clone, Debug)]
 pub enum MessageViewState {
@@ -67,6 +74,8 @@ pub struct AppContext {
     pub toast: Signal<Option<Toast>>,
     /// Open compose session (`None` = closed).
     pub compose_draft: Signal<Option<ComposeSession>>,
+    /// Folder jumper / move-to-folder dialog (`None` = closed).
+    pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
 }
 
 impl AppContext {

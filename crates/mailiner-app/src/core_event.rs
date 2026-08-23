@@ -40,6 +40,8 @@ use crate::toast::{
 pub enum CoreEvent {
     // —— mail ops ——
     SelectMailbox(MailboxId),
+    /// Open a mailbox and select the newest message (keyboard jump).
+    JumpToMailbox(MailboxId),
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
         mailbox_id: MailboxId,
@@ -240,7 +242,10 @@ pub async fn core_loop(
                     .await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
-                handle_select_mailbox(&manager, &mut ctx, mailbox_id).await;
+                handle_select_mailbox(&manager, &mut ctx, mailbox_id, false).await;
+            }
+            CoreEvent::JumpToMailbox(mailbox_id) => {
+                handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -796,6 +801,7 @@ async fn handle_select_mailbox(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     mailbox_id: MailboxId,
+    select_first: bool,
 ) {
     ctx.selected_message.set(None);
     ctx.message_view.set(MessageViewState::Empty);
@@ -827,6 +833,14 @@ async fn handle_select_mailbox(
             ctx.messages_loading.set(false);
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
                 node.total_count = total;
+            }
+            if select_first && total > 0 {
+                let end = total.min(20);
+                handle_fetch_message_range(manager, ctx, mailbox_id.clone(), 0..end).await;
+                let first_id = ctx.messages.read().get(0).map(|m| m.id.clone());
+                if let Some(id) = first_id {
+                    handle_select_message(manager, ctx, id).await;
+                }
             }
         }
         Err(e) => {
@@ -1858,7 +1872,7 @@ async fn handle_archive_sent(
         .as_ref()
         .is_some_and(|id| id.to_string() == sent);
     if viewing_account && viewing_sent {
-        handle_select_mailbox(manager, ctx, MailboxId::from(sent)).await;
+        handle_select_mailbox(manager, ctx, MailboxId::from(sent), false).await;
     }
 }
 

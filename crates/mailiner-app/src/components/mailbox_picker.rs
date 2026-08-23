@@ -9,6 +9,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
 use super::icons::{Icon, IconButton, IconKind};
+use super::messageview::{MessageScroll, scroll_message_view};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
 use crate::mailbox::{
@@ -58,12 +59,14 @@ impl Drop for WindowKeydown {
 #[component]
 pub fn MailboxPickerHost() -> Element {
     let ctx = use_context::<AppContext>();
+    let core = use_coroutine_handle::<CoreEvent>();
     let mode = *ctx.mailbox_picker.read();
     let mut open_gen = use_signal(|| 0u64);
 
     use_hook(|| {
         let mut ctx = ctx.clone();
         let mut open_gen = open_gen;
+        let core = core;
         let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
             if evt.ctrl_key() || evt.meta_key() || evt.alt_key() {
                 return;
@@ -93,6 +96,30 @@ pub fn MailboxPickerHost() -> Element {
                     let next = open_gen() + 1;
                     open_gen.set(next);
                     ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
+                }
+                "ArrowDown" => {
+                    evt.prevent_default();
+                    let _ = core.send(CoreEvent::SelectAdjacent { delta: 1 });
+                }
+                "ArrowUp" => {
+                    evt.prevent_default();
+                    let _ = core.send(CoreEvent::SelectAdjacent { delta: -1 });
+                }
+                "ArrowRight" => {
+                    evt.prevent_default();
+                    scroll_message_view(true, MessageScroll::Line);
+                }
+                "ArrowLeft" => {
+                    evt.prevent_default();
+                    scroll_message_view(false, MessageScroll::Line);
+                }
+                "PageDown" => {
+                    evt.prevent_default();
+                    scroll_message_view(true, MessageScroll::Page);
+                }
+                "PageUp" => {
+                    evt.prevent_default();
+                    scroll_message_view(false, MessageScroll::Page);
                 }
                 _ => {}
             }

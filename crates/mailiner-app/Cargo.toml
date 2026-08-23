@@ -62,6 +62,8 @@ web-sys = { version = "0.3", features = [
     "ShadowRoot",
     "ShadowRootInit",
     "ShadowRootMode",
+    "ScrollBehavior",
+    "ScrollToOptions",
     "Storage",
     "SupportedType",
     "Url",

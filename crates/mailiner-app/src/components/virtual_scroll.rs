@@ -64,6 +64,14 @@ impl<T: Clone> SparseList<T> {
         self.items.values().find(|v| pred(v))
     }
 
+    /// Index of the first cached item matching `pred`.
+    pub fn position<F>(&self, mut pred: F) -> Option<usize>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.items.iter().find(|(_, v)| pred(v)).map(|(k, _)| *k)
+    }
+
     pub fn has_item(&self, index: usize) -> bool {
         self.items.contains_key(&index)
     }
@@ -238,6 +246,27 @@ impl ViewportInfo {
     }
 }
 
+/// Next list index for a keyboard move. `None` means stay put.
+///
+/// Newest-first lists: `delta > 0` is visually down (older), `delta < 0` is up.
+/// With no current row, both directions land on index 0.
+pub fn adjacent_index(total: usize, current: Option<usize>, delta: i32) -> Option<usize> {
+    if total == 0 {
+        return None;
+    }
+    match current {
+        None => Some(0),
+        Some(i) => {
+            let next = i as i64 + i64::from(delta);
+            if next < 0 || next >= total as i64 {
+                None
+            } else {
+                Some(next as usize)
+            }
+        }
+    }
+}
+
 /// Subtract already-pending ranges so we do not re-request in-flight data.
 fn subtract_pending(needed: Vec<Range<usize>>, pending: &[Range<usize>]) -> Vec<Range<usize>> {
     if pending.is_empty() {
@@ -320,6 +349,9 @@ where
     /// Soft cap on cached items; entries outside the buffered viewport are dropped.
     #[props(!optional)]
     pub max_cached: Option<usize>,
+    /// Scroll so this row is visible when it changes (keyboard selection).
+    #[props(!optional)]
+    pub reveal_index: Option<usize>,
 }
 
 #[component]
@@ -374,6 +406,14 @@ where
             queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
         }
     });
+
+    let item_height = props.item_height;
+    let reveal_index = props.reveal_index;
+    use_effect(use_reactive!(|reveal_index| {
+        if let Some(index) = reveal_index {
+            scroll_row_into_view(index, item_height);
+        }
+    }));
 
     let props_for_scroll = props.clone();
     let pending_for_scroll = pending_ranges.clone();
@@ -463,6 +503,7 @@ where
 
     rsx! {
         div {
+            id: "message-list-scroll",
             class: "virtual-scroll-container",
             // Fill the parent; height is measured via ResizeObserver (onresize).
             style: "position: relative; height: 100%; width: 100%; overflow-y: auto; scrollbar-gutter: stable;",
@@ -513,6 +554,33 @@ where
                 }
             }
         }
+    }
+}
+
+fn scroll_row_into_view(index: usize, item_height: f64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let Some(el) = doc.get_element_by_id("message-list-scroll") else {
+            return;
+        };
+        let top = index as f64 * item_height;
+        let view_top = f64::from(el.scroll_top());
+        let height = f64::from(el.client_height());
+        if height <= 0.0 {
+            return;
+        }
+        if top < view_top {
+            el.set_scroll_top(top.round() as i32);
+        } else if top + item_height > view_top + height {
+            el.set_scroll_top((top + item_height - height).round() as i32);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (index, item_height);
     }
 }
 
@@ -610,5 +678,25 @@ mod tests {
         assert_eq!(vp.visible_count, 6);
         assert_eq!(vp.last_visible_index, 5);
         assert_eq!(vp.buffered_range(2, 1000), 0..8);
+    }
+
+    #[test]
+    fn sparse_list_position_finds_cached_index() {
+        let mut list = SparseList::new(10);
+        list.insert(0, "a");
+        list.insert(4, "e");
+        assert_eq!(list.position(|s| *s == "e"), Some(4));
+        assert_eq!(list.position(|s| *s == "missing"), None);
+    }
+
+    #[test]
+    fn adjacent_index_moves_and_clamps() {
+        assert_eq!(adjacent_index(0, None, 1), None);
+        assert_eq!(adjacent_index(5, None, 1), Some(0));
+        assert_eq!(adjacent_index(5, None, -1), Some(0));
+        assert_eq!(adjacent_index(5, Some(0), 1), Some(1));
+        assert_eq!(adjacent_index(5, Some(0), -1), None);
+        assert_eq!(adjacent_index(5, Some(4), 1), None);
+        assert_eq!(adjacent_index(5, Some(4), -1), Some(3));
     }
 }

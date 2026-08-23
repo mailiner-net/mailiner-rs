@@ -86,6 +86,100 @@ fn mount_shadow_html(host_id: &str, html: &str) {
     }
 }
 
+const MESSAGE_CONTENT_ID: &str = "mailiner-message-content";
+
+/// How far to move the message body. Line ≈ arrow-key scroll; page ≈ PageUp/Down.
+#[derive(Clone, Copy)]
+pub(crate) enum MessageScroll {
+    Line,
+    Page,
+}
+
+/// Scroll the message body. `down` is visually down (Right / PageDown).
+///
+/// Uses the browser's `behavior: smooth` easing. Repeated keys within
+/// `SMOOTH_COALESCE_MS` accumulate on the animation target so we do not
+/// restart from a mid-flight `scrollTop`.
+pub(crate) fn scroll_message_view(down: bool, step: MessageScroll) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::cell::Cell;
+        use web_sys::{ScrollBehavior, ScrollToOptions};
+
+        const SMOOTH_COALESCE_MS: f64 = 350.0;
+        thread_local! {
+            static PENDING: Cell<(f64, f64)> = const { Cell::new((f64::NAN, 0.0)) };
+        }
+
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let Some(el) = doc.get_element_by_id(MESSAGE_CONTENT_ID) else {
+            return;
+        };
+        let height = f64::from(el.client_height());
+        let delta = message_scroll_delta(height, down, step);
+        if delta == 0.0 {
+            return;
+        }
+        let max = (f64::from(el.scroll_height()) - height).max(0.0);
+        let current = f64::from(el.scroll_top());
+        let now = js_sys::Date::now();
+        let (pending_top, pending_at) = PENDING.with(|p| p.get());
+        let next = next_smooth_target(
+            current,
+            pending_top,
+            pending_at,
+            now,
+            delta,
+            max,
+            SMOOTH_COALESCE_MS,
+        );
+        PENDING.with(|p| p.set((next, now)));
+
+        let opts = ScrollToOptions::new();
+        opts.set_top(next);
+        opts.set_behavior(ScrollBehavior::Smooth);
+        el.scroll_to_with_scroll_to_options(&opts);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (down, step);
+    }
+}
+
+fn next_smooth_target(
+    current: f64,
+    pending_top: f64,
+    pending_at: f64,
+    now: f64,
+    delta: f64,
+    max: f64,
+    coalesce_ms: f64,
+) -> f64 {
+    let base = if pending_top.is_finite() && now - pending_at < coalesce_ms {
+        pending_top
+    } else {
+        current
+    };
+    (base + delta).clamp(0.0, max)
+}
+
+/// Line step matches a typical browser arrow-key scroll (~3 lines).
+/// Page step is almost one viewport, with a little overlap for context.
+fn message_scroll_delta(client_height: f64, down: bool, step: MessageScroll) -> f64 {
+    let amount = match step {
+        MessageScroll::Line => 48.0,
+        MessageScroll::Page => {
+            if client_height <= 0.0 {
+                return 0.0;
+            }
+            (client_height * 0.85).max(48.0)
+        }
+    };
+    if down { amount } else { -amount }
+}
+
 fn view_message_key(state: &MessageViewState) -> Option<String> {
     match state {
         MessageViewState::Ready { message_id, .. }
@@ -131,13 +225,13 @@ pub fn MessageView() -> Element {
                     if let Some(result) = fmt.format(&loaded.parts) {
                         prevented_remote.set(result.prevented_remote_resources && !allow);
                         formatted_html.set(result.html.clone());
-                        mount_shadow_html("mailiner-message-content", &result.html);
+                        mount_shadow_html(MESSAGE_CONTENT_ID, &result.html);
                     } else {
                         prevented_remote.set(false);
                         let fallback =
                             "<p class=\"mlnr-empty-body\">No displayable content.</p>".to_string();
                         formatted_html.set(fallback.clone());
-                        mount_shadow_html("mailiner-message-content", &fallback);
+                        mount_shadow_html(MESSAGE_CONTENT_ID, &fallback);
                     }
                 }
                 MessageViewState::Empty
@@ -145,7 +239,7 @@ pub fn MessageView() -> Element {
                 | MessageViewState::Error { .. } => {
                     prevented_remote.set(false);
                     formatted_html.set(String::new());
-                    mount_shadow_html("mailiner-message-content", "");
+                    mount_shadow_html(MESSAGE_CONTENT_ID, "");
                 }
             }
         });
@@ -210,7 +304,7 @@ pub fn MessageView() -> Element {
                     }
 
                     div {
-                        id: "mailiner-message-content",
+                        id: MESSAGE_CONTENT_ID,
                         class: "mlnr-msg-host",
                         // Host stays empty in RSX — content is mounted into shadow DOM.
                     }
@@ -431,4 +525,32 @@ fn MessageHeader(message: Arc<Message>) -> Element {
 fn find_envelope(ctx: &AppContext, message_id: &MessageId) -> Option<Arc<Message>> {
     let messages = ctx.messages.read();
     messages.find(|m| &m.id == message_id).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_step_is_small_and_signed() {
+        assert_eq!(message_scroll_delta(400.0, true, MessageScroll::Line), 48.0);
+        assert_eq!(message_scroll_delta(400.0, false, MessageScroll::Line), -48.0);
+    }
+
+    #[test]
+    fn page_step_uses_viewport_with_overlap() {
+        assert_eq!(message_scroll_delta(400.0, true, MessageScroll::Page), 340.0);
+        assert_eq!(message_scroll_delta(400.0, false, MessageScroll::Page), -340.0);
+        assert_eq!(message_scroll_delta(0.0, true, MessageScroll::Page), 0.0);
+    }
+
+    #[test]
+    fn rapid_keys_extend_the_smooth_target() {
+        let first = next_smooth_target(0.0, f64::NAN, 0.0, 1000.0, 48.0, 1000.0, 350.0);
+        assert_eq!(first, 48.0);
+        let second = next_smooth_target(12.0, first, 1000.0, 1100.0, 48.0, 1000.0, 350.0);
+        assert_eq!(second, 96.0);
+        let after_pause = next_smooth_target(96.0, second, 1100.0, 1600.0, 48.0, 1000.0, 350.0);
+        assert_eq!(after_pause, 144.0);
+    }
 }

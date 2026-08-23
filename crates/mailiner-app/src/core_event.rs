@@ -23,7 +23,7 @@ use crate::send::{OutboxDisplay, SendPhase, SendState};
 use crate::smtp_session::{
     InFlightSmtp, SmtpOutcome, SEND_TIMEOUT_MS, preflight, spawn_submit, spawn_test,
 };
-use crate::components::virtual_scroll::SparseList;
+use crate::components::virtual_scroll::{SparseList, adjacent_index};
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
@@ -48,6 +48,10 @@ pub enum CoreEvent {
         range: Range<usize>,
     },
     SelectMessage(MessageId),
+    /// Move the list selection by `delta` rows (↓ = +1, ↑ = −1).
+    SelectAdjacent {
+        delta: i32,
+    },
     MarkRead {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
@@ -252,6 +256,9 @@ pub async fn core_loop(
             }
             CoreEvent::SelectMessage(message_id) => {
                 handle_select_message(&manager, &mut ctx, message_id).await;
+            }
+            CoreEvent::SelectAdjacent { delta } => {
+                handle_select_adjacent(&manager, &mut ctx, delta).await;
             }
             CoreEvent::MarkRead {
                 mailbox_id,
@@ -904,6 +911,38 @@ async fn handle_fetch_message_range(
             );
         }
     }
+}
+
+async fn handle_select_adjacent(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    delta: i32,
+) {
+    if ctx.selected_mailbox.peek().is_none() {
+        return;
+    }
+    if *ctx.messages_loading.peek() {
+        return;
+    }
+    let total = ctx.messages.read().total_count();
+    let current = ctx.selected_message.read().clone().and_then(|id| {
+        ctx.messages.read().position(|m| m.id == id)
+    });
+    let Some(index) = adjacent_index(total, current, delta) else {
+        return;
+    };
+    if ctx.messages.read().get(index).is_none() {
+        let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+            return;
+        };
+        let start = index.saturating_sub(5);
+        let end = (index + 15).min(total);
+        handle_fetch_message_range(manager, ctx, mailbox_id, start..end).await;
+    }
+    let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
+        return;
+    };
+    handle_select_message(manager, ctx, message_id).await;
 }
 
 async fn handle_select_message(

@@ -120,6 +120,9 @@ pub fn MessageList() -> Element {
                         buffer_size: BUFFER_SIZE,
                         debounce_ms: Some(100),
                         max_cached: Some(MAX_CACHED),
+                        reveal_index: ctx.selected_message.read().as_ref().and_then(|id| {
+                            ctx.messages.read().position(|m| m.id == *id)
+                        }),
                         on_need_range: on_need_range,
                         render_item: render_item,
                     }

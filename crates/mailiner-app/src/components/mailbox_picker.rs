@@ -6,10 +6,8 @@ use dioxus::html::Key;
 use dioxus::prelude::*;
 use mailiner_core::MailboxRole;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
 
 use super::icons::{Icon, IconButton, IconKind};
-use super::messageview::{MessageScroll, scroll_message_view};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
 use crate::mailbox::{
@@ -28,127 +26,22 @@ fn role_icon(role: MailboxRole) -> IconKind {
     }
 }
 
-fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
-    evt.prevent_default();
-    evt.stop_propagation();
-}
-
-fn event_target_is_editable(evt: &web_sys::KeyboardEvent) -> bool {
-    let Some(target) = evt.target() else {
-        return false;
-    };
-    let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() else {
-        return false;
-    };
-    if el.is_content_editable() {
-        return true;
-    }
-    matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
-}
-
-struct WindowKeydown {
-    closure: Closure<dyn FnMut(web_sys::KeyboardEvent)>,
-}
-
-impl Drop for WindowKeydown {
-    fn drop(&mut self) {
-        if let Some(win) = web_sys::window() {
-            let _ = win.remove_event_listener_with_callback_and_bool(
-                "keydown",
-                self.closure.as_ref().unchecked_ref(),
-                true,
-            );
-        }
-    }
-}
-
 #[component]
 pub fn MailboxPickerHost() -> Element {
     let ctx = use_context::<AppContext>();
-    let core = use_coroutine_handle::<CoreEvent>();
     let mode = *ctx.mailbox_picker.read();
     let mut open_gen = use_signal(|| 0u64);
 
-    use_hook(|| {
-        let mut ctx = ctx.clone();
-        let mut open_gen = open_gen;
-        let core = core;
-        let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
-            if evt.ctrl_key() || evt.meta_key() || evt.alt_key() {
-                return;
-            }
-            if event_target_is_editable(&evt) {
-                return;
-            }
-            if ctx.compose_draft.peek().is_some() {
-                return;
-            }
-            if ctx.mailbox_picker.peek().is_some() {
-                return;
-            }
-            match evt.key().as_str() {
-                "j" | "J" => {
-                    claim_shortcut(&evt);
-                    let next = open_gen() + 1;
-                    open_gen.set(next);
-                    ctx.mailbox_picker.set(Some(MailboxPickerMode::Jump));
-                }
-                "m" | "M" => {
-                    if ctx.selected_message.peek().is_none() {
-                        ctx.show_toast(ToastAction::info("Select a message first"));
-                        return;
-                    }
-                    claim_shortcut(&evt);
-                    let next = open_gen() + 1;
-                    open_gen.set(next);
-                    ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
-                }
-                "ArrowDown" => {
-                    claim_shortcut(&evt);
-                    let _ = core.send(CoreEvent::SelectAdjacent { delta: 1 });
-                }
-                "ArrowUp" => {
-                    claim_shortcut(&evt);
-                    let _ = core.send(CoreEvent::SelectAdjacent { delta: -1 });
-                }
-                "ArrowRight" => {
-                    claim_shortcut(&evt);
-                    scroll_message_view(true, MessageScroll::Line);
-                }
-                "ArrowLeft" => {
-                    claim_shortcut(&evt);
-                    scroll_message_view(false, MessageScroll::Line);
-                }
-                "PageDown" => {
-                    claim_shortcut(&evt);
-                    scroll_message_view(true, MessageScroll::Page);
-                }
-                "PageUp" => {
-                    claim_shortcut(&evt);
-                    scroll_message_view(false, MessageScroll::Page);
-                }
-                _ => {}
-            }
-        }) as Box<dyn FnMut(_)>);
-        if let Some(win) = web_sys::window() {
-            // Capture so PageUp/Down never become native scroll on the list.
-            let _ = win.add_event_listener_with_callback_and_bool(
-                "keydown",
-                closure.as_ref().unchecked_ref(),
-                true,
-            );
-        }
-        Rc::new(WindowKeydown { closure })
-    });
-
-    // Host stays mounted, so this re-runs on every open/close. HTML `autofocus`
-    // and in-keydown `focus()` only stick on the first insert; retry after paint.
+    // Remount + focus on every open. Host stays mounted so this re-runs
+    // when `mailbox_picker` changes.
     {
         let ctx = ctx.clone();
         use_effect(move || {
             if ctx.mailbox_picker.read().is_none() {
                 return;
             }
+            let next = *open_gen.peek() + 1;
+            open_gen.set(next);
             spawn(async move {
                 for delay_ms in [0_u32, 16, 50, 100] {
                     sleep_ms(delay_ms).await;

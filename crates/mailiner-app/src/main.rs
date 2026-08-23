@@ -13,6 +13,7 @@ use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
     EmailNavigation, MailboxPickerHost, MessageList, MessageView, OnboardingForm, OutboxPanel,
+    ShortcutsHost,
     SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
@@ -30,6 +31,7 @@ mod formatter;
 mod layout;
 mod outbox_store;
 mod send;
+mod shortcuts;
 mod smtp_session;
 mod mailbox;
 mod message;
@@ -431,6 +433,7 @@ fn MainView() -> Element {
         ComposeOverlay {}
         ToastHost {}
         MailboxPickerHost {}
+        ShortcutsHost {}
     }
 }
 

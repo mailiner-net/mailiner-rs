@@ -33,6 +33,9 @@ use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload}
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
+use crate::toast::{
+    DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest,
+};
 
 pub enum CoreEvent {
     // —— mail ops ——
@@ -58,6 +61,10 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Inverse of a toasted action (central undo).
+    Undo(UndoRequest),
+    /// Work held until a toast dismissed without Undo (permanent delete).
+    CommitDismissed(DismissCommit),
     /// Stream a single attachment part and save to disk (browser download).
     DownloadAttachment {
         mailbox_id: MailboxId,
@@ -261,6 +268,12 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_move_to_trash(&manager, &mut ctx, mailbox_id, message_ids).await;
+            }
+            CoreEvent::Undo(undo) => {
+                handle_undo(&manager, &mut ctx, undo).await;
+            }
+            CoreEvent::CommitDismissed(commit) => {
+                handle_commit_dismissed(&manager, &mut ctx, commit).await;
             }
             CoreEvent::DownloadAttachment {
                 mailbox_id,
@@ -971,15 +984,16 @@ fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
     }
 }
 
-fn remove_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) {
+fn take_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) -> Vec<RemovedMessage> {
     let idset: std::collections::HashSet<MessageId> = ids.iter().cloned().collect();
-    let removed = ctx
+    let taken = ctx
         .messages
         .write()
-        .remove_matching(|m| idset.contains(&m.id));
+        .take_matching(|m| idset.contains(&m.id));
+    let n = taken.len();
     if let Some(mb) = ctx.selected_mailbox.read().clone() {
         if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mb) {
-            node.total_count = node.total_count.saturating_sub(removed);
+            node.total_count = node.total_count.saturating_sub(n);
         }
     }
     let selected = ctx.selected_message.read().clone();
@@ -987,6 +1001,42 @@ fn remove_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) {
         ctx.selected_message.set(None);
         ctx.message_view.set(MessageViewState::Empty);
         ctx.download_status.set(HashMap::new());
+    }
+    taken
+        .into_iter()
+        .map(|(index, message)| RemovedMessage { index, message })
+        .collect()
+}
+
+fn restore_snapshots(
+    ctx: &mut AppContext,
+    mailbox_id: &MailboxId,
+    snapshots: Vec<RemovedMessage>,
+    new_ids: Option<&[MessageId]>,
+) {
+    if ctx.selected_mailbox.read().as_ref() != Some(mailbox_id) {
+        return;
+    }
+    let mut snapshots = snapshots;
+    snapshots.sort_by_key(|s| s.index);
+    if let Some(ids) = new_ids {
+        if ids.len() == snapshots.len() {
+            for (snap, id) in snapshots.iter_mut().zip(ids) {
+                let mut next = (*snap.message).clone();
+                next.id = id.clone();
+                next.envelope.id = CoreMessageId::new(id.to_string());
+                snap.message = Arc::new(next);
+            }
+        }
+    }
+    {
+        let mut list = ctx.messages.write();
+        for snap in snapshots {
+            list.insert_at(snap.index, snap.message);
+        }
+        if let Some(node) = ctx.mailbox_nodes.write().get_mut(mailbox_id) {
+            node.total_count = list.total_count();
+        }
     }
 }
 
@@ -1010,11 +1060,11 @@ async fn handle_mark_read(
         return;
     }
     let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.toast.set(Some("No account selected".into()));
+        ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };
     let Some(connector) = manager.get(&account_id) else {
-        ctx.toast.set(Some("Not connected".into()));
+        ctx.show_toast(ToastAction::error("Not connected"));
         return;
     };
 
@@ -1028,8 +1078,7 @@ async fn handle_mark_read(
     {
         error!("Failed to update read flag: {}", e);
         apply_read_flag(ctx, &message_ids, !is_read);
-        ctx.toast
-            .set(Some(format!("Could not update read state: {e}")));
+        ctx.show_toast(ToastAction::error(format!("Could not update read state: {e}")));
     }
 }
 
@@ -1047,11 +1096,11 @@ async fn handle_move_messages(
         return;
     }
     let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.toast.set(Some("No account selected".into()));
+        ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };
     let Some(connector) = manager.get(&account_id) else {
-        ctx.toast.set(Some("Not connected".into()));
+        ctx.show_toast(ToastAction::error("Not connected"));
         return;
     };
 
@@ -1062,19 +1111,35 @@ async fn handle_move_messages(
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
     {
-        Ok(()) => {
-            remove_messages_from_ui(ctx, &message_ids);
+        Ok(dest_uids) => {
+            let snapshots = take_messages_from_ui(ctx, &message_ids);
             let dest_label = ctx
                 .mailbox_nodes
                 .read()
                 .get(&dest_mailbox_id)
                 .map(|n| n.title().to_string())
                 .unwrap_or_else(|| dest_mailbox_id.to_string());
-            ctx.toast.set(Some(format!("Moved to {dest_label}")));
+            let dest_ids: Vec<MessageId> = dest_uids
+                .into_iter()
+                .map(|id| MessageId::from(id.to_string()))
+                .collect();
+            if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
+                ctx.show_toast(ToastAction::moved(
+                    dest_label,
+                    MoveUndo {
+                        from: dest_mailbox_id,
+                        to: mailbox_id,
+                        dest_ids,
+                        snapshots,
+                    },
+                ));
+            } else {
+                ctx.show_toast(ToastAction::info(format!("Moved to {dest_label}")));
+            }
         }
         Err(e) => {
             error!("Failed to move messages: {}", e);
-            ctx.toast.set(Some(format!("Could not move messages: {e}")));
+            ctx.show_toast(ToastAction::error(format!("Could not move messages: {e}")));
         }
     }
 }
@@ -1092,11 +1157,11 @@ async fn handle_move_to_trash(
         return;
     }
     let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.toast.set(Some("No account selected".into()));
+        ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };
     let Some(connector) = manager.get(&account_id) else {
-        ctx.toast.set(Some("Not connected".into()));
+        ctx.show_toast(ToastAction::error("Not connected"));
         return;
     };
 
@@ -1114,22 +1179,13 @@ async fn handle_move_to_trash(
     let core_ids = core_message_ids(&message_ids);
 
     if source_is_trash || trash_id.as_ref() == Some(&mailbox_id) {
-        match connector.delete_messages(&folder_id, &core_ids).await {
-            Ok(()) => {
-                remove_messages_from_ui(ctx, &message_ids);
-                ctx.toast.set(Some("Deleted".into()));
-            }
-            Err(e) => {
-                error!("Failed to delete messages: {}", e);
-                ctx.toast.set(Some(format!("Could not delete: {e}")));
-            }
-        }
+        let snapshots = take_messages_from_ui(ctx, &message_ids);
+        ctx.show_toast(ToastAction::deleted(mailbox_id, snapshots));
         return;
     }
 
     let Some(trash_id) = trash_id else {
-        ctx.toast
-            .set(Some("No Trash folder found on this account".into()));
+        ctx.show_toast(ToastAction::error("No Trash folder found on this account"));
         return;
     };
 
@@ -1138,13 +1194,98 @@ async fn handle_move_to_trash(
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
     {
-        Ok(()) => {
-            remove_messages_from_ui(ctx, &message_ids);
-            ctx.toast.set(Some("Moved to Trash".into()));
+        Ok(dest_uids) => {
+            let snapshots = take_messages_from_ui(ctx, &message_ids);
+            let dest_ids: Vec<MessageId> = dest_uids
+                .into_iter()
+                .map(|id| MessageId::from(id.to_string()))
+                .collect();
+            if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
+                ctx.show_toast(ToastAction::trashed(MoveUndo {
+                    from: trash_id,
+                    to: mailbox_id,
+                    dest_ids,
+                    snapshots,
+                }));
+            } else {
+                ctx.show_toast(ToastAction::info("Moved to Trash"));
+            }
         }
         Err(e) => {
             error!("Failed to move to trash: {}", e);
-            ctx.toast.set(Some(format!("Could not move to Trash: {e}")));
+            ctx.show_toast(ToastAction::error(format!("Could not move to Trash: {e}")));
+        }
+    }
+}
+
+async fn handle_undo(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    undo: UndoRequest,
+) {
+    match undo {
+        UndoRequest::RestoreLocal {
+            mailbox_id,
+            snapshots,
+        } => {
+            restore_snapshots(ctx, &mailbox_id, snapshots, None);
+            ctx.show_toast(ToastAction::info("Undone"));
+        }
+        UndoRequest::ReverseMove(undo) => {
+            let Some(account_id) = ctx.selected_account.read().clone() else {
+                ctx.show_toast(ToastAction::error("No account selected"));
+                return;
+            };
+            let Some(connector) = manager.get(&account_id) else {
+                ctx.show_toast(ToastAction::error("Not connected"));
+                return;
+            };
+            let from = FolderId::new(undo.from.to_string());
+            let to = FolderId::new(undo.to.to_string());
+            let core_ids = core_message_ids(&undo.dest_ids);
+            match connector.move_messages(&from, &core_ids, &to).await {
+                Ok(new_uids) => {
+                    if ctx.selected_mailbox.read().as_ref() == Some(&undo.from) {
+                        let _ = take_messages_from_ui(ctx, &undo.dest_ids);
+                    }
+                    let new_ids: Vec<MessageId> = new_uids
+                        .into_iter()
+                        .map(|id| MessageId::from(id.to_string()))
+                        .collect();
+                    restore_snapshots(ctx, &undo.to, undo.snapshots, Some(&new_ids));
+                    ctx.show_toast(ToastAction::info("Undone"));
+                }
+                Err(e) => {
+                    error!("Failed to undo move: {}", e);
+                    ctx.show_toast(ToastAction::error(format!("Could not undo: {e}")));
+                }
+            }
+        }
+    }
+}
+
+async fn handle_commit_dismissed(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    commit: DismissCommit,
+) {
+    match commit {
+        DismissCommit::Delete {
+            mailbox_id,
+            message_ids,
+        } => {
+            let Some(account_id) = ctx.selected_account.read().clone() else {
+                return;
+            };
+            let Some(connector) = manager.get(&account_id) else {
+                return;
+            };
+            let folder_id = FolderId::new(mailbox_id.to_string());
+            let core_ids = core_message_ids(&message_ids);
+            if let Err(e) = connector.delete_messages(&folder_id, &core_ids).await {
+                error!("Failed to permanently delete: {}", e);
+                ctx.show_toast(ToastAction::error(format!("Could not delete: {e}")));
+            }
         }
     }
 }
@@ -1621,7 +1762,7 @@ async fn handle_smtp_finished(
             ctx.send_status.set(Some(SendState::Sent {
                 account_id: flight.account_id.clone(),
             }));
-            ctx.toast.set(Some("Sent".into()));
+            ctx.show_toast(ToastAction::Sent);
             let _ = receipt;
             if let Some(rfc822) = rfc822 {
                 let _ = smtp_tx.unbounded_send(CoreEvent::ArchiveSent {
@@ -1688,25 +1829,25 @@ async fn handle_archive_sent(
 ) {
     let Some(connector) = manager.get(&account_id) else {
         warn!("ArchiveSent: no IMAP connector for {account_id}");
-        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
         return;
     };
     let sent = match connector.find_sent_folder().await {
         Ok(Some(name)) => name,
         Ok(None) => {
             warn!("ArchiveSent: no Sent mailbox for {account_id}");
-            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
             return;
         }
         Err(e) => {
             warn!("ArchiveSent: LIST failed for {account_id}: {e}");
-            ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+            ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
             return;
         }
     };
     if let Err(e) = connector.append_rfc822_seen(&sent, &rfc822).await {
         warn!("ArchiveSent: APPEND failed for {account_id} → {sent}: {e}");
-        ctx.toast.set(Some(ARCHIVE_SENT_WARN.into()));
+        ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
         return;
     }
     info!("ArchiveSent: appended to {sent} for {account_id}");

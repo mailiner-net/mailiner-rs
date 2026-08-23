@@ -3,6 +3,7 @@ mod accounts;
 mod compose;
 mod icons;
 mod outbox;
+mod toast;
 mod attachments;
 mod connection_status;
 mod emailnavigation;
@@ -14,7 +15,8 @@ pub mod virtual_scroll;
 
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
 pub use compose::ComposeOverlay;
-pub use outbox::{OutboxPanel, ToastHost};
+pub use outbox::OutboxPanel;
+pub use toast::ToastHost;
 pub use connection_status::ConnectionStatusBanner;
 pub use emailnavigation::{EmailNavigation, MessageList};
 pub use messageview::MessageView;

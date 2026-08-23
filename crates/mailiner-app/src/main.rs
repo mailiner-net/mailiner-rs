@@ -34,6 +34,7 @@ mod smtp_session;
 mod mailbox;
 mod message;
 mod message_loader;
+mod toast;
 mod websocket_stream;
 
 /// UI bootstrap state machine (store open → onboarding vs main).

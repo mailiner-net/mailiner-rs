@@ -58,11 +58,11 @@ pub fn open_reply_or_forward(
     loaded: &mailiner_core::models::LoadedMessage,
 ) {
     let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.toast.set(Some("Select an account first.".into()));
+        ctx.show_toast(crate::toast::ToastAction::error("Select an account first."));
         return;
     };
     let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-        ctx.toast.set(Some("Account not found.".into()));
+        ctx.show_toast(crate::toast::ToastAction::error("Account not found."));
         return;
     };
     let identity = FromIdentity::new(account.name, account.email);
@@ -82,7 +82,7 @@ pub fn open_reply_or_forward(
                 },
             );
         }
-        Err(e) => ctx.toast.set(Some(e.to_string())),
+        Err(e) => ctx.show_toast(crate::toast::ToastAction::error(e.to_string())),
     }
 }
 

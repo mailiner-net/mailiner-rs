@@ -1011,11 +1011,62 @@ textarea.ui-input {
     z-index: 40;
     background: #111;
     color: #fff;
-    padding: 0.6rem 0.8rem;
     border-radius: 8px;
+    overflow: hidden;
+    min-width: 16rem;
+    max-width: min(28rem, calc(100vw - 2rem));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.toast-body {
     display: flex;
     align-items: center;
     gap: 0.6rem;
+    padding: 0.65rem 0.8rem 0.55rem;
+}
+
+.toast-message {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.toast-undo {
+    flex: 0 0 auto;
+    font: inherit;
+    font-weight: 600;
+    color: #93c5fd;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.toast-undo:hover {
+    color: #bfdbfe;
+}
+
+.toast-close {
+    flex: 0 0 auto;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    padding: 0 0.15rem;
+    cursor: pointer;
+    opacity: 0.75;
+}
+
+.toast-close:hover {
+    opacity: 1;
+}
+
+.toast-timer {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.45);
+    transform: scaleX(var(--toast-progress, 1));
+    transform-origin: left center;
 }
 
 .mailbox-row {

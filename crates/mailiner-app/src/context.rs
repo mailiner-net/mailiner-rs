@@ -12,6 +12,7 @@ use crate::outbox_store::OutboxListEntry;
 use crate::send::{ComposeSession, SendState};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
+use crate::toast::{Toast, ToastAction};
 
 /// Viewer panel state driven by core_loop load pipeline.
 #[derive(Clone, Debug)]
@@ -63,7 +64,19 @@ pub struct AppContext {
     /// Outbox list (no rfc822 / no passwords).
     pub outbox: Signal<Vec<OutboxListEntry>>,
     /// Ephemeral toast (e.g. “Sent”).
-    pub toast: Signal<Option<String>>,
+    pub toast: Signal<Option<Toast>>,
     /// Open compose session (`None` = closed).
     pub compose_draft: Signal<Option<ComposeSession>>,
+}
+
+impl AppContext {
+    pub fn show_toast(&self, action: ToastAction) {
+        let mut toast = self.toast;
+        let id = toast
+            .peek()
+            .as_ref()
+            .map(|t| t.id.wrapping_add(1))
+            .unwrap_or(1);
+        toast.set(Some(Toast { id, action }));
+    }
 }

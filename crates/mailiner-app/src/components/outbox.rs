@@ -67,26 +67,6 @@ pub fn OutboxPanel() -> Element {
     }
 }
 
-#[component]
-pub fn ToastHost() -> Element {
-    let mut ctx = use_context::<AppContext>();
-    let toast = ctx.toast.read().clone();
-    let Some(text) = toast else {
-        return rsx! {};
-    };
-    rsx! {
-        div {
-            class: "toast",
-            role: "status",
-            "{text}"
-            button {
-                onclick: move |_| ctx.toast.set(None),
-                "×"
-            }
-        }
-    }
-}
-
 fn state_label(state: OutboxItemState) -> &'static str {
     match state {
         OutboxItemState::Queued => "Queued",

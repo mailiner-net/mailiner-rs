@@ -93,9 +93,8 @@ impl<T: Clone> SparseList<T> {
     }
 
     /// Remove matching cached items and close the index gaps (newest-first list).
-    /// Also shrinks `total_count` by the number removed (including uncached holes
-    /// only when the predicate can see them — so this is for cached rows).
-    pub fn remove_matching<F>(&mut self, mut pred: F) -> usize
+    /// Returns each removed row with its original index.
+    pub fn take_matching<F>(&mut self, mut pred: F) -> Vec<(usize, T)>
     where
         F: FnMut(&T) -> bool,
     {
@@ -106,8 +105,9 @@ impl<T: Clone> SparseList<T> {
             .map(|(k, _)| *k)
             .collect();
         if remove_keys.is_empty() {
-            return 0;
+            return Vec::new();
         }
+        let mut taken = Vec::with_capacity(remove_keys.len());
         let mut new_items = BTreeMap::new();
         let mut removed = 0usize;
         let mut remove_idx = 0usize;
@@ -117,18 +117,43 @@ impl<T: Clone> SparseList<T> {
                 removed += 1;
             }
             if remove_idx < remove_keys.len() && remove_keys[remove_idx] == k {
+                taken.push((k, v));
                 remove_idx += 1;
                 removed += 1;
                 continue;
             }
             new_items.insert(k - removed, v);
         }
-        // Trailing removals already counted; uncached rows after the last cached
-        // key are not shifted here (their indices stay valid relative to remaining
-        // cached items that we did shift).
         self.items = new_items;
-        self.total_count = self.total_count.saturating_sub(removed);
-        removed
+        self.total_count = self.total_count.saturating_sub(taken.len());
+        taken
+    }
+
+    /// Remove matching cached items and close the index gaps (newest-first list).
+    pub fn remove_matching<F>(&mut self, pred: F) -> usize
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.take_matching(pred).len()
+    }
+
+    /// Insert `item` at `index`, shifting later cached rows up.
+    pub fn insert_at(&mut self, index: usize, item: T) {
+        let index = index.min(self.total_count);
+        let to_shift: Vec<usize> = self
+            .items
+            .keys()
+            .copied()
+            .filter(|&k| k >= index)
+            .rev()
+            .collect();
+        for k in to_shift {
+            if let Some(v) = self.items.remove(&k) {
+                self.items.insert(k + 1, v);
+            }
+        }
+        self.items.insert(index, item);
+        self.total_count += 1;
     }
 
     /// Find contiguous runs of missing indices within `[start, end)`.
@@ -556,6 +581,25 @@ mod tests {
         assert!(!list.has_item(1));
         assert_eq!(list.get(2).copied(), Some("d"));
         assert_eq!(list.get(3).copied(), Some("e"));
+    }
+
+    #[test]
+    fn sparse_list_take_and_insert_at_restores() {
+        let mut list = SparseList::new(4);
+        list.insert(0, "a");
+        list.insert(1, "b");
+        list.insert(2, "c");
+        list.insert(3, "d");
+        let taken = list.take_matching(|s| *s == "b" || *s == "d");
+        assert_eq!(taken.len(), 2);
+        assert_eq!(list.total_count(), 2);
+        list.insert_at(taken[0].0, taken[0].1);
+        list.insert_at(taken[1].0, taken[1].1);
+        assert_eq!(list.total_count(), 4);
+        assert_eq!(list.get(0).copied(), Some("a"));
+        assert_eq!(list.get(1).copied(), Some("b"));
+        assert_eq!(list.get(2).copied(), Some("c"));
+        assert_eq!(list.get(3).copied(), Some("d"));
     }
 
     #[test]

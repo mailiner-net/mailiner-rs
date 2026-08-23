@@ -349,6 +349,76 @@ fn quote_mailbox(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+fn expand_uid_set(members: &[imap_proto::UidSetMember]) -> Vec<MessageId> {
+    let mut out = Vec::new();
+    for member in members {
+        match member {
+            imap_proto::UidSetMember::Uid(u) => out.push(MessageId::new(u.to_string())),
+            imap_proto::UidSetMember::UidRange(range) => {
+                for u in *range.start()..=*range.end() {
+                    out.push(MessageId::new(u.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn copyuid_dest(code: &Option<imap_proto::ResponseCode<'_>>) -> Option<Vec<MessageId>> {
+    match code {
+        Some(imap_proto::ResponseCode::CopyUid(_, _, dest)) => Some(expand_uid_set(dest)),
+        _ => None,
+    }
+}
+
+/// Run a tagged command and collect destination UIDs from COPYUID.
+async fn run_copyuid_command<S>(
+    session: &mut Session<TlsStream<S>>,
+    command: &str,
+) -> MailinerResult<Vec<MessageId>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let tag = session
+        .run_command(command)
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to run {command}: {e}")))?;
+    let mut dest_uids = Vec::new();
+    loop {
+        let resp = session
+            .read_response()
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to read IMAP response: {e}")))?
+            .ok_or_else(|| ImapError::Imap("IMAP connection closed".into()))?;
+        match resp.parsed() {
+            imap_proto::Response::Data { code, .. } => {
+                if let Some(uids) = copyuid_dest(code) {
+                    dest_uids = uids;
+                }
+            }
+            imap_proto::Response::Done {
+                tag: done_tag,
+                status,
+                code,
+                information,
+            } if done_tag == &tag => {
+                if let Some(uids) = copyuid_dest(code) {
+                    dest_uids = uids;
+                }
+                return match status {
+                    imap_proto::Status::Ok => Ok(dest_uids),
+                    _ => Err(ImapError::Imap(format!(
+                        "{command} failed: {}",
+                        information.as_deref().unwrap_or("error")
+                    ))
+                    .into()),
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
 async fn drain_uid_store<S>(
     session: &mut Session<TlsStream<S>>,
     uids: &str,
@@ -795,12 +865,12 @@ where
         folder_id: &FolderId,
         message_ids: &[MessageId],
         dest_folder_id: &FolderId,
-    ) -> MailinerResult<()> {
+    ) -> MailinerResult<Vec<MessageId>> {
         if message_ids.is_empty() || folder_id == dest_folder_id {
-            return Ok(());
+            return Ok(message_ids.to_vec());
         }
         let uids = uid_set(message_ids)?;
-        let dest = dest_folder_id.as_str();
+        let dest = quote_mailbox(dest_folder_id.as_str());
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
@@ -811,16 +881,16 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
-        if session.uid_mv(&uids, dest).await.is_ok() {
-            return Ok(());
+        match run_copyuid_command(session, &format!("UID MOVE {uids} {dest}")).await {
+            Ok(dest_uids) => return Ok(dest_uids),
+            Err(_) => {}
         }
 
-        // RFC 6851 fallback: COPY + \Deleted + EXPUNGE. uid_copy does not quote.
-        session
-            .uid_copy(&uids, quote_mailbox(dest))
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to copy messages: {e}")))?;
-        delete_selected_uids(session, &uids).await
+        // RFC 6851 fallback: COPY + \Deleted + EXPUNGE.
+        let dest_uids =
+            run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
+        delete_selected_uids(session, &uids).await?;
+        Ok(dest_uids)
     }
 
     async fn delete_messages(
@@ -1167,5 +1237,15 @@ mod tests {
         assert_eq!(quote_mailbox("Trash"), "\"Trash\"");
         assert_eq!(quote_mailbox("Deleted Items"), "\"Deleted Items\"");
         assert_eq!(quote_mailbox(r#"foo"bar"#), r#""foo\"bar""#);
+    }
+
+    #[test]
+    fn expand_uid_range() {
+        let ids = expand_uid_set(&[
+            imap_proto::UidSetMember::Uid(12),
+            imap_proto::UidSetMember::UidRange(20..=22),
+        ]);
+        let raw: Vec<_> = ids.iter().map(MessageId::as_str).collect();
+        assert_eq!(raw, ["12", "20", "21", "22"]);
     }
 }

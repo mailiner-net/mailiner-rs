@@ -61,12 +61,15 @@ where
     ) -> Result<()>;
 
     /// Move messages from `folder_id` to `dest_folder_id` (IMAP MOVE, or COPY+\Deleted).
+    ///
+    /// Returns destination UIDs when the server sends `COPYUID` (same order as
+    /// `message_ids`). Empty if the server omitted it.
     async fn move_messages(
         &self,
         folder_id: &FolderId,
         message_ids: &[MessageId],
         dest_folder_id: &FolderId,
-    ) -> Result<()>;
+    ) -> Result<Vec<MessageId>>;
 
     /// Permanently delete messages (STORE \Deleted + EXPUNGE).
     async fn delete_messages(
@@ -344,10 +347,10 @@ where
     async fn move_messages(
         &self,
         _folder_id: &FolderId,
-        _message_ids: &[MessageId],
+        message_ids: &[MessageId],
         _dest_folder_id: &FolderId,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Vec<MessageId>> {
+        Ok(message_ids.to_vec())
     }
 
     async fn delete_messages(

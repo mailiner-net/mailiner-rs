@@ -327,6 +327,87 @@ where
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 }
 
+fn imap_flag_atom(flag: &str) -> Result<&'static str, ImapError> {
+    match flag {
+        "is_read" => Ok("\\Seen"),
+        "is_flagged" => Ok("\\Flagged"),
+        "is_draft" => Ok("\\Draft"),
+        "is_deleted" => Ok("\\Deleted"),
+        "is_starred" => Ok("\\Starred"),
+        _ => Err(ImapError::InvalidData(format!("Unknown flag: {flag}"))),
+    }
+}
+
+fn uid_set(ids: &[MessageId]) -> Result<String, ImapError> {
+    if ids.is_empty() {
+        return Err(ImapError::InvalidData("No message ids".into()));
+    }
+    Ok(ids.iter().map(MessageId::as_str).collect::<Vec<_>>().join(","))
+}
+
+fn quote_mailbox(name: &str) -> String {
+    format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+async fn drain_uid_store<S>(
+    session: &mut Session<TlsStream<S>>,
+    uids: &str,
+    query: &str,
+) -> MailinerResult<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let stream = session
+        .uid_store(uids, query)
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to store flags: {e}")))?;
+    stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to store flags: {e}")))?;
+    Ok(())
+}
+
+async fn expunge_uids<S>(session: &mut Session<TlsStream<S>>, uids: &str) -> MailinerResult<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let uidplus = match session.uid_expunge(uids).await {
+        Ok(stream) => Some(
+            stream
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to expunge: {e}"))),
+        ),
+        Err(_) => None,
+    };
+    if let Some(result) = uidplus {
+        result?;
+        return Ok(());
+    }
+
+    let stream = session
+        .expunge()
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to expunge: {e}")))?;
+    stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to expunge: {e}")))?;
+    Ok(())
+}
+
+async fn delete_selected_uids<S>(
+    session: &mut Session<TlsStream<S>>,
+    uids: &str,
+) -> MailinerResult<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    drain_uid_store(session, uids, "+FLAGS.SILENT (\\Deleted)").await?;
+    expunge_uids(session, uids).await
+}
+
 #[async_trait]
 impl<S> EmailConnector<S> for ImapConnector<S>
 where
@@ -678,47 +759,89 @@ where
 
     async fn update_envelope_flags(
         &self,
-        message_id: &MessageId,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
         flags: &[(&str, bool)],
     ) -> MailinerResult<()> {
+        if message_ids.is_empty() || flags.is_empty() {
+            return Ok(());
+        }
+        let uids = uid_set(message_ids)?;
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
         };
 
         session
-            .select("INBOX")
+            .select(folder_id.as_str())
             .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
         for (flag, value) in flags {
-            let flag = match *flag {
-                "is_read" => Flag::Seen,
-                "is_flagged" => Flag::Flagged,
-                "is_draft" => Flag::Draft,
-                "is_deleted" => Flag::Deleted,
-                "is_starred" => Flag::Custom("\\Starred".into()),
-                _ => return Err(ImapError::InvalidData(format!("Unknown flag: {}", flag)).into()),
-            };
-
-            let stream = if *value {
-                session
-                    .uid_store(message_id.as_str(), format!("+FLAGS ({:?})", flag))
-                    .await
-                    .map_err(|e| ImapError::Imap(format!("Failed to set flag: {}", e)))?
+            let atom = imap_flag_atom(flag)?;
+            let query = if *value {
+                format!("+FLAGS.SILENT ({atom})")
             } else {
-                session
-                    .uid_store(message_id.as_str(), format!("-FLAGS ({:?})", flag))
-                    .await
-                    .map_err(|e| ImapError::Imap(format!("Failed to remove flag: {}", e)))?
+                format!("-FLAGS.SILENT ({atom})")
             };
-            let _updates = stream
-                .try_collect::<Vec<_>>()
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to update envelope flags: {}", e)))?;
+            drain_uid_store(session, &uids, &query).await?;
         }
 
         Ok(())
+    }
+
+    async fn move_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        dest_folder_id: &FolderId,
+    ) -> MailinerResult<()> {
+        if message_ids.is_empty() || folder_id == dest_folder_id {
+            return Ok(());
+        }
+        let uids = uid_set(message_ids)?;
+        let dest = dest_folder_id.as_str();
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+
+        if session.uid_mv(&uids, dest).await.is_ok() {
+            return Ok(());
+        }
+
+        // RFC 6851 fallback: COPY + \Deleted + EXPUNGE. uid_copy does not quote.
+        session
+            .uid_copy(&uids, quote_mailbox(dest))
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to copy messages: {e}")))?;
+        delete_selected_uids(session, &uids).await
+    }
+
+    async fn delete_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+    ) -> MailinerResult<()> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let uids = uid_set(message_ids)?;
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        delete_selected_uids(session, &uids).await
     }
 
     async fn get_body_structure(
@@ -1019,5 +1142,30 @@ mod tests {
         assert_eq!(part_size_from_structure(&root, "2"), Some(99_000));
         assert_eq!(part_size_from_structure(&root, "1"), Some(10));
         assert_eq!(part_size_from_structure(&root, "3"), None);
+    }
+
+    #[test]
+    fn imap_flag_atoms() {
+        assert_eq!(imap_flag_atom("is_read").unwrap(), "\\Seen");
+        assert_eq!(imap_flag_atom("is_flagged").unwrap(), "\\Flagged");
+        assert_eq!(imap_flag_atom("is_deleted").unwrap(), "\\Deleted");
+        assert!(imap_flag_atom("nope").is_err());
+    }
+
+    #[test]
+    fn uid_set_joins() {
+        let ids = [
+            MessageId::new("12"),
+            MessageId::new("44"),
+        ];
+        assert_eq!(uid_set(&ids).unwrap(), "12,44");
+        assert!(uid_set(&[]).is_err());
+    }
+
+    #[test]
+    fn quote_mailbox_escapes() {
+        assert_eq!(quote_mailbox("Trash"), "\"Trash\"");
+        assert_eq!(quote_mailbox("Deleted Items"), "\"Deleted Items\"");
+        assert_eq!(quote_mailbox(r#"foo"bar"#), r#""foo\"bar""#);
     }
 }

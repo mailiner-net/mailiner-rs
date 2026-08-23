@@ -88,6 +88,49 @@ impl<T: Clone> SparseList<T> {
         self.items.len()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.items.values_mut()
+    }
+
+    /// Remove matching cached items and close the index gaps (newest-first list).
+    /// Also shrinks `total_count` by the number removed (including uncached holes
+    /// only when the predicate can see them — so this is for cached rows).
+    pub fn remove_matching<F>(&mut self, mut pred: F) -> usize
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let remove_keys: Vec<usize> = self
+            .items
+            .iter()
+            .filter(|(_, v)| pred(v))
+            .map(|(k, _)| *k)
+            .collect();
+        if remove_keys.is_empty() {
+            return 0;
+        }
+        let mut new_items = BTreeMap::new();
+        let mut removed = 0usize;
+        let mut remove_idx = 0usize;
+        for (k, v) in std::mem::take(&mut self.items) {
+            while remove_idx < remove_keys.len() && remove_keys[remove_idx] < k {
+                remove_idx += 1;
+                removed += 1;
+            }
+            if remove_idx < remove_keys.len() && remove_keys[remove_idx] == k {
+                remove_idx += 1;
+                removed += 1;
+                continue;
+            }
+            new_items.insert(k - removed, v);
+        }
+        // Trailing removals already counted; uncached rows after the last cached
+        // key are not shifted here (their indices stay valid relative to remaining
+        // cached items that we did shift).
+        self.items = new_items;
+        self.total_count = self.total_count.saturating_sub(removed);
+        removed
+    }
+
     /// Find contiguous runs of missing indices within `[start, end)`.
     pub fn missing_ranges(&self, start: usize, end: usize) -> Vec<Range<usize>> {
         let end = end.min(self.total_count);
@@ -497,6 +540,22 @@ mod tests {
         let vp = ViewportInfo::calculate(0.0, 0.0, 72.0, 1000);
         assert_eq!(vp.visible_count, 0);
         assert_eq!(vp.buffered_range(15, 1000), 0..0);
+    }
+
+    #[test]
+    fn sparse_list_remove_matching_shifts_indices() {
+        let mut list = SparseList::new(5);
+        list.insert(0, "a");
+        list.insert(1, "b");
+        list.insert(3, "d");
+        list.insert(4, "e");
+        let n = list.remove_matching(|s| *s == "b");
+        assert_eq!(n, 1);
+        assert_eq!(list.total_count(), 4);
+        assert_eq!(list.get(0).copied(), Some("a"));
+        assert!(!list.has_item(1));
+        assert_eq!(list.get(2).copied(), Some("d"));
+        assert_eq!(list.get(3).copied(), Some("e"));
     }
 
     #[test]

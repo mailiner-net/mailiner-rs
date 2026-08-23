@@ -114,6 +114,44 @@ pub fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<Mail
     (root_ids, mboxes)
 }
 
+/// First mailbox with `role`, if any.
+pub fn find_mailbox_with_role(
+    nodes: &HashMap<MailboxId, MailboxNode>,
+    role: MailboxRole,
+) -> Option<MailboxId> {
+    nodes
+        .iter()
+        .find(|(_, n)| n.role == role)
+        .map(|(id, _)| id.clone())
+}
+
+/// Depth-first list of `(id, indented title)` for move pickers.
+pub fn flatten_mailboxes(
+    roots: &[MailboxId],
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> Vec<(MailboxId, String)> {
+    let mut out = Vec::new();
+    fn walk(
+        id: &MailboxId,
+        depth: usize,
+        nodes: &HashMap<MailboxId, MailboxNode>,
+        out: &mut Vec<(MailboxId, String)>,
+    ) {
+        let Some(node) = nodes.get(id) else {
+            return;
+        };
+        let indent = "\u{00a0}\u{00a0}".repeat(depth);
+        out.push((id.clone(), format!("{indent}{}", node.title())));
+        for child in &node.children {
+            walk(child, depth + 1, nodes, out);
+        }
+    }
+    for root in roots {
+        walk(root, 0, nodes, &mut out);
+    }
+    out
+}
+
 fn sort_mailbox_ids(ids: &mut [MailboxId], mboxes: &HashMap<MailboxId, MailboxNode>) {
     ids.sort_by(|a, b| {
         let (ra, na) = mboxes
@@ -192,5 +230,28 @@ mod tests {
             .map(|id| nodes.get(id).unwrap().name.as_str())
             .collect();
         assert_eq!(names, ["Drafts", "Sent", "Zebra"]);
+    }
+
+    #[test]
+    fn find_trash_role() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        let trash = find_mailbox_with_role(&nodes, MailboxRole::Trash).unwrap();
+        assert_eq!(trash.to_string(), "Trash");
+        assert!(find_mailbox_with_role(&nodes, MailboxRole::Outbox).is_none());
+    }
+
+    #[test]
+    fn flatten_indents_children() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("INBOX.Work", "Work", Some("INBOX"), MailboxRole::Other),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        let flat = flatten_mailboxes(&roots, &nodes);
+        let titles: Vec<_> = flat.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(titles, ["Inbox", "\u{00a0}\u{00a0}Work", "Trash"]);
     }
 }

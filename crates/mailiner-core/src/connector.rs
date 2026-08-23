@@ -52,10 +52,27 @@ where
         range: Range<usize>,
     ) -> Result<Vec<Envelope>>;
     async fn get_envelope(&self, message_id: &MessageId) -> Result<Envelope>;
+    /// Set or clear named flags (`is_read`, `is_flagged`, `is_draft`, `is_deleted`, `is_starred`).
     async fn update_envelope_flags(
         &self,
-        message_id: &MessageId,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
         flags: &[(&str, bool)],
+    ) -> Result<()>;
+
+    /// Move messages from `folder_id` to `dest_folder_id` (IMAP MOVE, or COPY+\Deleted).
+    async fn move_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        dest_folder_id: &FolderId,
+    ) -> Result<()>;
+
+    /// Permanently delete messages (STORE \Deleted + EXPUNGE).
+    async fn delete_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
     ) -> Result<()>;
 
     /// FETCH BODYSTRUCTURE for one message (UID). Selects `folder_id` if needed.
@@ -317,8 +334,26 @@ where
 
     async fn update_envelope_flags(
         &self,
-        _message_id: &MessageId,
+        _folder_id: &FolderId,
+        _message_ids: &[MessageId],
         _flags: &[(&str, bool)],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn move_messages(
+        &self,
+        _folder_id: &FolderId,
+        _message_ids: &[MessageId],
+        _dest_folder_id: &FolderId,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn delete_messages(
+        &self,
+        _folder_id: &FolderId,
+        _message_ids: &[MessageId],
     ) -> Result<()> {
         Ok(())
     }

@@ -33,6 +33,7 @@ pub struct Message {
     pub bcc: Option<String>,
     pub date: DateTime<Utc>,
     pub has_attachments: bool,
+    pub is_read: bool,
     /// Original IMAP envelope for reply/forward prefill.
     pub envelope: Envelope,
 }
@@ -90,6 +91,7 @@ impl From<Envelope> for Message {
             bcc: envelope.bcc.as_ref().map(EmailAddress::to_string),
             date: envelope.date,
             has_attachments: envelope.has_attachments,
+            is_read: envelope.is_read,
             envelope,
         }
     }

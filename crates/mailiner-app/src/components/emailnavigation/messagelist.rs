@@ -53,6 +53,7 @@ pub fn MessageList() -> Element {
             div {
                 class: "message-list-item",
                 class: if is_selected { "selected" },
+                class: if !message.is_read { "unread" },
 
                 onclick: move |_| {
                     let _ = core_tx.send(CoreEvent::SelectMessage(message.id.clone()));

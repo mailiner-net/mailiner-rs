@@ -5,9 +5,13 @@ use dioxus::prelude::*;
 
 use mailiner_composer::ComposeIntent;
 
+use mailiner_core::MailboxRole;
+
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
+use crate::core_event::CoreEvent;
 use crate::formatter::{FormatOptions, MessageFormatter};
+use crate::mailbox::{flatten_mailboxes, MailboxId};
 use crate::message::{Message, MessageId};
 
 use super::compose::open_reply_or_forward;
@@ -234,8 +238,24 @@ fn ready_loaded(
 #[component]
 fn MessageHeader(message: Arc<Message>) -> Element {
     let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
     let date = format_date(&message.date);
     let actions_ready = ready_loaded(&ctx, &message.id).is_some();
+    let mailbox_id = ctx.selected_mailbox.read().clone();
+    let in_trash = mailbox_id
+        .as_ref()
+        .and_then(|id| ctx.mailbox_nodes.read().get(id).map(|n| n.role == MailboxRole::Trash))
+        .unwrap_or(false);
+    let move_targets = {
+        let nodes = ctx.mailbox_nodes.read();
+        let roots = ctx.mailbox_roots.read();
+        flatten_mailboxes(&roots, &nodes)
+            .into_iter()
+            .filter(|(id, _)| mailbox_id.as_ref() != Some(id))
+            .collect::<Vec<_>>()
+    };
+    let mut move_seq = use_signal(|| 0u32);
+    let is_read = message.is_read;
 
     rsx! {
         header {
@@ -292,6 +312,93 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                             }
                         },
                         "Forward"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        title: if is_read { "Mark as unread" } else { "Mark as read" },
+                        onclick: {
+                            let message = message.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::MarkRead {
+                                    mailbox_id,
+                                    message_ids: vec![message.id.clone()],
+                                    is_read: !is_read,
+                                });
+                            }
+                        },
+                        if is_read { "Mark unread" } else { "Mark read" }
+                    }
+                    select {
+                        key: "{move_seq}",
+                        class: "ui-btn ui-btn-secondary message-move-select",
+                        title: "Move to folder",
+                        aria_label: "Move to folder",
+                        value: "",
+                        onchange: {
+                            let message = message.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            move |evt: FormEvent| {
+                                let dest = evt.value();
+                                move_seq.set(move_seq() + 1);
+                                if dest.is_empty() {
+                                    return;
+                                }
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::MoveMessages {
+                                    mailbox_id,
+                                    message_ids: vec![message.id.clone()],
+                                    dest_mailbox_id: MailboxId::from(dest),
+                                });
+                            }
+                        },
+                        option {
+                            value: "",
+                            disabled: true,
+                            selected: true,
+                            "Move to…"
+                        }
+                        for (id, title) in move_targets {
+                            option {
+                                value: "{id.to_string()}",
+                                "{title}"
+                            }
+                        }
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        title: if in_trash { "Delete permanently" } else { "Move to Trash" },
+                        onclick: {
+                            let message = message.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                #[cfg(feature = "web")]
+                                if in_trash {
+                                    let Some(window) = web_sys::window() else {
+                                        return;
+                                    };
+                                    match window.confirm_with_message(
+                                        "Delete this message permanently?",
+                                    ) {
+                                        Ok(true) => {}
+                                        _ => return,
+                                    }
+                                }
+                                let _ = core_tx.send(CoreEvent::MoveToTrash {
+                                    mailbox_id,
+                                    message_ids: vec![message.id.clone()],
+                                });
+                            }
+                        },
+                        if in_trash { "Delete" } else { "Trash" }
                     }
                 }
             }

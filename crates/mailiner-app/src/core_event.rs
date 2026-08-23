@@ -11,7 +11,7 @@ use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{FolderId, MessageId as CoreMessageId};
+use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -43,6 +43,21 @@ pub enum CoreEvent {
         range: Range<usize>,
     },
     SelectMessage(MessageId),
+    MarkRead {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+        is_read: bool,
+    },
+    MoveMessages {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+        dest_mailbox_id: MailboxId,
+    },
+    /// Move to the Trash special-use folder, or permanently delete when already there.
+    MoveToTrash {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Stream a single attachment part and save to disk (browser download).
     DownloadAttachment {
         mailbox_id: MailboxId,
@@ -225,6 +240,27 @@ pub async fn core_loop(
             }
             CoreEvent::SelectMessage(message_id) => {
                 handle_select_message(&manager, &mut ctx, message_id).await;
+            }
+            CoreEvent::MarkRead {
+                mailbox_id,
+                message_ids,
+                is_read,
+            } => {
+                handle_mark_read(&manager, &mut ctx, mailbox_id, message_ids, is_read).await;
+            }
+            CoreEvent::MoveMessages {
+                mailbox_id,
+                message_ids,
+                dest_mailbox_id,
+            } => {
+                handle_move_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
+                    .await;
+            }
+            CoreEvent::MoveToTrash {
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_move_to_trash(&manager, &mut ctx, mailbox_id, message_ids).await;
             }
             CoreEvent::DownloadAttachment {
                 mailbox_id,
@@ -891,9 +927,24 @@ async fn handle_select_message(
                 return;
             }
             ctx.message_view.set(MessageViewState::Ready {
-                message_id,
+                message_id: message_id.clone(),
                 loaded: Arc::new(loaded),
             });
+            let was_unread = ctx
+                .messages
+                .read()
+                .find(|m| m.id == message_id)
+                .is_some_and(|m| !m.is_read);
+            if was_unread {
+                apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
+                if let Err(e) = connector
+                    .update_envelope_flags(&folder_id, &[core_id], &[("is_read", true)])
+                    .await
+                {
+                    warn!("Auto-mark as read failed for {}: {}", message_id, e);
+                    apply_read_flag(ctx, std::slice::from_ref(&message_id), false);
+                }
+            }
         }
         Err(e) => {
             if ctx.selected_message.read().as_ref() != Some(&message_id) {
@@ -904,6 +955,196 @@ async fn handle_select_message(
                 message_id,
                 message: e.to_string(),
             });
+        }
+    }
+}
+
+fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
+    let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
+    for msg in ctx.messages.write().iter_mut() {
+        if idset.contains(&msg.id) {
+            let mut next = (**msg).clone();
+            next.is_read = is_read;
+            next.envelope.is_read = is_read;
+            *msg = Arc::new(next);
+        }
+    }
+}
+
+fn remove_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) {
+    let idset: std::collections::HashSet<MessageId> = ids.iter().cloned().collect();
+    let removed = ctx
+        .messages
+        .write()
+        .remove_matching(|m| idset.contains(&m.id));
+    if let Some(mb) = ctx.selected_mailbox.read().clone() {
+        if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mb) {
+            node.total_count = node.total_count.saturating_sub(removed);
+        }
+    }
+    let selected = ctx.selected_message.read().clone();
+    if selected.as_ref().is_some_and(|id| idset.contains(id)) {
+        ctx.selected_message.set(None);
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
+    }
+}
+
+fn core_message_ids(ids: &[MessageId]) -> Vec<CoreMessageId> {
+    ids.iter()
+        .map(|id| CoreMessageId::new(id.to_string()))
+        .collect()
+}
+
+async fn handle_mark_read(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+    is_read: bool,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.toast.set(Some("No account selected".into()));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.toast.set(Some("Not connected".into()));
+        return;
+    };
+
+    apply_read_flag(ctx, &message_ids, is_read);
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_ids = core_message_ids(&message_ids);
+    if let Err(e) = connector
+        .update_envelope_flags(&folder_id, &core_ids, &[("is_read", is_read)])
+        .await
+    {
+        error!("Failed to update read flag: {}", e);
+        apply_read_flag(ctx, &message_ids, !is_read);
+        ctx.toast
+            .set(Some(format!("Could not update read state: {e}")));
+    }
+}
+
+async fn handle_move_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+    dest_mailbox_id: MailboxId,
+) {
+    if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.toast.set(Some("No account selected".into()));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.toast.set(Some("Not connected".into()));
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let dest_id = FolderId::new(dest_mailbox_id.to_string());
+    let core_ids = core_message_ids(&message_ids);
+    match connector
+        .move_messages(&folder_id, &core_ids, &dest_id)
+        .await
+    {
+        Ok(()) => {
+            remove_messages_from_ui(ctx, &message_ids);
+            let dest_label = ctx
+                .mailbox_nodes
+                .read()
+                .get(&dest_mailbox_id)
+                .map(|n| n.title().to_string())
+                .unwrap_or_else(|| dest_mailbox_id.to_string());
+            ctx.toast.set(Some(format!("Moved to {dest_label}")));
+        }
+        Err(e) => {
+            error!("Failed to move messages: {}", e);
+            ctx.toast.set(Some(format!("Could not move messages: {e}")));
+        }
+    }
+}
+
+async fn handle_move_to_trash(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.toast.set(Some("No account selected".into()));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.toast.set(Some("Not connected".into()));
+        return;
+    };
+
+    let source_is_trash = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(|n| n.role == MailboxRole::Trash);
+    let trash_id = crate::mailbox::find_mailbox_with_role(
+        &ctx.mailbox_nodes.read(),
+        MailboxRole::Trash,
+    );
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_ids = core_message_ids(&message_ids);
+
+    if source_is_trash || trash_id.as_ref() == Some(&mailbox_id) {
+        match connector.delete_messages(&folder_id, &core_ids).await {
+            Ok(()) => {
+                remove_messages_from_ui(ctx, &message_ids);
+                ctx.toast.set(Some("Deleted".into()));
+            }
+            Err(e) => {
+                error!("Failed to delete messages: {}", e);
+                ctx.toast.set(Some(format!("Could not delete: {e}")));
+            }
+        }
+        return;
+    }
+
+    let Some(trash_id) = trash_id else {
+        ctx.toast
+            .set(Some("No Trash folder found on this account".into()));
+        return;
+    };
+
+    let dest_id = FolderId::new(trash_id.to_string());
+    match connector
+        .move_messages(&folder_id, &core_ids, &dest_id)
+        .await
+    {
+        Ok(()) => {
+            remove_messages_from_ui(ctx, &message_ids);
+            ctx.toast.set(Some("Moved to Trash".into()));
+        }
+        Err(e) => {
+            error!("Failed to move to trash: {}", e);
+            ctx.toast.set(Some(format!("Could not move to Trash: {e}")));
         }
     }
 }

@@ -959,6 +959,12 @@ textarea.ui-input {
     padding: 0.3rem 0.7rem;
 }
 
+.message-move-select {
+    max-width: 10.5rem;
+    cursor: pointer;
+    appearance: auto;
+}
+
 .outbox-panel {
     padding: 0.75rem 1rem;
     border-top: 1px solid var(--border, #ddd);
@@ -1257,6 +1263,15 @@ textarea.ui-input {
                 top: 0;
             }
 
+            &.unread .message-from,
+            &.unread .message-subject {
+                font-weight: 700;
+            }
+
+            &.unread .message-subject {
+                color: #111;
+            }
+
             .message-list-item-content {
                 .message-from {
                     font-weight: 600;
@@ -1483,6 +1498,11 @@ textarea.ui-input {
 
             &.selected {
                 background-color: #e3f2fd;
+            }
+
+            &.unread .message-from,
+            &.unread .message-subject {
+                font-weight: 700;
             }
 
             .message-list-item-content {

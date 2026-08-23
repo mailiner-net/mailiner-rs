@@ -28,6 +28,11 @@ fn role_icon(role: MailboxRole) -> IconKind {
     }
 }
 
+fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
+    evt.prevent_default();
+    evt.stop_propagation();
+}
+
 fn event_target_is_editable(evt: &web_sys::KeyboardEvent) -> bool {
     let Some(target) = evt.target() else {
         return false;
@@ -48,9 +53,10 @@ struct WindowKeydown {
 impl Drop for WindowKeydown {
     fn drop(&mut self) {
         if let Some(win) = web_sys::window() {
-            let _ = win.remove_event_listener_with_callback(
+            let _ = win.remove_event_listener_with_callback_and_bool(
                 "keydown",
                 self.closure.as_ref().unchecked_ref(),
+                true,
             );
         }
     }
@@ -82,7 +88,7 @@ pub fn MailboxPickerHost() -> Element {
             }
             match evt.key().as_str() {
                 "j" | "J" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     let next = open_gen() + 1;
                     open_gen.set(next);
                     ctx.mailbox_picker.set(Some(MailboxPickerMode::Jump));
@@ -92,40 +98,45 @@ pub fn MailboxPickerHost() -> Element {
                         ctx.show_toast(ToastAction::info("Select a message first"));
                         return;
                     }
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     let next = open_gen() + 1;
                     open_gen.set(next);
                     ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
                 }
                 "ArrowDown" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     let _ = core.send(CoreEvent::SelectAdjacent { delta: 1 });
                 }
                 "ArrowUp" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     let _ = core.send(CoreEvent::SelectAdjacent { delta: -1 });
                 }
                 "ArrowRight" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     scroll_message_view(true, MessageScroll::Line);
                 }
                 "ArrowLeft" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     scroll_message_view(false, MessageScroll::Line);
                 }
                 "PageDown" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     scroll_message_view(true, MessageScroll::Page);
                 }
                 "PageUp" => {
-                    evt.prevent_default();
+                    claim_shortcut(&evt);
                     scroll_message_view(false, MessageScroll::Page);
                 }
                 _ => {}
             }
         }) as Box<dyn FnMut(_)>);
         if let Some(win) = web_sys::window() {
-            let _ = win.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
+            // Capture so PageUp/Down never become native scroll on the list.
+            let _ = win.add_event_listener_with_callback_and_bool(
+                "keydown",
+                closure.as_ref().unchecked_ref(),
+                true,
+            );
         }
         Rc::new(WindowKeydown { closure })
     });

@@ -1475,7 +1475,6 @@ textarea.ui-input {
                 min-width: 0;
 
                 .message-from {
-                    font-weight: 600;
                     font-size: var(--text-sm);
                     line-height: 1.2;
                     margin-bottom: 1px;
@@ -1712,7 +1711,6 @@ textarea.ui-input {
 
             .message-list-item-content {
                 .message-from {
-                    font-weight: 600;
                     margin-bottom: 4px;
                 }
 

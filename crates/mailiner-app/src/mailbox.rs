@@ -17,6 +17,12 @@ impl From<FolderId> for MailboxId {
     }
 }
 
+impl MailboxId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl ToString for MailboxId {
     fn to_string(&self) -> String {
         self.0.clone()
@@ -123,6 +129,39 @@ pub fn find_mailbox_with_role(
         .iter()
         .find(|(_, n)| n.role == role)
         .map(|(id, _)| id.clone())
+}
+
+/// Mailbox to open after a folder list: saved id if it still exists, else Inbox, else first root.
+pub fn resolve_startup_mailbox(
+    saved: Option<&MailboxId>,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+    roots: &[MailboxId],
+) -> Option<MailboxId> {
+    if let Some(id) = saved
+        && nodes.contains_key(id)
+    {
+        return Some(id.clone());
+    }
+    if let Some(inbox) = find_mailbox_with_role(nodes, MailboxRole::Inbox) {
+        return Some(inbox);
+    }
+    roots.first().cloned()
+}
+
+/// True when `ancestor` is a parent (any depth) of `target`.
+pub fn mailbox_is_ancestor(
+    ancestor: &MailboxId,
+    target: &MailboxId,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> bool {
+    let mut current = nodes.get(target).and_then(|n| n.parent.clone());
+    while let Some(id) = current {
+        if &id == ancestor {
+            return true;
+        }
+        current = nodes.get(&id).and_then(|n| n.parent.clone());
+    }
+    false
 }
 
 /// One mailbox in tree order, with a display path for filtering.
@@ -345,6 +384,66 @@ mod tests {
         let trash = find_mailbox_with_role(&nodes, MailboxRole::Trash).unwrap();
         assert_eq!(trash.to_string(), "Trash");
         assert!(find_mailbox_with_role(&nodes, MailboxRole::Outbox).is_none());
+    }
+
+    #[test]
+    fn resolve_startup_prefers_saved_when_present() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Archive", "Archive", None, MailboxRole::Other),
+        ]);
+        let saved = MailboxId::from("Archive".to_string());
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        assert_eq!(chosen.as_str(), "Archive");
+    }
+
+    #[test]
+    fn resolve_startup_falls_back_to_inbox_when_saved_missing() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Sent", "Sent", None, MailboxRole::Sent),
+        ]);
+        let saved = MailboxId::from("Gone".to_string());
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        assert_eq!(chosen.as_str(), "INBOX");
+        let first_time = resolve_startup_mailbox(None, &nodes, &roots).unwrap();
+        assert_eq!(first_time.as_str(), "INBOX");
+    }
+
+    #[test]
+    fn resolve_startup_uses_first_root_without_inbox() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("Archive", "Archive", None, MailboxRole::Other),
+            folder("Lists", "Lists", None, MailboxRole::Other),
+        ]);
+        let chosen = resolve_startup_mailbox(None, &nodes, &roots).unwrap();
+        assert_eq!(chosen.as_str(), roots[0].as_str());
+    }
+
+    #[test]
+    fn resolve_startup_empty_tree_is_none() {
+        let nodes = HashMap::new();
+        let roots: Vec<MailboxId> = Vec::new();
+        assert!(resolve_startup_mailbox(None, &nodes, &roots).is_none());
+    }
+
+    #[test]
+    fn mailbox_is_ancestor_walks_parents() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("KDE", "KDE", None, MailboxRole::Other),
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+            folder("KDE.pim.inbox", "inbox", Some("KDE.pim"), MailboxRole::Other),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        let kde = MailboxId::from("KDE".to_string());
+        let pim = MailboxId::from("KDE.pim".to_string());
+        let inbox = MailboxId::from("KDE.pim.inbox".to_string());
+        let trash = MailboxId::from("Trash".to_string());
+        assert!(mailbox_is_ancestor(&kde, &inbox, &nodes));
+        assert!(mailbox_is_ancestor(&pim, &inbox, &nodes));
+        assert!(!mailbox_is_ancestor(&inbox, &kde, &nodes));
+        assert!(!mailbox_is_ancestor(&kde, &trash, &nodes));
+        assert!(!mailbox_is_ancestor(&kde, &kde, &nodes));
     }
 
     #[test]

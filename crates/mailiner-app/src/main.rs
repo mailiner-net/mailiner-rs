@@ -29,6 +29,7 @@ mod core_event;
 mod download;
 mod formatter;
 mod layout;
+mod ui_prefs;
 mod outbox_store;
 mod send;
 mod shortcuts;

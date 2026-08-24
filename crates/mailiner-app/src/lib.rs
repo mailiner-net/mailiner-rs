@@ -9,6 +9,7 @@ pub mod mailbox;
 pub mod message;
 pub mod formatter;
 pub mod layout;
+pub mod ui_prefs;
 pub mod message_loader;
 pub mod toast;
 pub mod shortcuts;

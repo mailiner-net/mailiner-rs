@@ -54,6 +54,20 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
         .map(|id| *id == props.mailbox_id)
         .unwrap_or(false);
     let mut children_visible = use_signal(|| false);
+    // Reveal a nested restored/jumped folder so the selected row is visible.
+    {
+        let mailbox_id = props.mailbox_id.clone();
+        use_effect(move || {
+            let selected = ctx.selected_mailbox.read().clone();
+            let nodes = ctx.mailbox_nodes.read();
+            if selected
+                .as_ref()
+                .is_some_and(|sel| crate::mailbox::mailbox_is_ancestor(&mailbox_id, sel, &nodes))
+            {
+                children_visible.set(true);
+            }
+        });
+    }
     rsx! {
         div {
             class: "mailbox-tree-view-item",

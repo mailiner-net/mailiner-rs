@@ -246,7 +246,7 @@ pub async fn core_loop(
                     .await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
-                handle_select_mailbox(&manager, &mut ctx, mailbox_id, false).await;
+                handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
             }
             CoreEvent::JumpToMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
@@ -733,6 +733,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     }
 
     refresh_ui_accounts(manager, ctx).await;
+    crate::ui_prefs::retain_last_mailboxes(&known);
 }
 
 /// Rebuild UI accounts from the store plus explicitly memory-only configs.
@@ -782,6 +783,7 @@ async fn list_folders_soft(
             let (root_ids, mboxes) = crate::mailbox::build_mailbox_tree(mboxes);
             ctx.mailbox_nodes.set(mboxes);
             ctx.mailbox_roots.set(root_ids);
+            restore_mailbox(manager, ctx, account_id).await;
         }
         Err(e) => {
             error!("Failed to list folders for {}: {}", account_id, e);
@@ -791,6 +793,24 @@ async fn list_folders_soft(
             // Leave connection Ready; empty tree is the UI signal.
         }
     }
+}
+
+/// Open the last folder for this account, or Inbox / first root when none is saved.
+async fn restore_mailbox(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) {
+    let to_open = {
+        let nodes = ctx.mailbox_nodes.read();
+        let roots = ctx.mailbox_roots.read();
+        let saved = crate::ui_prefs::load_last_mailbox(account_id);
+        crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots)
+    };
+    let Some(mailbox_id) = to_open else {
+        return;
+    };
+    handle_select_mailbox(manager, ctx, mailbox_id, true).await;
 }
 
 fn clear_mailbox_ui(ctx: &mut AppContext) {
@@ -836,6 +856,7 @@ async fn handle_select_mailbox(
                 mailbox_id.to_string(),
                 total
             );
+            crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
             ctx.messages.set(SparseList::new(total));
             ctx.messages_loading.set(false);
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {

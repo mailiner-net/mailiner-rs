@@ -50,10 +50,14 @@ pub struct AppContext {
     pub accounts: Signal<HashMap<AccountId, Account>>,
     pub mailbox_nodes: Signal<HashMap<MailboxId, MailboxNode>>,
     pub mailbox_roots: Signal<Vec<MailboxId>>,
-    /// Sparse cache of envelopes for the selected mailbox (newest-first indices).
+    /// Sparse cache of envelopes for the selected mailbox (order = [`Self::message_sort`]).
     pub messages: Signal<SparseList<Arc<Message>>>,
     /// True while SELECT / EXISTS is in flight for the selected mailbox.
     pub messages_loading: Signal<bool>,
+    /// Active list sort (may fall back if the server lacks IMAP SORT).
+    pub message_sort: Signal<mailiner_core::MessageSort>,
+    /// Server advertised RFC 5256 `SORT` (Size / Sender).
+    pub sort_supports_size_sender: Signal<bool>,
 
     pub selected_mailbox: Signal<Option<MailboxId>>,
     pub selected_account: Signal<Option<AccountId>>,

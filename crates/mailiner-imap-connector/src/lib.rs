@@ -1,10 +1,12 @@
 mod bodystructure;
 mod section_path;
 mod sent;
+mod sort;
 
 pub use sent::{ListedMailbox, find_sent_mailbox, role_from_name, special_use_from_attrs};
 
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -24,8 +26,8 @@ use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
-    FolderId, Group, MailboxRole, MailinerError, MessageId, PartChunk, PartStream,
-    Result as MailinerResult,
+    FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId, MessageSort,
+    PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
 
@@ -91,6 +93,18 @@ where
     imap: Arc<Mutex<ImapSession<S>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by message UID.
     structure_cache: Mutex<HashMap<MessageId, BodyPart>>,
+    /// RFC 5256 SORT advertised after LOGIN.
+    has_sort: AtomicBool,
+    /// Last [`prepare_folder_list`] index (UID order, or sequence for Date).
+    list_index: Mutex<Option<ListIndex>>,
+}
+
+struct ListIndex {
+    folder: String,
+    sort: MessageSort,
+    /// `None` = inverted sequence numbers (arrival / Date).
+    uids: Option<Vec<u32>>,
+    total: usize,
 }
 
 impl<S> ImapConnector<S>
@@ -106,6 +120,8 @@ where
             username,
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
+            has_sort: AtomicBool::new(false),
+            list_index: Mutex::new(None),
         }
     }
 
@@ -219,6 +235,56 @@ where
         }
     }
 
+    fn envelope_from_fetch(
+        account_id: &AccountId,
+        folder_id: &FolderId,
+        fetch: &async_imap::types::Fetch,
+        structures: &mut Vec<(MessageId, BodyPart)>,
+    ) -> MailinerResult<Envelope> {
+        let header = fetch
+            .header()
+            .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
+        let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
+            Self::parse_flags(fetch.flags());
+        let uid = fetch
+            .uid
+            .ok_or_else(|| ImapError::InvalidData("No UID in FETCH response".to_string()))?;
+        let parsed_headers = MessageParser::new()
+            .parse_headers(header)
+            .ok_or::<MailinerError>(
+                ImapError::InvalidData("Failed to parse headers".to_string()).into(),
+            )?;
+        let mid = MessageId::new(uid.to_string());
+        let has_attachments = if let Some(bs) = fetch.bodystructure() {
+            let part = bodystructure::convert_body_structure(bs);
+            let has = bodystructure::structure_has_attachments(&part);
+            structures.push((mid.clone(), part));
+            has
+        } else {
+            false
+        };
+        Ok(Envelope {
+            id: mid,
+            account_id: account_id.clone(),
+            folder_id: folder_id.clone(),
+            subject: parsed_headers.subject().map(|s| s.to_string()),
+            from: Self::parse_email_address(parsed_headers.from()),
+            to: Self::parse_email_address(parsed_headers.to()),
+            cc: Self::parse_email_address(parsed_headers.cc()),
+            bcc: Self::parse_email_address(parsed_headers.bcc()),
+            date: Self::parse_date(parsed_headers.date())?,
+            is_read,
+            is_starred,
+            is_flagged,
+            is_draft,
+            is_deleted,
+            has_attachments,
+            size: fetch.size.map(|s| s as u64),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
     fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> (bool, bool, bool, bool, bool) {
         let mut is_read = false;
         let mut is_starred = false;
@@ -325,6 +391,89 @@ where
     /// lower peak memory. 512 KiB is a pragmatic default until adaptive sizing.
     const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
+
+    async fn probe_sort(session: &mut Session<TlsStream<S>>, flag: &AtomicBool) {
+        match session.capabilities().await {
+            Ok(caps) => {
+                let has = caps.has_str("SORT");
+                flag.store(has, Ordering::Relaxed);
+                info!("IMAP SORT capability: {has}");
+            }
+            Err(e) => {
+                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT");
+                flag.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn build_list_index(
+        session: &mut Session<TlsStream<S>>,
+        folder_id: &str,
+        requested: MessageSort,
+        has_sort: bool,
+    ) -> Result<ListIndex, ImapError> {
+        let mailbox = session
+            .select(folder_id)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        let exists = mailbox.exists as usize;
+        let sort = sort::apply_sort_or_fallback(requested, has_sort);
+
+        if exists == 0 {
+            return Ok(ListIndex {
+                folder: folder_id.to_string(),
+                sort,
+                uids: None,
+                total: 0,
+            });
+        }
+
+        let uids = match sort {
+            MessageSort::Date => None,
+            MessageSort::Unread => {
+                if has_sort {
+                    let unseen = sort::uid_sort(session, "REVERSE DATE", "UNSEEN").await?;
+                    let seen = sort::uid_sort(session, "REVERSE DATE", "SEEN").await?;
+                    let mut all = unseen;
+                    all.extend(seen);
+                    Some(all)
+                } else {
+                    let unseen = session
+                        .uid_search("UNSEEN")
+                        .await
+                        .map_err(|e| ImapError::Imap(format!("UID SEARCH UNSEEN: {e}")))?;
+                    let seen = session
+                        .uid_search("SEEN")
+                        .await
+                        .map_err(|e| ImapError::Imap(format!("UID SEARCH SEEN: {e}")))?;
+                    Some(sort::unread_uid_order(unseen, seen))
+                }
+            }
+            MessageSort::Size | MessageSort::Sender => {
+                let (criteria, query) = sort::sort_command(sort).expect("size/sender have SORT");
+                match sort::uid_sort(session, criteria, query).await {
+                    Ok(uids) => Some(uids),
+                    Err(e) => {
+                        tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Date");
+                        return Ok(ListIndex {
+                            folder: folder_id.to_string(),
+                            sort: MessageSort::Date,
+                            uids: None,
+                            total: exists,
+                        });
+                    }
+                }
+            }
+        };
+
+        let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
+        Ok(ListIndex {
+            folder: folder_id.to_string(),
+            sort,
+            uids,
+            total,
+        })
+    }
 }
 
 fn imap_flag_atom(flag: &str) -> Result<&'static str, ImapError> {
@@ -489,6 +638,7 @@ where
     }
 
     async fn disconnect(&self) -> MailinerResult<()> {
+        *self.list_index.lock().await = None;
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
             session
@@ -512,6 +662,9 @@ where
                 *imap = ImapSession::Authenticated(authenticated.map_err(|(e, _)| {
                     ImapError::Authentication(format!("Failed to login: {}", e))
                 })?);
+                if let ImapSession::Authenticated(session) = &mut *imap {
+                    Self::probe_sort(session, &self.has_sort).await;
+                }
             } else {
                 return Err(MailinerError::Connector(
                     "IMAP session in invalid state".to_string(),
@@ -632,16 +785,31 @@ where
     }
 
     async fn open_folder(&self, folder_id: &FolderId) -> MailinerResult<usize> {
+        let state = self
+            .prepare_folder_list(folder_id, MessageSort::Date)
+            .await?;
+        Ok(state.total)
+    }
+
+    async fn prepare_folder_list(
+        &self,
+        folder_id: &FolderId,
+        sort: MessageSort,
+    ) -> MailinerResult<FolderListState> {
+        let has_sort = self.has_sort.load(Ordering::Relaxed);
         let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            let mailbox = session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
-            Ok(mailbox.exists as usize)
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+        let index =
+            Self::build_list_index(session, folder_id.as_str(), sort, has_sort).await?;
+        let state = FolderListState {
+            total: index.total,
+            sort: index.sort,
+            supports_size_sender: has_sort,
+        };
+        *self.list_index.lock().await = Some(index);
+        Ok(state)
     }
 
     async fn list_envelopes(&self, folder_id: &FolderId) -> MailinerResult<Vec<Envelope>> {
@@ -654,86 +822,99 @@ where
         folder_id: &FolderId,
         range: std::ops::Range<usize>,
     ) -> MailinerResult<Vec<Envelope>> {
+        let query = "(UID BODY.PEEK[HEADER] RFC822.SIZE FLAGS BODYSTRUCTURE)";
         let (envelopes, structures) = {
             let mut imap = self.imap.lock().await;
             let ImapSession::Authenticated(session) = &mut *imap else {
                 return Err(ImapError::NotAuthenticated.into());
             };
 
-            let mailbox = session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
-            let total = mailbox.exists as usize;
-
+            let has_sort = self.has_sort.load(Ordering::Relaxed);
+            let mut index_slot = self.list_index.lock().await;
+            if index_slot
+                .as_ref()
+                .is_none_or(|idx| idx.folder != folder_id.as_str())
+            {
+                *index_slot = Some(
+                    Self::build_list_index(
+                        session,
+                        folder_id.as_str(),
+                        MessageSort::Date,
+                        has_sort,
+                    )
+                    .await?,
+                );
+            }
+            let index = index_slot.as_ref().expect("index just set");
+            let total = index.total;
             if total == 0 || range.start >= total || range.start >= range.end {
                 return Ok(Vec::new());
             }
-
             let end = range.end.min(total);
-            let seq_high = total - range.start;
-            let seq_low = total - end + 1;
-            let sequence_set = format!("{}:{}", seq_low, seq_high);
 
-            let mut fetch = session
-                .fetch(&sequence_set, "(UID RFC822.HEADER FLAGS BODYSTRUCTURE)")
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {}", e)))?;
+            let (fetch_set, uid_order) = if let Some(uids) = &index.uids {
+                let slice = &uids[range.start..end];
+                let set = slice
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (set, Some(slice.to_vec()))
+            } else {
+                let seq_high = total - range.start;
+                let seq_low = total - end + 1;
+                (format!("{seq_low}:{seq_high}"), None)
+            };
 
             let mut envelopes = Vec::new();
             let mut structures: Vec<(MessageId, BodyPart)> = Vec::new();
 
-            while let Some(result) = fetch.next().await {
-                let fetch = result
-                    .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {}", e)))?;
-                let header = fetch
-                    .header()
-                    .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
-                let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
-                    Self::parse_flags(fetch.flags());
-                let uid = fetch.uid.ok_or_else(|| {
-                    ImapError::InvalidData("No UID in FETCH response".to_string())
-                })?;
-
-                let parser = MessageParser::new();
-                let parsed_headers = parser.parse_headers(header).ok_or::<MailinerError>(
-                    ImapError::InvalidData("Failed to parse headers".to_string()).into(),
-                )?;
-
-                let mid = MessageId::new(uid.to_string());
-                let has_attachments = if let Some(bs) = fetch.bodystructure() {
-                    let part = bodystructure::convert_body_structure(bs);
-                    let has = bodystructure::structure_has_attachments(&part);
-                    structures.push((mid.clone(), part));
-                    has
-                } else {
-                    false
-                };
-
-                envelopes.push(Envelope {
-                    id: mid,
-                    account_id: self.account_id.clone(),
-                    folder_id: folder_id.clone(),
-                    subject: parsed_headers.subject().map(|s| s.to_string()),
-                    from: Self::parse_email_address(parsed_headers.from()),
-                    to: Self::parse_email_address(parsed_headers.to()),
-                    cc: Self::parse_email_address(parsed_headers.cc()),
-                    bcc: Self::parse_email_address(parsed_headers.bcc()),
-                    date: Self::parse_date(parsed_headers.date())?,
-                    is_read,
-                    is_starred,
-                    is_flagged,
-                    is_draft,
-                    is_deleted,
-                    has_attachments,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                });
+            if uid_order.is_some() {
+                let mut fetch = session
+                    .uid_fetch(&fetch_set, query)
+                    .await
+                    .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {e}")))?;
+                while let Some(result) = fetch.next().await {
+                    let fetch = result
+                        .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
+                    envelopes.push(Self::envelope_from_fetch(
+                        &self.account_id,
+                        folder_id,
+                        &fetch,
+                        &mut structures,
+                    )?);
+                }
+            } else {
+                let mut fetch = session
+                    .fetch(&fetch_set, query)
+                    .await
+                    .map_err(|e| ImapError::Imap(format!("Failed to fetch messages: {e}")))?;
+                while let Some(result) = fetch.next().await {
+                    let fetch = result
+                        .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
+                    envelopes.push(Self::envelope_from_fetch(
+                        &self.account_id,
+                        folder_id,
+                        &fetch,
+                        &mut structures,
+                    )?);
+                }
             }
 
-            envelopes.reverse();
+            if let Some(order) = uid_order {
+                let mut by_uid: HashMap<u32, Envelope> = envelopes
+                    .into_iter()
+                    .filter_map(|e| e.id.as_str().parse::<u32>().ok().map(|u| (u, e)))
+                    .collect();
+                envelopes = order
+                    .into_iter()
+                    .filter_map(|u| by_uid.remove(&u))
+                    .collect();
+            } else {
+                envelopes.reverse();
+            }
             (envelopes, structures)
-        }; // imap lock released
+        };
 
         if !structures.is_empty() {
             let mut cache = self.structure_cache.lock().await;
@@ -762,7 +943,10 @@ where
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
             let mut fetch = session
-                .uid_fetch(message_id.as_str(), "(RFC822.HEADER FLAGS BODYSTRUCTURE)")
+                .uid_fetch(
+                    message_id.as_str(),
+                    "(BODY.PEEK[HEADER] RFC822.SIZE FLAGS BODYSTRUCTURE)",
+                )
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {}", e)))?;
 
@@ -811,6 +995,7 @@ where
                     is_draft,
                     is_deleted,
                     has_attachments,
+                    size: fetch.size.map(|s| s as u64),
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },

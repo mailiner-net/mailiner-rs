@@ -13,6 +13,67 @@ pub struct Account {
     pub updated_at: DateTime<Utc>,
 }
 
+/// How the message list is ordered for a selected folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageSort {
+    /// Arrival / sequence order, newest first (no IMAP SORT required).
+    #[default]
+    Date,
+    /// Unseen first, then seen; each group newest first.
+    Unread,
+    /// Largest `RFC822.SIZE` first. Requires IMAP `SORT`.
+    Size,
+    /// First From mailbox, A–Z. Requires IMAP `SORT`.
+    Sender,
+}
+
+impl MessageSort {
+    pub const ALL: [Self; 4] = [Self::Date, Self::Unread, Self::Size, Self::Sender];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Date => "date",
+            Self::Unread => "unread",
+            Self::Size => "size",
+            Self::Sender => "sender",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "date" => Some(Self::Date),
+            "unread" => Some(Self::Unread),
+            "size" => Some(Self::Size),
+            "sender" => Some(Self::Sender),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Date => "Date",
+            Self::Unread => "Unread first",
+            Self::Size => "Size",
+            Self::Sender => "Sender",
+        }
+    }
+
+    /// Size and Sender need RFC 5256 `SORT`.
+    pub fn needs_sort_capability(self) -> bool {
+        matches!(self, Self::Size | Self::Sender)
+    }
+}
+
+/// Result of preparing a folder for a paged list (after SELECT + optional SORT/SEARCH).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderListState {
+    pub total: usize,
+    /// Sort actually applied (may fall back from the request).
+    pub sort: MessageSort,
+    pub supports_size_sender: bool,
+}
+
 /// Well-known mailbox role (RFC 6154 special-use, else name heuristics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -141,6 +202,9 @@ pub struct Envelope {
     pub is_draft: bool,
     pub is_deleted: bool,
     pub has_attachments: bool,
+    /// RFC822.SIZE when the server sent it.
+    #[serde(default)]
+    pub size: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -293,4 +357,21 @@ pub struct AccountMetadata {
     pub id: AccountId,
     pub last_sync: DateTime<Utc>,
     pub folders: Vec<FolderMetadata>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessageSort;
+
+    #[test]
+    fn message_sort_key_roundtrip() {
+        for sort in MessageSort::ALL {
+            assert_eq!(MessageSort::from_key(sort.as_key()), Some(sort));
+        }
+        assert!(MessageSort::from_key("nope").is_none());
+        assert!(MessageSort::Size.needs_sort_capability());
+        assert!(MessageSort::Sender.needs_sort_capability());
+        assert!(!MessageSort::Date.needs_sort_capability());
+        assert!(!MessageSort::Unread.needs_sort_capability());
+    }
 }

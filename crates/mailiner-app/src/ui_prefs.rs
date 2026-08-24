@@ -12,6 +12,10 @@ use crate::account_store::{AccountStoreError, StringKvStore};
 #[cfg(target_arch = "wasm32")]
 use crate::account_store::WebLocalStorage;
 use crate::mailbox::MailboxId;
+use mailiner_core::MessageSort;
+
+/// `localStorage` key for the message-list sort.
+pub const MESSAGE_SORT_KEY: &str = "mailiner.ui.messageSort";
 
 /// `localStorage` key for last-opened mailbox per account.
 pub const LAST_MAILBOX_KEY: &str = "mailiner.ui.lastMailbox.v1";
@@ -107,6 +111,21 @@ pub fn save_last_mailbox(account_id: &AccountId, mailbox_id: &MailboxId) {
         blob.set(account_id.clone(), mailbox_id);
         save_blob(kv, &blob)
     });
+}
+
+pub fn load_message_sort() -> MessageSort {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(MESSAGE_SORT_KEY)?
+            .as_deref()
+            .and_then(MessageSort::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_message_sort(sort: MessageSort) {
+    let _ = with_kv(|kv| kv.set_item(MESSAGE_SORT_KEY, sort.as_key()));
 }
 
 /// Drop last-mailbox rows for accounts that are no longer known.
@@ -219,6 +238,17 @@ mod tests {
 
         retain_last_mailboxes(&HashSet::new());
         assert!(load_last_mailbox(&acc).is_none());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn message_sort_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_message_sort(), MessageSort::Date);
+        save_message_sort(MessageSort::Unread);
+        assert_eq!(load_message_sort(), MessageSort::Unread);
+        save_message_sort(MessageSort::Sender);
+        assert_eq!(load_message_sort(), MessageSort::Sender);
         host_kv::reset();
     }
 }

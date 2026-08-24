@@ -192,6 +192,7 @@ mod tests {
             is_draft: false,
             is_deleted: false,
             has_attachments: false,
+            size: None,
             created_at: now,
             updated_at: now,
         };

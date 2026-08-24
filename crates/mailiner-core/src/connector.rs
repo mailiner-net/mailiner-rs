@@ -12,7 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Account, Envelope, Folder, MessageContent, MessagePart, PartChunk, PartKind, TransferEncoding,
+    Account, Envelope, Folder, FolderListState, MessageContent, MessagePart, MessageSort,
+    PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).
@@ -40,12 +41,18 @@ where
     async fn delete_folder(&self, folder_id: &FolderId) -> Result<()>;
     /// Select the folder and return the number of messages (EXISTS).
     async fn open_folder(&self, folder_id: &FolderId) -> Result<usize>;
+    /// SELECT the folder, build the sort index, and return the list length.
+    async fn prepare_folder_list(
+        &self,
+        folder_id: &FolderId,
+        sort: MessageSort,
+    ) -> Result<FolderListState>;
 
     // Envelope operations
     async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>>;
     /// Fetch envelopes for a UI index range `[start, end)`.
     ///
-    /// Indices are newest-first: index 0 is the most recent message in the folder.
+    /// Indices follow the last [`Self::prepare_folder_list`] sort (default: newest-first arrival).
     async fn list_envelopes_range(
         &self,
         folder_id: &FolderId,
@@ -136,6 +143,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_draft: false,
             is_deleted: false,
             has_attachments: i % 2 == 0,
+            size: Some(1_000 + ((i * 37) % 97) as u64 * 100),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
@@ -291,6 +299,18 @@ where
         Ok(100)
     }
 
+    async fn prepare_folder_list(
+        &self,
+        _folder_id: &FolderId,
+        sort: MessageSort,
+    ) -> Result<FolderListState> {
+        Ok(FolderListState {
+            total: 100,
+            sort,
+            supports_size_sender: true,
+        })
+    }
+
     async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>> {
         mock_envelopes(folder_id, 0..100)
     }
@@ -330,6 +350,7 @@ where
             is_draft: false,
             is_deleted: false,
             has_attachments: true,
+            size: Some(1_024),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })

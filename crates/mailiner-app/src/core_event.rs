@@ -11,7 +11,7 @@ use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId};
+use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId, MessageSort};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -42,6 +42,8 @@ pub enum CoreEvent {
     SelectMailbox(MailboxId),
     /// Open a mailbox and select the newest message (keyboard jump).
     JumpToMailbox(MailboxId),
+    /// Rebuild the current folder's list in a new order.
+    SetMessageSort(MessageSort),
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
         mailbox_id: MailboxId,
@@ -250,6 +252,9 @@ pub async fn core_loop(
             }
             CoreEvent::JumpToMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
+            }
+            CoreEvent::SetMessageSort(sort) => {
+                handle_set_message_sort(&manager, &mut ctx, sort).await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -849,21 +854,28 @@ async fn handle_select_mailbox(
     };
 
     let folder_id = FolderId::new(mailbox_id.to_string());
-    match connector.open_folder(&folder_id).await {
-        Ok(total) => {
+    let requested = *ctx.message_sort.peek();
+    match connector
+        .prepare_folder_list(&folder_id, requested)
+        .await
+    {
+        Ok(state) => {
             info!(
-                "Opened mailbox {} with {} messages",
+                "Opened mailbox {} with {} messages (sort={:?})",
                 mailbox_id.to_string(),
-                total
+                state.total,
+                state.sort
             );
+            ctx.sort_supports_size_sender.set(state.supports_size_sender);
+            ctx.message_sort.set(state.sort);
             crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
-            ctx.messages.set(SparseList::new(total));
+            ctx.messages.set(SparseList::new(state.total));
             ctx.messages_loading.set(false);
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
-                node.total_count = total;
+                node.total_count = state.total;
             }
-            if select_first && total > 0 {
-                let end = total.min(20);
+            if select_first && state.total > 0 {
+                let end = state.total.min(20);
                 handle_fetch_message_range(manager, ctx, mailbox_id.clone(), 0..end).await;
                 let first_id = ctx.messages.read().get(0).map(|m| m.id.clone());
                 if let Some(id) = first_id {
@@ -876,6 +888,19 @@ async fn handle_select_mailbox(
             ctx.messages_loading.set(false);
         }
     }
+}
+
+async fn handle_set_message_sort(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    sort: MessageSort,
+) {
+    crate::ui_prefs::save_message_sort(sort);
+    ctx.message_sort.set(sort);
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        return;
+    };
+    handle_select_mailbox(manager, ctx, mailbox_id, true).await;
 }
 
 async fn handle_fetch_message_range(
@@ -1153,6 +1178,10 @@ async fn handle_mark_read(
         error!("Failed to update read flag: {}", e);
         apply_read_flag(ctx, &message_ids, !is_read);
         ctx.show_toast(ToastAction::error(format!("Could not update read state: {e}")));
+        return;
+    }
+    if *ctx.message_sort.peek() == MessageSort::Unread {
+        handle_select_mailbox(manager, ctx, mailbox_id, true).await;
     }
 }
 

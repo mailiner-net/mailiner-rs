@@ -21,7 +21,8 @@ fn list_date(dt: &DateTime<Utc>) -> String {
     }
 }
 
-const ITEM_HEIGHT: f64 = 72.0;
+/// Must match `#messagelist .message-list-item` padding + avatar size.
+const ITEM_HEIGHT: f64 = 52.0;
 const BUFFER_SIZE: usize = 5;
 const MAX_CACHED: usize = 500;
 
@@ -48,6 +49,7 @@ pub fn MessageList() -> Element {
             .as_ref()
             .map(|id| *id == message.id)
             .unwrap_or(false);
+        let avatar = message.avatar_color();
 
         rsx! {
             div {
@@ -58,6 +60,12 @@ pub fn MessageList() -> Element {
                 onclick: move |_| {
                     let _ = core_tx.send(CoreEvent::SelectMessage(message.id.clone()));
                 },
+
+                div {
+                    class: "message-avatar",
+                    style: "background-color: {avatar}",
+                    aria_hidden: "true",
+                }
 
                 div {
                     class: "message-list-item-content",

@@ -13,8 +13,9 @@ pub use connector::{
 pub use error::{MailinerError, Result};
 pub use ids::{AccountId, FolderId, MessageId, MessagePartId};
 pub use models::{
-    Account, AccountMetadata, EmailAddr, EmailAddress, Envelope, Folder, FolderListState,
-    FolderMetadata, Group, MailboxRole, MessageSort, LoadedMessage, MessageContent, MessagePart,
+    Account, AccountMetadata, EmailAddr, EmailAddress, Envelope, Folder, FolderCounts,
+    FolderListState, FolderMetadata, Group, MailboxRole, MessageSort, LoadedMessage,
+    MessageContent, MessagePart,
     PartChunk, PartKind, TransferEncoding,
 };
 pub use storage::{InMemoryStorage, Storage};

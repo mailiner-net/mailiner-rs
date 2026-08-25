@@ -12,8 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Account, Envelope, Folder, FolderListState, MessageContent, MessagePart, MessageSort,
-    PartChunk, PartKind, TransferEncoding,
+    Account, Envelope, Folder, FolderCounts, FolderListState, MessageContent, MessagePart,
+    MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).
@@ -32,6 +32,11 @@ where
 
     // Folder operations
     async fn list_folders(&self, account_id: &AccountId) -> Result<Vec<Folder>>;
+    /// `STATUS (MESSAGES UNSEEN)` for each id. Missing entries were skipped or failed.
+    async fn folder_counts(
+        &self,
+        folder_ids: &[FolderId],
+    ) -> Result<HashMap<FolderId, FolderCounts>>;
     async fn create_folder(
         &self,
         account_id: &AccountId,
@@ -274,6 +279,28 @@ where
         ])
     }
 
+    async fn folder_counts(
+        &self,
+        folder_ids: &[FolderId],
+    ) -> Result<HashMap<FolderId, FolderCounts>> {
+        let mut out = HashMap::new();
+        for id in folder_ids {
+            let unread = if id.as_str().eq_ignore_ascii_case("inbox") {
+                3
+            } else {
+                0
+            };
+            out.insert(
+                id.clone(),
+                FolderCounts {
+                    total_messages: 100,
+                    unread_messages: unread,
+                },
+            );
+        }
+        Ok(out)
+    }
+
     async fn create_folder(
         &self,
         account_id: &AccountId,
@@ -306,6 +333,7 @@ where
     ) -> Result<FolderListState> {
         Ok(FolderListState {
             total: 100,
+            unread: Some(3),
             sort,
             supports_size_sender: true,
         })

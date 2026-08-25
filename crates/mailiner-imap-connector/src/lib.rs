@@ -26,8 +26,8 @@ use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
-    FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId, MessageSort,
-    PartChunk, PartStream, Result as MailinerResult,
+    FolderCounts, FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId,
+    MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
 
@@ -105,6 +105,8 @@ struct ListIndex {
     /// `None` = inverted sequence numbers (arrival / Date).
     uids: Option<Vec<u32>>,
     total: usize,
+    /// `UNSEEN` count from SELECT/SEARCH; `None` if it could not be measured.
+    unread: Option<usize>,
 }
 
 impl<S> ImapConnector<S>
@@ -425,14 +427,17 @@ where
                 sort,
                 uids: None,
                 total: 0,
+                unread: Some(0),
             });
         }
 
+        let mut unread = None;
         let uids = match sort {
             MessageSort::Date => None,
             MessageSort::Unread => {
                 if has_sort {
                     let unseen = sort::uid_sort(session, "REVERSE DATE", "UNSEEN").await?;
+                    unread = Some(unseen.len());
                     let seen = sort::uid_sort(session, "REVERSE DATE", "SEEN").await?;
                     let mut all = unseen;
                     all.extend(seen);
@@ -442,6 +447,7 @@ where
                         .uid_search("UNSEEN")
                         .await
                         .map_err(|e| ImapError::Imap(format!("UID SEARCH UNSEEN: {e}")))?;
+                    unread = Some(unseen.len());
                     let seen = session
                         .uid_search("SEEN")
                         .await
@@ -455,16 +461,22 @@ where
                     Ok(uids) => Some(uids),
                     Err(e) => {
                         tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Date");
+                        let unread = Self::search_unseen_count(session).await;
                         return Ok(ListIndex {
                             folder: folder_id.to_string(),
                             sort: MessageSort::Date,
                             uids: None,
                             total: exists,
+                            unread,
                         });
                     }
                 }
             }
         };
+
+        if unread.is_none() {
+            unread = Self::search_unseen_count(session).await;
+        }
 
         let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
         Ok(ListIndex {
@@ -472,7 +484,18 @@ where
             sort,
             uids,
             total,
+            unread,
         })
+    }
+
+    async fn search_unseen_count(session: &mut Session<TlsStream<S>>) -> Option<usize> {
+        match session.uid_search("UNSEEN").await {
+            Ok(set) => Some(set.len()),
+            Err(e) => {
+                tracing::debug!("UID SEARCH UNSEEN for folder badge: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -738,6 +761,36 @@ where
         }
     }
 
+    async fn folder_counts(
+        &self,
+        folder_ids: &[FolderId],
+    ) -> MailinerResult<HashMap<FolderId, FolderCounts>> {
+        let mut out = HashMap::new();
+        for id in folder_ids {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+            let result = session.status(id.as_str(), "(MESSAGES UNSEEN)").await;
+            drop(imap);
+            match result {
+                Ok(mbox) => {
+                    out.insert(
+                        id.clone(),
+                        FolderCounts {
+                            total_messages: u64::from(mbox.exists),
+                            unread_messages: u64::from(mbox.unseen.unwrap_or(0)),
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!("STATUS {} failed: {e}", id.as_str());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     async fn create_folder(
         &self,
         account_id: &AccountId,
@@ -805,6 +858,7 @@ where
             Self::build_list_index(session, folder_id.as_str(), sort, has_sort).await?;
         let state = FolderListState {
             total: index.total,
+            unread: index.unread,
             sort: index.sort,
             supports_size_sender: has_sort,
         };

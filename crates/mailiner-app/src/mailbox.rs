@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mailiner_core::{Folder, FolderId, MailboxRole};
+use mailiner_core::{Folder, FolderCounts, FolderId, MailboxRole};
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct MailboxId(String);
@@ -29,6 +29,7 @@ impl ToString for MailboxId {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct MailboxNode {
     pub id: MailboxId,
     pub name: String,
@@ -36,6 +37,8 @@ pub struct MailboxNode {
     pub children: Vec<MailboxId>,
     pub unread_count: usize,
     pub total_count: usize,
+    /// True when unread is above the last count the user opened this folder with.
+    pub has_new: bool,
     pub role: MailboxRole,
 }
 
@@ -55,6 +58,7 @@ impl From<Folder> for MailboxNode {
             children: vec![],
             unread_count: 0,
             total_count: 0,
+            has_new: false,
             role: folder.role,
         }
     }
@@ -82,6 +86,7 @@ pub fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<Mail
                 children: vec![],
                 unread_count: 0,
                 total_count: 0,
+                has_new: false,
                 role,
             });
         mboxes.insert(mailbox_id.clone(), folder.clone().into());
@@ -95,6 +100,7 @@ pub fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<Mail
                     children: vec![],
                     unread_count: 0,
                     total_count: 0,
+                    has_new: false,
                     role: MailboxRole::Other,
                 })
                 .children
@@ -118,6 +124,43 @@ pub fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<Mail
     }
 
     (root_ids, mboxes)
+}
+
+/// True when unread arrived after the user last opened this folder.
+pub fn unread_badge_is_new(unread: usize, acknowledged: usize) -> bool {
+    unread > acknowledged
+}
+
+/// Copy IMAP `STATUS` totals onto matching tree nodes.
+pub fn apply_folder_counts(
+    nodes: &mut HashMap<MailboxId, MailboxNode>,
+    counts: &HashMap<FolderId, FolderCounts>,
+) {
+    for (folder_id, count) in counts {
+        let id = MailboxId::from(folder_id.clone());
+        if let Some(node) = nodes.get_mut(&id) {
+            node.unread_count = count.unread_messages as usize;
+            node.total_count = count.total_messages as usize;
+        }
+    }
+}
+
+/// Set [`MailboxNode::has_new`] from persisted acknowledged unread counts.
+///
+/// Only folders present in `counts` are updated, so a later STATUS cannot
+/// flip a folder the user already opened this session.
+pub fn apply_unread_new_state(
+    nodes: &mut HashMap<MailboxId, MailboxNode>,
+    counts: &HashMap<FolderId, FolderCounts>,
+    acknowledged: &HashMap<MailboxId, usize>,
+) {
+    for folder_id in counts.keys() {
+        let id = MailboxId::from(folder_id.clone());
+        if let Some(node) = nodes.get_mut(&id) {
+            let ack = acknowledged.get(&id).copied().unwrap_or(0);
+            node.has_new = unread_badge_is_new(node.unread_count, ack);
+        }
+    }
 }
 
 /// First mailbox with `role`, if any.
@@ -512,5 +555,51 @@ mod tests {
         let filtered = filter_mailbox_entries(&entries, "inbox");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].title, "Inbox");
+    }
+
+    #[test]
+    fn unread_badge_is_new_when_count_exceeds_acknowledged() {
+        assert!(unread_badge_is_new(1, 0));
+        assert!(unread_badge_is_new(6, 5));
+        assert!(!unread_badge_is_new(0, 0));
+        assert!(!unread_badge_is_new(5, 5));
+        assert!(!unread_badge_is_new(3, 5));
+    }
+
+    #[test]
+    fn apply_folder_counts_and_new_state() {
+        let (_, mut nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Archive", "Archive", None, MailboxRole::Other),
+        ]);
+        let inbox = FolderId::new("INBOX");
+        let archive = FolderId::new("Archive");
+        let mut counts = HashMap::new();
+        counts.insert(
+            inbox,
+            FolderCounts {
+                total_messages: 10,
+                unread_messages: 4,
+            },
+        );
+        counts.insert(
+            archive,
+            FolderCounts {
+                total_messages: 2,
+                unread_messages: 2,
+            },
+        );
+        apply_folder_counts(&mut nodes, &counts);
+
+        let inbox_id = MailboxId::from("INBOX".to_string());
+        let archive_id = MailboxId::from("Archive".to_string());
+        assert_eq!(nodes.get(&inbox_id).unwrap().unread_count, 4);
+        assert_eq!(nodes.get(&inbox_id).unwrap().total_count, 10);
+
+        let mut ack = HashMap::new();
+        ack.insert(inbox_id.clone(), 4);
+        apply_unread_new_state(&mut nodes, &counts, &ack);
+        assert!(!nodes.get(&inbox_id).unwrap().has_new);
+        assert!(nodes.get(&archive_id).unwrap().has_new);
     }
 }

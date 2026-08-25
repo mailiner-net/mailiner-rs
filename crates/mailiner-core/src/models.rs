@@ -69,9 +69,18 @@ impl MessageSort {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderListState {
     pub total: usize,
+    /// `UNSEEN` from the just-selected mailbox (`None` if SEARCH failed).
+    pub unread: Option<usize>,
     /// Sort actually applied (may fall back from the request).
     pub sort: MessageSort,
     pub supports_size_sender: bool,
+}
+
+/// IMAP `STATUS` totals for one mailbox (`MESSAGES` / `UNSEEN`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FolderCounts {
+    pub total_messages: u64,
+    pub unread_messages: u64,
 }
 
 /// Well-known mailbox role (RFC 6154 special-use, else name heuristics).

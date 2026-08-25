@@ -22,6 +22,11 @@ pub const LAST_MAILBOX_KEY: &str = "mailiner.ui.lastMailbox.v1";
 /// Schema version for [`LastMailboxBlob`] (independent of the account store).
 pub const LAST_MAILBOX_SCHEMA_VERSION: u32 = 1;
 
+/// `localStorage` key for last-acknowledged unread counts (opened-folder watermark).
+pub const ACK_UNREAD_KEY: &str = "mailiner.ui.ackUnread.v1";
+/// Schema version for [`AckUnreadBlob`].
+pub const ACK_UNREAD_SCHEMA_VERSION: u32 = 1;
+
 /// Single JSON document stored under [`LAST_MAILBOX_KEY`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LastMailboxBlob {
@@ -72,6 +77,63 @@ impl LastMailboxBlob {
     pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
         self.last_mailbox.retain(|id, _| known.contains(id));
         self.schema_version = LAST_MAILBOX_SCHEMA_VERSION;
+    }
+}
+
+/// Per-account unread watermarks: opening a folder acknowledges its current unread count.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AckUnreadBlob {
+    pub schema_version: u32,
+    /// Account id → mailbox id → unread count last seen while that folder was open.
+    pub acknowledged: HashMap<AccountId, HashMap<String, usize>>,
+}
+
+impl AckUnreadBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: ACK_UNREAD_SCHEMA_VERSION,
+            acknowledged: HashMap::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > ACK_UNREAD_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported ack-unread schema_version {} (max supported {})",
+                blob.schema_version, ACK_UNREAD_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+
+    pub fn get(&self, account_id: &AccountId) -> HashMap<MailboxId, usize> {
+        self.acknowledged
+            .get(account_id)
+            .map(|m| {
+                m.iter()
+                    .map(|(id, n)| (MailboxId::from(id.clone()), *n))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set(&mut self, account_id: AccountId, mailbox_id: &MailboxId, unread: usize) {
+        self.acknowledged
+            .entry(account_id)
+            .or_default()
+            .insert(mailbox_id.as_str().to_string(), unread);
+        self.schema_version = ACK_UNREAD_SCHEMA_VERSION;
+    }
+
+    pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
+        self.acknowledged.retain(|id, _| known.contains(id));
+        self.schema_version = ACK_UNREAD_SCHEMA_VERSION;
     }
 }
 
@@ -134,6 +196,41 @@ pub fn retain_last_mailboxes(known: &HashSet<AccountId>) {
         let mut blob = load_blob(kv)?;
         blob.retain_accounts(known);
         save_blob(kv, &blob)
+    });
+}
+
+fn load_ack_blob(kv: &dyn StringKvStore) -> Result<AckUnreadBlob, AccountStoreError> {
+    match kv.get_item(ACK_UNREAD_KEY)? {
+        None => Ok(AckUnreadBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(AckUnreadBlob::empty()),
+        Some(s) => AckUnreadBlob::decode(&s),
+    }
+}
+
+fn save_ack_blob(kv: &dyn StringKvStore, blob: &AckUnreadBlob) -> Result<(), AccountStoreError> {
+    kv.set_item(ACK_UNREAD_KEY, &blob.encode()?)
+}
+
+/// Last unread counts the user opened each folder with, for `account_id`.
+pub fn load_ack_unread(account_id: &AccountId) -> HashMap<MailboxId, usize> {
+    with_kv(|kv| Ok(load_ack_blob(kv)?.get(account_id))).unwrap_or_default()
+}
+
+/// Persist the unread count seen while `mailbox_id` was open.
+pub fn save_ack_unread(account_id: &AccountId, mailbox_id: &MailboxId, unread: usize) {
+    let _ = with_kv(|kv| {
+        let mut blob = load_ack_blob(kv)?;
+        blob.set(account_id.clone(), mailbox_id, unread);
+        save_ack_blob(kv, &blob)
+    });
+}
+
+/// Drop acknowledged-unread rows for accounts that are no longer known.
+pub fn retain_ack_unread(known: &HashSet<AccountId>) {
+    let _ = with_kv(|kv| {
+        let mut blob = load_ack_blob(kv)?;
+        blob.retain_accounts(known);
+        save_ack_blob(kv, &blob)
     });
 }
 
@@ -250,5 +347,35 @@ mod tests {
         save_message_sort(MessageSort::Sender);
         assert_eq!(load_message_sort(), MessageSort::Sender);
         host_kv::reset();
+    }
+
+    #[test]
+    fn ack_unread_roundtrip() {
+        host_kv::reset();
+        let acc = AccountId::new("ack-acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        assert!(load_ack_unread(&acc).is_empty());
+
+        save_ack_unread(&acc, &inbox, 4);
+        assert_eq!(load_ack_unread(&acc).get(&inbox).copied(), Some(4));
+
+        save_ack_unread(&acc, &inbox, 1);
+        assert_eq!(load_ack_unread(&acc).get(&inbox).copied(), Some(1));
+
+        retain_ack_unread(&HashSet::new());
+        assert!(load_ack_unread(&acc).is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn ack_unread_decode_rejects_future_schema() {
+        let json = r#"{"schema_version":99,"acknowledged":{}}"#;
+        let err = AckUnreadBlob::decode(json).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(msg.contains("unsupported") && msg.contains("99"), "msg={msg}");
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
     }
 }

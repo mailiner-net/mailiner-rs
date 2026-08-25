@@ -1265,17 +1265,30 @@ textarea.ui-input {
 .mailbox-name {
     flex: 1 1 auto;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    gap: 0.15rem;
     font-size: 0.9rem;
     line-height: 36px;
 }
 
+.mailbox-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .mailbox-unread {
-    color: var(--item-accent);
+    flex: 0 0 auto;
+    color: inherit;
     font-weight: 600;
     font-size: 0.8rem;
+}
+
+.mailbox-unread.is-new {
+    color: var(--item-accent);
 }
 
 .message-avatar {

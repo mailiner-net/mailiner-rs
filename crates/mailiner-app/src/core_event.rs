@@ -739,6 +739,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
 
     refresh_ui_accounts(manager, ctx).await;
     crate::ui_prefs::retain_last_mailboxes(&known);
+    crate::ui_prefs::retain_ack_unread(&known);
 }
 
 /// Rebuild UI accounts from the store plus explicitly memory-only configs.
@@ -785,10 +786,51 @@ async fn list_folders_soft(
 
     match connector.list_folders(account_id).await {
         Ok(mboxes) => {
-            let (root_ids, mboxes) = crate::mailbox::build_mailbox_tree(mboxes);
-            ctx.mailbox_nodes.set(mboxes);
+            let folder_ids: Vec<FolderId> = mboxes.iter().map(|f| f.id.clone()).collect();
+            let (root_ids, nodes) = crate::mailbox::build_mailbox_tree(mboxes);
+            ctx.mailbox_nodes.set(nodes);
             ctx.mailbox_roots.set(root_ids);
+
+            // STATUS the folder we will open first so its badge is ready before SELECT.
+            let startup = {
+                let nodes = ctx.mailbox_nodes.read();
+                let roots = ctx.mailbox_roots.read();
+                let saved = crate::ui_prefs::load_last_mailbox(account_id);
+                crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots)
+            };
+            if let Some(startup_id) = startup.as_ref() {
+                let one = [FolderId::new(startup_id.to_string())];
+                if let Ok(counts) = connector.folder_counts(&one).await {
+                    let ack = crate::ui_prefs::load_ack_unread(account_id);
+                    let mut nodes = ctx.mailbox_nodes.write();
+                    crate::mailbox::apply_folder_counts(&mut nodes, &counts);
+                    crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                }
+            }
+
             restore_mailbox(manager, ctx, account_id).await;
+
+            // Remaining folders. Skip the selected one so later STATUS cannot
+            // overwrite local read/unread adjustments.
+            let selected = ctx.selected_mailbox.read().clone();
+            let rest: Vec<FolderId> = folder_ids
+                .into_iter()
+                .filter(|id| selected.as_ref().is_none_or(|sel| sel.as_str() != id.as_str()))
+                .collect();
+            let ack = crate::ui_prefs::load_ack_unread(account_id);
+            for id in rest {
+                match connector.folder_counts(std::slice::from_ref(&id)).await {
+                    Ok(counts) if !counts.is_empty() => {
+                        let mut nodes = ctx.mailbox_nodes.write();
+                        crate::mailbox::apply_folder_counts(&mut nodes, &counts);
+                        crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("folder_counts {} failed: {}", id, e);
+                    }
+                }
+            }
         }
         Err(e) => {
             error!("Failed to list folders for {}: {}", account_id, e);
@@ -871,9 +913,7 @@ async fn handle_select_mailbox(
             crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
             ctx.messages.set(SparseList::new(state.total));
             ctx.messages_loading.set(false);
-            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
-                node.total_count = state.total;
-            }
+            acknowledge_mailbox_open(ctx, &account_id, &mailbox_id, state.total, state.unread);
             if select_first && state.total > 0 {
                 let end = state.total.min(20);
                 handle_fetch_message_range(manager, ctx, mailbox_id.clone(), 0..end).await;
@@ -1073,14 +1113,92 @@ async fn handle_select_message(
 
 fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
     let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
+    let mut unread_delta: i32 = 0;
     for msg in ctx.messages.write().iter_mut() {
-        if idset.contains(&msg.id) {
+        if idset.contains(&msg.id) && msg.is_read != is_read {
             let mut next = (**msg).clone();
             next.is_read = is_read;
             next.envelope.is_read = is_read;
             *msg = Arc::new(next);
+            if is_read {
+                unread_delta -= 1;
+            } else {
+                unread_delta += 1;
+            }
         }
     }
+    if unread_delta != 0 {
+        let mailbox_id = ctx.selected_mailbox.read().clone();
+        if let Some(mailbox_id) = mailbox_id {
+            bump_mailbox_unread(ctx, &mailbox_id, unread_delta, true);
+        }
+    }
+}
+
+fn acknowledge_mailbox_open(
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    total: usize,
+    unread: Option<usize>,
+) {
+    let unread = {
+        let mut nodes = ctx.mailbox_nodes.write();
+        let Some(node) = nodes.get_mut(mailbox_id) else {
+            return;
+        };
+        node.total_count = total;
+        if let Some(unread) = unread {
+            node.unread_count = unread;
+        }
+        node.has_new = false;
+        node.unread_count
+    };
+    crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
+}
+
+fn bump_mailbox_unread(
+    ctx: &mut AppContext,
+    mailbox_id: &MailboxId,
+    delta: i32,
+    acknowledge: bool,
+) {
+    if delta == 0 {
+        return;
+    }
+    let account_id = ctx.selected_account.read().clone();
+    let unread = {
+        let mut nodes = ctx.mailbox_nodes.write();
+        let Some(node) = nodes.get_mut(mailbox_id) else {
+            return;
+        };
+        let next = (node.unread_count as i32 + delta).max(0) as usize;
+        node.unread_count = next;
+        if acknowledge {
+            node.has_new = false;
+        } else if let Some(account_id) = account_id.as_ref() {
+            let ack = crate::ui_prefs::load_ack_unread(account_id)
+                .get(mailbox_id)
+                .copied()
+                .unwrap_or(0);
+            node.has_new = crate::mailbox::unread_badge_is_new(next, ack);
+        } else {
+            node.has_new = next > 0;
+        }
+        next
+    };
+    if acknowledge {
+        if let Some(account_id) = account_id.as_ref() {
+            crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
+        }
+    }
+}
+
+fn unread_in_removed(snapshots: &[RemovedMessage]) -> i32 {
+    snapshots
+        .iter()
+        .filter(|s| !s.message.is_read)
+        .count() as i32
 }
 
 fn take_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) -> Vec<RemovedMessage> {
@@ -1090,9 +1208,14 @@ fn take_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) -> Vec<Removed
         .write()
         .take_matching(|m| idset.contains(&m.id));
     let n = taken.len();
-    if let Some(mb) = ctx.selected_mailbox.read().clone() {
+    let unread_n = taken.iter().filter(|(_, m)| !m.is_read).count() as i32;
+    let mb = ctx.selected_mailbox.read().clone();
+    if let Some(mb) = mb {
         if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mb) {
             node.total_count = node.total_count.saturating_sub(n);
+        }
+        if unread_n != 0 {
+            bump_mailbox_unread(ctx, &mb, -unread_n, true);
         }
     }
     let selected = ctx.selected_message.read().clone();
@@ -1129,12 +1252,18 @@ fn restore_snapshots(
         }
     }
     {
+        let unread_n = unread_in_removed(&snapshots);
         let mut list = ctx.messages.write();
         for snap in snapshots {
             list.insert_at(snap.index, snap.message);
         }
         if let Some(node) = ctx.mailbox_nodes.write().get_mut(mailbox_id) {
             node.total_count = list.total_count();
+        }
+        drop(list);
+        if unread_n != 0 {
+            let acknowledge = ctx.selected_mailbox.read().as_ref() == Some(mailbox_id);
+            bump_mailbox_unread(ctx, mailbox_id, unread_n, acknowledge);
         }
     }
 }
@@ -1216,6 +1345,10 @@ async fn handle_move_messages(
     {
         Ok(dest_uids) => {
             let snapshots = take_messages_from_ui(ctx, &message_ids);
+            let unread_n = unread_in_removed(&snapshots);
+            if unread_n != 0 {
+                bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
+            }
             let dest_label = ctx
                 .mailbox_nodes
                 .read()
@@ -1299,6 +1432,10 @@ async fn handle_move_to_trash(
     {
         Ok(dest_uids) => {
             let snapshots = take_messages_from_ui(ctx, &message_ids);
+            let unread_n = unread_in_removed(&snapshots);
+            if unread_n != 0 {
+                bump_mailbox_unread(ctx, &trash_id, unread_n, false);
+            }
             let dest_ids: Vec<MessageId> = dest_uids
                 .into_iter()
                 .map(|id| MessageId::from(id.to_string()))
@@ -1348,8 +1485,12 @@ async fn handle_undo(
             let core_ids = core_message_ids(&undo.dest_ids);
             match connector.move_messages(&from, &core_ids, &to).await {
                 Ok(new_uids) => {
-                    if ctx.selected_mailbox.read().as_ref() == Some(&undo.from) {
+                    let unread_n = unread_in_removed(&undo.snapshots);
+                    let viewing_from = ctx.selected_mailbox.read().as_ref() == Some(&undo.from);
+                    if viewing_from {
                         let _ = take_messages_from_ui(ctx, &undo.dest_ids);
+                    } else if unread_n != 0 {
+                        bump_mailbox_unread(ctx, &undo.from, -unread_n, false);
                     }
                     let new_ids: Vec<MessageId> = new_uids
                         .into_iter()

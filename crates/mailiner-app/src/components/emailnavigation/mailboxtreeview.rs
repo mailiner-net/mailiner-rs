@@ -102,9 +102,13 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
 
                 div {
                     class: "mailbox-name",
-                    "{mailbox.title()}"
+                    span { class: "mailbox-title", "{mailbox.title()}" }
                     if mailbox.unread_count > 0 {
-                        span { class: "mailbox-unread", " {mailbox.unread_count}" }
+                        span {
+                            class: "mailbox-unread",
+                            class: if mailbox.has_new { "is-new" },
+                            " ({mailbox.unread_count})"
+                        }
                     }
                 }
             }

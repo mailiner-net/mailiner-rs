@@ -1099,6 +1099,35 @@ where
         Ok(())
     }
 
+    async fn sync_unread_sort_index(
+        &self,
+        message_ids: &[MessageId],
+        now_read: bool,
+    ) -> MailinerResult<Vec<(usize, usize)>> {
+        let mut slot = self.list_index.lock().await;
+        let Some(index) = slot.as_mut() else {
+            return Ok(Vec::new());
+        };
+        if index.sort != MessageSort::Unread {
+            return Ok(Vec::new());
+        }
+        let Some(uids) = index.uids.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let mut unread = index.unread.unwrap_or(0);
+        let mut moves = Vec::new();
+        for id in message_ids {
+            let Ok(uid) = id.as_str().parse::<u32>() else {
+                continue;
+            };
+            if let Some(mv) = sort::move_uid_for_seen_flag(uids, &mut unread, uid, now_read) {
+                moves.push(mv);
+            }
+        }
+        index.unread = Some(unread);
+        Ok(moves)
+    }
+
     async fn move_messages(
         &self,
         folder_id: &FolderId,

@@ -29,6 +29,42 @@ pub fn unread_uid_order(unseen: HashSet<u32>, seen: HashSet<u32>) -> Vec<u32> {
     unseen
 }
 
+/// Move `uid` between the unseen prefix and the seen suffix of an unread-first index.
+///
+/// `unread` is the length of the unseen prefix. Returns `(old_index, new_index)`.
+pub fn move_uid_for_seen_flag(
+    uids: &mut Vec<u32>,
+    unread: &mut usize,
+    uid: u32,
+    now_read: bool,
+) -> Option<(usize, usize)> {
+    let from = uids.iter().position(|&u| u == uid)?;
+    uids.remove(from);
+    if from < *unread {
+        *unread = unread.saturating_sub(1);
+    }
+    let dest = if now_read {
+        *unread..uids.len()
+    } else {
+        0..*unread
+    };
+    let to = insert_uid_desc(uids, uid, dest);
+    if !now_read {
+        *unread += 1;
+    }
+    Some((from, to))
+}
+
+fn insert_uid_desc(uids: &mut Vec<u32>, uid: u32, range: std::ops::Range<usize>) -> usize {
+    let pos = uids[range.clone()]
+        .iter()
+        .position(|&u| u < uid)
+        .map(|i| range.start + i)
+        .unwrap_or(range.end);
+    uids.insert(pos, uid);
+    pos
+}
+
 /// IMAP SORT criteria + search key for a sort that needs the SORT extension.
 pub fn sort_command(sort: MessageSort) -> Option<(&'static str, &'static str)> {
     match sort {
@@ -110,6 +146,42 @@ mod tests {
         let unseen = HashSet::from([3, 10, 1]);
         let seen = HashSet::from([8, 2]);
         assert_eq!(unread_uid_order(unseen, seen), vec![10, 3, 1, 8, 2]);
+    }
+
+    #[test]
+    fn mark_read_moves_into_seen_group_by_uid() {
+        let mut uids = vec![10, 3, 1, 8, 2];
+        let mut unread = 3;
+        assert_eq!(
+            move_uid_for_seen_flag(&mut uids, &mut unread, 3, true),
+            Some((1, 3))
+        );
+        assert_eq!(unread, 2);
+        assert_eq!(uids, vec![10, 1, 8, 3, 2]);
+    }
+
+    #[test]
+    fn mark_unread_moves_into_unseen_group_by_uid() {
+        let mut uids = vec![10, 3, 1, 8, 2];
+        let mut unread = 3;
+        assert_eq!(
+            move_uid_for_seen_flag(&mut uids, &mut unread, 8, false),
+            Some((3, 1))
+        );
+        assert_eq!(unread, 4);
+        assert_eq!(uids, vec![10, 8, 3, 1, 2]);
+    }
+
+    #[test]
+    fn mark_unread_first_unseen_when_none() {
+        let mut uids = vec![8, 2];
+        let mut unread = 0;
+        assert_eq!(
+            move_uid_for_seen_flag(&mut uids, &mut unread, 8, false),
+            Some((0, 0))
+        );
+        assert_eq!(unread, 1);
+        assert_eq!(uids, vec![8, 2]);
     }
 
     #[test]

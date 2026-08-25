@@ -71,6 +71,15 @@ where
         message_ids: &[MessageId],
         flags: &[(&str, bool)],
     ) -> Result<()>;
+    /// Keep an Unread-first list index in sync after a `\Seen` change.
+    ///
+    /// Returns `(old_index, new_index)` per id, in call order. Empty when the
+    /// current folder is not sorted by unread.
+    async fn sync_unread_sort_index(
+        &self,
+        message_ids: &[MessageId],
+        now_read: bool,
+    ) -> Result<Vec<(usize, usize)>>;
 
     /// Move messages from `folder_id` to `dest_folder_id` (IMAP MOVE, or COPY+\Deleted).
     ///
@@ -391,6 +400,14 @@ where
         _flags: &[(&str, bool)],
     ) -> Result<()> {
         Ok(())
+    }
+
+    async fn sync_unread_sort_index(
+        &self,
+        _message_ids: &[MessageId],
+        _now_read: bool,
+    ) -> Result<Vec<(usize, usize)>> {
+        Ok(Vec::new())
     }
 
     async fn move_messages(

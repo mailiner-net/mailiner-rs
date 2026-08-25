@@ -145,6 +145,47 @@ impl<T: Clone> SparseList<T> {
         self.take_matching(pred).len()
     }
 
+    /// Move the logical row at `from` to `to` without changing `total_count`.
+    ///
+    /// Cached items (and holes) between the two indices shift to close the gap.
+    /// A missing `from` still shifts neighbours so uncached rows stay aligned.
+    pub fn relocate(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.total_count || self.total_count == 0 {
+            return;
+        }
+        let to = to.min(self.total_count - 1);
+        let item = self.items.remove(&from);
+        if from < to {
+            let keys: Vec<usize> = self
+                .items
+                .keys()
+                .copied()
+                .filter(|&k| k > from && k <= to)
+                .collect();
+            for k in keys {
+                if let Some(v) = self.items.remove(&k) {
+                    self.items.insert(k - 1, v);
+                }
+            }
+        } else {
+            let keys: Vec<usize> = self
+                .items
+                .keys()
+                .copied()
+                .filter(|&k| k >= to && k < from)
+                .rev()
+                .collect();
+            for k in keys {
+                if let Some(v) = self.items.remove(&k) {
+                    self.items.insert(k + 1, v);
+                }
+            }
+        }
+        if let Some(item) = item {
+            self.items.insert(to, item);
+        }
+    }
+
     /// Insert `item` at `index`, shifting later cached rows up.
     pub fn insert_at(&mut self, index: usize, item: T) {
         let index = index.min(self.total_count);
@@ -678,6 +719,38 @@ mod tests {
         assert_eq!(vp.visible_count, 6);
         assert_eq!(vp.last_visible_index, 5);
         assert_eq!(vp.buffered_range(2, 1000), 0..8);
+    }
+
+    #[test]
+    fn sparse_list_relocate_down_shifts_between() {
+        let mut list = SparseList::new(5);
+        list.insert(0, "a");
+        list.insert(1, "b");
+        list.insert(2, "c");
+        list.insert(4, "e");
+        list.relocate(1, 3);
+        assert_eq!(list.total_count(), 5);
+        assert_eq!(list.get(0).copied(), Some("a"));
+        assert_eq!(list.get(1).copied(), Some("c"));
+        assert!(!list.has_item(2));
+        assert_eq!(list.get(3).copied(), Some("b"));
+        assert_eq!(list.get(4).copied(), Some("e"));
+    }
+
+    #[test]
+    fn sparse_list_relocate_up_shifts_between() {
+        let mut list = SparseList::new(4);
+        list.insert(0, "a");
+        list.insert(1, "b");
+        list.insert(2, "c");
+        list.insert(3, "d");
+        list.relocate(3, 1);
+        assert_eq!(
+            (0..4)
+                .filter_map(|i| list.get(i).copied())
+                .collect::<Vec<_>>(),
+            ["a", "d", "b", "c"]
+        );
     }
 
     #[test]

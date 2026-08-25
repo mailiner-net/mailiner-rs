@@ -260,7 +260,7 @@ pub async fn core_loop(
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
             }
             CoreEvent::SelectMessage(message_id) => {
-                handle_select_message(&manager, &mut ctx, message_id).await;
+                handle_select_message(&manager, &mut ctx, message_id, true).await;
             }
             CoreEvent::SelectAdjacent { delta } => {
                 handle_select_adjacent(&manager, &mut ctx, delta).await;
@@ -919,7 +919,10 @@ async fn handle_select_mailbox(
                 handle_fetch_message_range(manager, ctx, mailbox_id.clone(), 0..end).await;
                 let first_id = ctx.messages.read().get(0).map(|m| m.id.clone());
                 if let Some(id) = first_id {
-                    handle_select_message(manager, ctx, id).await;
+                    // Unread-first: selecting the top row would immediately
+                    // consume the message the user just asked to see as unread.
+                    let auto_mark = state.sort != MessageSort::Unread;
+                    handle_select_message(manager, ctx, id, auto_mark).await;
                 }
             }
         }
@@ -1028,13 +1031,14 @@ async fn handle_select_adjacent(
     let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
         return;
     };
-    handle_select_message(manager, ctx, message_id).await;
+    handle_select_message(manager, ctx, message_id, true).await;
 }
 
 async fn handle_select_message(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     message_id: MessageId,
+    auto_mark_read: bool,
 ) {
     ctx.selected_message.set(Some(message_id.clone()));
     ctx.download_status.set(HashMap::new());
@@ -1087,7 +1091,7 @@ async fn handle_select_message(
                 .read()
                 .find(|m| m.id == message_id)
                 .is_some_and(|m| !m.is_read);
-            if was_unread {
+            if was_unread && auto_mark_read {
                 apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
                 if let Err(e) = connector
                     .update_envelope_flags(&folder_id, &[core_id], &[("is_read", true)])
@@ -1095,6 +1099,14 @@ async fn handle_select_message(
                 {
                     warn!("Auto-mark as read failed for {}: {}", message_id, e);
                     apply_read_flag(ctx, std::slice::from_ref(&message_id), false);
+                } else {
+                    relocate_unread_sort_rows(
+                        connector,
+                        ctx,
+                        std::slice::from_ref(&message_id),
+                        true,
+                    )
+                    .await;
                 }
             }
         }
@@ -1309,8 +1321,33 @@ async fn handle_mark_read(
         ctx.show_toast(ToastAction::error(format!("Could not update read state: {e}")));
         return;
     }
-    if *ctx.message_sort.peek() == MessageSort::Unread {
-        handle_select_mailbox(manager, ctx, mailbox_id, true).await;
+    relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
+}
+
+/// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.
+async fn relocate_unread_sort_rows(
+    connector: &mailiner_imap_connector::ImapConnector<crate::websocket_stream::WebSocketStream>,
+    ctx: &mut AppContext,
+    message_ids: &[MessageId],
+    now_read: bool,
+) {
+    if *ctx.message_sort.peek() != MessageSort::Unread || message_ids.is_empty() {
+        return;
+    }
+    let core_ids = core_message_ids(message_ids);
+    match connector.sync_unread_sort_index(&core_ids, now_read).await {
+        Ok(moves) => {
+            if moves.is_empty() {
+                return;
+            }
+            let mut list = ctx.messages.write();
+            for (from, to) in moves {
+                list.relocate(from, to);
+            }
+        }
+        Err(e) => {
+            warn!("unread-sort relocate failed: {e}");
+        }
     }
 }
 

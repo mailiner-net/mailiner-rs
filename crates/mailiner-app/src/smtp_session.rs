@@ -6,14 +6,14 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use dioxus::logger::tracing::info;
 use futures_channel::mpsc::UnboundedSender;
 use futures_channel::oneshot;
-use futures_util::future::{Either, select};
+use futures_util::future::{select, Either};
 use gloo_timers::future::TimeoutFuture;
 use mailiner_core::submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
 use mailiner_smtp_connector::{SmtpConnector, SmtpError};
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, SmtpTlsMode, ehlo_domain, smtp_password, smtp_username,
+    ehlo_domain, smtp_password, smtp_username, AccountConfig, SmtpTlsMode,
 };
 use crate::connection::CONNECT_TIMEOUT_MS;
 use crate::core_event::CoreEvent;
@@ -39,7 +39,10 @@ impl From<SmtpError> for ClassifiedSendError {
 }
 
 pub enum SmtpOutcome {
-    Send(Result<SubmitReceipt, ClassifiedSendError>),
+    Send {
+        outbox_id: Option<OutboxId>,
+        result: Result<SubmitReceipt, ClassifiedSendError>,
+    },
     Test {
         request_id: AccountId,
         result: Result<(), ClassifiedSendError>,
@@ -49,7 +52,7 @@ pub enum SmtpOutcome {
 pub struct InFlightSmtp {
     pub account_id: AccountId,
     pub generation: u64,
-    pub cancel_tx: oneshot::Sender<()>,
+    pub cancel_tx: Option<oneshot::Sender<()>>,
     pub outbox_id: Option<OutboxId>,
     pub is_test: bool,
 }
@@ -76,12 +79,13 @@ pub fn spawn_submit(
     cancel_rx: oneshot::Receiver<()>,
     event_tx: UnboundedSender<CoreEvent>,
     timeout_ms: u32,
+    outbox_id: Option<OutboxId>,
 ) {
     spawn_fut(async move {
-        let outcome = run_submit(config, request, cancel_rx, timeout_ms).await;
+        let result = run_submit(config, request, cancel_rx, timeout_ms).await;
         let _ = event_tx.unbounded_send(CoreEvent::SmtpFinished {
             generation,
-            outcome: SmtpOutcome::Send(outcome),
+            outcome: SmtpOutcome::Send { outbox_id, result },
         });
     });
 }
@@ -207,10 +211,13 @@ async fn open_stream(
         kind: SendErrorKind::NetworkOrProxy,
         message: e.to_string(),
     })?;
-    stream.wait_until_open().await.map_err(|e| ClassifiedSendError {
-        kind: SendErrorKind::NetworkOrProxy,
-        message: e.to_string(),
-    })?;
+    stream
+        .wait_until_open()
+        .await
+        .map_err(|e| ClassifiedSendError {
+            kind: SendErrorKind::NetworkOrProxy,
+            message: e.to_string(),
+        })?;
 
     let connector = SmtpConnector::new(
         config.id.clone(),

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
+use futures_util::future::{select, Either};
 use futures_util::StreamExt;
-use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
@@ -16,22 +16,22 @@ use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId, MessageSo
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
-use crate::components::virtual_scroll::{SparseList, adjacent_index, index_after_removal};
+use crate::components::virtual_scroll::{adjacent_index, index_after_removal, SparseList};
 use crate::connection::{
-    AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
-    set_connection_state,
+    set_connection_state, AccountConnectionManager, ConnectErrorKind, ConnectionState,
+    EnsureConnectedMode,
 };
 use crate::context::{AppContext, MessageViewState};
-use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
+use crate::download::{DownloadStatus, StreamingBlobDownload, MAX_DOWNLOAD_BYTES};
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
 use crate::outbox_store::{
-    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
+    OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore, MAX_OUTBOX_AUTO_ATTEMPTS,
 };
 use crate::send::{OutboxDisplay, SendPhase, SendState};
 use crate::smtp_session::{
-    InFlightSmtp, SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test,
+    preflight, spawn_submit, spawn_test, InFlightSmtp, SmtpOutcome, SEND_TIMEOUT_MS,
 };
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
 
@@ -290,15 +290,8 @@ pub async fn core_loop(
                 extend,
                 toggle,
             } => {
-                handle_select_list_click(
-                    &manager,
-                    &mut ctx,
-                    message_id,
-                    index,
-                    extend,
-                    toggle,
-                )
-                .await;
+                handle_select_list_click(&manager, &mut ctx, message_id, index, extend, toggle)
+                    .await;
             }
             CoreEvent::SelectAdjacent { delta, extend } => {
                 handle_select_adjacent(&manager, &mut ctx, delta, extend).await;
@@ -427,17 +420,12 @@ pub async fn core_loop(
                 .await;
             }
             CoreEvent::DeleteOutboxItem { id } => {
-                if let Some(flight) = inflight.as_ref() {
+                if let Some(flight) = inflight.as_mut() {
                     if flight.outbox_id.as_ref() == Some(&id) {
-                        let _ = flight.cancel_tx; // replaced below
-                    }
-                }
-                if let Some(flight) = inflight.take() {
-                    if flight.outbox_id.as_ref() == Some(&id) {
-                        let _ = flight.cancel_tx.send(());
+                        if let Some(tx) = flight.cancel_tx.take() {
+                            let _ = tx.send(());
+                        }
                         smtp_generation = smtp_generation.wrapping_add(1);
-                    } else {
-                        inflight = Some(flight);
                     }
                 }
                 let _ = outbox.delete(&id).await;
@@ -1091,7 +1079,9 @@ async fn handle_select_list_click(
         return;
     }
     if toggle {
-        ctx.selection.write().toggle(message_id.clone(), Some(index));
+        ctx.selection
+            .write()
+            .toggle(message_id.clone(), Some(index));
         let Some(focus) = ctx.selection.read().focus().cloned() else {
             return;
         };
@@ -1117,15 +1107,9 @@ async fn apply_index_range_selection(
         }
     }
     let ids = cached_ids_in_range(ctx, start, end);
-    let focus = ctx
-        .messages
-        .read()
-        .get(end_index)
-        .map(|m| m.id.clone());
+    let focus = ctx.messages.read().get(end_index).map(|m| m.id.clone());
     if let Some(focus) = focus {
-        ctx.selection
-            .write()
-            .set_range(ids, focus, Some(end_index));
+        ctx.selection.write().set_range(ids, focus, Some(end_index));
     }
 }
 
@@ -1369,9 +1353,10 @@ fn take_messages_from_ui(
         // Prefer the index from when the row was focused. Unread-first
         // auto-mark-read relocates the message into the read section, which
         // would otherwise make "next" a random later read row.
-        ctx.selection.read().focus_at_index().or_else(|| {
-            ctx.messages.read().position(|m| &m.id == id)
-        })
+        ctx.selection
+            .read()
+            .focus_at_index()
+            .or_else(|| ctx.messages.read().position(|m| &m.id == id))
     });
     let taken = ctx
         .messages
@@ -1924,24 +1909,21 @@ async fn cancel_inflight_for(
     inflight: &mut Option<InFlightSmtp>,
     smtp_generation: &mut u64,
     account_id: &AccountId,
-    outbox: &dyn OutboxStore,
+    _outbox: &dyn OutboxStore,
 ) {
-    let Some(flight) = inflight.take() else {
+    let Some(flight) = inflight.as_mut() else {
         return;
     };
     if flight.account_id != *account_id {
-        *inflight = Some(flight);
         return;
     }
-    let _ = flight.cancel_tx.send(());
-    *smtp_generation = smtp_generation.wrapping_add(1);
-    if let Some(id) = flight.outbox_id {
-        if let Ok(Some(mut item)) = outbox.get(&id).await {
-            item.state = OutboxItemState::Queued;
-            item.updated_at = chrono::Utc::now();
-            let _ = outbox.upsert(&item).await;
-        }
+    // Signal the task but keep the slot. SmtpFinished settles the row
+    // (delete on success, requeue on Cancelled) so DrainOutbox cannot
+    // start a second DATA for the same rfc822.
+    if let Some(tx) = flight.cancel_tx.take() {
+        let _ = tx.send(());
     }
+    *smtp_generation = smtp_generation.wrapping_add(1);
 }
 
 async fn purge_missing_accounts(
@@ -2066,7 +2048,7 @@ fn start_send_item(
     *inflight = Some(InFlightSmtp {
         account_id: account_id.clone(),
         generation,
-        cancel_tx,
+        cancel_tx: Some(cancel_tx),
         outbox_id: Some(item.id.clone()),
         is_test: false,
     });
@@ -2074,7 +2056,6 @@ fn start_send_item(
         account_id,
         phase: SendPhase::Connecting,
     }));
-    let _ = item;
     spawn_submit(
         config,
         request,
@@ -2082,6 +2063,7 @@ fn start_send_item(
         cancel_rx,
         smtp_tx.clone(),
         SEND_TIMEOUT_MS,
+        Some(item.id),
     );
 }
 
@@ -2187,7 +2169,7 @@ async fn handle_test_smtp(
     *inflight = Some(InFlightSmtp {
         account_id: config.id.clone(),
         generation,
-        cancel_tx,
+        cancel_tx: Some(cancel_tx),
         outbox_id: None,
         is_test: true,
     });
@@ -2212,6 +2194,16 @@ async fn handle_smtp_finished(
     outcome: SmtpOutcome,
 ) {
     let Some(flight) = inflight.take() else {
+        // Inflight was dropped (item deleted) but DATA may still have succeeded.
+        // Never leave that rfc822 queued for a second submit.
+        if let SmtpOutcome::Send {
+            outbox_id: Some(id),
+            result: Ok(_),
+        } = outcome
+        {
+            let _ = outbox.delete(&id).await;
+            refresh_outbox_signal(outbox, ctx).await;
+        }
         return;
     };
     if flight.generation != generation {
@@ -2219,7 +2211,10 @@ async fn handle_smtp_finished(
         return;
     }
     match outcome {
-        SmtpOutcome::Send(Ok(receipt)) => {
+        SmtpOutcome::Send {
+            result: Ok(receipt),
+            ..
+        } => {
             let rfc822 = if let Some(id) = &flight.outbox_id {
                 match outbox.get(id).await {
                     Ok(Some(item)) => item.rfc822().ok(),
@@ -2243,7 +2238,9 @@ async fn handle_smtp_finished(
                 });
             }
         }
-        SmtpOutcome::Send(Err(err)) => {
+        SmtpOutcome::Send {
+            result: Err(err), ..
+        } => {
             if let Some(id) = &flight.outbox_id {
                 if let Ok(Some(mut item)) = outbox.get(id).await {
                     item.last_error_kind = Some(err.kind);

@@ -1361,14 +1361,8 @@ where
 
         let mut map = HashMap::new();
         for section in sections {
-            match Self::extract_section_bytes(&fetch, section) {
-                Ok(bytes) => {
-                    map.insert(section.clone(), bytes);
-                }
-                Err(e) => {
-                    tracing::warn!(section = %section, error = %e, "section missing in FETCH");
-                }
-            }
+            let bytes = Self::extract_section_bytes(&fetch, section)?;
+            map.insert(section.clone(), bytes);
         }
         Ok(map)
     }

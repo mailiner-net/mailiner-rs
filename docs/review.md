@@ -26,7 +26,7 @@ Do not re-open these.
 | Send cancel requeued before DATA finished (double-send) | `322db54` |
 | Date/sequence list index stale after remote EXPUNGE | `289102a` |
 | Envelope had no RFC Message-ID / threading headers | `611fa4d` |
-| Stringly `update_envelope_flags` | f9209b4 |
+| Stringly `update_envelope_flags` | `5e45729` |
 
 ---
 
@@ -80,10 +80,7 @@ Do not re-open these.
 
 ### 8. `fetch_raw_parts` swallows missing sections
 
-- Severity: suggestion
-- Where: [`crates/mailiner-imap-connector/src/lib.rs`](../crates/mailiner-imap-connector/src/lib.rs) (`fetch_raw_parts`)
-- A requested section that is absent is logged and omitted. Combined with the old loader check this hid body failures; the loader now requires a display part, but a partial map is still `Ok`.
-- Direction: fail if a requested section is absent, or return per-section errors the loader can surface.
+- [x] Done. A missing requested section is now an error; the loader already fails if no display part decoded.
 
 ### 9. MOVE fallback can copy without deleting
 

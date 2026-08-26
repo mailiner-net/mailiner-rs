@@ -23,7 +23,8 @@ Do not re-open these.
 | Send cancel ignored the oneshot; cancelled outbox marked Failed | `ccaef37` |
 | SMTP success reply not truncated | `ccaef37` |
 | Attachment download hint used decoded `size` instead of wire size | `b14f132` |
-| Send cancel requeued before DATA finished (double-send) | a6f5863 |
+| Send cancel requeued before DATA finished (double-send) | `322db54` |
+| Date/sequence list index stale after remote EXPUNGE | 59a0988 |
 
 ---
 
@@ -40,11 +41,8 @@ Do not re-open these.
 
 ### 2. List index and Date/sequence paging after a remote EXPUNGE
 
-- Severity: bug
-- Where: [`crates/mailiner-imap-connector/src/lib.rs`](../crates/mailiner-imap-connector/src/lib.rs) (`list_envelopes_range`, `forget_messages`)
-- Paging is a UI index into the last `prepare_folder_list` result. UID-sorted lists (Unread / Size / Sender) are now pruned on **our** MOVE/DELETE. Date sort has no UID vector: it FETCHes inverted sequence numbers from the cached `EXISTS` and does **not** re-`SELECT` if `list_index.folder` still matches.
-- Nothing consumes EXPUNGE from another client (no IDLE/NOOP poll). A message deleted elsewhere shifts sequence numbers; the next range fetch returns the wrong mail. `sync_unread_sort_index` only patches `\Seen` on an Unread list.
-- Direction: treat any UID/EXISTS change as index death. For Date, `SELECT` on every range fetch and use current EXISTS, or always page by UID. Longer term: IDLE (or periodic NOOP) and drop/rebuild the index on EXPUNGE.
+- [x] Done. Date pages by `UID SEARCH ALL` (newest UID first). Each range `SELECT`s and rebuilds the index when `EXISTS` ≠ cached total. Sequence fetch remains only if SEARCH ALL fails.
+- Still open (not required to close this item): IDLE / periodic NOOP so the UI notices EXPUNGE without a later range fetch.
 
 ### 3. Envelope has no RFC 5322 identity / threading headers
 
@@ -150,9 +148,8 @@ Do not re-open these.
 
 ## Suggested order
 
-1. Remote EXPUNGE / Date sequence paging (2) — user-visible correctness.
-2. Envelope RFC Message-ID + reply threading (3) — composer already waits on this.
-3. Folder-scoped `MessageId` (1) and typed flags (4) — unblock a lot of later IMAP work; do not mix with a feature PR.
-4. Prefetch bounds (7) and missing-section errors (8) — WASM memory and load honesty.
-5. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
-6. COPY+delete partial success (9) and `UNSEEN` counts (10) with the next IMAP pass.
+1. Envelope RFC Message-ID + reply threading (3) — composer already waits on this.
+2. Folder-scoped `MessageId` (1) and typed flags (4) — unblock a lot of later IMAP work; do not mix with a feature PR.
+3. Prefetch bounds (7) and missing-section errors (8) — WASM memory and load honesty.
+4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
+5. COPY+delete partial success (9) and `UNSEEN` counts (10) with the next IMAP pass.

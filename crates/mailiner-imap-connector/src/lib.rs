@@ -3,7 +3,7 @@ mod section_path;
 mod sent;
 mod sort;
 
-pub use sent::{ListedMailbox, find_sent_mailbox, role_from_name, special_use_from_attrs};
+pub use sent::{find_sent_mailbox, role_from_name, special_use_from_attrs, ListedMailbox};
 
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,14 +95,14 @@ where
     structure_cache: Mutex<HashMap<(FolderId, MessageId), BodyPart>>,
     /// RFC 5256 SORT advertised after LOGIN.
     has_sort: AtomicBool,
-    /// Last [`prepare_folder_list`] index (UID order, or sequence for Date).
+    /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
 }
 
 struct ListIndex {
     folder: String,
     sort: MessageSort,
-    /// `None` = inverted sequence numbers (arrival / Date).
+    /// UID order for paging. `None` only if `UID SEARCH ALL` failed (sequence fallback).
     uids: Option<Vec<u32>>,
     total: usize,
     /// `UNSEEN` count from SELECT/SEARCH; `None` if it could not be measured.
@@ -309,7 +309,7 @@ where
     }
 
     /// Drop cached BODYSTRUCTURE rows and the list index entries for these UIDs.
-    /// Sequence-based Date sort is cleared entirely (EXPUNGE shifts numbers).
+    /// Sequence fallback (no UID list) is cleared entirely — EXPUNGE shifts numbers.
     async fn forget_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) {
         {
             let mut cache = self.structure_cache.lock().await;
@@ -453,7 +453,7 @@ where
             return Ok(ListIndex {
                 folder: folder_id.to_string(),
                 sort,
-                uids: None,
+                uids: Some(Vec::new()),
                 total: 0,
                 unread: Some(0),
             });
@@ -461,7 +461,7 @@ where
 
         let mut unread = None;
         let uids = match sort {
-            MessageSort::Date => None,
+            MessageSort::Date => Some(Self::search_arrival_uids(session).await?),
             MessageSort::Unread => {
                 if has_sort {
                     let unseen = sort::uid_sort(session, "REVERSE DATE", "UNSEEN").await?;
@@ -490,11 +490,13 @@ where
                     Err(e) => {
                         tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Date");
                         let unread = Self::search_unseen_count(session).await;
+                        let uids = Self::search_arrival_uids(session).await.ok();
+                        let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
                         return Ok(ListIndex {
                             folder: folder_id.to_string(),
                             sort: MessageSort::Date,
-                            uids: None,
-                            total: exists,
+                            uids,
+                            total,
                             unread,
                         });
                     }
@@ -525,6 +527,16 @@ where
             }
         }
     }
+
+    async fn search_arrival_uids(
+        session: &mut Session<TlsStream<S>>,
+    ) -> Result<Vec<u32>, ImapError> {
+        let set = session
+            .uid_search("ALL")
+            .await
+            .map_err(|e| ImapError::Imap(format!("UID SEARCH ALL: {e}")))?;
+        Ok(sort::arrival_uid_order(set))
+    }
 }
 
 fn imap_flag_atom(flag: &str) -> Result<&'static str, ImapError> {
@@ -542,7 +554,11 @@ fn uid_set(ids: &[MessageId]) -> Result<String, ImapError> {
     if ids.is_empty() {
         return Err(ImapError::InvalidData("No message ids".into()));
     }
-    Ok(ids.iter().map(MessageId::as_str).collect::<Vec<_>>().join(","))
+    Ok(ids
+        .iter()
+        .map(MessageId::as_str)
+        .collect::<Vec<_>>()
+        .join(","))
 }
 
 fn quote_mailbox(name: &str) -> String {
@@ -743,10 +759,8 @@ where
 
     async fn list_folders(&self, account_id: &AccountId) -> MailinerResult<Vec<Folder>> {
         let listed = self.list_all_mailboxes().await.unwrap_or_default();
-        let roles: std::collections::HashMap<String, MailboxRole> = listed
-            .iter()
-            .map(|m| (m.name.clone(), m.role()))
-            .collect();
+        let roles: std::collections::HashMap<String, MailboxRole> =
+            listed.iter().map(|m| (m.name.clone(), m.role())).collect();
 
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
@@ -882,8 +896,7 @@ where
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
         };
-        let index =
-            Self::build_list_index(session, folder_id.as_str(), sort, has_sort).await?;
+        let index = Self::build_list_index(session, folder_id.as_str(), sort, has_sort).await?;
         let state = FolderListState {
             total: index.total,
             unread: index.unread,
@@ -912,19 +925,24 @@ where
             };
 
             let has_sort = self.has_sort.load(Ordering::Relaxed);
+            let mailbox = session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            let exists = mailbox.exists as usize;
             let mut index_slot = self.list_index.lock().await;
-            if index_slot
+            let stale = index_slot
                 .as_ref()
-                .is_none_or(|idx| idx.folder != folder_id.as_str())
-            {
+                .is_none_or(|idx| idx.folder != folder_id.as_str() || idx.total != exists);
+            if stale {
+                let requested = index_slot
+                    .as_ref()
+                    .filter(|idx| idx.folder == folder_id.as_str())
+                    .map(|idx| idx.sort)
+                    .unwrap_or(MessageSort::Date);
                 *index_slot = Some(
-                    Self::build_list_index(
-                        session,
-                        folder_id.as_str(),
-                        MessageSort::Date,
-                        has_sort,
-                    )
-                    .await?,
+                    Self::build_list_index(session, folder_id.as_str(), requested, has_sort)
+                        .await?,
                 );
             }
             let index = index_slot.as_ref().expect("index just set");
@@ -1191,8 +1209,7 @@ where
         }
 
         // RFC 6851 fallback: COPY + \Deleted + EXPUNGE.
-        let dest_uids =
-            run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
+        let dest_uids = run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
         delete_selected_uids(session, &uids).await?;
         drop(imap);
         self.forget_messages(folder_id, message_ids).await;
@@ -1533,10 +1550,7 @@ mod tests {
 
     #[test]
     fn uid_set_joins() {
-        let ids = [
-            MessageId::new("12"),
-            MessageId::new("44"),
-        ];
+        let ids = [MessageId::new("12"), MessageId::new("44")];
         assert_eq!(uid_set(&ids).unwrap(), "12,44");
         assert!(uid_set(&[]).is_err());
     }

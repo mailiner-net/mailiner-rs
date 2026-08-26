@@ -19,6 +19,13 @@ pub fn apply_sort_or_fallback(requested: MessageSort, has_sort: bool) -> Message
     }
 }
 
+/// Newest-first arrival (descending UID). Used for Date when `SORT` is not applied.
+pub fn arrival_uid_order(uids: HashSet<u32>) -> Vec<u32> {
+    let mut uids: Vec<u32> = uids.into_iter().collect();
+    uids.sort_unstable_by(|a, b| b.cmp(a));
+    uids
+}
+
 /// Unseen UIDs first, then seen. Each group newest-first (descending UID ≈ arrival).
 pub fn unread_uid_order(unseen: HashSet<u32>, seen: HashSet<u32>) -> Vec<u32> {
     let mut unseen: Vec<u32> = unseen.into_iter().collect();
@@ -139,6 +146,11 @@ mod tests {
             apply_sort_or_fallback(MessageSort::Date, false),
             MessageSort::Date
         );
+    }
+
+    #[test]
+    fn arrival_order_newest_uid_first() {
+        assert_eq!(arrival_uid_order(HashSet::from([1, 10, 3])), vec![10, 3, 1]);
     }
 
     #[test]

@@ -69,10 +69,11 @@ where
         }
     }
 
-    let any_content = parts
+    let had_display = parts.iter().any(|p| p.is_display_part());
+    let any_display = parts
         .iter()
-        .any(|p| p.should_prefetch() && !matches!(p.content, MessageContent::Empty));
-    if !any_content && !sections.is_empty() {
+        .any(|p| p.is_display_part() && !matches!(p.content, MessageContent::Empty));
+    if had_display && !any_display {
         return Err(MailinerError::Connector(format!(
             "failed to load content sections: {}",
             missing.join(", ")

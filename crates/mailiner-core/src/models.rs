@@ -326,6 +326,11 @@ impl MessagePart {
     pub fn should_prefetch(&self) -> bool {
         self.is_hidden || !self.is_attachment
     }
+
+    /// Visible body (not an attachment and not a cid-only inline).
+    pub fn is_display_part(&self) -> bool {
+        !self.is_attachment && !self.is_hidden
+    }
 }
 
 /// Aggregate returned by the message load pipeline.
@@ -345,7 +350,7 @@ impl LoadedMessage {
     }
 
     pub fn content_parts(&self) -> impl Iterator<Item = &MessagePart> {
-        self.parts.iter().filter(|p| p.should_prefetch())
+        self.parts.iter().filter(|p| p.is_display_part())
     }
 }
 

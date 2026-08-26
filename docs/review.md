@@ -91,10 +91,7 @@ Do not re-open these.
 
 ### 10. `folder_counts` treats missing `UNSEEN` as zero
 
-- Severity: suggestion
-- Where: [`crates/mailiner-imap-connector/src/lib.rs`](../crates/mailiner-imap-connector/src/lib.rs) (`folder_counts`)
-- The trait says missing entries were skipped or failed. IMAP inserts a row when STATUS succeeds but `unseen` is `None`, as `0` unread. The sidebar then shows a confident zero.
-- Direction: skip STATUS rows without `UNSEEN` (or keep `unread: None` through to the UI).
+- [x] Done. STATUS without `UNSEEN` is skipped (same as a failed STATUS); the sidebar keeps its last badge instead of showing a false zero.
 
 ### 11. Send cancel can still double-send
 
@@ -140,6 +137,6 @@ Do not re-open these.
 ## Suggested order
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
-3. Prefetch bounds (7) and missing-section errors (8) — WASM memory and load honesty.
+3. Prefetch bounds (7) — WASM memory and load honesty.
 4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
-5. COPY+delete partial success (9) and `UNSEEN` counts (10) with the next IMAP pass.
+5. COPY+delete partial success (9) with the next IMAP pass.

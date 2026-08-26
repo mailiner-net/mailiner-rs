@@ -845,11 +845,15 @@ where
             drop(imap);
             match result {
                 Ok(mbox) => {
+                    let Some(unseen) = mbox.unseen else {
+                        tracing::debug!("STATUS {} omitted UNSEEN; skipping count", id.as_str());
+                        continue;
+                    };
                     out.insert(
                         id.clone(),
                         FolderCounts {
                             total_messages: u64::from(mbox.exists),
-                            unread_messages: u64::from(mbox.unseen.unwrap_or(0)),
+                            unread_messages: u64::from(unseen),
                         },
                     );
                 }

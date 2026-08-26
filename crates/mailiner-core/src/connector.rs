@@ -37,15 +37,6 @@ where
         &self,
         folder_ids: &[FolderId],
     ) -> Result<HashMap<FolderId, FolderCounts>>;
-    async fn create_folder(
-        &self,
-        account_id: &AccountId,
-        name: &str,
-        parent_id: Option<&FolderId>,
-    ) -> Result<Folder>;
-    async fn delete_folder(&self, folder_id: &FolderId) -> Result<()>;
-    /// Select the folder and return the number of messages (EXISTS).
-    async fn open_folder(&self, folder_id: &FolderId) -> Result<usize>;
     /// SELECT the folder, build the sort index, and return the list length.
     async fn prepare_folder_list(
         &self,
@@ -53,8 +44,6 @@ where
         sort: MessageSort,
     ) -> Result<FolderListState>;
 
-    // Envelope operations
-    async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>>;
     /// Fetch envelopes for a UI index range `[start, end)`.
     ///
     /// Indices follow the last [`Self::prepare_folder_list`] sort (default: newest-first arrival).
@@ -63,7 +52,6 @@ where
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>>;
-    async fn get_envelope(&self, folder_id: &FolderId, message_id: &MessageId) -> Result<Envelope>;
     /// Set or clear flags. Unknown names cannot be passed (typed).
     async fn update_envelope_flags(
         &self,
@@ -310,31 +298,6 @@ where
         Ok(out)
     }
 
-    async fn create_folder(
-        &self,
-        account_id: &AccountId,
-        name: &str,
-        parent_id: Option<&FolderId>,
-    ) -> Result<Folder> {
-        Ok(Folder {
-            id: FolderId::new(format!("folder-{}", name.to_lowercase())),
-            account_id: account_id.clone(),
-            name: name.to_string(),
-            parent_id: parent_id.cloned(),
-            role: crate::MailboxRole::Other,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
-    }
-
-    async fn delete_folder(&self, _folder_id: &FolderId) -> Result<()> {
-        Ok(())
-    }
-
-    async fn open_folder(&self, _folder_id: &FolderId) -> Result<usize> {
-        Ok(100)
-    }
-
     async fn prepare_folder_list(
         &self,
         _folder_id: &FolderId,
@@ -348,53 +311,12 @@ where
         })
     }
 
-    async fn list_envelopes(&self, folder_id: &FolderId) -> Result<Vec<Envelope>> {
-        mock_envelopes(folder_id, 0..100)
-    }
-
     async fn list_envelopes_range(
         &self,
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>> {
         mock_envelopes(folder_id, range)
-    }
-
-    async fn get_envelope(&self, folder_id: &FolderId, message_id: &MessageId) -> Result<Envelope> {
-        Ok(Envelope {
-            id: message_id.clone(),
-            account_id: AccountId::new("mock-account-1"),
-            folder_id: folder_id.clone(),
-            subject: Some("Test Message".to_string()),
-            from: Some(crate::models::EmailAddress::List(vec![
-                crate::models::EmailAddr {
-                    name: Some("Test Sender".to_string()),
-                    email: Some("sender@example.com".to_string()),
-                },
-            ])),
-            to: Some(crate::models::EmailAddress::List(vec![
-                crate::models::EmailAddr {
-                    name: Some("Test Recipient".to_string()),
-                    email: Some("recipient@example.com".to_string()),
-                },
-            ])),
-            cc: None,
-            bcc: None,
-            reply_to: None,
-            rfc_message_id: None,
-            in_reply_to: None,
-            references: Vec::new(),
-            date: Utc::now(),
-            is_read: false,
-            is_starred: false,
-            is_flagged: false,
-            is_draft: false,
-            is_deleted: false,
-            has_attachments: true,
-            size: Some(1_024),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
     }
 
     async fn update_envelope_flags(

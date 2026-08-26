@@ -56,11 +56,7 @@ Do not re-open these.
 
 ### 5. Unused `EmailConnector` methods
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/connector.rs`](../crates/mailiner-core/src/connector.rs)
-- `create_folder`, `delete_folder`, `open_folder`, and `list_envelopes` have no callers outside the trait/impls. `get_envelope` is also unused after the folder-id fix.
-- `open_folder` is `prepare_folder_list(..., Date)`. `list_envelopes` calls that then fetches `0..total`, so it would wipe an Unread/Size/Sender index if anyone used it. Folder create/delete assume `/` as the hierarchy delimiter.
-- Direction: remove or `#[doc(hidden)]` until the UI needs them. If `list_envelopes` stays, it must honor the current sort, not reset to Date.
+- [x] Done. Removed `create_folder`, `delete_folder`, `open_folder`, `list_envelopes`, and unused `get_envelope` from the trait and both impls.
 
 ### 6. `MockConnector` does not implement the contracts
 

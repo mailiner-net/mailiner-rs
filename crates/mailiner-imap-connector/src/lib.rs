@@ -865,59 +865,6 @@ where
         Ok(out)
     }
 
-    async fn create_folder(
-        &self,
-        account_id: &AccountId,
-        name: &str,
-        parent_id: Option<&FolderId>,
-    ) -> MailinerResult<Folder> {
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            let full_name = if let Some(parent) = parent_id {
-                format!("{}/{}", parent.as_str(), name)
-            } else {
-                name.to_string()
-            };
-
-            session
-                .create(&full_name)
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to create folder: {}", e)))?;
-
-            Ok(Folder {
-                id: FolderId::new(full_name.clone()),
-                account_id: account_id.clone(),
-                name: name.to_string(),
-                parent_id: parent_id.cloned(),
-                role: role_from_name(&full_name, Some("/")),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
-    }
-
-    async fn delete_folder(&self, folder_id: &FolderId) -> MailinerResult<()> {
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            session
-                .delete(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to delete folder: {}", e)))?;
-            Ok(())
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
-    }
-
-    async fn open_folder(&self, folder_id: &FolderId) -> MailinerResult<usize> {
-        let state = self
-            .prepare_folder_list(folder_id, MessageSort::Arrival)
-            .await?;
-        Ok(state.total)
-    }
-
     async fn prepare_folder_list(
         &self,
         folder_id: &FolderId,
@@ -937,11 +884,6 @@ where
         };
         *self.list_index.lock().await = Some(index);
         Ok(state)
-    }
-
-    async fn list_envelopes(&self, folder_id: &FolderId) -> MailinerResult<Vec<Envelope>> {
-        let total = self.open_folder(folder_id).await?;
-        self.list_envelopes_range(folder_id, 0..total).await
     }
 
     async fn list_envelopes_range(
@@ -1060,102 +1002,6 @@ where
             }
         }
         Ok(envelopes)
-    }
-
-    async fn get_envelope(
-        &self,
-        folder_id: &FolderId,
-        message_id: &MessageId,
-    ) -> MailinerResult<Envelope> {
-        let (envelope, structure) = {
-            let mut imap = self.imap.lock().await;
-            let ImapSession::Authenticated(session) = &mut *imap else {
-                return Err(ImapError::NotAuthenticated.into());
-            };
-
-            session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
-
-            let mut fetch = session
-                .uid_fetch(
-                    message_id.as_str(),
-                    "(BODY.PEEK[HEADER] RFC822.SIZE FLAGS BODYSTRUCTURE)",
-                )
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {}", e)))?;
-
-            let fetch = fetch
-                .next()
-                .await
-                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
-                .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {}", e)))?;
-
-            let header = fetch
-                .header()
-                .ok_or_else(|| ImapError::InvalidData("Invalid message header".to_string()))?;
-
-            let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
-                Self::parse_flags(fetch.flags());
-
-            let parsed_headers =
-                MessageParser::new()
-                    .parse_headers(header)
-                    .ok_or(ImapError::InvalidData(
-                        "Failed to parse headers".to_string(),
-                    ))?;
-
-            let (has_attachments, structure) = if let Some(bs) = fetch.bodystructure() {
-                let part = bodystructure::convert_body_structure(bs);
-                let has = bodystructure::structure_has_attachments(&part);
-                (has, Some(part))
-            } else {
-                (false, None)
-            };
-
-            (
-                Envelope {
-                    id: message_id.clone(),
-                    account_id: self.account_id.clone(),
-                    folder_id: folder_id.clone(),
-                    subject: parsed_headers.subject().map(|s| s.to_string()),
-                    from: Self::parse_email_address(parsed_headers.from()),
-                    to: Self::parse_email_address(parsed_headers.to()),
-                    cc: Self::parse_email_address(parsed_headers.cc()),
-                    bcc: Self::parse_email_address(parsed_headers.bcc()),
-                    reply_to: Self::parse_email_address(parsed_headers.reply_to()),
-                    rfc_message_id: parsed_headers
-                        .message_id()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string),
-                    in_reply_to: Self::header_ids(parsed_headers.in_reply_to())
-                        .into_iter()
-                        .next(),
-                    references: Self::header_ids(parsed_headers.references()),
-                    date: Self::parse_date(parsed_headers.date())?,
-                    is_read,
-                    is_starred,
-                    is_flagged,
-                    is_draft,
-                    is_deleted,
-                    has_attachments,
-                    size: fetch.size.map(|s| s as u64),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                },
-                structure,
-            )
-        };
-
-        if let Some(part) = structure {
-            self.structure_cache
-                .lock()
-                .await
-                .insert((folder_id.clone(), message_id.clone()), part);
-        }
-        Ok(envelope)
     }
 
     async fn update_envelope_flags(

@@ -10,9 +10,9 @@ use super::icons::{IconButton, IconKind};
 use super::messageview::{MessageScroll, scroll_message_view};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
-use crate::shortcuts::{
-    GLOBAL_SHORTCUTS, ShortcutGroup, ShortcutId, shortcut_for_key, shortcuts_in_group,
-};
+use crate::mailbox::MailboxId;
+use crate::message::MessageId;
+use crate::shortcuts::{ShortcutGroup, ShortcutId, shortcut_for_key, shortcuts_in_group};
 use crate::toast::ToastAction;
 
 fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
@@ -49,7 +49,12 @@ impl Drop for WindowKeydown {
     }
 }
 
-fn run_shortcut(id: ShortcutId, ctx: &mut AppContext, core: Coroutine<CoreEvent>, help_open: &mut Signal<bool>) {
+fn run_shortcut(
+    id: ShortcutId,
+    ctx: &mut AppContext,
+    core: Coroutine<CoreEvent>,
+    help_open: &mut Signal<bool>,
+) {
     match id {
         ShortcutId::JumpToFolder => {
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Jump));
@@ -79,8 +84,38 @@ fn run_shortcut(id: ShortcutId, ctx: &mut AppContext, core: Coroutine<CoreEvent>
         ShortcutId::PageMessageUp => {
             scroll_message_view(false, MessageScroll::Page);
         }
+        ShortcutId::MoveToTrash => {
+            let Some((mailbox_id, message_id)) = require_selected_message(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::MoveToTrash {
+                mailbox_id,
+                message_ids: vec![message_id],
+            });
+        }
+        ShortcutId::DeletePermanently => {
+            let Some((mailbox_id, message_id)) = require_selected_message(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::DeleteMessages {
+                mailbox_id,
+                message_ids: vec![message_id],
+            });
+        }
         ShortcutId::ShowHelp => {
             help_open.set(true);
+        }
+    }
+}
+
+fn require_selected_message(ctx: &AppContext) -> Option<(MailboxId, MessageId)> {
+    let mailbox_id = ctx.selected_mailbox.peek().clone();
+    let message_id = ctx.selected_message.peek().clone();
+    match (mailbox_id, message_id) {
+        (Some(mailbox_id), Some(message_id)) => Some((mailbox_id, message_id)),
+        _ => {
+            ctx.show_toast(ToastAction::info("Select a message first"));
+            None
         }
     }
 }
@@ -109,11 +144,13 @@ pub fn ShortcutsHost() -> Element {
 
             if *help_open.peek() {
                 let key = evt.key();
-                if key == "Escape" || shortcut_for_key(&key).is_some_and(|s| s.id == ShortcutId::ShowHelp)
+                let shift = evt.shift_key();
+                if key == "Escape"
+                    || shortcut_for_key(&key, shift).is_some_and(|s| s.id == ShortcutId::ShowHelp)
                 {
                     claim_shortcut(&evt);
                     help_open.set(false);
-                } else if shortcut_for_key(&key).is_some() {
+                } else if shortcut_for_key(&key, shift).is_some() {
                     claim_shortcut(&evt);
                 }
                 return;
@@ -123,7 +160,7 @@ pub fn ShortcutsHost() -> Element {
                 return;
             }
 
-            let Some(shortcut) = shortcut_for_key(&evt.key()) else {
+            let Some(shortcut) = shortcut_for_key(&evt.key(), evt.shift_key()) else {
                 return;
             };
             claim_shortcut(&evt);

@@ -62,6 +62,8 @@ pub struct AppContext {
     pub selected_mailbox: Signal<Option<MailboxId>>,
     pub selected_account: Signal<Option<AccountId>>,
     pub selected_message: Signal<Option<MessageId>>,
+    /// List index when the current message was selected (before unread-sort relocate).
+    pub selected_at_index: Signal<Option<usize>>,
     /// Body viewer state (load / format inputs).
     pub message_view: Signal<MessageViewState>,
     /// Per-section attachment download progress (section path → status).

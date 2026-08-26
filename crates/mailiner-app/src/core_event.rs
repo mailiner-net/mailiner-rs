@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
-use futures_util::StreamExt;
 use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
+use futures_util::StreamExt;
 use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
@@ -16,14 +16,7 @@ use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId, MessageSo
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
-use crate::outbox_store::{
-    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
-};
-use crate::send::{OutboxDisplay, SendPhase, SendState};
-use crate::smtp_session::{
-    InFlightSmtp, SmtpOutcome, SEND_TIMEOUT_MS, preflight, spawn_submit, spawn_test,
-};
-use crate::components::virtual_scroll::{SparseList, adjacent_index};
+use crate::components::virtual_scroll::{SparseList, adjacent_index, index_after_removal};
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
@@ -33,9 +26,14 @@ use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload}
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
-use crate::toast::{
-    DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest,
+use crate::outbox_store::{
+    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
 };
+use crate::send::{OutboxDisplay, SendPhase, SendState};
+use crate::smtp_session::{
+    InFlightSmtp, SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test,
+};
+use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
 
 pub enum CoreEvent {
     // —— mail ops ——
@@ -66,6 +64,11 @@ pub enum CoreEvent {
     },
     /// Move to the Trash special-use folder, or permanently delete when already there.
     MoveToTrash {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
+    /// Permanently delete (IMAP on toast dismiss unless undone).
+    DeleteMessages {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
@@ -226,8 +229,13 @@ pub async fn core_loop(
                 handle_reconnect(&mut manager, &mut ctx, account_id).await;
             }
             CoreEvent::DisconnectAccount(account_id) => {
-                cancel_inflight_for(&mut inflight, &mut smtp_generation, &account_id, outbox.as_ref())
-                    .await;
+                cancel_inflight_for(
+                    &mut inflight,
+                    &mut smtp_generation,
+                    &account_id,
+                    outbox.as_ref(),
+                )
+                .await;
                 manager.disconnect_account(&account_id, &mut ctx).await;
                 if ctx.selected_account.read().as_ref() == Some(&account_id) {
                     clear_mailbox_ui(&mut ctx);
@@ -244,8 +252,14 @@ pub async fn core_loop(
             }
             CoreEvent::AccountsChanged => {
                 handle_accounts_changed(&mut manager, &mut ctx).await;
-                purge_missing_accounts(&manager, outbox.as_ref(), &mut ctx, &mut inflight, &mut smtp_generation)
-                    .await;
+                purge_missing_accounts(
+                    &manager,
+                    outbox.as_ref(),
+                    &mut ctx,
+                    &mut inflight,
+                    &mut smtp_generation,
+                )
+                .await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
@@ -285,6 +299,12 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_move_to_trash(&manager, &mut ctx, mailbox_id, message_ids).await;
+            }
+            CoreEvent::DeleteMessages {
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_delete_messages(&manager, &mut ctx, mailbox_id, message_ids).await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -815,7 +835,11 @@ async fn list_folders_soft(
             let selected = ctx.selected_mailbox.read().clone();
             let rest: Vec<FolderId> = folder_ids
                 .into_iter()
-                .filter(|id| selected.as_ref().is_none_or(|sel| sel.as_str() != id.as_str()))
+                .filter(|id| {
+                    selected
+                        .as_ref()
+                        .is_none_or(|sel| sel.as_str() != id.as_str())
+                })
                 .collect();
             let ack = crate::ui_prefs::load_ack_unread(account_id);
             for id in rest {
@@ -865,6 +889,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(false);
     ctx.selected_message.set(None);
+    ctx.selected_at_index.set(None);
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
@@ -878,6 +903,7 @@ async fn handle_select_mailbox(
     select_first: bool,
 ) {
     ctx.selected_message.set(None);
+    ctx.selected_at_index.set(None);
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());
     ctx.messages.set(SparseList::new(0));
@@ -897,10 +923,7 @@ async fn handle_select_mailbox(
 
     let folder_id = FolderId::new(mailbox_id.to_string());
     let requested = *ctx.message_sort.peek();
-    match connector
-        .prepare_folder_list(&folder_id, requested)
-        .await
-    {
+    match connector.prepare_folder_list(&folder_id, requested).await {
         Ok(state) => {
             info!(
                 "Opened mailbox {} with {} messages (sort={:?})",
@@ -908,7 +931,8 @@ async fn handle_select_mailbox(
                 state.total,
                 state.sort
             );
-            ctx.sort_supports_size_sender.set(state.supports_size_sender);
+            ctx.sort_supports_size_sender
+                .set(state.supports_size_sender);
             ctx.message_sort.set(state.sort);
             crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
             ctx.messages.set(SparseList::new(state.total));
@@ -1014,12 +1038,19 @@ async fn handle_select_adjacent(
         return;
     }
     let total = ctx.messages.read().total_count();
-    let current = ctx.selected_message.read().clone().and_then(|id| {
-        ctx.messages.read().position(|m| m.id == id)
-    });
+    let current = ctx
+        .selected_message
+        .read()
+        .clone()
+        .and_then(|id| ctx.messages.read().position(|m| m.id == id));
     let Some(index) = adjacent_index(total, current, delta) else {
         return;
     };
+    select_list_index(manager, ctx, index).await;
+}
+
+async fn select_list_index(manager: &AccountConnectionManager, ctx: &mut AppContext, index: usize) {
+    let total = ctx.messages.read().total_count();
     if ctx.messages.read().get(index).is_none() {
         let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
             return;
@@ -1034,12 +1065,29 @@ async fn handle_select_adjacent(
     handle_select_message(manager, ctx, message_id, true).await;
 }
 
+async fn select_after_removed_row(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    removed_index: Option<usize>,
+) {
+    let Some(removed_index) = removed_index else {
+        return;
+    };
+    let total = ctx.messages.read().total_count();
+    let Some(index) = index_after_removal(total, removed_index) else {
+        return;
+    };
+    select_list_index(manager, ctx, index).await;
+}
+
 async fn handle_select_message(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     message_id: MessageId,
     auto_mark_read: bool,
 ) {
+    ctx.selected_at_index
+        .set(ctx.messages.read().position(|m| m.id == message_id));
     ctx.selected_message.set(Some(message_id.clone()));
     ctx.download_status.set(HashMap::new());
     ctx.message_view.set(MessageViewState::Loading {
@@ -1207,14 +1255,28 @@ fn bump_mailbox_unread(
 }
 
 fn unread_in_removed(snapshots: &[RemovedMessage]) -> i32 {
-    snapshots
-        .iter()
-        .filter(|s| !s.message.is_read)
-        .count() as i32
+    snapshots.iter().filter(|s| !s.message.is_read).count() as i32
 }
 
-fn take_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) -> Vec<RemovedMessage> {
+/// Remove `ids` from the current list. If the selected row is among them,
+/// returns its pre-removal index so the caller can select the next remaining row.
+fn take_messages_from_ui(
+    ctx: &mut AppContext,
+    ids: &[MessageId],
+) -> (Vec<RemovedMessage>, Option<usize>) {
     let idset: std::collections::HashSet<MessageId> = ids.iter().cloned().collect();
+    let selected = ctx.selected_message.read().clone();
+    let selected_removed_index = selected.as_ref().and_then(|id| {
+        if !idset.contains(id) {
+            return None;
+        }
+        // Prefer the index from when the row was selected. Unread-first
+        // auto-mark-read relocates the message into the read section, which
+        // would otherwise make "next" a random later read row.
+        ctx.selected_at_index
+            .read()
+            .or_else(|| ctx.messages.read().position(|m| &m.id == id))
+    });
     let taken = ctx
         .messages
         .write()
@@ -1230,16 +1292,17 @@ fn take_messages_from_ui(ctx: &mut AppContext, ids: &[MessageId]) -> Vec<Removed
             bump_mailbox_unread(ctx, &mb, -unread_n, true);
         }
     }
-    let selected = ctx.selected_message.read().clone();
-    if selected.as_ref().is_some_and(|id| idset.contains(id)) {
+    if selected_removed_index.is_some() {
         ctx.selected_message.set(None);
+        ctx.selected_at_index.set(None);
         ctx.message_view.set(MessageViewState::Empty);
         ctx.download_status.set(HashMap::new());
     }
-    taken
+    let snapshots = taken
         .into_iter()
         .map(|(index, message)| RemovedMessage { index, message })
-        .collect()
+        .collect();
+    (snapshots, selected_removed_index)
 }
 
 fn restore_snapshots(
@@ -1318,7 +1381,9 @@ async fn handle_mark_read(
     {
         error!("Failed to update read flag: {}", e);
         apply_read_flag(ctx, &message_ids, !is_read);
-        ctx.show_toast(ToastAction::error(format!("Could not update read state: {e}")));
+        ctx.show_toast(ToastAction::error(format!(
+            "Could not update read state: {e}"
+        )));
         return;
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
@@ -1381,7 +1446,7 @@ async fn handle_move_messages(
         .await
     {
         Ok(dest_uids) => {
-            let snapshots = take_messages_from_ui(ctx, &message_ids);
+            let (snapshots, removed_sel) = take_messages_from_ui(ctx, &message_ids);
             let unread_n = unread_in_removed(&snapshots);
             if unread_n != 0 {
                 bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
@@ -1409,6 +1474,7 @@ async fn handle_move_messages(
             } else {
                 ctx.show_toast(ToastAction::info(format!("Moved to {dest_label}")));
             }
+            select_after_removed_row(manager, ctx, removed_sel).await;
         }
         Err(e) => {
             error!("Failed to move messages: {}", e);
@@ -1443,17 +1509,14 @@ async fn handle_move_to_trash(
         .read()
         .get(&mailbox_id)
         .is_some_and(|n| n.role == MailboxRole::Trash);
-    let trash_id = crate::mailbox::find_mailbox_with_role(
-        &ctx.mailbox_nodes.read(),
-        MailboxRole::Trash,
-    );
+    let trash_id =
+        crate::mailbox::find_mailbox_with_role(&ctx.mailbox_nodes.read(), MailboxRole::Trash);
 
     let folder_id = FolderId::new(mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
 
     if source_is_trash || trash_id.as_ref() == Some(&mailbox_id) {
-        let snapshots = take_messages_from_ui(ctx, &message_ids);
-        ctx.show_toast(ToastAction::deleted(mailbox_id, snapshots));
+        schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
         return;
     }
 
@@ -1468,7 +1531,7 @@ async fn handle_move_to_trash(
         .await
     {
         Ok(dest_uids) => {
-            let snapshots = take_messages_from_ui(ctx, &message_ids);
+            let (snapshots, removed_sel) = take_messages_from_ui(ctx, &message_ids);
             let unread_n = unread_in_removed(&snapshots);
             if unread_n != 0 {
                 bump_mailbox_unread(ctx, &trash_id, unread_n, false);
@@ -1487,6 +1550,7 @@ async fn handle_move_to_trash(
             } else {
                 ctx.show_toast(ToastAction::info("Moved to Trash"));
             }
+            select_after_removed_row(manager, ctx, removed_sel).await;
         }
         Err(e) => {
             error!("Failed to move to trash: {}", e);
@@ -1495,11 +1559,41 @@ async fn handle_move_to_trash(
     }
 }
 
-async fn handle_undo(
+async fn handle_delete_messages(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    undo: UndoRequest,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
 ) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.show_toast(ToastAction::error("No account selected"));
+        return;
+    };
+    if manager.get(&account_id).is_none() {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    }
+    schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
+}
+
+async fn schedule_permanent_delete(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: &[MessageId],
+) {
+    let (snapshots, removed_sel) = take_messages_from_ui(ctx, message_ids);
+    ctx.show_toast(ToastAction::deleted(mailbox_id, snapshots));
+    select_after_removed_row(manager, ctx, removed_sel).await;
+}
+
+async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, undo: UndoRequest) {
     match undo {
         UndoRequest::RestoreLocal {
             mailbox_id,
@@ -1525,7 +1619,8 @@ async fn handle_undo(
                     let unread_n = unread_in_removed(&undo.snapshots);
                     let viewing_from = ctx.selected_mailbox.read().as_ref() == Some(&undo.from);
                     if viewing_from {
-                        let _ = take_messages_from_ui(ctx, &undo.dest_ids);
+                        let (_, removed_sel) = take_messages_from_ui(ctx, &undo.dest_ids);
+                        select_after_removed_row(manager, ctx, removed_sel).await;
                     } else if unread_n != 0 {
                         bump_mailbox_unread(ctx, &undo.from, -unread_n, false);
                     }
@@ -2089,15 +2184,7 @@ async fn handle_smtp_finished(
         }
     }
     refresh_outbox_signal(outbox, ctx).await;
-    drain_outbox(
-        manager,
-        ctx,
-        outbox,
-        smtp_tx,
-        inflight,
-        smtp_generation,
-    )
-    .await;
+    drain_outbox(manager, ctx, outbox, smtp_tx, inflight, smtp_generation).await;
 }
 
 const ARCHIVE_SENT_WARN: &str = "Could not save a copy in Sent.";
@@ -2162,14 +2249,5 @@ async fn handle_retry_outbox(
     item.updated_at = chrono::Utc::now();
     let _ = outbox.upsert(&item).await;
     refresh_outbox_signal(outbox, ctx).await;
-    drain_outbox(
-        manager,
-        ctx,
-        outbox,
-        smtp_tx,
-        inflight,
-        smtp_generation,
-    )
-    .await;
+    drain_outbox(manager, ctx, outbox, smtp_tx, inflight, smtp_generation).await;
 }
-

@@ -287,6 +287,19 @@ impl ViewportInfo {
     }
 }
 
+/// After removing the row at `removed_index`, the list index that should stay
+/// selected. Prefers the row that slid into that slot (visually next / older);
+/// if that was the last row, the new last row (previous / newer).
+pub fn index_after_removal(total_after: usize, removed_index: usize) -> Option<usize> {
+    if total_after == 0 {
+        None
+    } else if removed_index < total_after {
+        Some(removed_index)
+    } else {
+        Some(total_after - 1)
+    }
+}
+
 /// Next list index for a keyboard move. `None` means stay put.
 ///
 /// Newest-first lists: `delta > 0` is visually down (older), `delta < 0` is up.
@@ -760,6 +773,14 @@ mod tests {
         list.insert(4, "e");
         assert_eq!(list.position(|s| *s == "e"), Some(4));
         assert_eq!(list.position(|s| *s == "missing"), None);
+    }
+
+    #[test]
+    fn index_after_removal_prefers_next_then_previous() {
+        assert_eq!(index_after_removal(0, 0), None);
+        assert_eq!(index_after_removal(2, 0), Some(0));
+        assert_eq!(index_after_removal(2, 1), Some(1));
+        assert_eq!(index_after_removal(2, 2), Some(1));
     }
 
     #[test]

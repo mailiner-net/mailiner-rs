@@ -9,6 +9,16 @@ use mailiner_core::models::{LoadedMessage, MessageContent};
 use mailiner_mime::{MessageParser, decode_part_content};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+/// Skip prefetch when BODYSTRUCTURE size exceeds this (wire octets).
+const MAX_PREFETCH_OCTETS: u64 = 2 * 1024 * 1024;
+
+fn within_prefetch_budget(part: &mailiner_core::models::MessagePart) -> bool {
+    match part.original_size {
+        Some(n) => n <= MAX_PREFETCH_OCTETS,
+        None => true,
+    }
+}
+
 /// Load a message: BODYSTRUCTURE → parse parts → FETCH content sections → decode.
 pub async fn load_message<S, C>(
     connector: &C,
@@ -25,7 +35,7 @@ where
 
     let mut sections: Vec<String> = parts
         .iter()
-        .filter(|p| p.should_prefetch())
+        .filter(|p| p.should_prefetch() && within_prefetch_budget(p))
         .map(|p| p.section())
         .collect();
     sections.sort();
@@ -45,7 +55,7 @@ where
 
     let mut missing = Vec::new();
     for part in &mut parts {
-        if !part.should_prefetch() {
+        if !part.should_prefetch() || !within_prefetch_budget(part) {
             continue;
         }
         let sec = part.section();

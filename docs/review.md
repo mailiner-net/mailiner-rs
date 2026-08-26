@@ -64,11 +64,7 @@ Do not re-open these.
 
 ### 7. Prefetch has no size bound; viewer holds wire + decoded + data-URL copies
 
-- Severity: suggestion (WASM memory)
-- Where: [`crates/mailiner-app/src/message_loader.rs`](../crates/mailiner-app/src/message_loader.rs), [`crates/mailiner-core/src/connector.rs`](../crates/mailiner-core/src/connector.rs) (`fetch_raw_parts`), [`crates/mailiner-app/src/formatter/html.rs`](../crates/mailiner-app/src/formatter/html.rs)
-- `load_message` still prefetches every `should_prefetch` part (visible body **and** hidden cid images) via a complete `HashMap<String, Vec<u8>>`. There is no `original_size` gate (unlike `stream_raw_part` / 100 MiB). MIME decode caps run only after the wire `Vec`s exist. `format_html` then base64-encodes the same `Binary` buffers into data URLs while the parts still hold the decoded bytes. Peak usage is wire + decoded + data-URL HTML.
-- `FormatResult.inlined_part_ids` is computed but never used to hide or free those parts.
-- Direction: bound prefetch by `original_size`; stream or skip large cid images; drop `MessageContent::Binary` after inlining (or inline from the stream). Keep `fetch_raw_parts` for small text.
+- [x] Done (budget). Prefetch skips parts whose `original_size` is over 2 MiB. Still open: drop `MessageContent::Binary` after cid inlining (`inlined_part_ids` is unused for that).
 
 ### 8. `fetch_raw_parts` swallows missing sections
 
@@ -120,5 +116,4 @@ Do not re-open these.
 ## Suggested order
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
-3. Prefetch bounds (7) — WASM memory and load honesty.
-4. Slim the connector trait (13) and leftover types (12, 16) when touching those files anyway.
+3. Slim the connector trait (13) and leftover types (12, 16) when touching those files anyway.

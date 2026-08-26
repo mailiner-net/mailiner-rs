@@ -1252,7 +1252,12 @@ where
 
         // RFC 6851 fallback: COPY + \Deleted + EXPUNGE.
         let dest_uids = run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
-        delete_selected_uids(session, &uids).await?;
+        if let Err(e) = delete_selected_uids(session, &uids).await {
+            return Err(MailinerError::PartialMove {
+                message: e.to_string(),
+                dest_ids: dest_uids,
+            });
+        }
         drop(imap);
         self.forget_messages(folder_id, message_ids).await;
         Ok(dest_uids)

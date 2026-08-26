@@ -1557,6 +1557,15 @@ async fn handle_move_messages(
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
         }
+        Err(mailiner_core::MailinerError::PartialMove {
+            dest_ids: _,
+            message,
+        }) => {
+            error!("Partial move (copy ok, delete failed): {message}");
+            ctx.show_toast(ToastAction::error(
+                "Copied, but the originals are still here. Do not retry.",
+            ));
+        }
         Err(e) => {
             error!("Failed to move messages: {}", e);
             ctx.show_toast(ToastAction::error(format!("Could not move messages: {e}")));
@@ -1632,6 +1641,15 @@ async fn handle_move_to_trash(
                 ctx.show_toast(ToastAction::info("Moved to Trash"));
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
+        }
+        Err(mailiner_core::MailinerError::PartialMove {
+            dest_ids: _,
+            message,
+        }) => {
+            error!("Partial trash (copy ok, delete failed): {message}");
+            ctx.show_toast(ToastAction::error(
+                "Copied to Trash, but the originals are still here. Do not retry.",
+            ));
         }
         Err(e) => {
             error!("Failed to move to trash: {}", e);

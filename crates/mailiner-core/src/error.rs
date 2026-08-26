@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::ids::MessageId;
+
 #[derive(Error, Debug)]
 pub enum MailinerError {
     #[error("Connector error: {0}")]
@@ -10,6 +12,13 @@ pub enum MailinerError {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    /// COPY (or equivalent) succeeded; removing the source UIDs failed.
+    #[error("Copied to the destination but could not remove the originals: {message}")]
+    PartialMove {
+        message: String,
+        dest_ids: Vec<MessageId>,
+    },
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

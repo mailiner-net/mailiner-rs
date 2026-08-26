@@ -84,10 +84,7 @@ Do not re-open these.
 
 ### 9. MOVE fallback can copy without deleting
 
-- Severity: suggestion
-- Where: [`crates/mailiner-imap-connector/src/lib.rs`](../crates/mailiner-imap-connector/src/lib.rs) (`move_messages`, COPY + `\Deleted` + EXPUNGE)
-- If `UID MOVE` is unavailable, COPY runs first. A later delete/EXPUNGE failure returns a hard error after the message already exists in dest. The app surfaces the error and does not update the UI, so the user can retry and create another copy.
-- Direction: treat delete-after-copy failure as a distinct partial-success error so the UI can reconcile (refresh dest, keep source).
+- [x] Done. COPY-then-delete failure is `MailinerError::PartialMove`. The UI keeps the source rows and tells the user not to retry.
 
 ### 10. `folder_counts` treats missing `UNSEEN` as zero
 
@@ -139,4 +136,3 @@ Do not re-open these.
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
 3. Prefetch bounds (7) — WASM memory and load honesty.
 4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
-5. COPY+delete partial success (9) with the next IMAP pass.

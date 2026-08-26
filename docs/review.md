@@ -24,7 +24,8 @@ Do not re-open these.
 | SMTP success reply not truncated | `ccaef37` |
 | Attachment download hint used decoded `size` instead of wire size | `b14f132` |
 | Send cancel requeued before DATA finished (double-send) | `322db54` |
-| Date/sequence list index stale after remote EXPUNGE | 59a0988 |
+| Date/sequence list index stale after remote EXPUNGE | `289102a` |
+| Envelope had no RFC Message-ID / threading headers | 00ec6ba |
 
 ---
 
@@ -46,11 +47,7 @@ Do not re-open these.
 
 ### 3. Envelope has no RFC 5322 identity / threading headers
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/models.rs`](../crates/mailiner-core/src/models.rs) (`Envelope`), [`crates/mailiner-composer/src/reply/prefill.rs`](../crates/mailiner-composer/src/reply/prefill.rs) (~line 86)
-- `Envelope` is IMAP-shaped (`is_read`, `size`, UID `id`) and has no `Message-ID`, `In-Reply-To`, `References`, or `Reply-To`. Reply prefill leaves threading empty on purpose (`// Threading placeholders — filled when Envelope carries Message-ID`).
-- Composer export already writes those headers when the draft has them.
-- Direction: parse and store the RFC identity headers the composer needs. Do not invent Message-IDs in the viewer path.
+- [x] Done. `Envelope` now has `reply_to`, `rfc_message_id`, `in_reply_to`, and `references`. IMAP parses them from headers; reply/reply-all prefill sets draft threading and prefers `Reply-To`.
 
 ### 4. Flags are stringly typed; star vs flag is unused
 
@@ -148,8 +145,7 @@ Do not re-open these.
 
 ## Suggested order
 
-1. Envelope RFC Message-ID + reply threading (3) — composer already waits on this.
-2. Folder-scoped `MessageId` (1) and typed flags (4) — unblock a lot of later IMAP work; do not mix with a feature PR.
+1. Folder-scoped `MessageId` (1) and typed flags (4) — unblock a lot of later IMAP work; do not mix with a feature PR.
 3. Prefetch bounds (7) and missing-section errors (8) — WASM memory and load honesty.
 4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
 5. COPY+delete partial success (9) and `UNSEEN` counts (10) with the next IMAP pass.

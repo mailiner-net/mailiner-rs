@@ -213,6 +213,18 @@ pub struct Envelope {
     pub to: Option<EmailAddress>,
     pub cc: Option<EmailAddress>,
     pub bcc: Option<EmailAddress>,
+    /// RFC 5322 `Reply-To`, when present.
+    #[serde(default)]
+    pub reply_to: Option<EmailAddress>,
+    /// RFC 5322 `Message-ID` of this message (not the IMAP UID).
+    #[serde(default)]
+    pub rfc_message_id: Option<String>,
+    /// RFC 5322 `In-Reply-To`.
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    /// RFC 5322 `References` chain (parent ids, oldest first).
+    #[serde(default)]
+    pub references: Vec<String>,
     pub date: DateTime<Utc>,
     pub is_read: bool,
     pub is_starred: bool,

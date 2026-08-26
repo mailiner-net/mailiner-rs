@@ -168,8 +168,8 @@ impl ToastAction {
 mod tests {
     use super::*;
     use crate::message::MessageId;
-    use mailiner_core::{AccountId, EmailAddr, EmailAddress, Envelope, FolderId};
     use chrono::Utc;
+    use mailiner_core::{AccountId, EmailAddr, EmailAddress, Envelope, FolderId};
 
     fn dummy_msg(id: &str) -> Arc<Message> {
         let now = Utc::now();
@@ -185,6 +185,10 @@ mod tests {
             to: None,
             cc: None,
             bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: Vec::new(),
             date: now,
             is_read: true,
             is_starred: false,
@@ -236,9 +240,6 @@ mod tests {
         );
         assert_eq!(a.message(), "Deleted");
         assert!(matches!(a.undo(), Some(UndoRequest::RestoreLocal { .. })));
-        assert!(matches!(
-            a.on_dismiss(),
-            Some(DismissCommit::Delete { .. })
-        ));
+        assert!(matches!(a.on_dismiss(), Some(DismissCommit::Delete { .. })));
     }
 }

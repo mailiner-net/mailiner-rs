@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use imap_proto::types::BodyStructure;
-use mail_parser::{Address, MessageParser};
+use mail_parser::{Address, HeaderValue, MessageParser};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -228,6 +228,25 @@ where
         })
     }
 
+    fn header_ids(value: &HeaderValue<'_>) -> Vec<String> {
+        if let Some(list) = value.as_text_list() {
+            list.iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        } else if let Some(text) = value.as_text() {
+            let t = text.trim();
+            if t.is_empty() {
+                Vec::new()
+            } else {
+                vec![t.to_string()]
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
     fn parse_date(date: Option<&mail_parser::DateTime>) -> Result<DateTime<Utc>, ImapError> {
         match date {
             Some(date) => chrono::DateTime::parse_from_rfc3339(&date.to_rfc3339())
@@ -274,6 +293,16 @@ where
             to: Self::parse_email_address(parsed_headers.to()),
             cc: Self::parse_email_address(parsed_headers.cc()),
             bcc: Self::parse_email_address(parsed_headers.bcc()),
+            reply_to: Self::parse_email_address(parsed_headers.reply_to()),
+            rfc_message_id: parsed_headers
+                .message_id()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            in_reply_to: Self::header_ids(parsed_headers.in_reply_to())
+                .into_iter()
+                .next(),
+            references: Self::header_ids(parsed_headers.references()),
             date: Self::parse_date(parsed_headers.date())?,
             is_read,
             is_starred,
@@ -1092,6 +1121,16 @@ where
                     to: Self::parse_email_address(parsed_headers.to()),
                     cc: Self::parse_email_address(parsed_headers.cc()),
                     bcc: Self::parse_email_address(parsed_headers.bcc()),
+                    reply_to: Self::parse_email_address(parsed_headers.reply_to()),
+                    rfc_message_id: parsed_headers
+                        .message_id()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                    in_reply_to: Self::header_ids(parsed_headers.in_reply_to())
+                        .into_iter()
+                        .next(),
+                    references: Self::header_ids(parsed_headers.references()),
                     date: Self::parse_date(parsed_headers.date())?,
                     is_read,
                     is_starred,

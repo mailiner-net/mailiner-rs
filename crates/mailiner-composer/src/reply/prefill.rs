@@ -4,9 +4,7 @@ use mailiner_core::{Envelope, LoadedMessage, MessageContent, PartKind};
 
 use crate::identity::FromIdentity;
 use crate::model::draft::{BodyMode, ComposerAddress, DraftDocument};
-use crate::model::recipients::{
-    dedupe_addresses, exclude_self, flatten_addresses,
-};
+use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
 
 /// How the user opened the composer.
@@ -83,8 +81,9 @@ fn build_reply_like(
         ComposeIntent::New => unreachable!(),
     }
 
-    // Threading placeholders — filled when Envelope carries Message-ID (PR 8.5).
-    // Fields remain empty until then.
+    if matches!(intent, ComposeIntent::Reply | ComposeIntent::ReplyAll) {
+        apply_reply_threading(&mut draft, env);
+    }
 
     let from_addr = env
         .from
@@ -163,18 +162,55 @@ fn html_escape_text(s: &str) -> String {
     out
 }
 
+fn apply_reply_threading(draft: &mut DraftDocument, env: &Envelope) {
+    let Some(mid) = env
+        .rfc_message_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    draft.in_reply_to = Some(mid.to_string());
+    let mut refs = env.references.clone();
+    if refs.is_empty() {
+        if let Some(parent) = env
+            .in_reply_to
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            refs.push(parent.to_string());
+        }
+    }
+    if !refs.iter().any(|r| ids_equal(r, mid)) {
+        refs.push(mid.to_string());
+    }
+    draft.references = refs;
+}
+
+fn ids_equal(a: &str, b: &str) -> bool {
+    fn bare(s: &str) -> &str {
+        s.trim().trim_start_matches('<').trim_end_matches('>')
+    }
+    bare(a).eq_ignore_ascii_case(bare(b))
+}
+
 fn reply_to_addresses(env: &Envelope) -> Vec<ComposerAddress> {
-    // Prefer Reply-To when present (PR 8.5); until then use From.
-    env.from
+    env.reply_to
         .as_ref()
+        .or(env.from.as_ref())
         .map(flatten_addresses)
         .unwrap_or_default()
 }
 
-fn reply_all_addresses(env: &Envelope, self_email: &str) -> (Vec<ComposerAddress>, Vec<ComposerAddress>) {
+fn reply_all_addresses(
+    env: &Envelope,
+    self_email: &str,
+) -> (Vec<ComposerAddress>, Vec<ComposerAddress>) {
     let mut to = Vec::new();
-    if let Some(from) = &env.from {
-        to.extend(flatten_addresses(from));
+    if let Some(reply_addr) = env.reply_to.as_ref().or(env.from.as_ref()) {
+        to.extend(flatten_addresses(reply_addr));
     }
     if let Some(orig_to) = &env.to {
         to.extend(flatten_addresses(orig_to));
@@ -182,14 +218,13 @@ fn reply_all_addresses(env: &Envelope, self_email: &str) -> (Vec<ComposerAddress
     to = exclude_self(to, self_email);
     to = dedupe_addresses(to);
 
-    let mut cc = env
-        .cc
-        .as_ref()
-        .map(flatten_addresses)
-        .unwrap_or_default();
+    let mut cc = env.cc.as_ref().map(flatten_addresses).unwrap_or_default();
     cc = exclude_self(cc, self_email);
     // Don't duplicate addresses already in To.
-    cc.retain(|c| !to.iter().any(|t| crate::model::emails_equal(&t.email, &c.email)));
+    cc.retain(|c| {
+        !to.iter()
+            .any(|t| crate::model::emails_equal(&t.email, &c.email))
+    });
     cc = dedupe_addresses(cc);
 
     (to, cc)
@@ -199,7 +234,10 @@ enum BodyPick {
     Plain(String),
     HtmlOnly(String),
     /// Multipart alternative: rich HTML quote + plain alternative text.
-    HtmlWithPlain { plain: String, html: String },
+    HtmlWithPlain {
+        plain: String,
+        html: String,
+    },
 }
 
 fn pick_body(loaded: &LoadedMessage) -> Result<BodyPick, PrefillError> {
@@ -265,6 +303,10 @@ mod tests {
                 email: Some("cc@example.com".into()),
             }])),
             bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: Vec::new(),
             date: Utc::now(),
             is_read: true,
             is_starred: false,
@@ -361,6 +403,42 @@ mod tests {
         assert!(d.to.iter().any(|a| a.email == "alice@example.com"));
         assert!(!d.to.iter().any(|a| a.email == "me@example.com"));
         assert!(d.cc.iter().any(|a| a.email == "cc@example.com"));
+    }
+
+    #[test]
+    fn reply_prefers_reply_to_and_fills_threading() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let mut env = env_with_from("alice@example.com");
+        env.reply_to = Some(EmailAddress::List(vec![EmailAddr {
+            name: Some("Alice Reply".into()),
+            email: Some("reply@example.com".into()),
+        }]));
+        env.rfc_message_id = Some("<mid@x>".into());
+        env.in_reply_to = Some("<parent@x>".into());
+        env.references = vec!["<root@x>".into(), "<parent@x>".into()];
+        let loaded = loaded_plain("x");
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert_eq!(d.to[0].email, "reply@example.com");
+        assert_eq!(d.in_reply_to.as_deref(), Some("<mid@x>"));
+        assert_eq!(
+            d.references,
+            vec![
+                "<root@x>".to_string(),
+                "<parent@x>".into(),
+                "<mid@x>".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn forward_does_not_set_threading() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let mut env = env_with_from("alice@example.com");
+        env.rfc_message_id = Some("<mid@x>".into());
+        let loaded = loaded_plain("body");
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
+        assert!(d.in_reply_to.is_none());
+        assert!(d.references.is_empty());
     }
 
     #[test]

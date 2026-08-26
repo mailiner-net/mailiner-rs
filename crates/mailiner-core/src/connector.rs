@@ -93,11 +93,7 @@ where
     ) -> Result<Vec<MessageId>>;
 
     /// Permanently delete messages (STORE \Deleted + EXPUNGE).
-    async fn delete_messages(
-        &self,
-        folder_id: &FolderId,
-        message_ids: &[MessageId],
-    ) -> Result<()>;
+    async fn delete_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) -> Result<()>;
 
     /// FETCH BODYSTRUCTURE for one message (UID). Selects `folder_id` if needed.
     async fn get_body_structure(
@@ -150,6 +146,10 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             ])),
             cc: None,
             bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: Vec::new(),
             date: Utc::now(),
             is_read: i % 3 == 0,
             is_starred: i % 5 == 0,
@@ -380,6 +380,10 @@ where
             ])),
             cc: None,
             bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: Vec::new(),
             date: Utc::now(),
             is_read: false,
             is_starred: false,

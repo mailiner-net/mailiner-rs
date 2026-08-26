@@ -39,6 +39,8 @@ pub enum ImapError {
     Connection(String),
     #[error("Authentication error: {0}")]
     Authentication(String),
+    #[error("TLS error: {0}")]
+    Tls(String),
     #[error("IMAP error: {0}")]
     Imap(String),
     #[error("Invalid data: {0}")]
@@ -51,7 +53,8 @@ impl From<ImapError> for MailinerError {
     fn from(err: ImapError) -> Self {
         match err {
             ImapError::Connection(msg) => MailinerError::Connector(msg),
-            ImapError::Authentication(msg) => MailinerError::Connector(msg),
+            ImapError::Authentication(msg) => MailinerError::Auth(msg),
+            ImapError::Tls(msg) => MailinerError::Tls(msg),
             ImapError::NotAuthenticated => {
                 MailinerError::Connector("Not authenticated".to_string())
             }
@@ -182,12 +185,13 @@ where
                     .with_no_client_auth();
                 let tls = TlsConnector::from(Arc::new(config));
                 let server_name = ServerName::try_from(self.host.clone())
-                    .map_err(|e| ImapError::Connection(format!("Invalid server name: {}", e)))?;
+                    .map_err(|e| ImapError::Tls(format!("Invalid server name: {}", e)))?;
 
                 info!("Establishing TLS connection...");
-                let tls_stream = tls.connect(server_name, stream).await.map_err(|e| {
-                    ImapError::Connection(format!("Failed to establish TLS: {}", e))
-                })?;
+                let tls_stream = tls
+                    .connect(server_name, stream)
+                    .await
+                    .map_err(|e| ImapError::Tls(format!("Failed to establish TLS: {}", e)))?;
                 info!("TLS stream established");
 
                 *imap = ImapSession::Unauthenticated(Client::new(tls_stream));

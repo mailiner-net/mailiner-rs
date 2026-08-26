@@ -147,23 +147,29 @@ pub enum EnsureConnectedMode {
 /// Classify connector / I/O failures into UI-facing kinds.
 pub fn classify_mailiner_error(err: &MailinerError) -> ConnectError {
     let text = err.to_string();
-    let lower = text.to_ascii_lowercase();
-    let kind = if lower.contains("auth")
-        || lower.contains("login")
-        || lower.contains("password")
-        || lower.contains("credentials")
-    {
-        ConnectErrorKind::Auth
-    } else if lower.contains("tls")
-        || lower.contains("certificate")
-        || lower.contains("sni")
-        || lower.contains("server name")
-    {
-        ConnectErrorKind::TlsOrSni
-    } else if lower.contains("timeout") {
-        ConnectErrorKind::Timeout
-    } else {
-        ConnectErrorKind::NetworkOrProxy
+    let kind = match err {
+        MailinerError::Auth(_) => ConnectErrorKind::Auth,
+        MailinerError::Tls(_) => ConnectErrorKind::TlsOrSni,
+        other => {
+            let lower = other.to_string().to_ascii_lowercase();
+            if lower.contains("auth")
+                || lower.contains("login")
+                || lower.contains("password")
+                || lower.contains("credentials")
+            {
+                ConnectErrorKind::Auth
+            } else if lower.contains("tls")
+                || lower.contains("certificate")
+                || lower.contains("sni")
+                || lower.contains("server name")
+            {
+                ConnectErrorKind::TlsOrSni
+            } else if lower.contains("timeout") {
+                ConnectErrorKind::Timeout
+            } else {
+                ConnectErrorKind::NetworkOrProxy
+            }
+        }
     };
     // Keep detail short and non-secret for logs/UI.
     let detail = truncate_for_ui(&text, 160);

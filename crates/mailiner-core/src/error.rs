@@ -7,6 +7,12 @@ pub enum MailinerError {
     #[error("Connector error: {0}")]
     Connector(String),
 
+    #[error("Authentication error: {0}")]
+    Auth(String),
+
+    #[error("TLS error: {0}")]
+    Tls(String),
+
     #[error("Invalid data: {0}")]
     InvalidData(String),
 

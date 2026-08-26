@@ -84,10 +84,7 @@ Do not re-open these.
 
 ### 12. `MailinerError` is stringly typed; connect classification re-parses English
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/error.rs`](../crates/mailiner-core/src/error.rs), [`crates/mailiner-app/src/connection.rs`](../crates/mailiner-app/src/connection.rs) (`classify_mailiner_error`)
-- IMAP maps into `Connector(String)`. `classify_mailiner_error` scans `Display` for `"auth"` / `"password"` / `"tls"`. That loses type information and can mis-classify. The send path correctly uses `SendErrorKind` instead.
-- Direction: structured IMAP/connect variants (or source-carrying wrappers) so classification does not depend on English substrings. Keep send errors on `SendErrorKind`.
+- [x] Done. `Auth` and `Tls` variants; IMAP login/TLS map into them. `classify_mailiner_error` matches those first. Other `Connector(String)` still uses a substring fallback. Send path stays on `SendErrorKind`.
 
 ### 13. `EmailConnector` is parameterized on the stream type
 
@@ -114,4 +111,4 @@ Do not re-open these.
 ## Suggested order
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
-3. Slim the connector trait (13) and leftover types (12, 16) when touching those files anyway.
+3. Slim the connector trait (13) and leftover `Account`/timestamps (16).

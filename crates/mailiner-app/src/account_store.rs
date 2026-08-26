@@ -1,7 +1,5 @@
 //! Account configuration store (secrets + connection settings).
 //!
-//! Separate from `mailiner_core::Storage` (mail cache, no secrets).
-//!
 //! Browser persistence uses a single `localStorage` JSON blob
 //! ([`ACCOUNTS_LOCAL_STORAGE_KEY`]); IndexedDB is deferred.
 

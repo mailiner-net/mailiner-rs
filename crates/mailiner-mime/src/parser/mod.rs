@@ -187,7 +187,6 @@ pub(crate) fn leaf_part(
             is_att
         },
         is_hidden,
-        raw_content: None,
         content: MessageContent::Empty,
         created_at: now,
         updated_at: now,

@@ -100,7 +100,6 @@ mod tests {
             size: text.len() as u64,
             is_attachment: false,
             is_hidden: false,
-            raw_content: None,
             content: MessageContent::Text(text.into()),
             created_at: now,
             updated_at: now,

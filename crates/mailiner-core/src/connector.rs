@@ -488,7 +488,6 @@ pub fn mock_text_part(envelope_id: MessageId, part_id: &str, text: &str) -> Mess
         size: text.len() as u64,
         is_attachment: false,
         is_hidden: false,
-        raw_content: None,
         content: MessageContent::Text(text.to_string()),
         created_at: now,
         updated_at: now,
@@ -527,7 +526,6 @@ mod tests {
             envelope_id: MessageId::new("1"),
             folder_id: FolderId::new("inbox"),
             parts,
-            structure: None,
         };
         assert_eq!(loaded.attachments().count(), 1);
         assert_eq!(loaded.content_parts().count(), 1);

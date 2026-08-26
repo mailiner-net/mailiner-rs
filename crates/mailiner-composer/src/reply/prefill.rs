@@ -297,12 +297,10 @@ mod tests {
                 size: text.len() as u64,
                 is_attachment: false,
                 is_hidden: false,
-                raw_content: None,
                 content: MessageContent::Text(text.into()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             }],
-            structure: None,
         }
     }
 
@@ -325,12 +323,10 @@ mod tests {
                 size: html.len() as u64,
                 is_attachment: false,
                 is_hidden: false,
-                raw_content: None,
                 content: MessageContent::Text(html.into()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             }],
-            structure: None,
         }
     }
 

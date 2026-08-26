@@ -2,9 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MailinerError {
-    #[error("Storage error: {0}")]
-    Storage(String),
-    
     #[error("Connector error: {0}")]
     Connector(String),
     

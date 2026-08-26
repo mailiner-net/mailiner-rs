@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::body::BodyPart;
 use crate::ids::{AccountId, FolderId, MessageId, MessagePartId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,9 +298,6 @@ pub struct MessagePart {
     pub is_attachment: bool,
     /// True for cid-inlined images (and parts hidden after cid resolution).
     pub is_hidden: bool,
-    /// Undecoded FETCH payload. Cleared after successful decode.
-    #[serde(skip)]
-    pub raw_content: Option<Vec<u8>>,
     pub content: MessageContent,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -329,8 +325,6 @@ pub struct LoadedMessage {
     pub folder_id: FolderId,
     /// Full parsed part list (content + attachments + hidden inlines).
     pub parts: Vec<MessagePart>,
-    /// Optional structure retained for debugging / re-parse.
-    pub structure: Option<BodyPart>,
 }
 
 impl LoadedMessage {
@@ -351,21 +345,6 @@ pub struct PartChunk {
     pub data: Vec<u8>,
     /// Total expected transfer size if known (BODYSTRUCTURE octets).
     pub total_hint: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FolderMetadata {
-    pub id: FolderId,
-    pub total_messages: u64,
-    pub unread_messages: u64,
-    pub last_sync: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountMetadata {
-    pub id: AccountId,
-    pub last_sync: DateTime<Utc>,
-    pub folders: Vec<FolderMetadata>,
 }
 
 #[cfg(test)]

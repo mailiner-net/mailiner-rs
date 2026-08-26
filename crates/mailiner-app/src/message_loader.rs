@@ -36,7 +36,6 @@ where
             envelope_id: message_id.clone(),
             folder_id: folder_id.clone(),
             parts,
-            structure: Some(structure),
         });
     }
 
@@ -59,7 +58,6 @@ where
             ) {
                 Ok(content) => {
                     part.content = content;
-                    part.raw_content = None;
                 }
                 Err(_) => {
                     missing.push(sec);
@@ -85,7 +83,6 @@ where
         envelope_id: message_id.clone(),
         folder_id: folder_id.clone(),
         parts,
-        structure: Some(structure),
     })
 }
 

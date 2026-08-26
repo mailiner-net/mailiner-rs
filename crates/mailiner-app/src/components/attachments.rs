@@ -15,6 +15,7 @@ struct AttachmentRow {
     filename: String,
     content_type: String,
     size: u64,
+    wire_size: Option<u64>,
     encoding: TransferEncoding,
     description: Option<String>,
 }
@@ -40,6 +41,7 @@ pub fn AttachmentsFooter() -> Element {
                     ),
                     content_type: p.content_type.clone(),
                     size: p.size,
+                    wire_size: p.original_size,
                     encoding: p.encoding,
                     description: p.description.clone(),
                 })
@@ -129,7 +131,7 @@ fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentR
     let filename = row.filename.clone();
     let content_type = row.content_type.clone();
     let encoding = row.encoding;
-    let size_hint = Some(row.size);
+    let size_hint = row.wire_size;
 
     rsx! {
         li {

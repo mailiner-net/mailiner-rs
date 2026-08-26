@@ -1,3 +1,5 @@
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -139,13 +141,13 @@ pub struct EmailAddr {
     pub email: Option<String>,
 }
 
-impl ToString for EmailAddr {
-    fn to_string(&self) -> String {
+impl fmt::Display for EmailAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (self.name.as_ref(), self.email.as_ref()) {
-            (Some(name), Some(email)) => format!("{} <{}>", name, email),
-            (Some(name), None) => format!("{}", name),
-            (None, Some(email)) => format!("{}", email),
-            (None, None) => String::new(),
+            (Some(name), Some(email)) => write!(f, "{name} <{email}>"),
+            (Some(name), None) => write!(f, "{name}"),
+            (None, Some(email)) => write!(f, "{email}"),
+            (None, None) => Ok(()),
         }
     }
 }
@@ -156,25 +158,18 @@ pub struct Group {
     pub members: Vec<EmailAddr>,
 }
 
-impl ToString for Group {
-    fn to_string(&self) -> String {
-        match self.name.as_ref() {
-            Some(name) => format!(
-                "{}: {}",
-                name,
-                self.members
-                    .iter()
-                    .map(EmailAddr::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            None => self
-                .members
-                .iter()
-                .map(EmailAddr::to_string)
-                .collect::<Vec<_>>()
-                .join(", "),
+impl fmt::Display for Group {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(name) = self.name.as_ref() {
+            write!(f, "{name}: ")?;
         }
+        for (i, member) in self.members.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{member}")?;
+        }
+        Ok(())
     }
 }
 
@@ -184,12 +179,27 @@ pub enum EmailAddress {
     Group(Vec<Group>),
 }
 
-impl ToString for EmailAddress {
-    fn to_string(&self) -> String {
+impl fmt::Display for EmailAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EmailAddress::List(list) => list.iter().map(|e| e.to_string()).collect(),
-            EmailAddress::Group(group) => group.iter().map(|g| g.to_string()).collect(),
+            EmailAddress::List(list) => {
+                for (i, addr) in list.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{addr}")?;
+                }
+            }
+            EmailAddress::Group(groups) => {
+                for (i, group) in groups.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{group}")?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -349,7 +359,7 @@ pub struct PartChunk {
 
 #[cfg(test)]
 mod tests {
-    use super::MessageSort;
+    use super::{EmailAddr, EmailAddress, MessageSort};
 
     #[test]
     fn message_sort_key_roundtrip() {
@@ -361,5 +371,20 @@ mod tests {
         assert!(MessageSort::Sender.needs_sort_capability());
         assert!(!MessageSort::Date.needs_sort_capability());
         assert!(!MessageSort::Unread.needs_sort_capability());
+    }
+
+    #[test]
+    fn email_address_list_joins_with_comma() {
+        let addr = EmailAddress::List(vec![
+            EmailAddr {
+                name: Some("Alice".into()),
+                email: Some("a@x.com".into()),
+            },
+            EmailAddr {
+                name: Some("Bob".into()),
+                email: Some("b@y.com".into()),
+            },
+        ]);
+        assert_eq!(addr.to_string(), "Alice <a@x.com>, Bob <b@y.com>");
     }
 }

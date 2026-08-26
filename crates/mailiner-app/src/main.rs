@@ -8,16 +8,15 @@ use mailiner_core::ids::AccountId;
 use crate::account_store::{
     AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
 };
-use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
     EmailNavigation, MailboxPickerHost, MessageList, MessageView, OnboardingForm, OutboxPanel,
-    ShortcutsHost,
-    SplitAxis, SplitHandle, ToastHost,
+    ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
+use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 
 mod account;
 mod account_config;
@@ -29,16 +28,16 @@ mod core_event;
 mod download;
 mod formatter;
 mod layout;
-mod ui_prefs;
-mod outbox_store;
-mod send;
-mod shortcuts;
-mod selection;
-mod smtp_session;
 mod mailbox;
 mod message;
 mod message_loader;
+mod outbox_store;
+mod selection;
+mod send;
+mod shortcuts;
+mod smtp_session;
 mod toast;
+mod ui_prefs;
 mod websocket_stream;
 
 /// UI bootstrap state machine (store open → onboarding vs main).

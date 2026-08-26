@@ -1,7 +1,7 @@
 use mailiner_core::body::BodyPart;
 use mailiner_core::models::{MessagePart, PartKind};
 
-use super::{leaf_part, PartParser, ParseContext, ATTACHMENT_MIME};
+use super::{leaf_part, ParseContext, PartParser, ATTACHMENT_MIME};
 
 pub struct AttachmentParser;
 

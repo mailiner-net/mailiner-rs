@@ -1,12 +1,12 @@
 //! Safe HTML formatter with cid resolution and remote-resource blocking.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use mailiner_core::models::{MessageContent, MessagePart};
 use regex::Regex;
 use std::sync::OnceLock;
 
 use super::sanitize::sanitize_css;
-use super::{text_content, FormatOptions, FormatResult};
+use super::{FormatOptions, FormatResult, text_content};
 
 const SAFE_IMAGE_TYPES: &[&str] = &[
     "image/png",

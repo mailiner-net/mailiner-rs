@@ -94,7 +94,10 @@ impl SmtpConnector {
             .with_no_client_auth();
         let tls = TlsConnector::from(Arc::new(config));
         let server_name = ServerName::try_from(self.host.clone()).map_err(|e| {
-            SmtpError::classified(SendErrorKind::TlsOrSni, format!("Invalid SMTP server name: {e}"))
+            SmtpError::classified(
+                SendErrorKind::TlsOrSni,
+                format!("Invalid SMTP server name: {e}"),
+            )
         })?;
         info!(host = %self.host, "SMTP TLS handshake");
         tls.connect(server_name, stream).await.map_err(|e| {
@@ -186,10 +189,7 @@ impl SmtpConnector {
         let envelope = build_envelope(request)?;
         let email = SendableEmail::new(envelope, request.rfc822.clone());
         let response = transport.send(email).await.map_err(map_smtp_send)?;
-        let reply = response
-            .message
-            .first()
-            .map(|s| truncate_smtp_reply(s));
+        let reply = response.message.first().map(|s| truncate_smtp_reply(s));
         let _ = transport.quit().await;
         Ok(SubmitReceipt {
             message_id: request.message_id.clone(),
@@ -257,7 +257,10 @@ impl SmtpConnector {
         };
 
         let creds = Credentials::new(self.username.clone(), password.to_string());
-        transport.auth(mechanism, &creds).await.map_err(map_smtp_auth)?;
+        transport
+            .auth(mechanism, &creds)
+            .await
+            .map_err(map_smtp_auth)?;
         Ok(transport)
     }
 }
@@ -283,7 +286,10 @@ fn map_smtp_connect(err: async_smtp::error::Error) -> SmtpError {
 
 fn map_smtp_starttls(err: async_smtp::error::Error) -> SmtpError {
     let text = err.to_string();
-    if text.to_ascii_lowercase().contains("does not support starttls") {
+    if text
+        .to_ascii_lowercase()
+        .contains("does not support starttls")
+    {
         return SmtpError::classified(
             SendErrorKind::TlsOrSni,
             "SMTP server did not advertise STARTTLS.",
@@ -318,7 +324,9 @@ fn classify_permanent(resp: &async_smtp::response::Response) -> SendErrorKind {
 fn map_smtp_send(err: async_smtp::error::Error) -> SmtpError {
     use async_smtp::error::Error::*;
     match err {
-        Transient(resp) => SmtpError::classified(SendErrorKind::Transient, smtp_response_text(&resp)),
+        Transient(resp) => {
+            SmtpError::classified(SendErrorKind::Transient, smtp_response_text(&resp))
+        }
         Permanent(resp) => {
             let kind = classify_permanent(&resp);
             SmtpError::classified(kind, smtp_response_text(&resp))
@@ -349,7 +357,7 @@ fn truncate_smtp_reply(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
     fn connector() -> SmtpConnector {
         SmtpConnector::new(

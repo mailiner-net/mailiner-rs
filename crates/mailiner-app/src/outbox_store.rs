@@ -278,8 +278,7 @@ impl<K: StringKvStore> BrowserOutboxStore<K> {
     }
 
     fn save(&self, blob: &OutboxBlob) -> Result<(), AccountStoreError> {
-        self.kv
-            .set_item(OUTBOX_LOCAL_STORAGE_KEY, &blob.encode()?)
+        self.kv.set_item(OUTBOX_LOCAL_STORAGE_KEY, &blob.encode()?)
     }
 }
 
@@ -426,23 +425,16 @@ mod tests {
     #[tokio::test]
     async fn delete_for_account() {
         let store = InMemoryOutboxStore::new();
-        let a = OutboxItem::from_request(
-            AccountId::new("a"),
-            &req(4),
-            "A".into(),
-            "t".into(),
-        )
-        .unwrap();
-        let b = OutboxItem::from_request(
-            AccountId::new("b"),
-            &req(4),
-            "B".into(),
-            "t".into(),
-        )
-        .unwrap();
+        let a =
+            OutboxItem::from_request(AccountId::new("a"), &req(4), "A".into(), "t".into()).unwrap();
+        let b =
+            OutboxItem::from_request(AccountId::new("b"), &req(4), "B".into(), "t".into()).unwrap();
         store.upsert(&a).await.unwrap();
         store.upsert(&b).await.unwrap();
-        store.delete_for_account(&AccountId::new("a")).await.unwrap();
+        store
+            .delete_for_account(&AccountId::new("a"))
+            .await
+            .unwrap();
         assert_eq!(store.list().await.unwrap().len(), 1);
         assert_eq!(store.list().await.unwrap()[0].account_id.as_str(), "b");
     }

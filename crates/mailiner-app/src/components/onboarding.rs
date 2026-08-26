@@ -139,9 +139,8 @@ pub fn OnboardingForm() -> Element {
                             phase.set(FormPhase::Idle);
                             ctx.smtp_test_status.write().remove(&rid);
                             test_request_id.set(None);
-                            status_message.set(Some(StatusMessage::success(
-                                "SMTP sign-in succeeded.",
-                            )));
+                            status_message
+                                .set(Some(StatusMessage::success("SMTP sign-in succeeded.")));
                         }
                         Some(SendState::Failed { kind, message, .. }) => {
                             phase.set(FormPhase::Idle);

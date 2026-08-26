@@ -319,7 +319,8 @@ mod tests {
     #[test]
     fn bcc_on_envelope_not_headers() {
         let mut d = minimal();
-        d.bcc.push(ComposerAddress::email_only("secret@example.com"));
+        d.bcc
+            .push(ComposerAddress::email_only("secret@example.com"));
         let prepared = prepare_submit(&d, &identity()).unwrap();
         assert!(prepared
             .envelope

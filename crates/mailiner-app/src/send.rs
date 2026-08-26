@@ -76,9 +76,7 @@ pub fn send_kind_user_message(kind: SendErrorKind) -> &'static str {
         SendErrorKind::NotConfigured => {
             "This account has no SMTP settings. Add them in account settings to send."
         }
-        SendErrorKind::TlsModeUnsupported => {
-            "This SMTP TLS mode is not supported."
-        }
+        SendErrorKind::TlsModeUnsupported => "This SMTP TLS mode is not supported.",
         SendErrorKind::RecipientRejected => "The server rejected a recipient.",
         SendErrorKind::MessageTooLarge => "The server rejected the message as too large.",
         SendErrorKind::Transient => "The server is temporarily unavailable (4xx). Try again.",

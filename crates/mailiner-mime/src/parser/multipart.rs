@@ -1,7 +1,7 @@
 use mailiner_core::body::BodyPart;
 use mailiner_core::models::MessagePart;
 
-use super::{PartParser, ParseContext, ATTACHMENT_MIME};
+use super::{ParseContext, PartParser, ATTACHMENT_MIME};
 use crate::heuristics::{is_attachment, is_rich_part};
 
 pub struct MultipartAlternativeParser;
@@ -29,7 +29,9 @@ impl PartParser for MultipartAlternativeParser {
             let mut sub_path = path.to_vec();
             sub_path.push((i + 1).to_string());
             let sub_id = format!("{part_id}.alternative.{i}");
-            return ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path);
+            return ctx
+                .registry
+                .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path);
         }
         Vec::new()
     }
@@ -62,7 +64,10 @@ impl PartParser for MultipartMixedParser {
                     &sub_path,
                 ));
             } else {
-                out.extend(ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path));
+                out.extend(
+                    ctx.registry
+                        .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+                );
             }
         }
         out
@@ -98,7 +103,10 @@ impl PartParser for MultipartRelatedParser {
                     &sub_path,
                 ));
             } else {
-                out.extend(ctx.registry.parse_part(ctx.envelope_id, sub, &sub_id, &sub_path));
+                out.extend(
+                    ctx.registry
+                        .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+                );
             }
         }
         out

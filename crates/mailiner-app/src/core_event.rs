@@ -6,8 +6,8 @@ use std::sync::Arc;
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
-use futures_util::future::{select, Either};
 use futures_util::StreamExt;
+use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
@@ -16,22 +16,22 @@ use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageId as CoreMessag
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
-use crate::components::virtual_scroll::{adjacent_index, index_after_removal, SparseList};
+use crate::components::virtual_scroll::{SparseList, adjacent_index, index_after_removal};
 use crate::connection::{
-    set_connection_state, AccountConnectionManager, ConnectErrorKind, ConnectionState,
-    EnsureConnectedMode,
+    AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
+    set_connection_state,
 };
 use crate::context::{AppContext, MessageViewState};
-use crate::download::{DownloadStatus, StreamingBlobDownload, MAX_DOWNLOAD_BYTES};
+use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
 use crate::outbox_store::{
-    OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore, MAX_OUTBOX_AUTO_ATTEMPTS,
+    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
 };
 use crate::send::{OutboxDisplay, SendPhase, SendState};
 use crate::smtp_session::{
-    preflight, spawn_submit, spawn_test, InFlightSmtp, SmtpOutcome, SEND_TIMEOUT_MS,
+    InFlightSmtp, SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test,
 };
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
 

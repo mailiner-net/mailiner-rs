@@ -99,7 +99,12 @@ fn last_segment<'a>(name: &'a str, delim: Option<&str>) -> &'a str {
 mod tests {
     use super::*;
 
-    fn mb(name: &str, delim: Option<&str>, no_select: bool, special_use: MailboxRole) -> ListedMailbox {
+    fn mb(
+        name: &str,
+        delim: Option<&str>,
+        no_select: bool,
+        special_use: MailboxRole,
+    ) -> ListedMailbox {
         ListedMailbox {
             name: name.into(),
             delimiter: delim.map(str::to_string),
@@ -144,7 +149,12 @@ mod tests {
 
     #[test]
     fn name_gmail_sent_mail_without_flag() {
-        let boxes = [mb("[Gmail]/Sent Mail", Some("/"), false, MailboxRole::Other)];
+        let boxes = [mb(
+            "[Gmail]/Sent Mail",
+            Some("/"),
+            false,
+            MailboxRole::Other,
+        )];
         assert_eq!(find_sent_mailbox(&boxes), Some("[Gmail]/Sent Mail"));
     }
 
@@ -172,9 +182,15 @@ mod tests {
     #[test]
     fn drafts_outbox_trash_from_name() {
         assert_eq!(role_from_name("Drafts", Some("/")), MailboxRole::Drafts);
-        assert_eq!(role_from_name("INBOX.Drafts", Some(".")), MailboxRole::Drafts);
+        assert_eq!(
+            role_from_name("INBOX.Drafts", Some(".")),
+            MailboxRole::Drafts
+        );
         assert_eq!(role_from_name("Outbox", Some("/")), MailboxRole::Outbox);
-        assert_eq!(role_from_name("Deleted Items", Some("/")), MailboxRole::Trash);
+        assert_eq!(
+            role_from_name("Deleted Items", Some("/")),
+            MailboxRole::Trash
+        );
     }
 
     #[test]

@@ -12,10 +12,10 @@ pub use codec::{
     decode_transfer_stream, qp_decode, qp_encode, DecodeError, DecodedContent,
     StreamingTransferDecoder, MAX_BINARY_DECODE_BYTES, MAX_TEXT_DECODE_BYTES,
 };
+pub use heuristics::{is_attachment, is_rich_part};
+pub use params::{mime_words_decode, normalize_params};
+pub use parser::{MessageParser, ATTACHMENT_MIME};
 pub use writer::{
     encode_unstructured, format_disposition, format_mailbox, generate_boundary, serialize_message,
     MimeBody, MimePart, WriteError,
 };
-pub use heuristics::{is_attachment, is_rich_part};
-pub use params::{mime_words_decode, normalize_params};
-pub use parser::{MessageParser, ATTACHMENT_MIME};

@@ -5,10 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::model::ComposerAddress;
 
 /// Format a simple attribution for reply/forward.
-pub fn attribution_line(
-    when: DateTime<Utc>,
-    from: Option<&ComposerAddress>,
-) -> String {
+pub fn attribution_line(when: DateTime<Utc>, from: Option<&ComposerAddress>) -> String {
     let who = match from {
         Some(a) => match &a.name {
             Some(n) if !n.is_empty() => format!("{n} <{}>", a.email),
@@ -84,7 +81,10 @@ mod tests {
     #[test]
     fn strip_re_fwd() {
         assert_eq!(subject_with_prefix(Some("Re: Re: Hi"), "Re:"), "Re: Hi");
-        assert_eq!(subject_with_prefix(Some("Fwd: Hello"), "Fwd:"), "Fwd: Hello");
+        assert_eq!(
+            subject_with_prefix(Some("Fwd: Hello"), "Fwd:"),
+            "Fwd: Hello"
+        );
         assert_eq!(subject_with_prefix(Some("Hello"), "Re:"), "Re: Hello");
     }
 

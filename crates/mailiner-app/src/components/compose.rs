@@ -5,14 +5,19 @@ use dioxus::prelude::*;
 use super::icons::{Icon, IconButton, IconKind};
 
 use mailiner_composer::identity::FromIdentity;
-use mailiner_composer::model::draft::{ComposerAddress, DraftDocument, BodyMode};
-use mailiner_composer::{build_draft, prepare_submit, ComposeIntent, PrepareSubmitError};
+use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
+use mailiner_composer::{ComposeIntent, PrepareSubmitError, build_draft, prepare_submit};
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::send::{ComposeSession, OutboxDisplay, SendState};
 
-fn apply_draft_fields(draft: &DraftDocument, to: &mut Signal<String>, subject: &mut Signal<String>, body: &mut Signal<String>) {
+fn apply_draft_fields(
+    draft: &DraftDocument,
+    to: &mut Signal<String>,
+    subject: &mut Signal<String>,
+    body: &mut Signal<String>,
+) {
     to.set(
         draft
             .to
@@ -112,18 +117,16 @@ pub fn ComposeOverlay() -> Element {
     {
         let ctx = ctx.clone();
         let mut last_draft_id = last_draft_id;
-        use_effect(move || {
-            match ctx.compose_draft.read().as_ref() {
-                Some(session) => {
-                    let id = session.draft.id.as_str().to_string();
-                    if last_draft_id() != Some(id.clone()) {
-                        last_draft_id.set(Some(id));
-                        apply_draft_fields(&session.draft, &mut to, &mut subject, &mut body);
-                        error.set(None);
-                    }
+        use_effect(move || match ctx.compose_draft.read().as_ref() {
+            Some(session) => {
+                let id = session.draft.id.as_str().to_string();
+                if last_draft_id() != Some(id.clone()) {
+                    last_draft_id.set(Some(id));
+                    apply_draft_fields(&session.draft, &mut to, &mut subject, &mut body);
+                    error.set(None);
                 }
-                None => last_draft_id.set(None),
             }
+            None => last_draft_id.set(None),
         });
     }
 

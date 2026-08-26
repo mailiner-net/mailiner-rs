@@ -75,4 +75,4 @@ impl fmt::Display for MessagePartId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
-} 
+}

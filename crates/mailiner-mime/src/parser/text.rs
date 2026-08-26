@@ -1,7 +1,7 @@
 use mailiner_core::body::BodyPart;
 use mailiner_core::models::{MessagePart, PartKind};
 
-use super::{leaf_part, PartParser, ParseContext};
+use super::{leaf_part, ParseContext, PartParser};
 
 pub struct TextPlainParser;
 pub struct TextHtmlParser;

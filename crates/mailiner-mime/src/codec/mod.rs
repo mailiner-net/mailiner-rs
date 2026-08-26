@@ -100,7 +100,6 @@ pub fn decode_content(
     }
 }
 
-
 /// Decode using core [`TransferEncoding`] / [`MessageContent`].
 pub fn decode_part_content(
     raw: &[u8],

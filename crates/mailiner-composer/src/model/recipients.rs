@@ -26,7 +26,11 @@ pub fn try_composer_address(a: &EmailAddr) -> Option<ComposerAddress> {
         return None;
     }
     Some(ComposerAddress {
-        name: a.name.as_ref().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()),
+        name: a
+            .name
+            .as_ref()
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty()),
         email: email.to_string(), // already trimmed
     })
 }
@@ -58,7 +62,10 @@ pub fn exclude_self(list: Vec<ComposerAddress>, self_email: &str) -> Vec<Compose
 pub fn dedupe_addresses(list: Vec<ComposerAddress>) -> Vec<ComposerAddress> {
     let mut out = Vec::new();
     for a in list {
-        if out.iter().any(|b: &ComposerAddress| emails_equal(&b.email, &a.email)) {
+        if out
+            .iter()
+            .any(|b: &ComposerAddress| emails_equal(&b.email, &a.email))
+        {
             continue;
         }
         out.push(a);

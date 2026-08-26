@@ -8,11 +8,11 @@ use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
 use crate::download::DownloadStatus;
-use crate::outbox_store::OutboxListEntry;
-use crate::send::{ComposeSession, SendState};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
+use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
+use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves the current message.

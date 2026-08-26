@@ -10,9 +10,7 @@ use wasm_bindgen::JsCast;
 use super::icons::{Icon, IconButton, IconKind};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
-use crate::mailbox::{
-    MailboxEntry, MailboxId, collect_mailbox_entries, filter_mailbox_entries,
-};
+use crate::mailbox::{MailboxEntry, MailboxId, collect_mailbox_entries, filter_mailbox_entries};
 use crate::toast::ToastAction;
 
 fn role_icon(role: MailboxRole) -> IconKind {
@@ -256,11 +254,7 @@ fn PickerRow(
     let label = if show_path {
         entry.path.clone()
     } else {
-        format!(
-            "{}{}",
-            "\u{00a0}\u{00a0}".repeat(entry.depth),
-            entry.title
-        )
+        format!("{}{}", "\u{00a0}\u{00a0}".repeat(entry.depth), entry.title)
     };
     rsx! {
         li {

@@ -11,7 +11,7 @@ use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::formatter::{FormatOptions, MessageFormatter};
-use crate::mailbox::{flatten_mailboxes, MailboxId};
+use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId};
 
 use super::compose::open_reply_or_forward;
@@ -338,7 +338,12 @@ fn MessageHeader(message: Arc<Message>) -> Element {
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()
-        .and_then(|id| ctx.mailbox_nodes.read().get(id).map(|n| n.role == MailboxRole::Trash))
+        .and_then(|id| {
+            ctx.mailbox_nodes
+                .read()
+                .get(id)
+                .map(|n| n.role == MailboxRole::Trash)
+        })
         .unwrap_or(false);
     let move_targets = {
         let nodes = ctx.mailbox_nodes.read();
@@ -562,13 +567,22 @@ mod tests {
     #[test]
     fn line_step_is_small_and_signed() {
         assert_eq!(message_scroll_delta(400.0, true, MessageScroll::Line), 48.0);
-        assert_eq!(message_scroll_delta(400.0, false, MessageScroll::Line), -48.0);
+        assert_eq!(
+            message_scroll_delta(400.0, false, MessageScroll::Line),
+            -48.0
+        );
     }
 
     #[test]
     fn page_step_uses_viewport_with_overlap() {
-        assert_eq!(message_scroll_delta(400.0, true, MessageScroll::Page), 340.0);
-        assert_eq!(message_scroll_delta(400.0, false, MessageScroll::Page), -340.0);
+        assert_eq!(
+            message_scroll_delta(400.0, true, MessageScroll::Page),
+            340.0
+        );
+        assert_eq!(
+            message_scroll_delta(400.0, false, MessageScroll::Page),
+            -340.0
+        );
         assert_eq!(message_scroll_delta(0.0, true, MessageScroll::Page), 0.0);
     }
 

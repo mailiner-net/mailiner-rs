@@ -65,7 +65,9 @@ impl From<Folder> for MailboxNode {
 }
 
 /// Inbox, Drafts, Sent, Outbox, Trash, then remaining names A–Z.
-pub fn build_mailbox_tree(folders: Vec<Folder>) -> (Vec<MailboxId>, HashMap<MailboxId, MailboxNode>) {
+pub fn build_mailbox_tree(
+    folders: Vec<Folder>,
+) -> (Vec<MailboxId>, HashMap<MailboxId, MailboxNode>) {
     let mut root_ids = Vec::new();
     let mut mboxes = HashMap::<MailboxId, MailboxNode>::new();
 
@@ -355,8 +357,8 @@ fn sort_mailbox_ids(ids: &mut [MailboxId], mboxes: &HashMap<MailboxId, MailboxNo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mailiner_core::{AccountId, Folder};
     use chrono::{TimeZone, Utc};
+    use mailiner_core::{AccountId, Folder};
 
     fn folder(id: &str, name: &str, parent: Option<&str>, role: MailboxRole) -> Folder {
         let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
@@ -397,7 +399,9 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["INBOX", "Drafts", "Sent", "Outbox", "Trash", "Archive", "Junk"]
+            [
+                "INBOX", "Drafts", "Sent", "Outbox", "Trash", "Archive", "Junk"
+            ]
         );
     }
 
@@ -475,7 +479,12 @@ mod tests {
         let (_, nodes) = build_mailbox_tree(vec![
             folder("KDE", "KDE", None, MailboxRole::Other),
             folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
-            folder("KDE.pim.inbox", "inbox", Some("KDE.pim"), MailboxRole::Other),
+            folder(
+                "KDE.pim.inbox",
+                "inbox",
+                Some("KDE.pim"),
+                MailboxRole::Other,
+            ),
             folder("Trash", "Trash", None, MailboxRole::Trash),
         ]);
         let kde = MailboxId::from("KDE".to_string());
@@ -545,12 +554,8 @@ mod tests {
 
     #[test]
     fn filter_inbox_special_use_title() {
-        let (roots, nodes) = build_mailbox_tree(vec![folder(
-            "INBOX",
-            "INBOX",
-            None,
-            MailboxRole::Inbox,
-        )]);
+        let (roots, nodes) =
+            build_mailbox_tree(vec![folder("INBOX", "INBOX", None, MailboxRole::Inbox)]);
         let entries = collect_mailbox_entries(&roots, &nodes);
         let filtered = filter_mailbox_entries(&entries, "inbox");
         assert_eq!(filtered.len(), 1);

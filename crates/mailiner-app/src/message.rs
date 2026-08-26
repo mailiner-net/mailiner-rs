@@ -4,16 +4,8 @@ use std::fmt;
 
 /// Distinct mid-saturation swatches for placeholder sender avatars.
 const AVATAR_COLORS: &[&str] = &[
-    "#4C6EF5",
-    "#0CA678",
-    "#F08C00",
-    "#E64980",
-    "#7048E8",
-    "#1098AD",
-    "#F76707",
-    "#37B24D",
-    "#C2255C",
-    "#364FC7",
+    "#4C6EF5", "#0CA678", "#F08C00", "#E64980", "#7048E8", "#1098AD", "#F76707", "#37B24D",
+    "#C2255C", "#364FC7",
 ];
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -74,11 +66,7 @@ impl Message {
             return email;
         }
         let preview = self.from_preview();
-        if preview.is_empty() {
-            "?"
-        } else {
-            preview
-        }
+        if preview.is_empty() { "?" } else { preview }
     }
 }
 

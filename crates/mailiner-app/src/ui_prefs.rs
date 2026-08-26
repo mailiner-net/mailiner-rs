@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use mailiner_core::ids::AccountId;
 use serde::{Deserialize, Serialize};
 
-use crate::account_store::{AccountStoreError, StringKvStore};
 #[cfg(target_arch = "wasm32")]
 use crate::account_store::WebLocalStorage;
+use crate::account_store::{AccountStoreError, StringKvStore};
 use crate::mailbox::MailboxId;
 use mailiner_core::MessageSort;
 
@@ -287,7 +287,10 @@ mod tests {
         let err = LastMailboxBlob::decode(json).unwrap_err();
         match err {
             AccountStoreError::Serialization(msg) => {
-                assert!(msg.contains("unsupported") && msg.contains("99"), "msg={msg}");
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
             }
             other => panic!("expected Serialization, got {other:?}"),
         }
@@ -304,11 +307,11 @@ mod tests {
     #[test]
     fn retain_drops_unknown_accounts() {
         let mut blob = LastMailboxBlob::empty();
-        blob.set(AccountId::new("keep"), &MailboxId::from("INBOX".to_string()));
         blob.set(
-            AccountId::new("gone"),
-            &MailboxId::from("Sent".to_string()),
+            AccountId::new("keep"),
+            &MailboxId::from("INBOX".to_string()),
         );
+        blob.set(AccountId::new("gone"), &MailboxId::from("Sent".to_string()));
         let known = HashSet::from([AccountId::new("keep")]);
         blob.retain_accounts(&known);
         assert!(blob.get(&AccountId::new("keep")).is_some());
@@ -373,7 +376,10 @@ mod tests {
         let err = AckUnreadBlob::decode(json).unwrap_err();
         match err {
             AccountStoreError::Serialization(msg) => {
-                assert!(msg.contains("unsupported") && msg.contains("99"), "msg={msg}");
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
             }
             other => panic!("expected Serialization, got {other:?}"),
         }

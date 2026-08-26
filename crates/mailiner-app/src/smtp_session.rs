@@ -6,14 +6,14 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use dioxus::logger::tracing::info;
 use futures_channel::mpsc::UnboundedSender;
 use futures_channel::oneshot;
-use futures_util::future::{select, Either};
+use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
 use mailiner_core::submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
 use mailiner_smtp_connector::{SmtpConnector, SmtpError};
 
 use crate::account::AccountId;
 use crate::account_config::{
-    ehlo_domain, smtp_password, smtp_username, AccountConfig, SmtpTlsMode,
+    AccountConfig, SmtpTlsMode, ehlo_domain, smtp_password, smtp_username,
 };
 use crate::connection::CONNECT_TIMEOUT_MS;
 use crate::core_event::CoreEvent;

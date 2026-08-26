@@ -380,9 +380,7 @@ pub fn optional_smtp_from_fields(
     let parsed_port: u16 = if port_trim.is_empty() {
         DEFAULT_SMTP_PORT
     } else {
-        port_trim
-            .parse()
-            .unwrap_or(DEFAULT_SMTP_PORT)
+        port_trim.parse().unwrap_or(DEFAULT_SMTP_PORT)
     };
     let tls_mode = tls_mode_from_legacy(use_tls, parsed_port);
     optional_smtp_from_tls_mode(host, port, username, password, tls_mode)
@@ -984,9 +982,7 @@ mod tests {
         let mut proxy = sample_proxy();
         proxy.remote_host = Some("imap-override.example".into());
         proxy.remote_port = Some(993);
-        let url = proxy
-            .websocket_url_for("smtp.example.com", 465)
-            .unwrap();
+        let url = proxy.websocket_url_for("smtp.example.com", 465).unwrap();
         assert!(url.contains("remote=smtp.example.com:465"), "{url}");
         assert!(!url.contains("imap-override"));
     }

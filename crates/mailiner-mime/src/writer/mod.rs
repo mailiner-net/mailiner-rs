@@ -106,21 +106,29 @@ pub fn format_disposition(kind: &str, filename: Option<&str>) -> String {
     let Some(name) = filename.map(str::trim).filter(|s| !s.is_empty()) else {
         return kind.to_string();
     };
-    if is_all_printable_ascii(name) && !name.contains('"') && !name.contains('\\') && !name.contains(';')
+    if is_all_printable_ascii(name)
+        && !name.contains('"')
+        && !name.contains('\\')
+        && !name.contains(';')
     {
         return format!("{kind}; filename=\"{name}\"");
     }
     let encoded = rfc2231_encode(name);
     if is_all_printable_ascii(name) {
-        format!("{kind}; filename=\"{}\"; filename*={encoded}", escape_quoted(name))
+        format!(
+            "{kind}; filename=\"{}\"; filename*={encoded}",
+            escape_quoted(name)
+        )
     } else {
         // ASCII fallback filename for old MUAs.
         let fallback: String = name
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
             })
             .collect();
         format!("{kind}; filename=\"{fallback}\"; filename*={encoded}")
@@ -129,7 +137,9 @@ pub fn format_disposition(kind: &str, filename: Option<&str>) -> String {
 
 fn write_part_content_headers(out: &mut Vec<u8>, part: &MimePart) -> Result<(), WriteError> {
     match &part.body {
-        MimeBody::Multipart { subtype, boundary, .. } => {
+        MimeBody::Multipart {
+            subtype, boundary, ..
+        } => {
             if boundary.is_empty() {
                 return Err(WriteError::EmptyBoundary);
             }
@@ -183,7 +193,9 @@ fn write_part_body(out: &mut Vec<u8>, part: &MimePart) -> Result<(), WriteError>
 
 fn write_header(out: &mut Vec<u8>, name: &str, value: &str) -> Result<(), WriteError> {
     if name.is_empty()
-        || name.bytes().any(|b| b == b':' || b == b'\r' || b == b'\n' || b.is_ascii_whitespace())
+        || name
+            .bytes()
+            .any(|b| b == b':' || b == b'\r' || b == b'\n' || b.is_ascii_whitespace())
     {
         return Err(WriteError::InvalidHeaderName(name.to_string()));
     }
@@ -224,15 +236,27 @@ fn fold_into(out: &mut Vec<u8>, value: &str, first_col: usize) {
 }
 
 fn is_all_printable_ascii(s: &str) -> bool {
-    s.bytes()
-        .all(|b| b == b'\t' || (32..=126).contains(&b))
+    s.bytes().all(|b| b == b'\t' || (32..=126).contains(&b))
 }
 
 fn needs_quoted_display(n: &str) -> bool {
-    n.bytes().any(|b| matches!(
-        b,
-        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b':' | b';' | b'@' | b'\\' | b',' | b'.' | b'"'
-    )) || n.contains(' ')
+    n.bytes().any(|b| {
+        matches!(
+            b,
+            b'(' | b')'
+                | b'<'
+                | b'>'
+                | b'['
+                | b']'
+                | b':'
+                | b';'
+                | b'@'
+                | b'\\'
+                | b','
+                | b'.'
+                | b'"'
+        )
+    }) || n.contains(' ')
 }
 
 fn escape_quoted(s: &str) -> String {
@@ -302,7 +326,11 @@ mod tests {
     use crate::codec::{base64_encode, qp_encode};
 
     fn has_crlf_only(bytes: &[u8]) -> bool {
-        !bytes.contains(&b'\n') || bytes.windows(2).filter(|w| w[1] == b'\n').all(|w| w[0] == b'\r')
+        !bytes.contains(&b'\n')
+            || bytes
+                .windows(2)
+                .filter(|w| w[1] == b'\n')
+                .all(|w| w[0] == b'\r')
     }
 
     #[test]
@@ -310,7 +338,10 @@ mod tests {
         let root = MimePart {
             headers: vec![
                 ("Content-Type".into(), "text/plain; charset=UTF-8".into()),
-                ("Content-Transfer-Encoding".into(), "quoted-printable".into()),
+                (
+                    "Content-Transfer-Encoding".into(),
+                    "quoted-printable".into(),
+                ),
             ],
             body: MimeBody::Octets(qp_encode(b"Hello")),
         };
@@ -323,7 +354,11 @@ mod tests {
             &root,
         )
         .unwrap();
-        assert!(has_crlf_only(&msg), "bare LF in {:?}", String::from_utf8_lossy(&msg));
+        assert!(
+            has_crlf_only(&msg),
+            "bare LF in {:?}",
+            String::from_utf8_lossy(&msg)
+        );
         assert!(msg.windows(2).any(|w| w == b"\r\n"));
     }
 
@@ -355,14 +390,20 @@ mod tests {
         let plain = MimePart {
             headers: vec![
                 ("Content-Type".into(), "text/plain; charset=UTF-8".into()),
-                ("Content-Transfer-Encoding".into(), "quoted-printable".into()),
+                (
+                    "Content-Transfer-Encoding".into(),
+                    "quoted-printable".into(),
+                ),
             ],
             body: MimeBody::Octets(qp_encode(b"plain")),
         };
         let html = MimePart {
             headers: vec![
                 ("Content-Type".into(), "text/html; charset=UTF-8".into()),
-                ("Content-Transfer-Encoding".into(), "quoted-printable".into()),
+                (
+                    "Content-Transfer-Encoding".into(),
+                    "quoted-printable".into(),
+                ),
             ],
             body: MimeBody::Octets(qp_encode(b"<p>html</p>")),
         };
@@ -390,7 +431,10 @@ mod tests {
         let body = MimePart {
             headers: vec![
                 ("Content-Type".into(), "text/plain; charset=UTF-8".into()),
-                ("Content-Transfer-Encoding".into(), "quoted-printable".into()),
+                (
+                    "Content-Transfer-Encoding".into(),
+                    "quoted-printable".into(),
+                ),
             ],
             body: MimeBody::Octets(qp_encode(b"hi")),
         };
@@ -425,7 +469,10 @@ mod tests {
         let html = MimePart {
             headers: vec![
                 ("Content-Type".into(), "text/html; charset=UTF-8".into()),
-                ("Content-Transfer-Encoding".into(), "quoted-printable".into()),
+                (
+                    "Content-Transfer-Encoding".into(),
+                    "quoted-printable".into(),
+                ),
             ],
             body: MimeBody::Octets(qp_encode(b"<img src=\"cid:img1@mailiner\">")),
         };

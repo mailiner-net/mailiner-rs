@@ -75,9 +75,34 @@ fn is_safe_href(value: &str) -> bool {
 /// Tags allowed in compose edit/export HTML fragments.
 fn allowed_tags() -> [&'static str; 28] {
     [
-        "p", "br", "div", "span", "blockquote", "pre", "code", "ul", "ol", "li", "a", "b",
-        "strong", "i", "em", "u", "img", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "table",
-        "tr", "td", "th",
+        "p",
+        "br",
+        "div",
+        "span",
+        "blockquote",
+        "pre",
+        "code",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "img",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "table",
+        "tr",
+        "td",
+        "th",
     ]
 }
 
@@ -118,9 +143,11 @@ fn sanitize_fragment(html: &str, kind: PolicyKind) -> String {
     };
 
     let tags: HashSet<&str> = allowed_tags().into_iter().collect();
-    let clean_rm: HashSet<&str> = ["script", "style", "iframe", "object", "embed", "svg", "math"]
-        .into_iter()
-        .collect();
+    let clean_rm: HashSet<&str> = [
+        "script", "style", "iframe", "object", "embed", "svg", "math",
+    ]
+    .into_iter()
+    .collect();
     let generic: HashSet<&str> = [
         "title",
         "alt",
@@ -138,12 +165,11 @@ fn sanitize_fragment(html: &str, kind: PolicyKind) -> String {
     tag_attrs.insert("a", ["href", "title", "class"].into_iter().collect());
     tag_attrs.insert(
         "img",
-        ["src", "alt", "width", "height", "class"].into_iter().collect(),
+        ["src", "alt", "width", "height", "class"]
+            .into_iter()
+            .collect(),
     );
-    tag_attrs.insert(
-        "div",
-        ["class", "data-mlnr-quote"].into_iter().collect(),
-    );
+    tag_attrs.insert("div", ["class", "data-mlnr-quote"].into_iter().collect());
     tag_attrs.insert("p", ["class"].into_iter().collect());
     tag_attrs.insert("blockquote", ["class"].into_iter().collect());
     let schemes: HashSet<&str> = ["http", "https", "mailto", "cid", "blob", "data"]
@@ -160,26 +186,28 @@ fn sanitize_fragment(html: &str, kind: PolicyKind) -> String {
         .generic_attributes(generic)
         .tag_attributes(tag_attrs)
         .url_schemes(schemes)
-        .attribute_filter(move |element, attribute, value| match (element, attribute) {
-            ("a", "href") => {
-                if is_safe_href(value) {
-                    Some(value.into())
-                } else {
-                    None
+        .attribute_filter(
+            move |element, attribute, value| match (element, attribute) {
+                ("a", "href") => {
+                    if is_safe_href(value) {
+                        Some(value.into())
+                    } else {
+                        None
+                    }
                 }
-            }
-            ("img", "src") => {
-                if is_safe_img_src(value, allow_blob, allow_cid, allow_data, allow_remote_img) {
-                    Some(value.into())
-                } else {
-                    None
+                ("img", "src") => {
+                    if is_safe_img_src(value, allow_blob, allow_cid, allow_data, allow_remote_img) {
+                        Some(value.into())
+                    } else {
+                        None
+                    }
                 }
-            }
-            ("img", "srcset") | (_, "srcset") | (_, "imagesrcset") => None,
-            (_, "style") => None,
-            (_, "background") | (_, "poster") => None,
-            _ => Some(value.into()),
-        });
+                ("img", "srcset") | (_, "srcset") | (_, "imagesrcset") => None,
+                (_, "style") => None,
+                (_, "background") | (_, "poster") => None,
+                _ => Some(value.into()),
+            },
+        );
 
     builder.clean(html).to_string()
 }

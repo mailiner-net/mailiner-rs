@@ -246,7 +246,10 @@ pub fn is_valid_email_v1(email: &str) -> bool {
     if email.is_empty() {
         return false;
     }
-    if email.chars().any(|c| c.is_whitespace() || c == '<' || c == '>' || c == ',') {
+    if email
+        .chars()
+        .any(|c| c.is_whitespace() || c == '<' || c == '>' || c == ',')
+    {
         return false;
     }
     let mut parts = email.split('@');

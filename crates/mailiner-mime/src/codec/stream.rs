@@ -14,8 +14,12 @@ pub struct StreamingTransferDecoder {
 enum Inner {
     /// 7bit / 8bit / binary / other — pass through.
     Identity,
-    Base64 { pending: Vec<u8> },
-    Qp { pending: Vec<u8> },
+    Base64 {
+        pending: Vec<u8>,
+    },
+    Qp {
+        pending: Vec<u8>,
+    },
 }
 
 impl StreamingTransferDecoder {

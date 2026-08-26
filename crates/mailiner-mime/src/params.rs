@@ -91,7 +91,7 @@ fn parse_rfc2231_key(key: &str) -> Option<(String, bool, usize)> {
     if parts.len() >= 2 {
         let idx = parts[1].parse::<usize>().unwrap_or(0);
         let encoded = parts.len() >= 3; // trailing * after index
-        // FILENAME*0* → parts = ["FILENAME", "0", ""]
+                                        // FILENAME*0* → parts = ["FILENAME", "0", ""]
         let encoded = encoded || (parts.len() == 3);
         return Some((base, encoded, idx));
     }
@@ -213,9 +213,8 @@ fn try_decode_mime_word(s: &str) -> Option<(String, usize)> {
         _ => return None,
     };
 
-    let decoded = charset_decode(&raw, charset).unwrap_or_else(|_| {
-        raw.iter().map(|&b| b as char).collect()
-    });
+    let decoded =
+        charset_decode(&raw, charset).unwrap_or_else(|_| raw.iter().map(|&b| b as char).collect());
     Some((decoded, total_len))
 }
 
@@ -238,10 +237,7 @@ mod tests {
 
     #[test]
     fn rfc2231_utf8_filename() {
-        let pairs = vec![(
-            "filename*".to_string(),
-            "UTF-8''%C3%A9.pdf".to_string(),
-        )];
+        let pairs = vec![("filename*".to_string(), "UTF-8''%C3%A9.pdf".to_string())];
         let m = normalize_params(Some(&pairs));
         assert_eq!(m.get("FILENAME").map(|s| s.as_str()), Some("é.pdf"));
     }

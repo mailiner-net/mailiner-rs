@@ -2249,7 +2249,9 @@ async fn handle_smtp_finished(
                     item.last_error_kind = Some(err.kind);
                     item.last_error = Some(err.message.clone());
                     item.updated_at = chrono::Utc::now();
-                    if err.kind.is_retryable() && item.attempts < MAX_OUTBOX_AUTO_ATTEMPTS {
+                    if err.kind == SendErrorKind::Cancelled
+                        || (err.kind.is_retryable() && item.attempts < MAX_OUTBOX_AUTO_ATTEMPTS)
+                    {
                         item.state = OutboxItemState::Queued;
                     } else {
                         item.state = OutboxItemState::Failed;

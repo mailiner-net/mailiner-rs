@@ -233,18 +233,21 @@ where
     let timeout = TimeoutFuture::new(timeout_ms);
     futures_util::pin_mut!(work);
     futures_util::pin_mut!(timeout);
-    match select(work, timeout).await {
-        Either::Left((result, _)) => {
-            drop(cancel_rx);
-            result
-        }
-        Either::Right((_, work)) => {
+    futures_util::pin_mut!(cancel_rx);
+    match select(work, select(timeout, cancel_rx)).await {
+        Either::Left((result, _)) => result,
+        Either::Right((Either::Left((_, work)), _)) => {
             drop(work);
-            // Also honour cancel: if both fire we still timeout.
-            let _ = cancel_rx;
             Err(ClassifiedSendError {
                 kind: SendErrorKind::Timeout,
                 message: "Sending timed out. Try again or check the proxy and SMTP host.".into(),
+            })
+        }
+        Either::Right((Either::Right((_, work)), _)) => {
+            drop(work);
+            Err(ClassifiedSendError {
+                kind: SendErrorKind::Cancelled,
+                message: "Sending was cancelled.".into(),
             })
         }
     }

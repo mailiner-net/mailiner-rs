@@ -40,7 +40,7 @@ pub enum SendErrorKind {
     Cancelled,
     /// Account has no SMTP settings.
     NotConfigured,
-    /// Reserved: a TLS mode the client cannot speak. All persisted modes are spoken.
+    /// SMTP TLS mode the client cannot speak.
     TlsModeUnsupported,
     /// A RCPT TO was rejected (5xx).
     RecipientRejected,
@@ -48,10 +48,11 @@ pub enum SendErrorKind {
     MessageTooLarge,
     /// SMTP 4xx.
     Transient,
-    /// SMTP 5xx not otherwise classified.
-    Permanent,
     /// Programmer / unexpected error.
     Internal,
+    /// SMTP 5xx not otherwise classified. Unknown persisted variants land here.
+    #[serde(other)]
+    Permanent,
 }
 
 impl SendErrorKind {
@@ -61,5 +62,16 @@ impl SendErrorKind {
             self,
             Self::NetworkOrProxy | Self::TlsOrSni | Self::Timeout | Self::Transient
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SendErrorKind;
+
+    #[test]
+    fn unknown_kind_deserializes_as_permanent() {
+        let kind: SendErrorKind = serde_json::from_str("\"future_kind\"").unwrap();
+        assert_eq!(kind, SendErrorKind::Permanent);
     }
 }

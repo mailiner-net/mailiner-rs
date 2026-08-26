@@ -186,7 +186,10 @@ impl SmtpConnector {
         let envelope = build_envelope(request)?;
         let email = SendableEmail::new(envelope, request.rfc822.clone());
         let response = transport.send(email).await.map_err(map_smtp_send)?;
-        let reply = response.message.first().cloned();
+        let reply = response
+            .message
+            .first()
+            .map(|s| truncate_smtp_reply(s));
         let _ = transport.quit().await;
         Ok(SubmitReceipt {
             message_id: request.message_id.clone(),
@@ -293,31 +296,54 @@ fn map_smtp_auth(_err: async_smtp::error::Error) -> SmtpError {
     SmtpError::classified(SendErrorKind::Auth, "SMTP authentication failed.")
 }
 
-fn map_smtp_send(err: async_smtp::error::Error) -> SmtpError {
-    let text = err.to_string();
-    let lower = text.to_ascii_lowercase();
-    if lower.contains("552") || lower.contains("message too large") || lower.contains("size") {
-        return SmtpError::classified(SendErrorKind::MessageTooLarge, text);
+fn smtp_response_text(resp: &async_smtp::response::Response) -> String {
+    if resp.message.is_empty() {
+        resp.code.to_string()
+    } else {
+        format!("{} {}", resp.code, resp.message.join("; "))
     }
-    if text.contains("550") || text.contains("553") || lower.contains("recipient") {
-        return SmtpError::classified(SendErrorKind::RecipientRejected, text);
-    }
-    // async-smtp Error Display may include the SMTP code.
-    if let Some(code) = extract_smtp_code(&text) {
-        if (400..500).contains(&code) {
-            return SmtpError::classified(SendErrorKind::Transient, text);
-        }
-        if (500..600).contains(&code) {
-            return SmtpError::classified(SendErrorKind::Permanent, text);
-        }
-    }
-    SmtpError::classified(SendErrorKind::Permanent, text)
 }
 
-fn extract_smtp_code(text: &str) -> Option<u16> {
-    text.split(|c: char| !c.is_ascii_digit())
-        .find(|s| s.len() == 3)
-        .and_then(|s| s.parse().ok())
+fn classify_permanent(resp: &async_smtp::response::Response) -> SendErrorKind {
+    let text = resp.message.join(" ").to_ascii_lowercase();
+    if resp.has_code(552) || text.contains("message too large") {
+        SendErrorKind::MessageTooLarge
+    } else if resp.has_code(550) || resp.has_code(551) || resp.has_code(553) {
+        SendErrorKind::RecipientRejected
+    } else {
+        SendErrorKind::Permanent
+    }
+}
+
+fn map_smtp_send(err: async_smtp::error::Error) -> SmtpError {
+    use async_smtp::error::Error::*;
+    match err {
+        Transient(resp) => SmtpError::classified(SendErrorKind::Transient, smtp_response_text(&resp)),
+        Permanent(resp) => {
+            let kind = classify_permanent(&resp);
+            SmtpError::classified(kind, smtp_response_text(&resp))
+        }
+        Io(e) => SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()),
+        other => {
+            let text = other.to_string();
+            if text.starts_with("timeout:") {
+                SmtpError::classified(SendErrorKind::Timeout, text)
+            } else {
+                SmtpError::classified(SendErrorKind::Permanent, text)
+            }
+        }
+    }
+}
+
+fn truncate_smtp_reply(s: &str) -> String {
+    const MAX: usize = 200;
+    if s.chars().count() <= MAX {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(MAX).collect();
+        out.push('…');
+        out
+    }
 }
 
 #[cfg(test)]

@@ -60,11 +60,7 @@ Do not re-open these.
 
 ### 6. `MockConnector` does not implement the contracts
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/connector.rs`](../crates/mailiner-core/src/connector.rs) (`MockConnector`)
-- `connected` is never written (`allow(dead_code)`). `list_envelopes_range` ignores sort and returns oldest-first (`test-message-1` at index 0) while IMAP Date is newest-first. `prepare_folder_list` always reports `unread: Some(3)` and `supports_size_sender: true`. `sync_unread_sort_index` always returns `[]`, so unread-first relocate tests would pass without moving rows. `move_messages` returns the **source** IDs as destination UIDs, which would make undo look successful. HTML part `1.2` is advertised as quoted-printable but `mock_section_bytes` returns raw HTML.
-- The mock’s own unit tests never call the trait methods; `load_message` tests use it as a fixture.
-- Direction: make the mock stateful (sort, flags, dest UIDs, connection) or name it a UI fixture and keep contract tests on IMAP / `sort.rs`. Do not return source IDs from `move_messages`.
+- [x] Done. Documented as a loader/UI fixture. Arrival list is newest-first, HTML is 7bit to match the bytes, `move_messages` returns no dest UIDs, `supports_size_sender` is false. Still not a stateful IMAP double (`sync_unread_sort_index` is empty).
 
 ### 7. Prefetch has no size bound; viewer holds wire + decoded + data-URL copies
 
@@ -125,4 +121,4 @@ Do not re-open these.
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
 3. Prefetch bounds (7) — WASM memory and load honesty.
-4. Slim the connector trait (5, 6, 13) and leftover types (12, 16) when touching those files anyway.
+4. Slim the connector trait (13) and leftover types (12, 16) when touching those files anyway.

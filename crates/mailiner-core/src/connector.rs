@@ -113,17 +113,19 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
     let end = range.end.min(total);
     let start = range.start.min(end);
     let mut envelopes = Vec::new();
+    // Arrival: index 0 is newest (`test-message-100`).
     for i in start..end {
-        let message_id = MessageId::new(format!("test-message-{}", i + 1));
+        let n = total - i;
+        let message_id = MessageId::new(format!("test-message-{n}"));
         envelopes.push(Envelope {
             id: message_id.clone(),
             account_id: AccountId::new("mock-account-1"),
             folder_id: folder_id.clone(),
-            subject: Some(format!("Test Message {}", i + 1)),
+            subject: Some(format!("Test Message {n}")),
             from: Some(crate::models::EmailAddress::List(vec![
                 crate::models::EmailAddr {
-                    name: Some(format!("Sender {}", i + 1)),
-                    email: Some(format!("sender{}@example.com", i + 1)),
+                    name: Some(format!("Sender {n}")),
+                    email: Some(format!("sender{n}@example.com")),
                 },
             ])),
             to: Some(crate::models::EmailAddress::List(vec![
@@ -139,13 +141,13 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             in_reply_to: None,
             references: Vec::new(),
             date: Utc::now(),
-            is_read: i % 3 == 0,
-            is_starred: i % 5 == 0,
+            is_read: n % 3 == 0,
+            is_starred: n % 5 == 0,
             is_flagged: false,
             is_draft: false,
             is_deleted: false,
-            has_attachments: i % 2 == 0,
-            size: Some(1_000 + ((i * 37) % 97) as u64 * 100),
+            has_attachments: n % 2 == 0,
+            size: Some(1_000 + ((n * 37) % 97) as u64 * 100),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
@@ -174,7 +176,7 @@ pub fn mock_multipart_structure() -> BodyPart {
                     BodyPart {
                         type_: "text".into(),
                         subtype: "html".into(),
-                        encoding: Some("QUOTED-PRINTABLE".into()),
+                        encoding: Some("7BIT".into()),
                         size: Some(80),
                         parameters: [("CHARSET".into(), "UTF-8".into())].into(),
                         ..Default::default()
@@ -212,15 +214,12 @@ fn mock_section_bytes(section: &str) -> Vec<u8> {
     }
 }
 
-// Mock implementation for testing
-pub struct MockConnector {
-    #[allow(dead_code)]
-    connected: bool,
-}
+/// Loader / UI fixture. Not a faithful IMAP session (no sort index, no dest UIDs).
+pub struct MockConnector;
 
 impl MockConnector {
     pub fn new() -> Self {
-        Self { connected: false }
+        Self
     }
 }
 
@@ -307,7 +306,7 @@ where
             total: 100,
             unread: Some(3),
             sort,
-            supports_size_sender: true,
+            supports_size_sender: false,
         })
     }
 
@@ -342,7 +341,8 @@ where
         message_ids: &[MessageId],
         _dest_folder_id: &FolderId,
     ) -> Result<Vec<MessageId>> {
-        Ok(message_ids.to_vec())
+        let _ = message_ids;
+        Ok(Vec::new())
     }
 
     async fn delete_messages(

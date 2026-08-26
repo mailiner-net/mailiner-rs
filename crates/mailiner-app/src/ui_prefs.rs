@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn message_sort_roundtrip() {
         host_kv::reset();
-        assert_eq!(load_message_sort(), MessageSort::Date);
+        assert_eq!(load_message_sort(), MessageSort::Arrival);
         save_message_sort(MessageSort::Unread);
         assert_eq!(load_message_sort(), MessageSort::Unread);
         save_message_sort(MessageSort::Sender);

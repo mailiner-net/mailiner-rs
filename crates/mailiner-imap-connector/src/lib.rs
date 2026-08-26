@@ -490,7 +490,7 @@ where
 
         let mut unread = None;
         let uids = match sort {
-            MessageSort::Date => Some(Self::search_arrival_uids(session).await?),
+            MessageSort::Arrival => Some(Self::search_arrival_uids(session).await?),
             MessageSort::Unread => {
                 if has_sort {
                     let unseen = sort::uid_sort(session, "REVERSE DATE", "UNSEEN").await?;
@@ -523,7 +523,7 @@ where
                         let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
                         return Ok(ListIndex {
                             folder: folder_id.to_string(),
-                            sort: MessageSort::Date,
+                            sort: MessageSort::Arrival,
                             uids,
                             total,
                             unread,
@@ -913,7 +913,7 @@ where
 
     async fn open_folder(&self, folder_id: &FolderId) -> MailinerResult<usize> {
         let state = self
-            .prepare_folder_list(folder_id, MessageSort::Date)
+            .prepare_folder_list(folder_id, MessageSort::Arrival)
             .await?;
         Ok(state.total)
     }
@@ -971,7 +971,7 @@ where
                     .as_ref()
                     .filter(|idx| idx.folder == folder_id.as_str())
                     .map(|idx| idx.sort)
-                    .unwrap_or(MessageSort::Date);
+                    .unwrap_or(MessageSort::Arrival);
                 *index_slot = Some(
                     Self::build_list_index(session, folder_id.as_str(), requested, has_sort)
                         .await?,

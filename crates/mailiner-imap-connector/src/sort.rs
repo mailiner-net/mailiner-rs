@@ -13,7 +13,7 @@ use crate::ImapError;
 /// Requested sort, or Date when Size/Sender need `SORT` the server does not have.
 pub fn apply_sort_or_fallback(requested: MessageSort, has_sort: bool) -> MessageSort {
     if requested.needs_sort_capability() && !has_sort {
-        MessageSort::Date
+        MessageSort::Arrival
     } else {
         requested
     }
@@ -77,7 +77,7 @@ pub fn sort_command(sort: MessageSort) -> Option<(&'static str, &'static str)> {
     match sort {
         MessageSort::Size => Some(("REVERSE SIZE", "ALL")),
         MessageSort::Sender => Some(("FROM", "ALL")),
-        MessageSort::Date | MessageSort::Unread => None,
+        MessageSort::Arrival | MessageSort::Unread => None,
     }
 }
 
@@ -132,7 +132,7 @@ mod tests {
     fn fallback_only_when_sort_required() {
         assert_eq!(
             apply_sort_or_fallback(MessageSort::Size, false),
-            MessageSort::Date
+            MessageSort::Arrival
         );
         assert_eq!(
             apply_sort_or_fallback(MessageSort::Sender, true),
@@ -143,8 +143,8 @@ mod tests {
             MessageSort::Unread
         );
         assert_eq!(
-            apply_sort_or_fallback(MessageSort::Date, false),
-            MessageSort::Date
+            apply_sort_or_fallback(MessageSort::Arrival, false),
+            MessageSort::Arrival
         );
     }
 
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn sort_command_only_for_size_sender() {
-        assert!(sort_command(MessageSort::Date).is_none());
+        assert!(sort_command(MessageSort::Arrival).is_none());
         assert!(sort_command(MessageSort::Unread).is_none());
         assert_eq!(
             sort_command(MessageSort::Size),

@@ -110,17 +110,11 @@ Do not re-open these.
 
 ### 14. `MessageSort::Date` is arrival, not the Date header
 
-- Severity: nit
-- Where: [`crates/mailiner-core/src/models.rs`](../crates/mailiner-core/src/models.rs)
-- Documented as arrival / sequence order, newest first (no IMAP `SORT`). The UI label is still `"Date"`. Users (and future `SORT DATE` wiring) will assume header date.
-- Direction: rename to `Arrival` (keep a serde alias) or actually sort by the envelope date when `SORT` is unavailable.
+- [x] Done. Variant is `Arrival` (label “Arrival”). Persisted `"date"` still loads; serde has `alias = "date"`.
 
 ### 15. `PartKind::Other` is never produced
 
-- Severity: nit
-- Where: [`crates/mailiner-app/src/formatter/mod.rs`](../crates/mailiner-app/src/formatter/mod.rs), [`crates/mailiner-mime/src/parser`](../crates/mailiner-mime/src/parser)
-- Unknown leaves become `Attachment`. The formatter still special-cases `Other` as a text fallback.
-- Direction: drop `Other`, or emit it only for a real unknown-text path.
+- [x] Done. Removed. Unknown leaves stay `Attachment`; the formatter only treats `TextPlain` as plain text.
 
 ### 16. Leftover `Account` / timestamps / `TlsModeUnsupported`
 
@@ -135,4 +129,4 @@ Do not re-open these.
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
 3. Prefetch bounds (7) — WASM memory and load honesty.
-4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
+4. Slim the connector trait (5, 6, 13) and leftover types (12, 16) when touching those files anyway.

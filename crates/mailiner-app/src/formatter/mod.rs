@@ -56,7 +56,7 @@ impl MessageFormatter {
     fn format_part(&self, part: &MessagePart, all: &[MessagePart]) -> Option<FormatResult> {
         match part.kind {
             PartKind::TextHtml => format_html(part, all, &self.options),
-            PartKind::TextPlain | PartKind::Other => {
+            PartKind::TextPlain => {
                 // Prefer plain formatter for text/plain; also fallback for other text.
                 if part.content_type.to_ascii_lowercase().starts_with("text/") {
                     format_plain(part)

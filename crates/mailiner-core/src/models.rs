@@ -18,9 +18,10 @@ pub struct Account {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageSort {
-    /// Arrival / sequence order, newest first (no IMAP SORT required).
+    /// Arrival order, newest first (no IMAP `SORT DATE`; not the Date header).
     #[default]
-    Date,
+    #[serde(alias = "date")]
+    Arrival,
     /// Unseen first, then seen; each group newest first.
     Unread,
     /// Largest `RFC822.SIZE` first. Requires IMAP `SORT`.
@@ -30,11 +31,11 @@ pub enum MessageSort {
 }
 
 impl MessageSort {
-    pub const ALL: [Self; 4] = [Self::Date, Self::Unread, Self::Size, Self::Sender];
+    pub const ALL: [Self; 4] = [Self::Arrival, Self::Unread, Self::Size, Self::Sender];
 
     pub fn as_key(self) -> &'static str {
         match self {
-            Self::Date => "date",
+            Self::Arrival => "arrival",
             Self::Unread => "unread",
             Self::Size => "size",
             Self::Sender => "sender",
@@ -43,7 +44,7 @@ impl MessageSort {
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key {
-            "date" => Some(Self::Date),
+            "arrival" | "date" => Some(Self::Arrival),
             "unread" => Some(Self::Unread),
             "size" => Some(Self::Size),
             "sender" => Some(Self::Sender),
@@ -53,7 +54,7 @@ impl MessageSort {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Date => "Date",
+            Self::Arrival => "Arrival",
             Self::Unread => "Unread first",
             Self::Size => "Size",
             Self::Sender => "Sender",
@@ -294,9 +295,8 @@ pub enum PartKind {
     TextPlain,
     TextHtml,
     Image,
-    Attachment,
     #[default]
-    Other,
+    Attachment,
 }
 
 /// Decoded part payload. HTML is still text; use [`PartKind::TextHtml`] to distinguish.
@@ -399,7 +399,8 @@ mod tests {
         assert!(MessageSort::from_key("nope").is_none());
         assert!(MessageSort::Size.needs_sort_capability());
         assert!(MessageSort::Sender.needs_sort_capability());
-        assert!(!MessageSort::Date.needs_sort_capability());
+        assert!(!MessageSort::Arrival.needs_sort_capability());
+        assert_eq!(MessageSort::from_key("date"), Some(MessageSort::Arrival));
         assert!(!MessageSort::Unread.needs_sort_capability());
     }
 

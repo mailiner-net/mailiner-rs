@@ -60,17 +60,35 @@ fn run_shortcut(
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Jump));
         }
         ShortcutId::MoveToFolder => {
-            if ctx.selected_message.peek().is_none() {
+            if ctx.selection.peek().is_empty() {
                 ctx.show_toast(ToastAction::info("Select a message first"));
                 return;
             }
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
         }
         ShortcutId::NextMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent { delta: 1 });
+            let _ = core.send(CoreEvent::SelectAdjacent {
+                delta: 1,
+                extend: false,
+            });
         }
         ShortcutId::PrevMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent { delta: -1 });
+            let _ = core.send(CoreEvent::SelectAdjacent {
+                delta: -1,
+                extend: false,
+            });
+        }
+        ShortcutId::ExtendNextMessage => {
+            let _ = core.send(CoreEvent::SelectAdjacent {
+                delta: 1,
+                extend: true,
+            });
+        }
+        ShortcutId::ExtendPrevMessage => {
+            let _ = core.send(CoreEvent::SelectAdjacent {
+                delta: -1,
+                extend: true,
+            });
         }
         ShortcutId::ScrollMessageDown => {
             scroll_message_view(true, MessageScroll::Line);
@@ -85,21 +103,21 @@ fn run_shortcut(
             scroll_message_view(false, MessageScroll::Page);
         }
         ShortcutId::MoveToTrash => {
-            let Some((mailbox_id, message_id)) = require_selected_message(ctx) else {
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
             let _ = core.send(CoreEvent::MoveToTrash {
                 mailbox_id,
-                message_ids: vec![message_id],
+                message_ids,
             });
         }
         ShortcutId::DeletePermanently => {
-            let Some((mailbox_id, message_id)) = require_selected_message(ctx) else {
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
             let _ = core.send(CoreEvent::DeleteMessages {
                 mailbox_id,
-                message_ids: vec![message_id],
+                message_ids,
             });
         }
         ShortcutId::ShowHelp => {
@@ -108,11 +126,11 @@ fn run_shortcut(
     }
 }
 
-fn require_selected_message(ctx: &AppContext) -> Option<(MailboxId, MessageId)> {
+fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<MessageId>)> {
     let mailbox_id = ctx.selected_mailbox.peek().clone();
-    let message_id = ctx.selected_message.peek().clone();
-    match (mailbox_id, message_id) {
-        (Some(mailbox_id), Some(message_id)) => Some((mailbox_id, message_id)),
+    let message_ids = ctx.selected_ids();
+    match (mailbox_id, message_ids.is_empty()) {
+        (Some(mailbox_id), false) => Some((mailbox_id, message_ids)),
         _ => {
             ctx.show_toast(ToastAction::info("Select a message first"));
             None

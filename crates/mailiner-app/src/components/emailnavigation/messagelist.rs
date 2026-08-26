@@ -41,24 +41,36 @@ pub fn MessageList() -> Element {
     };
 
     let render_item = move |args: (usize, Arc<Message>)| -> Element {
-        let (_index, message) = args;
+        let (index, message) = args;
         let core_tx = use_coroutine_handle::<CoreEvent>();
         let ctx = use_context::<AppContext>();
-        let selected_message = ctx.selected_message.read();
-        let is_selected = selected_message
-            .as_ref()
-            .map(|id| *id == message.id)
-            .unwrap_or(false);
+        let selection = ctx.selection.read();
+        let is_selected = selection.contains(&message.id);
+        let is_focused = selection.focus() == Some(&message.id);
         let avatar = message.avatar_color();
 
         rsx! {
             div {
                 class: "message-list-item",
                 class: if is_selected { "selected" },
+                class: if is_focused { "focused" },
                 class: if !message.is_read { "unread" },
+                aria_selected: if is_selected { "true" } else { "false" },
 
-                onclick: move |_| {
-                    let _ = core_tx.send(CoreEvent::SelectMessage(message.id.clone()));
+                onmousedown: move |evt: MouseEvent| {
+                    if evt.modifiers().shift() || evt.modifiers().ctrl() || evt.modifiers().meta() {
+                        evt.prevent_default();
+                    }
+                },
+
+                onclick: move |evt: MouseEvent| {
+                    evt.prevent_default();
+                    let _ = core_tx.send(CoreEvent::SelectListClick {
+                        message_id: message.id.clone(),
+                        index,
+                        extend: evt.modifiers().shift(),
+                        toggle: evt.modifiers().ctrl() || evt.modifiers().meta(),
+                    });
                 },
 
                 div {
@@ -128,7 +140,7 @@ pub fn MessageList() -> Element {
                         buffer_size: BUFFER_SIZE,
                         debounce_ms: Some(100),
                         max_cached: Some(MAX_CACHED),
-                        reveal_index: ctx.selected_message.read().as_ref().and_then(|id| {
+                        reveal_index: ctx.selection.read().focus().and_then(|id| {
                             ctx.messages.read().position(|m| m.id == *id)
                         }),
                         on_need_range: on_need_range,

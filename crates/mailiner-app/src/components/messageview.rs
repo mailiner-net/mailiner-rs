@@ -349,7 +349,22 @@ fn MessageHeader(message: Arc<Message>) -> Element {
             .collect::<Vec<_>>()
     };
     let mut move_seq = use_signal(|| 0u32);
-    let is_read = message.is_read;
+    let selected_ids = ctx.selected_ids();
+    let selected_n = selected_ids.len();
+    let all_selected_read = {
+        let list = ctx.messages.read();
+        !selected_ids.is_empty()
+            && selected_ids.iter().all(|id| {
+                list.find(|m| m.id == *id)
+                    .map(|m| m.is_read)
+                    .unwrap_or(message.is_read)
+            })
+    };
+    let is_read = if selected_n > 1 {
+        all_selected_read
+    } else {
+        message.is_read
+    };
 
     rsx! {
         header {
@@ -411,15 +426,18 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                         class: "ui-btn ui-btn-secondary",
                         title: if is_read { "Mark as unread" } else { "Mark as read" },
                         onclick: {
-                            let message = message.clone();
                             let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
                             move |_| {
                                 let Some(mailbox_id) = mailbox_id.clone() else {
                                     return;
                                 };
+                                if ids.is_empty() {
+                                    return;
+                                }
                                 let _ = core_tx.send(CoreEvent::MarkRead {
                                     mailbox_id,
-                                    message_ids: vec![message.id.clone()],
+                                    message_ids: ids.clone(),
                                     is_read: !is_read,
                                 });
                             }
@@ -433,8 +451,8 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                         aria_label: "Move to folder",
                         value: "",
                         onchange: {
-                            let message = message.clone();
                             let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
                             move |evt: FormEvent| {
                                 let dest = evt.value();
                                 move_seq.set(move_seq() + 1);
@@ -444,9 +462,12 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                                 let Some(mailbox_id) = mailbox_id.clone() else {
                                     return;
                                 };
+                                if ids.is_empty() {
+                                    return;
+                                }
                                 let _ = core_tx.send(CoreEvent::MoveMessages {
                                     mailbox_id,
-                                    message_ids: vec![message.id.clone()],
+                                    message_ids: ids.clone(),
                                     dest_mailbox_id: MailboxId::from(dest),
                                 });
                             }
@@ -468,27 +489,34 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                         class: "ui-btn ui-btn-secondary",
                         title: if in_trash { "Delete permanently" } else { "Move to Trash" },
                         onclick: {
-                            let message = message.clone();
                             let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
+                            let n = selected_n;
                             move |_| {
                                 let Some(mailbox_id) = mailbox_id.clone() else {
                                     return;
                                 };
+                                if ids.is_empty() {
+                                    return;
+                                }
                                 #[cfg(feature = "web")]
                                 if in_trash {
                                     let Some(window) = web_sys::window() else {
                                         return;
                                     };
-                                    match window.confirm_with_message(
-                                        "Delete this message permanently?",
-                                    ) {
+                                    let prompt = if n == 1 {
+                                        "Delete this message permanently?".to_string()
+                                    } else {
+                                        format!("Delete {n} messages permanently?")
+                                    };
+                                    match window.confirm_with_message(&prompt) {
                                         Ok(true) => {}
                                         _ => return,
                                     }
                                 }
                                 let _ = core_tx.send(CoreEvent::MoveToTrash {
                                     mailbox_id,
-                                    message_ids: vec![message.id.clone()],
+                                    message_ids: ids.clone(),
                                 });
                             }
                         },

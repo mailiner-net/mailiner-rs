@@ -33,6 +33,7 @@ mod ui_prefs;
 mod outbox_store;
 mod send;
 mod shortcuts;
+mod selection;
 mod smtp_session;
 mod mailbox;
 mod message;
@@ -271,8 +272,7 @@ fn App() -> Element {
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let sort_supports_size_sender = use_signal(|| false);
-    let selected_message = use_signal(|| None);
-    let selected_at_index = use_signal(|| None);
+    let selection = use_signal(crate::selection::MessageSelection::default);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
     let download_status = use_signal(HashMap::new);
     let send_status = use_signal(|| None);
@@ -292,8 +292,7 @@ fn App() -> Element {
         sort_supports_size_sender,
         selected_mailbox,
         selected_account,
-        selected_message,
-        selected_at_index,
+        selection,
         message_view,
         download_status,
         connection_states,

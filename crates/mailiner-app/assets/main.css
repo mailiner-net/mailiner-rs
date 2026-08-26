@@ -1468,6 +1468,7 @@ textarea.ui-input {
             cursor: pointer;
             position: relative;
             border-bottom: 1px solid #e0e0e0;
+            user-select: none;
 
             &:hover {
                 background-color: var(--item-hover-background);
@@ -1477,7 +1478,7 @@ textarea.ui-input {
                 background-color: #e3f2fd;
             }
 
-            &.selected::before {
+            &.focused::before {
                 content: "";
                 display: block;
                 width: 2px;
@@ -1722,6 +1723,7 @@ textarea.ui-input {
             border-bottom: 1px solid #e0e0e0;
             cursor: pointer;
             transition: background-color 0.2s;
+            user-select: none;
 
             &:hover {
                 background-color: var(--item-hover-background);

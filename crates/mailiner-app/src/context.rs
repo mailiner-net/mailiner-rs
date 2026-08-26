@@ -12,6 +12,7 @@ use crate::outbox_store::OutboxListEntry;
 use crate::send::{ComposeSession, SendState};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
+use crate::selection::MessageSelection;
 use crate::toast::{Toast, ToastAction};
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves the current message.
@@ -61,9 +62,8 @@ pub struct AppContext {
 
     pub selected_mailbox: Signal<Option<MailboxId>>,
     pub selected_account: Signal<Option<AccountId>>,
-    pub selected_message: Signal<Option<MessageId>>,
-    /// List index when the current message was selected (before unread-sort relocate).
-    pub selected_at_index: Signal<Option<usize>>,
+    /// Selected list rows. Single-select is a one-id set; the viewer shows `focus`.
+    pub selection: Signal<MessageSelection>,
     /// Body viewer state (load / format inputs).
     pub message_view: Signal<MessageViewState>,
     /// Per-section attachment download progress (section path → status).
@@ -85,6 +85,10 @@ pub struct AppContext {
 }
 
 impl AppContext {
+    pub fn selected_ids(&self) -> Vec<MessageId> {
+        self.selection.read().ids_vec()
+    }
+
     pub fn show_toast(&self, action: ToastAction) {
         let mut toast = self.toast;
         let id = toast

@@ -113,14 +113,15 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                         picker.set(None);
                         return;
                     };
-                    let Some(message_id) = ctx.selected_message.peek().clone() else {
+                    let message_ids = ctx.selected_ids();
+                    if message_ids.is_empty() {
                         ctx.show_toast(ToastAction::info("Select a message first"));
                         picker.set(None);
                         return;
                     };
                     let _ = core.send(CoreEvent::MoveMessages {
                         mailbox_id,
-                        message_ids: vec![message_id],
+                        message_ids,
                         dest_mailbox_id: id,
                     });
                 }

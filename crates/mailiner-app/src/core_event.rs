@@ -48,9 +48,17 @@ pub enum CoreEvent {
         range: Range<usize>,
     },
     SelectMessage(MessageId),
-    /// Move the list selection by `delta` rows (↓ = +1, ↑ = −1).
+    /// Click in the message list (plain / Ctrl / Shift).
+    SelectListClick {
+        message_id: MessageId,
+        index: usize,
+        extend: bool,
+        toggle: bool,
+    },
+    /// Move the list focus by `delta` rows (↓ = +1, ↑ = −1). `extend` is Shift+arrow.
     SelectAdjacent {
         delta: i32,
+        extend: bool,
     },
     MarkRead {
         mailbox_id: MailboxId,
@@ -274,10 +282,26 @@ pub async fn core_loop(
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
             }
             CoreEvent::SelectMessage(message_id) => {
-                handle_select_message(&manager, &mut ctx, message_id, true).await;
+                handle_select_message(&manager, &mut ctx, message_id, true, true).await;
             }
-            CoreEvent::SelectAdjacent { delta } => {
-                handle_select_adjacent(&manager, &mut ctx, delta).await;
+            CoreEvent::SelectListClick {
+                message_id,
+                index,
+                extend,
+                toggle,
+            } => {
+                handle_select_list_click(
+                    &manager,
+                    &mut ctx,
+                    message_id,
+                    index,
+                    extend,
+                    toggle,
+                )
+                .await;
+            }
+            CoreEvent::SelectAdjacent { delta, extend } => {
+                handle_select_adjacent(&manager, &mut ctx, delta, extend).await;
             }
             CoreEvent::MarkRead {
                 mailbox_id,
@@ -888,8 +912,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.selected_mailbox.set(None);
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(false);
-    ctx.selected_message.set(None);
-    ctx.selected_at_index.set(None);
+    ctx.selection.write().clear();
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
@@ -902,8 +925,7 @@ async fn handle_select_mailbox(
     mailbox_id: MailboxId,
     select_first: bool,
 ) {
-    ctx.selected_message.set(None);
-    ctx.selected_at_index.set(None);
+    ctx.selection.write().clear();
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());
     ctx.messages.set(SparseList::new(0));
@@ -946,7 +968,7 @@ async fn handle_select_mailbox(
                     // Unread-first: selecting the top row would immediately
                     // consume the message the user just asked to see as unread.
                     let auto_mark = state.sort != MessageSort::Unread;
-                    handle_select_message(manager, ctx, id, auto_mark).await;
+                    handle_select_message(manager, ctx, id, auto_mark, true).await;
                 }
             }
         }
@@ -1030,6 +1052,7 @@ async fn handle_select_adjacent(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     delta: i32,
+    extend: bool,
 ) {
     if ctx.selected_mailbox.peek().is_none() {
         return;
@@ -1038,18 +1061,87 @@ async fn handle_select_adjacent(
         return;
     }
     let total = ctx.messages.read().total_count();
-    let current = ctx
-        .selected_message
-        .read()
-        .clone()
-        .and_then(|id| ctx.messages.read().position(|m| m.id == id));
+    let current = ctx.selection.read().focus_at_index().or_else(|| {
+        ctx.selection
+            .read()
+            .focus()
+            .cloned()
+            .and_then(|id| ctx.messages.read().position(|m| m.id == id))
+    });
     let Some(index) = adjacent_index(total, current, delta) else {
         return;
     };
-    select_list_index(manager, ctx, index).await;
+    if extend {
+        apply_index_range_selection(manager, ctx, index).await;
+    }
+    select_list_index(manager, ctx, index, !extend).await;
 }
 
-async fn select_list_index(manager: &AccountConnectionManager, ctx: &mut AppContext, index: usize) {
+async fn handle_select_list_click(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_id: MessageId,
+    index: usize,
+    extend: bool,
+    toggle: bool,
+) {
+    if extend {
+        apply_index_range_selection(manager, ctx, index).await;
+        handle_select_message(manager, ctx, message_id, true, false).await;
+        return;
+    }
+    if toggle {
+        ctx.selection.write().toggle(message_id.clone(), Some(index));
+        let Some(focus) = ctx.selection.read().focus().cloned() else {
+            return;
+        };
+        handle_select_message(manager, ctx, focus, true, false).await;
+        return;
+    }
+    handle_select_message(manager, ctx, message_id, true, true).await;
+}
+
+async fn apply_index_range_selection(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    end_index: usize,
+) {
+    let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
+    let start = anchor.min(end_index);
+    let end = anchor.max(end_index);
+    let mailbox_id = ctx.selected_mailbox.read().clone();
+    if let Some(mailbox_id) = mailbox_id {
+        let missing = ctx.messages.read().missing_ranges(start, end + 1);
+        for range in missing {
+            handle_fetch_message_range(manager, ctx, mailbox_id.clone(), range).await;
+        }
+    }
+    let ids = cached_ids_in_range(ctx, start, end);
+    let focus = ctx
+        .messages
+        .read()
+        .get(end_index)
+        .map(|m| m.id.clone());
+    if let Some(focus) = focus {
+        ctx.selection
+            .write()
+            .set_range(ids, focus, Some(end_index));
+    }
+}
+
+fn cached_ids_in_range(ctx: &AppContext, start: usize, end_inclusive: usize) -> Vec<MessageId> {
+    let list = ctx.messages.read();
+    (start..=end_inclusive)
+        .filter_map(|i| list.get(i).map(|m| m.id.clone()))
+        .collect()
+}
+
+async fn select_list_index(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    index: usize,
+    replace_selection: bool,
+) {
     let total = ctx.messages.read().total_count();
     if ctx.messages.read().get(index).is_none() {
         let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
@@ -1062,7 +1154,7 @@ async fn select_list_index(manager: &AccountConnectionManager, ctx: &mut AppCont
     let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
         return;
     };
-    handle_select_message(manager, ctx, message_id, true).await;
+    handle_select_message(manager, ctx, message_id, true, replace_selection).await;
 }
 
 async fn select_after_removed_row(
@@ -1077,7 +1169,7 @@ async fn select_after_removed_row(
     let Some(index) = index_after_removal(total, removed_index) else {
         return;
     };
-    select_list_index(manager, ctx, index).await;
+    select_list_index(manager, ctx, index, true).await;
 }
 
 async fn handle_select_message(
@@ -1085,10 +1177,14 @@ async fn handle_select_message(
     ctx: &mut AppContext,
     message_id: MessageId,
     auto_mark_read: bool,
+    replace_selection: bool,
 ) {
-    ctx.selected_at_index
-        .set(ctx.messages.read().position(|m| m.id == message_id));
-    ctx.selected_message.set(Some(message_id.clone()));
+    let index = ctx.messages.read().position(|m| m.id == message_id);
+    if replace_selection {
+        ctx.selection.write().replace(message_id.clone(), index);
+    } else {
+        ctx.selection.write().note_focus(message_id.clone(), index);
+    }
     ctx.download_status.set(HashMap::new());
     ctx.message_view.set(MessageViewState::Loading {
         message_id: message_id.clone(),
@@ -1127,7 +1223,7 @@ async fn handle_select_message(
 
     match load_message(connector, &folder_id, &core_id).await {
         Ok(loaded) => {
-            if ctx.selected_message.read().as_ref() != Some(&message_id) {
+            if ctx.selection.read().focus() != Some(&message_id) {
                 return;
             }
             ctx.message_view.set(MessageViewState::Ready {
@@ -1159,7 +1255,7 @@ async fn handle_select_message(
             }
         }
         Err(e) => {
-            if ctx.selected_message.read().as_ref() != Some(&message_id) {
+            if ctx.selection.read().focus() != Some(&message_id) {
                 return;
             }
             error!("Failed to load message {}: {}", message_id, e);
@@ -1265,17 +1361,17 @@ fn take_messages_from_ui(
     ids: &[MessageId],
 ) -> (Vec<RemovedMessage>, Option<usize>) {
     let idset: std::collections::HashSet<MessageId> = ids.iter().cloned().collect();
-    let selected = ctx.selected_message.read().clone();
-    let selected_removed_index = selected.as_ref().and_then(|id| {
+    let focus = ctx.selection.read().focus().cloned();
+    let selected_removed_index = focus.as_ref().and_then(|id| {
         if !idset.contains(id) {
             return None;
         }
-        // Prefer the index from when the row was selected. Unread-first
+        // Prefer the index from when the row was focused. Unread-first
         // auto-mark-read relocates the message into the read section, which
         // would otherwise make "next" a random later read row.
-        ctx.selected_at_index
-            .read()
-            .or_else(|| ctx.messages.read().position(|m| &m.id == id))
+        ctx.selection.read().focus_at_index().or_else(|| {
+            ctx.messages.read().position(|m| &m.id == id)
+        })
     });
     let taken = ctx
         .messages
@@ -1292,9 +1388,9 @@ fn take_messages_from_ui(
             bump_mailbox_unread(ctx, &mb, -unread_n, true);
         }
     }
+    ctx.selection.write().remove_ids(&idset);
     if selected_removed_index.is_some() {
-        ctx.selected_message.set(None);
-        ctx.selected_at_index.set(None);
+        ctx.selection.write().clear();
         ctx.message_view.set(MessageViewState::Empty);
         ctx.download_status.set(HashMap::new());
     }
@@ -1679,7 +1775,7 @@ async fn handle_download_attachment(
     size_hint: Option<u64>,
 ) {
     // Ignore if user navigated away.
-    if ctx.selected_message.read().as_ref() != Some(&message_id) {
+    if ctx.selection.read().focus() != Some(&message_id) {
         return;
     }
     if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
@@ -1779,7 +1875,7 @@ async fn handle_download_attachment(
     if failed {
         return;
     }
-    if ctx.selected_message.read().as_ref() != Some(&message_id) {
+    if ctx.selection.read().focus() != Some(&message_id) {
         return;
     }
 

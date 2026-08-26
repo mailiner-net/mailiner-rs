@@ -13,5 +13,6 @@ pub mod ui_prefs;
 pub mod message_loader;
 pub mod toast;
 pub mod shortcuts;
+pub mod selection;
 
 // connection / core_loop are binary-only (Dioxus signals + WASM WebSocket).

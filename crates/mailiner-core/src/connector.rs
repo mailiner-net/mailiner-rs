@@ -12,8 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Account, Envelope, Folder, FolderCounts, FolderListState, MessageContent, MessagePart,
-    MessageSort, PartChunk, PartKind, TransferEncoding,
+    Account, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MessageContent,
+    MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).
@@ -64,12 +64,12 @@ where
         range: Range<usize>,
     ) -> Result<Vec<Envelope>>;
     async fn get_envelope(&self, folder_id: &FolderId, message_id: &MessageId) -> Result<Envelope>;
-    /// Set or clear named flags (`is_read`, `is_flagged`, `is_draft`, `is_deleted`, `is_starred`).
+    /// Set or clear flags. Unknown names cannot be passed (typed).
     async fn update_envelope_flags(
         &self,
         folder_id: &FolderId,
         message_ids: &[MessageId],
-        flags: &[(&str, bool)],
+        flags: &[(EnvelopeFlag, bool)],
     ) -> Result<()>;
     /// Keep an Unread-first list index in sync after a `\Seen` change.
     ///
@@ -401,7 +401,7 @@ where
         &self,
         _folder_id: &FolderId,
         _message_ids: &[MessageId],
-        _flags: &[(&str, bool)],
+        _flags: &[(EnvelopeFlag, bool)],
     ) -> Result<()> {
         Ok(())
     }

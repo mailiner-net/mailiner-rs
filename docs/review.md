@@ -25,7 +25,8 @@ Do not re-open these.
 | Attachment download hint used decoded `size` instead of wire size | `b14f132` |
 | Send cancel requeued before DATA finished (double-send) | `322db54` |
 | Date/sequence list index stale after remote EXPUNGE | `289102a` |
-| Envelope had no RFC Message-ID / threading headers | 00ec6ba |
+| Envelope had no RFC Message-ID / threading headers | `611fa4d` |
+| Stringly `update_envelope_flags` | f9209b4 |
 
 ---
 
@@ -51,11 +52,7 @@ Do not re-open these.
 
 ### 4. Flags are stringly typed; star vs flag is unused
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/connector.rs`](../crates/mailiner-core/src/connector.rs) (`update_envelope_flags`), [`crates/mailiner-imap-connector/src/lib.rs`](../crates/mailiner-imap-connector/src/lib.rs) (`imap_flag_atom`)
-- The trait takes `&[(&str, bool)]` (`"is_read"`, `"is_flagged"`, `"is_starred"`, …). Typos fail only at `imap_flag_atom` runtime.
-- `Envelope` has both `is_starred` and `is_flagged`. The app never reads either. IMAP maps star to a custom `\Starred` while `\Flagged` is the usual star.
-- Direction: a small `EnvelopeFlag` enum (map to IMAP atoms only in the connector). Collapse star/flag to one field, or document the distinction and actually use it.
+- [x] Done. `EnvelopeFlag` is the trait argument; IMAP maps it to atoms. `Starred` (`\Starred`) and `Flagged` (`\Flagged`) stay distinct; the app still does not surface either.
 
 ### 5. Unused `EmailConnector` methods
 
@@ -145,7 +142,7 @@ Do not re-open these.
 
 ## Suggested order
 
-1. Folder-scoped `MessageId` (1) and typed flags (4) — unblock a lot of later IMAP work; do not mix with a feature PR.
+1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
 3. Prefetch bounds (7) and missing-section errors (8) — WASM memory and load honesty.
 4. Slim the connector trait (5, 6, 13) and the leftover types (12, 14–16) when touching those files anyway.
 5. COPY+delete partial success (9) and `UNSEEN` counts (10) with the next IMAP pass.

@@ -25,8 +25,8 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
-    Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, Folder,
-    FolderCounts, FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId,
+    Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag,
+    Folder, FolderCounts, FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId,
     MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
@@ -568,14 +568,13 @@ where
     }
 }
 
-fn imap_flag_atom(flag: &str) -> Result<&'static str, ImapError> {
+fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     match flag {
-        "is_read" => Ok("\\Seen"),
-        "is_flagged" => Ok("\\Flagged"),
-        "is_draft" => Ok("\\Draft"),
-        "is_deleted" => Ok("\\Deleted"),
-        "is_starred" => Ok("\\Starred"),
-        _ => Err(ImapError::InvalidData(format!("Unknown flag: {flag}"))),
+        EnvelopeFlag::Read => "\\Seen",
+        EnvelopeFlag::Flagged => "\\Flagged",
+        EnvelopeFlag::Draft => "\\Draft",
+        EnvelopeFlag::Deleted => "\\Deleted",
+        EnvelopeFlag::Starred => "\\Starred",
     }
 }
 
@@ -1159,7 +1158,7 @@ where
         &self,
         folder_id: &FolderId,
         message_ids: &[MessageId],
-        flags: &[(&str, bool)],
+        flags: &[(EnvelopeFlag, bool)],
     ) -> MailinerResult<()> {
         if message_ids.is_empty() || flags.is_empty() {
             return Ok(());
@@ -1176,7 +1175,7 @@ where
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
         for (flag, value) in flags {
-            let atom = imap_flag_atom(flag)?;
+            let atom = imap_flag_atom(*flag);
             let query = if *value {
                 format!("+FLAGS.SILENT ({atom})")
             } else {
@@ -1581,10 +1580,10 @@ mod tests {
 
     #[test]
     fn imap_flag_atoms() {
-        assert_eq!(imap_flag_atom("is_read").unwrap(), "\\Seen");
-        assert_eq!(imap_flag_atom("is_flagged").unwrap(), "\\Flagged");
-        assert_eq!(imap_flag_atom("is_deleted").unwrap(), "\\Deleted");
-        assert!(imap_flag_atom("nope").is_err());
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Read), "\\Seen");
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Flagged), "\\Flagged");
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Deleted), "\\Deleted");
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Starred), "\\Starred");
     }
 
     #[test]

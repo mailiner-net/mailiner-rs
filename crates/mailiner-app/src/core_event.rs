@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{FolderId, MailboxRole, MessageId as CoreMessageId, MessageSort};
+use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageId as CoreMessageId, MessageSort};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -1222,7 +1222,7 @@ async fn handle_select_message(
             if was_unread && auto_mark_read {
                 apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
                 if let Err(e) = connector
-                    .update_envelope_flags(&folder_id, &[core_id], &[("is_read", true)])
+                    .update_envelope_flags(&folder_id, &[core_id], &[(EnvelopeFlag::Read, true)])
                     .await
                 {
                     warn!("Auto-mark as read failed for {}: {}", message_id, e);
@@ -1457,7 +1457,7 @@ async fn handle_mark_read(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
     if let Err(e) = connector
-        .update_envelope_flags(&folder_id, &core_ids, &[("is_read", is_read)])
+        .update_envelope_flags(&folder_id, &core_ids, &[(EnvelopeFlag::Read, is_read)])
         .await
     {
         error!("Failed to update read flag: {}", e);

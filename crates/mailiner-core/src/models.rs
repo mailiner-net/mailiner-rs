@@ -203,6 +203,19 @@ impl fmt::Display for EmailAddress {
     }
 }
 
+/// IMAP flag names used by [`crate::connector::EmailConnector::update_envelope_flags`].
+///
+/// `Starred` is the custom `\Starred` atom; `Flagged` is standard `\Flagged`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvelopeFlag {
+    Read,
+    Flagged,
+    Draft,
+    Deleted,
+    Starred,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub id: MessageId,

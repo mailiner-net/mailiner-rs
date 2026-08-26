@@ -63,7 +63,7 @@ where
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>>;
-    async fn get_envelope(&self, message_id: &MessageId) -> Result<Envelope>;
+    async fn get_envelope(&self, folder_id: &FolderId, message_id: &MessageId) -> Result<Envelope>;
     /// Set or clear named flags (`is_read`, `is_flagged`, `is_draft`, `is_deleted`, `is_starred`).
     async fn update_envelope_flags(
         &self,
@@ -360,11 +360,11 @@ where
         mock_envelopes(folder_id, range)
     }
 
-    async fn get_envelope(&self, message_id: &MessageId) -> Result<Envelope> {
+    async fn get_envelope(&self, folder_id: &FolderId, message_id: &MessageId) -> Result<Envelope> {
         Ok(Envelope {
             id: message_id.clone(),
             account_id: AccountId::new("mock-account-1"),
-            folder_id: FolderId::new("inbox"),
+            folder_id: folder_id.clone(),
             subject: Some("Test Message".to_string()),
             from: Some(crate::models::EmailAddress::List(vec![
                 crate::models::EmailAddr {

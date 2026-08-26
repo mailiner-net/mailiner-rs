@@ -91,8 +91,8 @@ where
     username: String,
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
-    /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by message UID.
-    structure_cache: Mutex<HashMap<MessageId, BodyPart>>,
+    /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by folder + UID.
+    structure_cache: Mutex<HashMap<(FolderId, MessageId), BodyPart>>,
     /// RFC 5256 SORT advertised after LOGIN.
     has_sort: AtomicBool,
     /// Last [`prepare_folder_list`] index (UID order, or sequence for Date).
@@ -306,6 +306,34 @@ where
         }
 
         (is_read, is_starred, is_flagged, is_draft, is_deleted)
+    }
+
+    /// Drop cached BODYSTRUCTURE rows and the list index entries for these UIDs.
+    /// Sequence-based Date sort is cleared entirely (EXPUNGE shifts numbers).
+    async fn forget_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) {
+        {
+            let mut cache = self.structure_cache.lock().await;
+            for id in message_ids {
+                cache.remove(&(folder_id.clone(), id.clone()));
+            }
+        }
+        let mut slot = self.list_index.lock().await;
+        let Some(idx) = slot.as_mut() else {
+            return;
+        };
+        if idx.folder != folder_id.as_str() {
+            return;
+        }
+        if let Some(uids) = idx.uids.as_mut() {
+            let gone: std::collections::HashSet<u32> = message_ids
+                .iter()
+                .filter_map(|id| id.as_str().parse().ok())
+                .collect();
+            uids.retain(|u| !gone.contains(u));
+            idx.total = uids.len();
+        } else {
+            *slot = None;
+        }
     }
 
     fn parse_folder_hierarchy(name: &str) -> (String, Option<String>) {
@@ -973,7 +1001,7 @@ where
         if !structures.is_empty() {
             let mut cache = self.structure_cache.lock().await;
             for (id, part) in structures {
-                cache.insert(id, part);
+                cache.insert((folder_id.clone(), id), part);
                 if cache.len() > 500 {
                     if let Some(k) = cache.keys().next().cloned() {
                         cache.remove(&k);
@@ -984,7 +1012,11 @@ where
         Ok(envelopes)
     }
 
-    async fn get_envelope(&self, message_id: &MessageId) -> MailinerResult<Envelope> {
+    async fn get_envelope(
+        &self,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+    ) -> MailinerResult<Envelope> {
         let (envelope, structure) = {
             let mut imap = self.imap.lock().await;
             let ImapSession::Authenticated(session) = &mut *imap else {
@@ -992,7 +1024,7 @@ where
             };
 
             session
-                .select("INBOX")
+                .select(folder_id.as_str())
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
@@ -1036,7 +1068,7 @@ where
                 Envelope {
                     id: message_id.clone(),
                     account_id: self.account_id.clone(),
-                    folder_id: FolderId::new("INBOX"),
+                    folder_id: folder_id.clone(),
                     subject: parsed_headers.subject().map(|s| s.to_string()),
                     from: Self::parse_email_address(parsed_headers.from()),
                     to: Self::parse_email_address(parsed_headers.to()),
@@ -1061,7 +1093,7 @@ where
             self.structure_cache
                 .lock()
                 .await
-                .insert(message_id.clone(), part);
+                .insert((folder_id.clone(), message_id.clone()), part);
         }
         Ok(envelope)
     }
@@ -1150,7 +1182,11 @@ where
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
         match run_copyuid_command(session, &format!("UID MOVE {uids} {dest}")).await {
-            Ok(dest_uids) => return Ok(dest_uids),
+            Ok(dest_uids) => {
+                drop(imap);
+                self.forget_messages(folder_id, message_ids).await;
+                return Ok(dest_uids);
+            }
             Err(_) => {}
         }
 
@@ -1158,6 +1194,8 @@ where
         let dest_uids =
             run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
         delete_selected_uids(session, &uids).await?;
+        drop(imap);
+        self.forget_messages(folder_id, message_ids).await;
         Ok(dest_uids)
     }
 
@@ -1179,7 +1217,10 @@ where
             .select(folder_id.as_str())
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
-        delete_selected_uids(session, &uids).await
+        delete_selected_uids(session, &uids).await?;
+        drop(imap);
+        self.forget_messages(folder_id, message_ids).await;
+        Ok(())
     }
 
     async fn get_body_structure(
@@ -1189,7 +1230,7 @@ where
     ) -> MailinerResult<BodyPart> {
         {
             let cache = self.structure_cache.lock().await;
-            if let Some(part) = cache.get(message_id) {
+            if let Some(part) = cache.get(&(folder_id.clone(), message_id.clone())) {
                 return Ok(part.clone());
             }
         }
@@ -1225,7 +1266,7 @@ where
         self.structure_cache
             .lock()
             .await
-            .insert(message_id.clone(), part.clone());
+            .insert((folder_id.clone(), message_id.clone()), part.clone());
         Ok(part)
     }
 
@@ -1295,7 +1336,7 @@ where
             .structure_cache
             .lock()
             .await
-            .get(message_id)
+            .get(&(folder_id.clone(), message_id.clone()))
             .and_then(|root| part_size_from_structure(root, section));
 
         if let Some(total) = total_hint {

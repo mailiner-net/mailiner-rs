@@ -40,8 +40,6 @@ pub enum SendErrorKind {
     Cancelled,
     /// Account has no SMTP settings.
     NotConfigured,
-    /// SMTP TLS mode the client cannot speak.
-    TlsModeUnsupported,
     /// A RCPT TO was rejected (5xx).
     RecipientRejected,
     /// Server rejected the message as too large.

@@ -106,10 +106,8 @@ Do not re-open these.
 
 ### 16. Leftover `Account` / timestamps / `TlsModeUnsupported`
 
-- Severity: nit
-- `authenticate` returns `mailiner_core::Account` and the app discards it (`AccountConfig` is the real record). `created_at` / `updated_at` on `Account` / `Folder` / `Envelope` are set to `Utc::now()` on every fetch and nobody reads them.
-- `SendErrorKind::TlsModeUnsupported` is unused in preflight (every `SmtpTlsMode` is spoken) but still has UI copy in `send.rs`.
-- Direction: drop `Account` from the connector return or align it with `AccountConfig`. Delete `TlsModeUnsupported` or keep it only as a real future variant.
+- [x] `TlsModeUnsupported` removed. Persisted `"tls_mode_unsupported"` becomes `Permanent` via `#[serde(other)]`.
+- Still open: `authenticate` returns unused `Account`; `created_at` / `updated_at` on `Account` / `Folder` / `Envelope` are write-only.
 
 ---
 

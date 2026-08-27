@@ -80,14 +80,14 @@ pub(crate) fn text_content(part: &MessagePart) -> Option<&str> {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use mailiner_core::ids::{MessageId, MessagePartId};
+    use mailiner_core::ids::{FolderId, MessageId, MessagePartId};
     use mailiner_core::models::{MessageContent, PartKind, TransferEncoding};
 
     fn part(kind: PartKind, ct: &str, text: &str) -> MessagePart {
         let now = Utc::now();
         MessagePart {
             id: MessagePartId::new("p1"),
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             path: vec!["TEXT".into()],
             kind,
             content_type: ct.into(),

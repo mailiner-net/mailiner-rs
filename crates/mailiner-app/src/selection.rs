@@ -129,7 +129,7 @@ mod tests {
     use super::*;
 
     fn id(s: &str) -> MessageId {
-        MessageId::from(s.to_string())
+        MessageId::new(mailiner_core::FolderId::new("INBOX"), s)
     }
 
     #[test]

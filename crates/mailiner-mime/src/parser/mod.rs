@@ -198,12 +198,13 @@ mod tests {
     use super::*;
     use mailiner_core::body::ContentDisposition;
     use mailiner_core::connector::mock_multipart_structure;
+    use mailiner_core::ids::FolderId;
 
     #[test]
     fn alternative_prefers_html() {
         let root = mock_multipart_structure();
         let parser = MessageParser::with_defaults();
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         // Should have HTML (from alternative) + PDF attachment
         assert!(
             parts.iter().any(|p| p.kind == PartKind::TextHtml),
@@ -238,7 +239,7 @@ mod tests {
             ..Default::default()
         };
         let parser = MessageParser::with_defaults();
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].section(), "TEXT");
         assert_eq!(parts[0].kind, PartKind::TextPlain);
@@ -272,7 +273,7 @@ mod tests {
             ..Default::default()
         };
         let parser = MessageParser::with_defaults();
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         let img = parts.iter().find(|p| p.kind == PartKind::Image).unwrap();
         assert!(img.is_hidden);
         assert!(img.is_attachment);
@@ -290,7 +291,7 @@ mod tests {
             ..Default::default()
         };
         let parser = MessageParser::with_defaults();
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         assert_eq!(parts.len(), 1);
         assert!(!parts[0].is_attachment);
         assert_eq!(parts[0].kind, PartKind::TextPlain);
@@ -306,7 +307,7 @@ mod tests {
             ..Default::default()
         };
         let parser = MessageParser::with_defaults();
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].kind, PartKind::Attachment);
         assert!(parts[0].is_attachment);
@@ -327,7 +328,7 @@ mod tests {
         };
         let parser = MessageParser::with_defaults();
         // message/rfc822 is not text/image/multipart — falls through to attachment
-        let parts = parser.parse(&MessageId::new("1"), &root);
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].kind, PartKind::Attachment);
     }

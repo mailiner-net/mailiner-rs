@@ -279,7 +279,7 @@ where
             .ok_or::<MailinerError>(
                 ImapError::InvalidData("Failed to parse headers".to_string()).into(),
             )?;
-        let mid = MessageId::new(uid.to_string());
+        let mid = MessageId::new(folder_id.clone(), uid.to_string());
         let has_attachments = if let Some(bs) = fetch.bodystructure() {
             let part = bodystructure::convert_body_structure(bs);
             let has = bodystructure::structure_has_attachments(&part);
@@ -360,7 +360,7 @@ where
         if let Some(uids) = idx.uids.as_mut() {
             let gone: std::collections::HashSet<u32> = message_ids
                 .iter()
-                .filter_map(|id| id.as_str().parse().ok())
+                .filter_map(|id| id.as_uid().parse().ok())
                 .collect();
             uids.retain(|u| !gone.contains(u));
             idx.total = uids.len();
@@ -588,7 +588,7 @@ fn uid_set(ids: &[MessageId]) -> Result<String, ImapError> {
     }
     Ok(ids
         .iter()
-        .map(MessageId::as_str)
+        .map(MessageId::as_uid)
         .collect::<Vec<_>>()
         .join(","))
 }
@@ -597,14 +597,16 @@ fn quote_mailbox(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn expand_uid_set(members: &[imap_proto::UidSetMember]) -> Vec<MessageId> {
+fn expand_uid_set(folder_id: &FolderId, members: &[imap_proto::UidSetMember]) -> Vec<MessageId> {
     let mut out = Vec::new();
     for member in members {
         match member {
-            imap_proto::UidSetMember::Uid(u) => out.push(MessageId::new(u.to_string())),
+            imap_proto::UidSetMember::Uid(u) => {
+                out.push(MessageId::new(folder_id.clone(), u.to_string()))
+            }
             imap_proto::UidSetMember::UidRange(range) => {
                 for u in *range.start()..=*range.end() {
-                    out.push(MessageId::new(u.to_string()));
+                    out.push(MessageId::new(folder_id.clone(), u.to_string()));
                 }
             }
         }
@@ -612,9 +614,14 @@ fn expand_uid_set(members: &[imap_proto::UidSetMember]) -> Vec<MessageId> {
     out
 }
 
-fn copyuid_dest(code: &Option<imap_proto::ResponseCode<'_>>) -> Option<Vec<MessageId>> {
+fn copyuid_dest(
+    folder_id: &FolderId,
+    code: &Option<imap_proto::ResponseCode<'_>>,
+) -> Option<Vec<MessageId>> {
     match code {
-        Some(imap_proto::ResponseCode::CopyUid(_, _, dest)) => Some(expand_uid_set(dest)),
+        Some(imap_proto::ResponseCode::CopyUid(_, _, dest)) => {
+            Some(expand_uid_set(folder_id, dest))
+        }
         _ => None,
     }
 }
@@ -622,6 +629,7 @@ fn copyuid_dest(code: &Option<imap_proto::ResponseCode<'_>>) -> Option<Vec<Messa
 /// Run a tagged command and collect destination UIDs from COPYUID.
 async fn run_copyuid_command<S>(
     session: &mut Session<TlsStream<S>>,
+    dest_folder_id: &FolderId,
     command: &str,
 ) -> MailinerResult<Vec<MessageId>>
 where
@@ -640,7 +648,7 @@ where
             .ok_or_else(|| ImapError::Imap("IMAP connection closed".into()))?;
         match resp.parsed() {
             imap_proto::Response::Data { code, .. } => {
-                if let Some(uids) = copyuid_dest(code) {
+                if let Some(uids) = copyuid_dest(dest_folder_id, code) {
                     dest_uids = uids;
                 }
             }
@@ -650,7 +658,7 @@ where
                 code,
                 information,
             } if done_tag == &tag => {
-                if let Some(uids) = copyuid_dest(code) {
+                if let Some(uids) = copyuid_dest(dest_folder_id, code) {
                     dest_uids = uids;
                 }
                 return match status {
@@ -982,7 +990,7 @@ where
             if let Some(order) = uid_order {
                 let mut by_uid: HashMap<u32, Envelope> = envelopes
                     .into_iter()
-                    .filter_map(|e| e.id.as_str().parse::<u32>().ok().map(|u| (u, e)))
+                    .filter_map(|e| e.id.as_uid().parse::<u32>().ok().map(|u| (u, e)))
                     .collect();
                 envelopes = order
                     .into_iter()
@@ -1059,7 +1067,7 @@ where
         let mut unread = index.unread.unwrap_or(0);
         let mut moves = Vec::new();
         for id in message_ids {
-            let Ok(uid) = id.as_str().parse::<u32>() else {
+            let Ok(uid) = id.as_uid().parse::<u32>() else {
                 continue;
             };
             if let Some(mv) = sort::move_uid_for_seen_flag(uids, &mut unread, uid, now_read) {
@@ -1091,7 +1099,8 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
-        match run_copyuid_command(session, &format!("UID MOVE {uids} {dest}")).await {
+        match run_copyuid_command(session, dest_folder_id, &format!("UID MOVE {uids} {dest}")).await
+        {
             Ok(dest_uids) => {
                 drop(imap);
                 self.forget_messages(folder_id, message_ids).await;
@@ -1101,7 +1110,9 @@ where
         }
 
         // RFC 6851 fallback: COPY + \Deleted + EXPUNGE.
-        let dest_uids = run_copyuid_command(session, &format!("UID COPY {uids} {dest}")).await?;
+        let dest_uids =
+            run_copyuid_command(session, dest_folder_id, &format!("UID COPY {uids} {dest}"))
+                .await?;
         if let Err(e) = delete_selected_uids(session, &uids).await {
             return Err(MailinerError::PartialMove {
                 message: e.to_string(),
@@ -1161,7 +1172,7 @@ where
                 .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
             let mut fetch = session
-                .uid_fetch(message_id.as_str(), "(BODYSTRUCTURE)")
+                .uid_fetch(message_id.as_uid(), "(BODYSTRUCTURE)")
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch BODYSTRUCTURE: {}", e)))?;
 
@@ -1208,7 +1219,7 @@ where
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
 
         let mut fetch = session
-            .uid_fetch(message_id.as_str(), &query)
+            .uid_fetch(message_id.as_uid(), &query)
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to fetch parts: {}", e)))?;
 
@@ -1258,7 +1269,7 @@ where
 
         let imap = Arc::clone(&self.imap);
         let folder_id = folder_id.as_str().to_string();
-        let message_id = message_id.as_str().to_string();
+        let message_id = message_id.as_uid().to_string();
         let section = section.to_string();
         let chunk_size = Self::STREAM_CHUNK;
         let max_download = Self::MAX_DOWNLOAD;
@@ -1441,7 +1452,11 @@ mod tests {
 
     #[test]
     fn uid_set_joins() {
-        let ids = [MessageId::new("12"), MessageId::new("44")];
+        let folder = FolderId::new("INBOX");
+        let ids = [
+            MessageId::new(folder.clone(), "12"),
+            MessageId::new(folder, "44"),
+        ];
         assert_eq!(uid_set(&ids).unwrap(), "12,44");
         assert!(uid_set(&[]).is_err());
     }
@@ -1455,11 +1470,16 @@ mod tests {
 
     #[test]
     fn expand_uid_range() {
-        let ids = expand_uid_set(&[
-            imap_proto::UidSetMember::Uid(12),
-            imap_proto::UidSetMember::UidRange(20..=22),
-        ]);
-        let raw: Vec<_> = ids.iter().map(MessageId::as_str).collect();
+        let folder = FolderId::new("Sent");
+        let ids = expand_uid_set(
+            &folder,
+            &[
+                imap_proto::UidSetMember::Uid(12),
+                imap_proto::UidSetMember::UidRange(20..=22),
+            ],
+        );
+        let raw: Vec<_> = ids.iter().map(MessageId::as_uid).collect();
         assert_eq!(raw, ["12", "20", "21", "22"]);
+        assert!(ids.iter().all(|id| id.folder_id() == &folder));
     }
 }

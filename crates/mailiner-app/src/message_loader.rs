@@ -146,7 +146,7 @@ mod tests {
     fn loads_multipart_prefers_html_content() {
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
-        let msg = MessageId::new("1");
+        let msg = MessageId::new(folder.clone(), "1");
         let loaded = block_on(load_message::<NullStream, _>(&connector, &folder, &msg)).unwrap();
 
         assert_eq!(loaded.envelope_id, msg);
@@ -173,7 +173,7 @@ mod tests {
     fn content_parts_decoded_attachment_not_fetched() {
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
-        let msg = MessageId::new("42");
+        let msg = MessageId::new(folder.clone(), "42");
         let loaded = block_on(load_message::<NullStream, _>(&connector, &folder, &msg)).unwrap();
 
         for p in loaded.attachments() {

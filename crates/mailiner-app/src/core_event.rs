@@ -11,7 +11,7 @@ use futures_util::future::{Either, select};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageId as CoreMessageId, MessageSort};
+use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageSort};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -1198,14 +1198,13 @@ async fn handle_select_message(
     };
 
     let folder_id = FolderId::new(mailbox_id.to_string());
-    let core_id = CoreMessageId::new(message_id.to_string());
     info!(
         "Loading message {} in {}",
         message_id,
         mailbox_id.to_string()
     );
 
-    match load_message(connector, &folder_id, &core_id).await {
+    match load_message(connector, &folder_id, &message_id).await {
         Ok(loaded) => {
             if ctx.selection.read().focus() != Some(&message_id) {
                 return;
@@ -1222,7 +1221,11 @@ async fn handle_select_message(
             if was_unread && auto_mark_read {
                 apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
                 if let Err(e) = connector
-                    .update_envelope_flags(&folder_id, &[core_id], &[(EnvelopeFlag::Read, true)])
+                    .update_envelope_flags(
+                        &folder_id,
+                        std::slice::from_ref(&message_id),
+                        &[(EnvelopeFlag::Read, true)],
+                    )
                     .await
                 {
                     warn!("Auto-mark as read failed for {}: {}", message_id, e);
@@ -1402,7 +1405,7 @@ fn restore_snapshots(
             for (snap, id) in snapshots.iter_mut().zip(ids) {
                 let mut next = (*snap.message).clone();
                 next.id = id.clone();
-                next.envelope.id = CoreMessageId::new(id.to_string());
+                next.envelope.id = id.clone();
                 snap.message = Arc::new(next);
             }
         }
@@ -1424,10 +1427,8 @@ fn restore_snapshots(
     }
 }
 
-fn core_message_ids(ids: &[MessageId]) -> Vec<CoreMessageId> {
-    ids.iter()
-        .map(|id| CoreMessageId::new(id.to_string()))
-        .collect()
+fn core_message_ids(ids: &[MessageId]) -> Vec<MessageId> {
+    ids.to_vec()
 }
 
 async fn handle_mark_read(
@@ -1538,10 +1539,7 @@ async fn handle_move_messages(
                 .get(&dest_mailbox_id)
                 .map(|n| n.title().to_string())
                 .unwrap_or_else(|| dest_mailbox_id.to_string());
-            let dest_ids: Vec<MessageId> = dest_uids
-                .into_iter()
-                .map(|id| MessageId::from(id.to_string()))
-                .collect();
+            let dest_ids = dest_uids;
             if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
                 ctx.show_toast(ToastAction::moved(
                     dest_label,
@@ -1626,10 +1624,7 @@ async fn handle_move_to_trash(
             if unread_n != 0 {
                 bump_mailbox_unread(ctx, &trash_id, unread_n, false);
             }
-            let dest_ids: Vec<MessageId> = dest_uids
-                .into_iter()
-                .map(|id| MessageId::from(id.to_string()))
-                .collect();
+            let dest_ids = dest_uids;
             if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
                 ctx.show_toast(ToastAction::trashed(MoveUndo {
                     from: trash_id,
@@ -1723,10 +1718,7 @@ async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, u
                     } else if unread_n != 0 {
                         bump_mailbox_unread(ctx, &undo.from, -unread_n, false);
                     }
-                    let new_ids: Vec<MessageId> = new_uids
-                        .into_iter()
-                        .map(|id| MessageId::from(id.to_string()))
-                        .collect();
+                    let new_ids = new_uids;
                     restore_snapshots(ctx, &undo.to, undo.snapshots, Some(&new_ids));
                     ctx.show_toast(ToastAction::info("Undone"));
                 }
@@ -1814,14 +1806,13 @@ async fn handle_download_attachment(
     );
 
     let folder_id = FolderId::new(mailbox_id.to_string());
-    let core_id = CoreMessageId::new(message_id.to_string());
     info!(
         "Downloading attachment section {} for message {}",
         section, message_id
     );
 
     let stream_result = connector
-        .stream_raw_part(&folder_id, &core_id, &section)
+        .stream_raw_part(&folder_id, &message_id, &section)
         .await;
 
     let mut stream = match stream_result {

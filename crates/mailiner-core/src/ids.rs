@@ -97,8 +97,9 @@ impl fmt::Display for FolderId {
 
 impl fmt::Display for MessageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Unit separator: mailbox names may contain `#`, `/`, `:`.
-        write!(f, "{}\u{1f}{}", self.folder_id.as_str(), self.uid)
+        // Length-prefixed folder so a U+001F in either part cannot collide.
+        let folder = self.folder_id.as_str();
+        write!(f, "{}:{}\u{1f}{}", folder.len(), folder, self.uid)
     }
 }
 
@@ -132,5 +133,13 @@ mod tests {
             MessageId::try_new(FolderId::new("INBOX"), ""),
             Err(EmptyMessageId)
         );
+    }
+
+    #[test]
+    fn display_does_not_collide_when_folder_contains_separator() {
+        let a = MessageId::new(FolderId::new("IN\u{1f}BOX"), "12");
+        let b = MessageId::new(FolderId::new("IN"), "BOX\u{1f}12");
+        assert_ne!(a.to_string(), b.to_string());
+        assert_eq!(a.to_string(), format!("6:IN\u{1f}BOX\u{1f}12"));
     }
 }

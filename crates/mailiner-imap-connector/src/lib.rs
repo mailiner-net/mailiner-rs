@@ -582,10 +582,20 @@ fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     }
 }
 
-fn uid_set(ids: &[MessageId]) -> Result<String, ImapError> {
+fn require_folder(folder_id: &FolderId, ids: &[MessageId]) -> Result<(), ImapError> {
+    if ids.iter().any(|id| id.folder_id() != folder_id) {
+        return Err(ImapError::InvalidData(
+            "message id is not in the selected folder".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn uid_set(folder_id: &FolderId, ids: &[MessageId]) -> Result<String, ImapError> {
     if ids.is_empty() {
         return Err(ImapError::InvalidData("No message ids".into()));
     }
+    require_folder(folder_id, ids)?;
     Ok(ids
         .iter()
         .map(MessageId::as_uid)
@@ -1025,7 +1035,7 @@ where
         if message_ids.is_empty() || flags.is_empty() {
             return Ok(());
         }
-        let uids = uid_set(message_ids)?;
+        let uids = uid_set(folder_id, message_ids)?;
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
@@ -1087,7 +1097,7 @@ where
         if message_ids.is_empty() || folder_id == dest_folder_id {
             return Ok(message_ids.to_vec());
         }
-        let uids = uid_set(message_ids)?;
+        let uids = uid_set(folder_id, message_ids)?;
         let dest = quote_mailbox(dest_folder_id.as_str());
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
@@ -1132,7 +1142,7 @@ where
         if message_ids.is_empty() {
             return Ok(());
         }
-        let uids = uid_set(message_ids)?;
+        let uids = uid_set(folder_id, message_ids)?;
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
@@ -1153,6 +1163,7 @@ where
         folder_id: &FolderId,
         message_id: &MessageId,
     ) -> MailinerResult<BodyPart> {
+        require_folder(folder_id, std::slice::from_ref(message_id))?;
         {
             let cache = self.structure_cache.lock().await;
             if let Some(part) = cache.get(&(folder_id.clone(), message_id.clone())) {
@@ -1201,6 +1212,7 @@ where
         message_id: &MessageId,
         sections: &[String],
     ) -> MailinerResult<HashMap<String, Vec<u8>>> {
+        require_folder(folder_id, std::slice::from_ref(message_id))?;
         if sections.is_empty() {
             return Ok(HashMap::new());
         }
@@ -1243,6 +1255,7 @@ where
         message_id: &MessageId,
         section: &str,
     ) -> MailinerResult<PartStream> {
+        require_folder(folder_id, std::slice::from_ref(message_id))?;
         // Fail fast if not authenticated (before returning a stream that would error later).
         {
             let imap = self.imap.lock().await;
@@ -1455,10 +1468,15 @@ mod tests {
         let folder = FolderId::new("INBOX");
         let ids = [
             MessageId::new(folder.clone(), "12"),
-            MessageId::new(folder, "44"),
+            MessageId::new(folder.clone(), "44"),
         ];
-        assert_eq!(uid_set(&ids).unwrap(), "12,44");
-        assert!(uid_set(&[]).is_err());
+        assert_eq!(uid_set(&folder, &ids).unwrap(), "12,44");
+        assert!(uid_set(&folder, &[]).is_err());
+        let mixed = [
+            MessageId::new(FolderId::new("INBOX"), "12"),
+            MessageId::new(FolderId::new("Sent"), "44"),
+        ];
+        assert!(uid_set(&FolderId::new("INBOX"), &mixed).is_err());
     }
 
     #[test]

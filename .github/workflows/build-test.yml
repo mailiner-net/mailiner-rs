@@ -1,0 +1,155 @@
+name: Build & Test
+
+on:
+  pull_request:
+  push:
+    # main is covered by Build & Deploy, which calls this workflow
+    branches-ignore:
+      - main
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: build-test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  CARGO_TERM_COLOR: always
+  DX_VERSION: "0.7.9"
+
+jobs:
+  lint:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (libraries)
+        run: >
+          cargo clippy --locked --all-targets
+          -p mailiner-core
+          -p mailiner-mime
+          -p mailiner-html
+          -p mailiner-imap-connector
+          -p mailiner-smtp-connector
+          -p mailiner-composer
+          -- -D warnings -A dead_code
+
+  check:
+    name: cargo check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      - name: cargo check
+        run: cargo check --workspace --locked --all-targets
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+  build:
+    name: Build mailiner-app (web)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          cache-on-failure: true
+
+      - name: Install dioxus-cli
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/DioxusLabs/dioxus/releases/download/v${DX_VERSION}/dx-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin
+          chmod +x /usr/local/bin/dx
+          dx --version
+
+      - name: Build mailiner-app (release web)
+        run: dx build -p mailiner-app --release --web --debug-symbols=false --locked
+
+      - name: Prepare public directory
+        run: |
+          set -euo pipefail
+          PUBLIC_DIR="target/dx/mailiner-app/release/web/public"
+          test -f "$PUBLIC_DIR/index.html"
+          # SPA fallback for Dioxus client-side routing on Cloudflare Pages
+          printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
+          echo "Build tree:"
+          find "$PUBLIC_DIR" -type f | head -50
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-public
+          path: target/dx/mailiner-app/release/web/public
+          retention-days: 7

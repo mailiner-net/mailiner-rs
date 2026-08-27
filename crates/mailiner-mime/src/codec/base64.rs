@@ -20,7 +20,7 @@ pub fn base64_decode(raw: &[u8]) -> Result<Vec<u8>, DecodeError> {
     // Normalize padding
     let rem = cleaned.len() % 4;
     if rem != 0 {
-        cleaned.extend(std::iter::repeat(b'=').take(4 - rem));
+        cleaned.extend(std::iter::repeat_n(b'=', 4 - rem));
     }
 
     STANDARD

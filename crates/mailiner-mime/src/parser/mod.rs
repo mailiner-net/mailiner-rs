@@ -161,7 +161,7 @@ pub(crate) fn leaf_part(
         let disp_att = part
             .disposition
             .as_ref()
-            .map(|d| d.type_.to_ascii_uppercase() == "ATTACHMENT")
+            .map(|d| d.type_.eq_ignore_ascii_case("ATTACHMENT"))
             .unwrap_or(false);
         if part.id.is_some() && !disp_att {
             is_hidden = true;

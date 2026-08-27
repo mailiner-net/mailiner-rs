@@ -88,7 +88,7 @@ fn build_reply_like(
     let from_addr = env
         .from
         .as_ref()
-        .map(|a| flatten_addresses(a))
+        .map(flatten_addresses)
         .and_then(|v| v.into_iter().next());
 
     let attribution = attribution_line(env.date, from_addr.as_ref());
@@ -249,18 +249,14 @@ fn pick_body(loaded: &LoadedMessage) -> Result<BodyPick, PrefillError> {
             continue;
         }
         match part.kind {
-            PartKind::TextPlain => {
-                if plain.is_none() {
-                    if let MessageContent::Text(t) = &part.content {
-                        plain = Some(t.clone());
-                    }
+            PartKind::TextPlain if plain.is_none() => {
+                if let MessageContent::Text(t) = &part.content {
+                    plain = Some(t.clone());
                 }
             }
-            PartKind::TextHtml => {
-                if html.is_none() {
-                    if let MessageContent::Text(t) = &part.content {
-                        html = Some(t.clone());
-                    }
+            PartKind::TextHtml if html.is_none() => {
+                if let MessageContent::Text(t) = &part.content {
+                    html = Some(t.clone());
                 }
             }
             _ => {}

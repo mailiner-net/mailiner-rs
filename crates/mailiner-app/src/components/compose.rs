@@ -103,6 +103,7 @@ pub fn ComposeOverlay() -> Element {
     // Local only: global `send_status` stays `Sending` after the dialog
     // closes (outbox drain) and must not disable a newly opened draft.
     let mut submitting = use_signal(|| false);
+    let mut submitted_id = use_signal(|| None::<String>);
 
     let session = ctx.compose_draft.read().clone();
     let open = session.is_some();
@@ -126,24 +127,39 @@ pub fn ComposeOverlay() -> Element {
                     apply_draft_fields(&session.draft, &mut to, &mut subject, &mut body);
                     error.set(None);
                     submitting.set(false);
+                    submitted_id.set(None);
                 }
             }
             None => {
                 last_draft_id.set(None);
                 submitting.set(false);
+                submitted_id.set(None);
             }
         });
     }
 
-    // Persist failed while the dialog is still open — allow retry.
+    // Persist failed for *this* draft — allow retry. Ignore stale Failed
+    // from an older send so a second click cannot enqueue a duplicate.
     {
         let ctx = ctx.clone();
         let mut submitting = submitting;
+        let submitted_id = submitted_id;
         use_effect(move || {
-            if matches!(
+            if !matches!(
                 ctx.send_status.read().as_ref(),
                 Some(SendState::Failed { .. })
             ) {
+                return;
+            }
+            let Some(open_id) = ctx
+                .compose_draft
+                .read()
+                .as_ref()
+                .map(|s| s.draft.id.as_str().to_string())
+            else {
+                return;
+            };
+            if submitted_id() == Some(open_id) {
                 submitting.set(false);
             }
         });
@@ -271,6 +287,8 @@ pub fn ComposeOverlay() -> Element {
                                             subject: draft.subject.clone(),
                                             to_preview: prepared.envelope.rcpt_to.join(", "),
                                         };
+                                        let draft_id = draft.id.as_str().to_string();
+                                        submitted_id.set(Some(draft_id.clone()));
                                         submitting.set(true);
                                         core.send(CoreEvent::SendMessage {
                                             account_id,
@@ -281,7 +299,8 @@ pub fn ComposeOverlay() -> Element {
                                                 message_id: prepared.message_id,
                                             },
                                             display,
-                                            rfc822_sent: prepared.rfc822_sent,
+                                            draft_id,
+                                            bcc_header: prepared.bcc_header,
                                         });
                                     }
                                     Err(PrepareSubmitError::Validation(errs)) => {

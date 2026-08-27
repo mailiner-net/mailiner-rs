@@ -28,8 +28,8 @@ use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag,
-    Folder, FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId,
-    MessageSort, PartChunk, PartStream, Result as MailinerResult,
+    Folder, FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId, MessageSort,
+    PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
 

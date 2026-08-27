@@ -63,9 +63,9 @@ pub struct OutboxItem {
     pub rcpt_to: Vec<String>,
     /// Standard base64 of RFC 5322 bytes.
     pub rfc822_b64: String,
-    /// Sent-folder copy (Bcc restored). Absent on older blobs and when identical to [`Self::rfc822_b64`].
+    /// Formatted `Bcc` value inserted only on the Sent-folder copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rfc822_sent_b64: Option<String>,
+    pub bcc_header: Option<String>,
     pub message_id: String,
     pub subject: String,
     pub to_preview: String,
@@ -103,7 +103,7 @@ impl OutboxItem {
             mail_from: request.mail_from.clone(),
             rcpt_to: request.rcpt_to.clone(),
             rfc822_b64: base64::engine::general_purpose::STANDARD.encode(&request.rfc822),
-            rfc822_sent_b64: None,
+            bcc_header: None,
             message_id: request.message_id.clone(),
             subject,
             to_preview,
@@ -125,26 +125,40 @@ impl OutboxItem {
         })
     }
 
-    /// Store a Sent-folder copy that includes `Bcc:` (SMTP DATA must not).
-    pub fn set_sent_copy(&mut self, rfc822_sent: &[u8]) -> Result<(), AccountStoreError> {
-        if rfc822_sent.len() > MAX_OUTBOX_ITEM_BYTES {
-            return Err(AccountStoreError::Other(format!(
-                "Message is too large to keep in this browser ({} bytes).",
-                rfc822_sent.len()
-            )));
+    /// Remember Bcc for the Sent copy. Never fails the SMTP path.
+    pub fn set_bcc_header(&mut self, bcc: impl Into<String>) {
+        let bcc = bcc.into();
+        if !bcc.is_empty() {
+            self.bcc_header = Some(bcc);
         }
-        self.rfc822_sent_b64 = Some(base64::engine::general_purpose::STANDARD.encode(rfc822_sent));
-        Ok(())
     }
 
-    /// Bytes to APPEND to Sent: Bcc-restored copy when present.
+    /// Bytes to APPEND to Sent: SMTP body plus `Bcc:` when we stored one.
     pub fn rfc822_for_mailbox(&self) -> Result<Vec<u8>, AccountStoreError> {
-        let Some(b64) = self.rfc822_sent_b64.as_deref() else {
-            return self.rfc822();
-        };
-        base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| AccountStoreError::Serialization(e.to_string()))
+        let bytes = self.rfc822()?;
+        match self.bcc_header.as_deref() {
+            Some(bcc) if !bcc.is_empty() => Ok(insert_header_before_body(&bytes, "Bcc", bcc)),
+            _ => Ok(bytes),
+        }
+    }
+}
+
+/// Insert `Name: value` after existing headers (before the header/body blank line).
+fn insert_header_before_body(rfc822: &[u8], name: &str, value: &str) -> Vec<u8> {
+    const SEP: &[u8] = b"\r\n\r\n";
+    if let Some(pos) = rfc822.windows(SEP.len()).position(|w| w == SEP) {
+        let mut out = Vec::with_capacity(rfc822.len() + name.len() + value.len() + 4);
+        out.extend_from_slice(&rfc822[..pos]);
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(&rfc822[pos..]);
+        out
+    } else {
+        let mut out = format!("{name}: {value}\r\n").into_bytes();
+        out.extend_from_slice(rfc822);
+        out
     }
 }
 
@@ -434,13 +448,23 @@ mod tests {
             "you@example.com".into(),
         )
         .unwrap();
-        item.set_sent_copy(b"Bcc: secret@example.com\r\n").unwrap();
+        item.set_bcc_header("secret@example.com");
         store.upsert(&item).await.unwrap();
         let back = store.get(&item.id).await.unwrap().unwrap();
         assert_eq!(back.rfc822().unwrap(), vec![b'x'; 8]);
         assert_eq!(
             back.rfc822_for_mailbox().unwrap(),
-            b"Bcc: secret@example.com\r\n"
+            b"Bcc: secret@example.com\r\nxxxxxxxx"
+        );
+    }
+
+    #[test]
+    fn insert_bcc_before_body() {
+        let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
+        let out = insert_header_before_body(raw, "Bcc", "hidden@x.com");
+        assert_eq!(
+            out,
+            b"From: me@x.com\r\nTo: you@x.com\r\nBcc: hidden@x.com\r\n\r\nHello"
         );
     }
 
@@ -451,7 +475,7 @@ mod tests {
         );
         let blob = OutboxBlob::decode(&json).expect("legacy blob");
         assert_eq!(blob.items.len(), 1);
-        assert!(blob.items[0].rfc822_sent_b64.is_none());
+        assert!(blob.items[0].bcc_header.is_none());
         assert_eq!(blob.items[0].rfc822().unwrap(), b"xx");
     }
 

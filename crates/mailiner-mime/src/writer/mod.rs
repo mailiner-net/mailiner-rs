@@ -191,6 +191,13 @@ fn write_part_body(out: &mut Vec<u8>, part: &MimePart) -> Result<(), WriteError>
     Ok(())
 }
 
+fn is_mailbox_list_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "from" | "to" | "cc" | "bcc" | "reply-to" | "sender"
+    )
+}
+
 fn write_header(out: &mut Vec<u8>, name: &str, value: &str) -> Result<(), WriteError> {
     if name.is_empty()
         || name
@@ -199,7 +206,13 @@ fn write_header(out: &mut Vec<u8>, name: &str, value: &str) -> Result<(), WriteE
     {
         return Err(WriteError::InvalidHeaderName(name.to_string()));
     }
-    let encoded = encode_unstructured(value);
+    // Mailbox lists are pre-formatted (`format_mailbox`). Do not RFC 2047
+    // the whole field — that would wrap a UTF-8 addr-spec into one encoded-word.
+    let encoded = if is_mailbox_list_header(name) {
+        value.to_string()
+    } else {
+        encode_unstructured(value)
+    };
     // Preferred 78-octet lines (RFC 5322 §2.2.3). Name + ": " counts.
     let prefix = format!("{name}: ");
     out.extend_from_slice(prefix.as_bytes());
@@ -360,6 +373,29 @@ mod tests {
             String::from_utf8_lossy(&msg)
         );
         assert!(msg.windows(2).any(|w| w == b"\r\n"));
+    }
+
+    #[test]
+    fn mailbox_header_keeps_utf8_addr_spec() {
+        let root = MimePart {
+            headers: vec![("Content-Type".into(), "text/plain; charset=UTF-8".into())],
+            body: MimeBody::Octets(b"Hi".to_vec()),
+        };
+        let msg = serialize_message(
+            &[
+                ("From".into(), "me@example.com".into()),
+                ("Bcc".into(), "müller@example.com".into()),
+                ("Subject".into(), "Hi".into()),
+            ],
+            &root,
+        )
+        .unwrap();
+        let s = String::from_utf8(msg).unwrap();
+        assert!(
+            s.contains("müller@example.com"),
+            "Bcc addr-spec must not be RFC 2047 wrapped:\n{s}"
+        );
+        assert!(!s.to_ascii_lowercase().contains("bcc: =?utf-8"));
     }
 
     #[test]

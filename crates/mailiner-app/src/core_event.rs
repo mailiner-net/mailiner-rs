@@ -135,8 +135,10 @@ pub enum CoreEvent {
         account_id: AccountId,
         request: SubmitRequest,
         display: OutboxDisplay,
-        /// Sent-folder copy with `Bcc:` restored. `None` when it matches `request.rfc822`.
-        rfc822_sent: Option<Vec<u8>>,
+        /// Compose session id; only this draft is closed after persist.
+        draft_id: String,
+        /// Formatted Bcc for the Sent copy. `None` when there is no Bcc.
+        bcc_header: Option<String>,
     },
     TestSmtpConnection {
         request_id: AccountId,
@@ -357,7 +359,8 @@ pub async fn core_loop(
                 account_id,
                 request,
                 display,
-                rfc822_sent,
+                draft_id,
+                bcc_header,
             } => {
                 handle_send_message(
                     &mut manager,
@@ -369,7 +372,8 @@ pub async fn core_loop(
                     account_id,
                     request,
                     display,
-                    rfc822_sent,
+                    draft_id,
+                    bcc_header,
                 )
                 .await;
             }
@@ -1982,7 +1986,8 @@ async fn handle_send_message(
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
-    rfc822_sent: Option<Vec<u8>>,
+    draft_id: String,
+    bcc_header: Option<String>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2019,16 +2024,8 @@ async fn handle_send_message(
             return;
         }
     };
-    if let Some(sent) = rfc822_sent.as_deref() {
-        if let Err(e) = item.set_sent_copy(sent) {
-            ctx.send_status.set(Some(SendState::Failed {
-                account_id,
-                kind: SendErrorKind::MessageTooLarge,
-                message: e.to_string(),
-                retryable: false,
-            }));
-            return;
-        }
+    if let Some(bcc) = bcc_header {
+        item.set_bcc_header(bcc);
     }
     if let Err(e) = outbox.upsert(&item).await {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2040,8 +2037,14 @@ async fn handle_send_message(
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
-    // Draft is durable in the outbox — close compose even if SMTP is queued.
-    ctx.compose_draft.set(None);
+    if ctx
+        .compose_draft
+        .read()
+        .as_ref()
+        .is_some_and(|s| s.draft.id.as_str() == draft_id)
+    {
+        ctx.compose_draft.set(None);
+    }
     if inflight.is_some() {
         ctx.send_status.set(Some(SendState::Idle));
         return;

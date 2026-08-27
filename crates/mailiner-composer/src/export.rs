@@ -34,9 +34,8 @@ pub struct PreparedMessage {
     ///
     /// `Bcc:` is omitted here (correct for SMTP DATA).
     pub rfc822: Vec<u8>,
-    /// Same bytes as [`Self::rfc822`] plus a `Bcc:` header when the draft had
-    /// Bcc recipients. `None` when that would be identical (no Bcc).
-    pub rfc822_sent: Option<Vec<u8>>,
+    /// Formatted `Bcc` value for the Sent-folder copy. `None` when there is no Bcc.
+    pub bcc_header: Option<String>,
     /// Message-ID token including angle brackets, also written into headers.
     pub message_id: String,
 }
@@ -95,20 +94,16 @@ pub fn prepare_submit(
     let root = build_tree(draft)?;
     let rfc822 = serialize_message(&headers, &root)
         .map_err(|e| PrepareSubmitError::Serialize(e.to_string()))?;
-    let rfc822_sent = if draft.bcc.is_empty() {
+    let bcc_header = if draft.bcc.is_empty() {
         None
     } else {
-        headers.push(("Bcc".into(), format_addr_list(&draft.bcc)));
-        Some(
-            serialize_message(&headers, &root)
-                .map_err(|e| PrepareSubmitError::Serialize(e.to_string()))?,
-        )
+        Some(format_addr_list(&draft.bcc))
     };
 
     Ok(PreparedMessage {
         envelope: SubmitEnvelope { mail_from, rcpt_to },
         rfc822,
-        rfc822_sent,
+        bcc_header,
         message_id,
     })
 }
@@ -347,20 +342,14 @@ mod tests {
             !s.to_ascii_lowercase().contains("bcc:"),
             "Bcc leaked into headers:\n{s}"
         );
-        let sent = prepared.rfc822_sent.expect("sent copy when Bcc is set");
-        let sent_s = String::from_utf8_lossy(&sent);
-        assert!(
-            sent_s.to_ascii_lowercase().contains("bcc:"),
-            "Sent copy missing Bcc:\n{sent_s}"
-        );
-        assert!(sent_s.contains("secret@example.com"));
+        assert_eq!(prepared.bcc_header.as_deref(), Some("secret@example.com"));
         assert_eq!(prepared.envelope.mail_from, "me@example.com");
     }
 
     #[test]
-    fn no_sent_copy_without_bcc() {
+    fn no_bcc_header_without_bcc() {
         let prepared = prepare_submit(&minimal(), &identity()).unwrap();
-        assert!(prepared.rfc822_sent.is_none());
+        assert!(prepared.bcc_header.is_none());
     }
 
     #[test]

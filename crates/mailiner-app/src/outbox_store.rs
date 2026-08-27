@@ -137,28 +137,32 @@ impl OutboxItem {
     pub fn rfc822_for_mailbox(&self) -> Result<Vec<u8>, AccountStoreError> {
         let bytes = self.rfc822()?;
         match self.bcc_header.as_deref() {
-            Some(bcc) if !bcc.is_empty() => Ok(insert_header_before_body(&bytes, "Bcc", bcc)),
+            Some(bcc) if !bcc.is_empty() => insert_folded_header(&bytes, "Bcc", bcc),
             _ => Ok(bytes),
         }
     }
 }
 
-/// Insert `Name: value` after existing headers (before the header/body blank line).
-fn insert_header_before_body(rfc822: &[u8], name: &str, value: &str) -> Vec<u8> {
+/// Insert a folded `Name: value` after existing headers (before the body).
+fn insert_folded_header(
+    rfc822: &[u8],
+    name: &str,
+    value: &str,
+) -> Result<Vec<u8>, AccountStoreError> {
+    let line = mailiner_mime::format_folded_header(name, value)
+        .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
     const SEP: &[u8] = b"\r\n\r\n";
     if let Some(pos) = rfc822.windows(SEP.len()).position(|w| w == SEP) {
-        let mut out = Vec::with_capacity(rfc822.len() + name.len() + value.len() + 4);
+        let mut out = Vec::with_capacity(rfc822.len() + line.len());
         out.extend_from_slice(&rfc822[..pos]);
         out.extend_from_slice(b"\r\n");
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(b": ");
-        out.extend_from_slice(value.as_bytes());
-        out.extend_from_slice(&rfc822[pos..]);
-        out
+        out.extend_from_slice(&line);
+        out.extend_from_slice(&rfc822[pos + 2..]);
+        Ok(out)
     } else {
-        let mut out = format!("{name}: {value}\r\n").into_bytes();
+        let mut out = line;
         out.extend_from_slice(rfc822);
-        out
+        Ok(out)
     }
 }
 
@@ -461,10 +465,28 @@ mod tests {
     #[test]
     fn insert_bcc_before_body() {
         let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
-        let out = insert_header_before_body(raw, "Bcc", "hidden@x.com");
+        let out = insert_folded_header(raw, "Bcc", "hidden@x.com").unwrap();
         assert_eq!(
             out,
             b"From: me@x.com\r\nTo: you@x.com\r\nBcc: hidden@x.com\r\n\r\nHello"
+        );
+    }
+
+    #[test]
+    fn insert_bcc_folds_long_list() {
+        let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
+        let bcc = (0..12)
+            .map(|i| format!("user{i:02}@example.com"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let out = insert_folded_header(raw, "Bcc", &bcc).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\r\n "), "expected folded Bcc:\n{text}");
+        assert!(text.contains("\r\n\r\nHello"));
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.len() > 78 && !line.starts_with("Bcc:"))
         );
     }
 

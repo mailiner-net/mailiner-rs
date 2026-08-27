@@ -47,6 +47,7 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let mailboxes = ctx.mailbox_nodes.read();
     let mailbox = mailboxes.get(&props.mailbox_id).unwrap();
+    let selectable = mailbox.selectable;
     let is_selected = ctx
         .selected_mailbox
         .read()
@@ -77,6 +78,9 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 class: if is_selected { "selected" },
 
                 onclick: move |_| {
+                    if !selectable {
+                        return;
+                    }
                     let _ = core_tx.send(CoreEvent::SelectMailbox(props.mailbox_id.clone()));
                 },
 

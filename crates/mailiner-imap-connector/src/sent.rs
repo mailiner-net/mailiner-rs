@@ -113,6 +113,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                     None,
                     None,
                     m.role(),
+                    true,
                     now,
                 );
             }
@@ -125,10 +126,11 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                     } else {
                         None
                     };
-                    let role = by_name
-                        .get(full.as_str())
+                    let listed_row = by_name.get(full.as_str());
+                    let role = listed_row
                         .map(|row| row.role())
                         .unwrap_or(MailboxRole::Other);
+                    let selectable = listed_row.is_some_and(|row| !row.no_select);
                     let leaf = chunks[i - 1];
                     push_folder(
                         &mut out,
@@ -138,6 +140,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                         Some(leaf),
                         parent.as_deref(),
                         role,
+                        selectable,
                         now,
                     );
                 }
@@ -155,9 +158,16 @@ fn push_folder(
     leaf: Option<&str>,
     parent: Option<&str>,
     role: MailboxRole,
+    selectable: bool,
     now: chrono::DateTime<Utc>,
 ) {
     if !seen.insert(full_name.to_string()) {
+        if selectable {
+            if let Some(existing) = out.iter_mut().find(|f| f.id.as_str() == full_name) {
+                existing.selectable = true;
+                existing.role = role;
+            }
+        }
         return;
     }
     out.push(Folder {
@@ -166,6 +176,7 @@ fn push_folder(
         name: leaf.unwrap_or(full_name).to_string(),
         parent_id: parent.map(|p| FolderId::new(p.to_string())),
         role,
+        selectable,
         created_at: now,
         updated_at: now,
     });
@@ -307,6 +318,9 @@ mod tests {
             Some("[Gmail]")
         );
         assert!(folders.iter().any(|f| f.id.as_str() == "[Gmail]"));
+        let gmail = folders.iter().find(|f| f.id.as_str() == "[Gmail]").unwrap();
+        assert!(!gmail.selectable);
+        assert!(sent.selectable);
     }
 
     #[test]
@@ -322,6 +336,40 @@ mod tests {
         assert_eq!(names, vec!["A", "A/B", "A/B/C"]);
         let b = folders.iter().find(|f| f.id.as_str() == "A/B").unwrap();
         assert_eq!(b.parent_id.as_ref().map(|id| id.as_str()), Some("A"));
+        assert!(
+            !folders
+                .iter()
+                .find(|f| f.id.as_str() == "A")
+                .unwrap()
+                .selectable
+        );
+        assert!(!b.selectable);
+        assert!(
+            folders
+                .iter()
+                .find(|f| f.id.as_str() == "A/B/C")
+                .unwrap()
+                .selectable
+        );
+    }
+
+    #[test]
+    fn folders_from_listed_upgrades_stub_when_later_row_is_selectable() {
+        let account = AccountId::new("acc");
+        let listed = [
+            mb("Work/A", Some("/"), false, MailboxRole::Other),
+            mb("Work", Some("/"), false, MailboxRole::Other),
+        ];
+        let folders = folders_from_listed(&account, &listed);
+        let work = folders.iter().find(|f| f.id.as_str() == "Work").unwrap();
+        assert!(work.selectable);
+        assert!(
+            folders
+                .iter()
+                .find(|f| f.id.as_str() == "Work/A")
+                .unwrap()
+                .selectable
+        );
     }
 
     #[test]

@@ -12,6 +12,9 @@ pub enum WriteError {
     /// Multipart part is missing a boundary.
     #[error("multipart boundary must not be empty")]
     EmptyBoundary,
+    /// A mailbox-list header value contained CR, LF, or other controls.
+    #[error("invalid header value for {0}")]
+    InvalidHeaderValue(String),
 }
 
 /// One MIME part: headers plus a leaf or nested multipart body.
@@ -38,6 +41,13 @@ pub enum MimeBody {
         /// Child parts.
         parts: Vec<MimePart>,
     },
+}
+
+/// Format `Name: value\r\n` with the same folding / mailbox-list rules as serialize.
+pub fn format_folded_header(name: &str, value: &str) -> Result<Vec<u8>, WriteError> {
+    let mut out = Vec::new();
+    write_header(&mut out, name, value)?;
+    Ok(out)
 }
 
 /// Serialize a complete RFC 5322 message (headers + root part). Always CRLF.
@@ -209,6 +219,12 @@ fn write_header(out: &mut Vec<u8>, name: &str, value: &str) -> Result<(), WriteE
     // Mailbox lists are pre-formatted (`format_mailbox`). Do not RFC 2047
     // the whole field — that would wrap a UTF-8 addr-spec into one encoded-word.
     let encoded = if is_mailbox_list_header(name) {
+        if value
+            .bytes()
+            .any(|b| b == 0 || b == b'\r' || b == b'\n' || (b < 32 && b != b'\t'))
+        {
+            return Err(WriteError::InvalidHeaderValue(name.to_string()));
+        }
         value.to_string()
     } else {
         encode_unstructured(value)
@@ -396,6 +412,27 @@ mod tests {
             "Bcc addr-spec must not be RFC 2047 wrapped:\n{s}"
         );
         assert!(!s.to_ascii_lowercase().contains("bcc: =?utf-8"));
+    }
+
+    #[test]
+    fn mailbox_header_rejects_crlf() {
+        let err = format_folded_header("Bcc", "a@x.com\r\nX-Injected: 1").unwrap_err();
+        assert_eq!(err, WriteError::InvalidHeaderValue("Bcc".into()));
+        let err = format_folded_header("To", "a@x.com\nCc: ev@il").unwrap_err();
+        assert_eq!(err, WriteError::InvalidHeaderValue("To".into()));
+    }
+
+    #[test]
+    fn format_folded_header_wraps_long_mailbox_list() {
+        let bcc = (0..12)
+            .map(|i| format!("user{i:02}@example.com"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = format_folded_header("Bcc", &bcc).unwrap();
+        let text = String::from_utf8(line).unwrap();
+        assert!(text.starts_with("Bcc: "));
+        assert!(text.ends_with("\r\n"));
+        assert!(text.contains("\r\n "), "expected folded Bcc:\n{text}");
     }
 
     #[test]

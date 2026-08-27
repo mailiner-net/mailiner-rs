@@ -826,7 +826,11 @@ async fn list_folders_soft(
 
     match connector.list_folders(account_id).await {
         Ok(mboxes) => {
-            let folder_ids: Vec<FolderId> = mboxes.iter().map(|f| f.id.clone()).collect();
+            let folder_ids: Vec<FolderId> = mboxes
+                .iter()
+                .filter(|f| f.selectable)
+                .map(|f| f.id.clone())
+                .collect();
             let (root_ids, nodes) = crate::mailbox::build_mailbox_tree(mboxes);
             ctx.mailbox_nodes.set(nodes);
             ctx.mailbox_roots.set(root_ids);
@@ -921,6 +925,14 @@ async fn handle_select_mailbox(
     mailbox_id: MailboxId,
     select_first: bool,
 ) {
+    if ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(|n| !n.selectable)
+    {
+        return;
+    }
     ctx.selection.write().clear();
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());

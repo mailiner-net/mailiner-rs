@@ -40,6 +40,8 @@ pub struct MailboxNode {
     /// True when unread is above the last count the user opened this folder with.
     pub has_new: bool,
     pub role: MailboxRole,
+    /// False for `\\Noselect` / synthesized ancestors.
+    pub selectable: bool,
 }
 
 impl MailboxNode {
@@ -60,6 +62,7 @@ impl From<Folder> for MailboxNode {
             total_count: 0,
             has_new: false,
             role: folder.role,
+            selectable: folder.selectable,
         }
     }
 }
@@ -80,6 +83,7 @@ pub fn build_mailbox_tree(
                 node.parent = folder.parent_id.as_ref().map(|id| id.clone().into());
                 node.name = folder.name.clone();
                 node.role = role;
+                node.selectable = folder.selectable;
             })
             .or_insert(MailboxNode {
                 id: mailbox_id.clone(),
@@ -90,6 +94,7 @@ pub fn build_mailbox_tree(
                 total_count: 0,
                 has_new: false,
                 role,
+                selectable: folder.selectable,
             });
         mboxes.insert(mailbox_id.clone(), folder.clone().into());
         if let Some(parent_id) = folder.parent_id.clone() {
@@ -104,6 +109,7 @@ pub fn build_mailbox_tree(
                     total_count: 0,
                     has_new: false,
                     role: MailboxRole::Other,
+                    selectable: false,
                 })
                 .children
                 .push(mailbox_id);
@@ -172,7 +178,7 @@ pub fn find_mailbox_with_role(
 ) -> Option<MailboxId> {
     nodes
         .iter()
-        .find(|(_, n)| n.role == role)
+        .find(|(_, n)| n.selectable && n.role == role)
         .map(|(id, _)| id.clone())
 }
 
@@ -183,14 +189,17 @@ pub fn resolve_startup_mailbox(
     roots: &[MailboxId],
 ) -> Option<MailboxId> {
     if let Some(id) = saved
-        && nodes.contains_key(id)
+        && nodes.get(id).is_some_and(|n| n.selectable)
     {
         return Some(id.clone());
     }
     if let Some(inbox) = find_mailbox_with_role(nodes, MailboxRole::Inbox) {
         return Some(inbox);
     }
-    roots.first().cloned()
+    roots
+        .iter()
+        .find(|id| nodes.get(*id).is_some_and(|n| n.selectable))
+        .cloned()
 }
 
 /// True when `ancestor` is a parent (any depth) of `target`.
@@ -242,14 +251,16 @@ pub fn collect_mailbox_entries(
         } else {
             format!("{parent_path} / {title}")
         };
-        out.push(MailboxEntry {
-            id: id.clone(),
-            title: title.clone(),
-            name: node.name.clone(),
-            path: path.clone(),
-            depth,
-            role: node.role,
-        });
+        if node.selectable {
+            out.push(MailboxEntry {
+                id: id.clone(),
+                title: title.clone(),
+                name: node.name.clone(),
+                path: path.clone(),
+                depth,
+                role: node.role,
+            });
+        }
         for child in &node.children {
             walk(child, depth + 1, &path, nodes, out);
         }
@@ -329,7 +340,9 @@ pub fn flatten_mailboxes(
             return;
         };
         let indent = "\u{00a0}\u{00a0}".repeat(depth);
-        out.push((id.clone(), format!("{indent}{}", node.title())));
+        if node.selectable {
+            out.push((id.clone(), format!("{indent}{}", node.title())));
+        }
         for child in &node.children {
             walk(child, depth + 1, nodes, out);
         }
@@ -361,6 +374,16 @@ mod tests {
     use mailiner_core::{AccountId, Folder};
 
     fn folder(id: &str, name: &str, parent: Option<&str>, role: MailboxRole) -> Folder {
+        folder_sel(id, name, parent, role, true)
+    }
+
+    fn folder_sel(
+        id: &str,
+        name: &str,
+        parent: Option<&str>,
+        role: MailboxRole,
+        selectable: bool,
+    ) -> Folder {
         let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         Folder {
             id: FolderId::new(id),
@@ -368,6 +391,7 @@ mod tests {
             name: name.into(),
             parent_id: parent.map(FolderId::new),
             role,
+            selectable,
             created_at: ts,
             updated_at: ts,
         }
@@ -472,6 +496,53 @@ mod tests {
         let nodes = HashMap::new();
         let roots: Vec<MailboxId> = Vec::new();
         assert!(resolve_startup_mailbox(None, &nodes, &roots).is_none());
+    }
+
+    #[test]
+    fn resolve_startup_skips_unselectable_saved() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sel("[Gmail]", "[Gmail]", None, MailboxRole::Other, false),
+        ]);
+        let saved = MailboxId::from("[Gmail]".to_string());
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        assert_eq!(chosen.as_str(), "INBOX");
+    }
+
+    #[test]
+    fn flatten_and_collect_skip_unselectable() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sel("[Gmail]", "[Gmail]", None, MailboxRole::Other, false),
+            folder(
+                "[Gmail]/Sent Mail",
+                "Sent Mail",
+                Some("[Gmail]"),
+                MailboxRole::Sent,
+            ),
+        ]);
+        let flat: Vec<_> = flatten_mailboxes(&roots, &nodes)
+            .into_iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        assert_eq!(flat, vec!["INBOX", "[Gmail]/Sent Mail"]);
+        let entries: Vec<_> = collect_mailbox_entries(&roots, &nodes)
+            .into_iter()
+            .map(|e| e.id.to_string())
+            .collect();
+        assert_eq!(entries, vec!["INBOX", "[Gmail]/Sent Mail"]);
+    }
+
+    #[test]
+    fn find_role_skips_unselectable() {
+        let (_, nodes) = build_mailbox_tree(vec![folder_sel(
+            "virtual-trash",
+            "Trash",
+            None,
+            MailboxRole::Trash,
+            false,
+        )]);
+        assert!(find_mailbox_with_role(&nodes, MailboxRole::Trash).is_none());
     }
 
     #[test]

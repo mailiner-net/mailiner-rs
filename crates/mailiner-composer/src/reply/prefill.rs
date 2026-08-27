@@ -286,7 +286,7 @@ mod tests {
 
     fn env_with_from(from: &str) -> Envelope {
         Envelope {
-            id: MessageId::new("1"),
+            id: MessageId::new(FolderId::new("INBOX"), "1"),
             account_id: AccountId::new("a"),
             folder_id: FolderId::new("INBOX"),
             subject: Some("Hello".into()),
@@ -322,11 +322,11 @@ mod tests {
 
     fn loaded_plain(text: &str) -> LoadedMessage {
         LoadedMessage {
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
             parts: vec![MessagePart {
                 id: MessagePartId::new("p1"),
-                envelope_id: MessageId::new("1"),
+                envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
                 path: vec!["1".into()],
                 kind: PartKind::TextPlain,
                 content_type: "text/plain".into(),
@@ -348,11 +348,11 @@ mod tests {
 
     fn loaded_html_only(html: &str) -> LoadedMessage {
         LoadedMessage {
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
             parts: vec![MessagePart {
                 id: MessagePartId::new("h1"),
-                envelope_id: MessageId::new("1"),
+                envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
                 path: vec!["1".into()],
                 kind: PartKind::TextHtml,
                 content_type: "text/html".into(),

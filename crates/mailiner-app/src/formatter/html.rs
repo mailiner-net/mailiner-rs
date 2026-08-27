@@ -222,14 +222,14 @@ fn ammonia_clean(html: &str, allow_remote: bool) -> String {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use mailiner_core::ids::{MessageId, MessagePartId};
+    use mailiner_core::ids::{FolderId, MessageId, MessagePartId};
     use mailiner_core::models::{PartKind, TransferEncoding};
 
     fn html_part(html: &str) -> MessagePart {
         let now = Utc::now();
         MessagePart {
             id: MessagePartId::new("html"),
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             path: vec!["1".into()],
             kind: PartKind::TextHtml,
             content_type: "text/html".into(),
@@ -252,7 +252,7 @@ mod tests {
         let now = Utc::now();
         MessagePart {
             id: MessagePartId::new("img"),
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             path: vec!["2".into()],
             kind: PartKind::Image,
             content_type: "image/png".into(),
@@ -286,7 +286,7 @@ mod tests {
         let now = Utc::now();
         let svg = MessagePart {
             id: MessagePartId::new("svg"),
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             path: vec!["2".into()],
             kind: PartKind::Image,
             content_type: "image/svg+xml".into(),

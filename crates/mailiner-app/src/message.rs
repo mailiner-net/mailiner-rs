@@ -1,33 +1,13 @@
 use chrono::{DateTime, Utc};
 use mailiner_core::{EmailAddr, EmailAddress, Envelope};
-use std::fmt;
+
+pub use mailiner_core::MessageId;
 
 /// Distinct mid-saturation swatches for placeholder sender avatars.
 const AVATAR_COLORS: &[&str] = &[
     "#4C6EF5", "#0CA678", "#F08C00", "#E64980", "#7048E8", "#1098AD", "#F76707", "#37B24D",
     "#C2255C", "#364FC7",
 ];
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct MessageId(String);
-
-impl MessageId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for MessageId {
-    fn from(id: String) -> Self {
-        Self(id)
-    }
-}
-
-impl fmt::Display for MessageId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Message {
@@ -154,7 +134,7 @@ mod tests {
 impl From<Envelope> for Message {
     fn from(envelope: Envelope) -> Self {
         Self {
-            id: MessageId::from(envelope.id.to_string()),
+            id: envelope.id.clone(),
             subject: envelope.subject.clone().unwrap_or_default(),
             from: envelope
                 .from

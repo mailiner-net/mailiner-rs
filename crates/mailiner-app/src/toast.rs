@@ -174,7 +174,7 @@ mod tests {
     fn dummy_msg(id: &str) -> Arc<Message> {
         let now = Utc::now();
         let envelope = Envelope {
-            id: mailiner_core::MessageId::new(id),
+            id: mailiner_core::MessageId::new(FolderId::new("INBOX"), id),
             account_id: AccountId::new("a"),
             folder_id: FolderId::new("INBOX"),
             subject: Some("s".into()),
@@ -216,7 +216,7 @@ mod tests {
         let undo = MoveUndo {
             from: MailboxId::from("Trash".to_string()),
             to: MailboxId::from("INBOX".to_string()),
-            dest_ids: vec![MessageId::from("9".to_string())],
+            dest_ids: vec![MessageId::new(FolderId::new("INBOX"), "9")],
             snapshots: vec![RemovedMessage {
                 index: 0,
                 message: dummy_msg("1"),

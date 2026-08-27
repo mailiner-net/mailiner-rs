@@ -116,7 +116,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
     // Arrival: index 0 is newest (`test-message-100`).
     for i in start..end {
         let n = total - i;
-        let message_id = MessageId::new(format!("test-message-{n}"));
+        let message_id = MessageId::new(folder_id.clone(), format!("test-message-{n}"));
         envelopes.push(Envelope {
             id: message_id.clone(),
             account_id: AccountId::new("mock-account-1"),
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn message_part_section_text() {
-        let p = mock_text_part(MessageId::new("1"), "p1", "hi");
+        let p = mock_text_part(MessageId::new(FolderId::new("inbox"), "1"), "p1", "hi");
         assert_eq!(p.section(), "TEXT");
         assert!(p.should_prefetch());
     }
@@ -443,13 +443,13 @@ mod tests {
     #[test]
     fn loaded_message_filters() {
         let mut parts = vec![
-            mock_text_part(MessageId::new("1"), "a", "hi"),
-            mock_text_part(MessageId::new("1"), "b", "att"),
+            mock_text_part(MessageId::new(FolderId::new("inbox"), "1"), "a", "hi"),
+            mock_text_part(MessageId::new(FolderId::new("inbox"), "1"), "b", "att"),
         ];
         parts[1].is_attachment = true;
         parts[1].is_hidden = false;
         let loaded = LoadedMessage {
-            envelope_id: MessageId::new("1"),
+            envelope_id: MessageId::new(FolderId::new("inbox"), "1"),
             folder_id: FolderId::new("inbox"),
             parts,
         };

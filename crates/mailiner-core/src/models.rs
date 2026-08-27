@@ -132,8 +132,15 @@ pub struct Folder {
     pub parent_id: Option<FolderId>,
     #[serde(default)]
     pub role: MailboxRole,
+    /// False for `\\Noselect` / synthesized ancestors. Default true for older blobs.
+    #[serde(default = "default_true")]
+    pub selectable: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

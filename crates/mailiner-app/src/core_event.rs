@@ -135,6 +135,10 @@ pub enum CoreEvent {
         account_id: AccountId,
         request: SubmitRequest,
         display: OutboxDisplay,
+        /// Compose session id; only this draft is closed after persist.
+        draft_id: String,
+        /// Formatted Bcc for the Sent copy. `None` when there is no Bcc.
+        bcc_header: Option<String>,
     },
     TestSmtpConnection {
         request_id: AccountId,
@@ -355,6 +359,8 @@ pub async fn core_loop(
                 account_id,
                 request,
                 display,
+                draft_id,
+                bcc_header,
             } => {
                 handle_send_message(
                     &mut manager,
@@ -366,6 +372,8 @@ pub async fn core_loop(
                     account_id,
                     request,
                     display,
+                    draft_id,
+                    bcc_header,
                 )
                 .await;
             }
@@ -818,7 +826,11 @@ async fn list_folders_soft(
 
     match connector.list_folders(account_id).await {
         Ok(mboxes) => {
-            let folder_ids: Vec<FolderId> = mboxes.iter().map(|f| f.id.clone()).collect();
+            let folder_ids: Vec<FolderId> = mboxes
+                .iter()
+                .filter(|f| f.selectable)
+                .map(|f| f.id.clone())
+                .collect();
             let (root_ids, nodes) = crate::mailbox::build_mailbox_tree(mboxes);
             ctx.mailbox_nodes.set(nodes);
             ctx.mailbox_roots.set(root_ids);
@@ -913,6 +925,14 @@ async fn handle_select_mailbox(
     mailbox_id: MailboxId,
     select_first: bool,
 ) {
+    if ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(|n| !n.selectable)
+    {
+        return;
+    }
     ctx.selection.write().clear();
     ctx.message_view.set(MessageViewState::Empty);
     ctx.download_status.set(HashMap::new());
@@ -1978,6 +1998,8 @@ async fn handle_send_message(
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
+    draft_id: String,
+    bcc_header: Option<String>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2014,6 +2036,9 @@ async fn handle_send_message(
             return;
         }
     };
+    if let Some(bcc) = bcc_header {
+        item.set_bcc_header(bcc);
+    }
     if let Err(e) = outbox.upsert(&item).await {
         ctx.send_status.set(Some(SendState::Failed {
             account_id,
@@ -2024,6 +2049,14 @@ async fn handle_send_message(
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
+    if ctx
+        .compose_draft
+        .read()
+        .as_ref()
+        .is_some_and(|s| s.draft.id.as_str() == draft_id)
+    {
+        ctx.compose_draft.set(None);
+    }
     if inflight.is_some() {
         ctx.send_status.set(Some(SendState::Idle));
         return;
@@ -2226,7 +2259,7 @@ async fn handle_smtp_finished(
         } => {
             let rfc822 = if let Some(id) = &flight.outbox_id {
                 match outbox.get(id).await {
-                    Ok(Some(item)) => item.rfc822().ok(),
+                    Ok(Some(item)) => item.rfc822_for_mailbox().ok(),
                     _ => None,
                 }
             } else {

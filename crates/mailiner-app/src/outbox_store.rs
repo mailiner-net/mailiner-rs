@@ -63,6 +63,9 @@ pub struct OutboxItem {
     pub rcpt_to: Vec<String>,
     /// Standard base64 of RFC 5322 bytes.
     pub rfc822_b64: String,
+    /// Formatted `Bcc` value inserted only on the Sent-folder copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcc_header: Option<String>,
     pub message_id: String,
     pub subject: String,
     pub to_preview: String,
@@ -100,6 +103,7 @@ impl OutboxItem {
             mail_from: request.mail_from.clone(),
             rcpt_to: request.rcpt_to.clone(),
             rfc822_b64: base64::engine::general_purpose::STANDARD.encode(&request.rfc822),
+            bcc_header: None,
             message_id: request.message_id.clone(),
             subject,
             to_preview,
@@ -119,6 +123,46 @@ impl OutboxItem {
             rfc822: self.rfc822()?,
             message_id: self.message_id.clone(),
         })
+    }
+
+    /// Remember Bcc for the Sent copy. Never fails the SMTP path.
+    pub fn set_bcc_header(&mut self, bcc: impl Into<String>) {
+        let bcc = bcc.into();
+        if !bcc.is_empty() {
+            self.bcc_header = Some(bcc);
+        }
+    }
+
+    /// Bytes to APPEND to Sent: SMTP body plus `Bcc:` when we stored one.
+    pub fn rfc822_for_mailbox(&self) -> Result<Vec<u8>, AccountStoreError> {
+        let bytes = self.rfc822()?;
+        match self.bcc_header.as_deref() {
+            Some(bcc) if !bcc.is_empty() => insert_folded_header(&bytes, "Bcc", bcc),
+            _ => Ok(bytes),
+        }
+    }
+}
+
+/// Insert a folded `Name: value` after existing headers (before the body).
+fn insert_folded_header(
+    rfc822: &[u8],
+    name: &str,
+    value: &str,
+) -> Result<Vec<u8>, AccountStoreError> {
+    let line = mailiner_mime::format_folded_header(name, value)
+        .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+    const SEP: &[u8] = b"\r\n\r\n";
+    if let Some(pos) = rfc822.windows(SEP.len()).position(|w| w == SEP) {
+        let mut out = Vec::with_capacity(rfc822.len() + line.len());
+        out.extend_from_slice(&rfc822[..pos]);
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(&line);
+        out.extend_from_slice(&rfc822[pos + 2..]);
+        Ok(out)
+    } else {
+        let mut out = line;
+        out.extend_from_slice(rfc822);
+        Ok(out)
     }
 }
 
@@ -394,7 +438,67 @@ mod tests {
         store.upsert(&item).await.unwrap();
         let back = store.get(&item.id).await.unwrap().unwrap();
         assert_eq!(back.rfc822().unwrap(), vec![b'x'; 16]);
+        assert_eq!(back.rfc822_for_mailbox().unwrap(), vec![b'x'; 16]);
         assert_eq!(store.oldest_queued().await.unwrap().unwrap().id, item.id);
+    }
+
+    #[tokio::test]
+    async fn sent_copy_round_trip() {
+        let store = BrowserOutboxStore::<MemoryKvStore>::open_memory();
+        let mut item = OutboxItem::from_request(
+            AccountId::new("a"),
+            &req(8),
+            "Hi".into(),
+            "you@example.com".into(),
+        )
+        .unwrap();
+        item.set_bcc_header("secret@example.com");
+        store.upsert(&item).await.unwrap();
+        let back = store.get(&item.id).await.unwrap().unwrap();
+        assert_eq!(back.rfc822().unwrap(), vec![b'x'; 8]);
+        assert_eq!(
+            back.rfc822_for_mailbox().unwrap(),
+            b"Bcc: secret@example.com\r\nxxxxxxxx"
+        );
+    }
+
+    #[test]
+    fn insert_bcc_before_body() {
+        let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
+        let out = insert_folded_header(raw, "Bcc", "hidden@x.com").unwrap();
+        assert_eq!(
+            out,
+            b"From: me@x.com\r\nTo: you@x.com\r\nBcc: hidden@x.com\r\n\r\nHello"
+        );
+    }
+
+    #[test]
+    fn insert_bcc_folds_long_list() {
+        let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
+        let bcc = (0..12)
+            .map(|i| format!("user{i:02}@example.com"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let out = insert_folded_header(raw, "Bcc", &bcc).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("\r\n "), "expected folded Bcc:\n{text}");
+        assert!(text.contains("\r\n\r\nHello"));
+        assert!(
+            !text
+                .lines()
+                .any(|line| line.len() > 78 && !line.starts_with("Bcc:"))
+        );
+    }
+
+    #[test]
+    fn old_blob_without_sent_copy_decodes() {
+        let json = format!(
+            r#"{{"schema_version":1,"items":[{{"id":"i1","account_id":"a","mail_from":"me@x.com","rcpt_to":["you@x.com"],"rfc822_b64":"eHg=","message_id":"<id@x.com>","subject":"Hi","to_preview":"you","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","attempts":0,"last_error_kind":null,"last_error":null,"state":"queued"}}]}}"#
+        );
+        let blob = OutboxBlob::decode(&json).expect("legacy blob");
+        assert_eq!(blob.items.len(), 1);
+        assert!(blob.items[0].bcc_header.is_none());
+        assert_eq!(blob.items[0].rfc822().unwrap(), b"xx");
     }
 
     #[tokio::test]

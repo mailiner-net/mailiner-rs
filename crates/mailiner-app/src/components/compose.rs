@@ -100,11 +100,10 @@ pub fn ComposeOverlay() -> Element {
     let mut body = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let last_draft_id = use_signal(|| None::<String>);
+    // Local only: global `send_status` stays `Sending` after the dialog
+    // closes (outbox drain) and must not disable a newly opened draft.
+    let mut submitting = use_signal(|| false);
 
-    let sending = matches!(
-        ctx.send_status.read().as_ref(),
-        Some(SendState::Sending { .. })
-    );
     let session = ctx.compose_draft.read().clone();
     let open = session.is_some();
     let title = session
@@ -112,11 +111,13 @@ pub fn ComposeOverlay() -> Element {
         .map(|s| s.title.as_str())
         .unwrap_or("New message")
         .to_string();
+    let sending = submitting();
 
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
         let mut last_draft_id = last_draft_id;
+        let mut submitting = submitting;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
@@ -124,21 +125,26 @@ pub fn ComposeOverlay() -> Element {
                     last_draft_id.set(Some(id));
                     apply_draft_fields(&session.draft, &mut to, &mut subject, &mut body);
                     error.set(None);
+                    submitting.set(false);
                 }
             }
-            None => last_draft_id.set(None),
+            None => {
+                last_draft_id.set(None);
+                submitting.set(false);
+            }
         });
     }
 
+    // Persist failed while the dialog is still open — allow retry.
     {
-        let mut ctx = ctx.clone();
+        let ctx = ctx.clone();
+        let mut submitting = submitting;
         use_effect(move || {
-            if let Some(SendState::Sent { .. }) = ctx.send_status.read().as_ref() {
-                ctx.compose_draft.set(None);
-                to.set(String::new());
-                subject.set(String::new());
-                body.set(String::new());
-                error.set(None);
+            if matches!(
+                ctx.send_status.read().as_ref(),
+                Some(SendState::Failed { .. })
+            ) {
+                submitting.set(false);
             }
         });
     }
@@ -265,6 +271,7 @@ pub fn ComposeOverlay() -> Element {
                                             subject: draft.subject.clone(),
                                             to_preview: prepared.envelope.rcpt_to.join(", "),
                                         };
+                                        submitting.set(true);
                                         core.send(CoreEvent::SendMessage {
                                             account_id,
                                             request: mailiner_core::SubmitRequest {
@@ -274,12 +281,17 @@ pub fn ComposeOverlay() -> Element {
                                                 message_id: prepared.message_id,
                                             },
                                             display,
+                                            rfc822_sent: prepared.rfc822_sent,
                                         });
                                     }
                                     Err(PrepareSubmitError::Validation(errs)) => {
+                                        submitting.set(false);
                                         error.set(Some(format!("Cannot send: {errs:?}")));
                                     }
-                                    Err(e) => error.set(Some(e.to_string())),
+                                    Err(e) => {
+                                        submitting.set(false);
+                                        error.set(Some(e.to_string()));
+                                    }
                                 }
                             },
                             if sending { "Sending…" } else { "Send" }

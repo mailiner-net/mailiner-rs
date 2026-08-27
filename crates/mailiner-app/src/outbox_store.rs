@@ -63,6 +63,9 @@ pub struct OutboxItem {
     pub rcpt_to: Vec<String>,
     /// Standard base64 of RFC 5322 bytes.
     pub rfc822_b64: String,
+    /// Sent-folder copy (Bcc restored). Absent on older blobs and when identical to [`Self::rfc822_b64`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfc822_sent_b64: Option<String>,
     pub message_id: String,
     pub subject: String,
     pub to_preview: String,
@@ -100,6 +103,7 @@ impl OutboxItem {
             mail_from: request.mail_from.clone(),
             rcpt_to: request.rcpt_to.clone(),
             rfc822_b64: base64::engine::general_purpose::STANDARD.encode(&request.rfc822),
+            rfc822_sent_b64: None,
             message_id: request.message_id.clone(),
             subject,
             to_preview,
@@ -119,6 +123,28 @@ impl OutboxItem {
             rfc822: self.rfc822()?,
             message_id: self.message_id.clone(),
         })
+    }
+
+    /// Store a Sent-folder copy that includes `Bcc:` (SMTP DATA must not).
+    pub fn set_sent_copy(&mut self, rfc822_sent: &[u8]) -> Result<(), AccountStoreError> {
+        if rfc822_sent.len() > MAX_OUTBOX_ITEM_BYTES {
+            return Err(AccountStoreError::Other(format!(
+                "Message is too large to keep in this browser ({} bytes).",
+                rfc822_sent.len()
+            )));
+        }
+        self.rfc822_sent_b64 = Some(base64::engine::general_purpose::STANDARD.encode(rfc822_sent));
+        Ok(())
+    }
+
+    /// Bytes to APPEND to Sent: Bcc-restored copy when present.
+    pub fn rfc822_for_mailbox(&self) -> Result<Vec<u8>, AccountStoreError> {
+        let Some(b64) = self.rfc822_sent_b64.as_deref() else {
+            return self.rfc822();
+        };
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))
     }
 }
 
@@ -394,7 +420,39 @@ mod tests {
         store.upsert(&item).await.unwrap();
         let back = store.get(&item.id).await.unwrap().unwrap();
         assert_eq!(back.rfc822().unwrap(), vec![b'x'; 16]);
+        assert_eq!(back.rfc822_for_mailbox().unwrap(), vec![b'x'; 16]);
         assert_eq!(store.oldest_queued().await.unwrap().unwrap().id, item.id);
+    }
+
+    #[tokio::test]
+    async fn sent_copy_round_trip() {
+        let store = BrowserOutboxStore::<MemoryKvStore>::open_memory();
+        let mut item = OutboxItem::from_request(
+            AccountId::new("a"),
+            &req(8),
+            "Hi".into(),
+            "you@example.com".into(),
+        )
+        .unwrap();
+        item.set_sent_copy(b"Bcc: secret@example.com\r\n").unwrap();
+        store.upsert(&item).await.unwrap();
+        let back = store.get(&item.id).await.unwrap().unwrap();
+        assert_eq!(back.rfc822().unwrap(), vec![b'x'; 8]);
+        assert_eq!(
+            back.rfc822_for_mailbox().unwrap(),
+            b"Bcc: secret@example.com\r\n"
+        );
+    }
+
+    #[test]
+    fn old_blob_without_sent_copy_decodes() {
+        let json = format!(
+            r#"{{"schema_version":1,"items":[{{"id":"i1","account_id":"a","mail_from":"me@x.com","rcpt_to":["you@x.com"],"rfc822_b64":"eHg=","message_id":"<id@x.com>","subject":"Hi","to_preview":"you","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","attempts":0,"last_error_kind":null,"last_error":null,"state":"queued"}}]}}"#
+        );
+        let blob = OutboxBlob::decode(&json).expect("legacy blob");
+        assert_eq!(blob.items.len(), 1);
+        assert!(blob.items[0].rfc822_sent_b64.is_none());
+        assert_eq!(blob.items[0].rfc822().unwrap(), b"xx");
     }
 
     #[tokio::test]

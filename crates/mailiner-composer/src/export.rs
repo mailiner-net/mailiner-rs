@@ -31,7 +31,12 @@ pub struct PreparedMessage {
     /// SMTP envelope.
     pub envelope: SubmitEnvelope,
     /// Complete RFC 5322 message including headers. Not SMTP-dot-stuffed.
+    ///
+    /// `Bcc:` is omitted here (correct for SMTP DATA).
     pub rfc822: Vec<u8>,
+    /// Same bytes as [`Self::rfc822`] plus a `Bcc:` header when the draft had
+    /// Bcc recipients. `None` when that would be identical (no Bcc).
+    pub rfc822_sent: Option<Vec<u8>>,
     /// Message-ID token including angle brackets, also written into headers.
     pub message_id: String,
 }
@@ -90,10 +95,20 @@ pub fn prepare_submit(
     let root = build_tree(draft)?;
     let rfc822 = serialize_message(&headers, &root)
         .map_err(|e| PrepareSubmitError::Serialize(e.to_string()))?;
+    let rfc822_sent = if draft.bcc.is_empty() {
+        None
+    } else {
+        headers.push(("Bcc".into(), format_addr_list(&draft.bcc)));
+        Some(
+            serialize_message(&headers, &root)
+                .map_err(|e| PrepareSubmitError::Serialize(e.to_string()))?,
+        )
+    };
 
     Ok(PreparedMessage {
         envelope: SubmitEnvelope { mail_from, rcpt_to },
         rfc822,
+        rfc822_sent,
         message_id,
     })
 }
@@ -332,7 +347,20 @@ mod tests {
             !s.to_ascii_lowercase().contains("bcc:"),
             "Bcc leaked into headers:\n{s}"
         );
+        let sent = prepared.rfc822_sent.expect("sent copy when Bcc is set");
+        let sent_s = String::from_utf8_lossy(&sent);
+        assert!(
+            sent_s.to_ascii_lowercase().contains("bcc:"),
+            "Sent copy missing Bcc:\n{sent_s}"
+        );
+        assert!(sent_s.contains("secret@example.com"));
         assert_eq!(prepared.envelope.mail_from, "me@example.com");
+    }
+
+    #[test]
+    fn no_sent_copy_without_bcc() {
+        let prepared = prepare_submit(&minimal(), &identity()).unwrap();
+        assert!(prepared.rfc822_sent.is_none());
     }
 
     #[test]

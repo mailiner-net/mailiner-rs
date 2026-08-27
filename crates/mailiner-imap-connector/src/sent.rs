@@ -1,6 +1,7 @@
 //! Mailbox roles from RFC 6154 special-use, then name heuristics.
 
-use mailiner_core::MailboxRole;
+use chrono::Utc;
+use mailiner_core::{AccountId, Folder, FolderId, MailboxRole};
 
 /// One LIST/LSUB row, enough to pick a role or Sent target.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,39 @@ pub fn role_from_name(name: &str, delim: Option<&str>) -> MailboxRole {
         "trash" | "bin" | "deleted" | "deleted items" | "deleted messages" => MailboxRole::Trash,
         _ => MailboxRole::Other,
     }
+}
+
+/// Build UI folders from a full `LIST`. Skips `\Noselect` (not selectable).
+///
+/// `\Noselect` parents still appear as tree stubs when a child has `parent_id`.
+pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> Vec<Folder> {
+    listed
+        .iter()
+        .filter(|m| !m.no_select)
+        .map(|m| {
+            let delim = m.delimiter.as_deref().unwrap_or("/");
+            let name_chunked: Vec<&str> = m.name.split(delim).collect();
+            Folder {
+                id: FolderId::new(m.name.clone()),
+                account_id: account_id.clone(),
+                name: name_chunked
+                    .last()
+                    .copied()
+                    .unwrap_or(m.name.as_str())
+                    .to_string(),
+                parent_id: if name_chunked.len() > 1 {
+                    Some(FolderId::new(
+                        name_chunked[..name_chunked.len() - 1].join(delim),
+                    ))
+                } else {
+                    None
+                },
+                role: m.role(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }
+        })
+        .collect()
 }
 
 fn last_segment<'a>(name: &'a str, delim: Option<&str>) -> &'a str {
@@ -197,5 +231,28 @@ mod tests {
     fn special_use_beats_name() {
         let listed = mb("Archive", Some("/"), false, MailboxRole::Sent);
         assert_eq!(listed.role(), MailboxRole::Sent);
+    }
+
+    #[test]
+    fn folders_from_listed_skips_noselect() {
+        let account = AccountId::new("acc");
+        let listed = [
+            mb("INBOX", Some("/"), false, MailboxRole::Inbox),
+            mb("[Gmail]", Some("/"), true, MailboxRole::Other),
+            mb("[Gmail]/Sent Mail", Some("/"), false, MailboxRole::Sent),
+            mb("Unsubscribed", Some("/"), false, MailboxRole::Other),
+        ];
+        let folders = folders_from_listed(&account, &listed);
+        let names: Vec<_> = folders.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(names, vec!["INBOX", "[Gmail]/Sent Mail", "Unsubscribed"]);
+        let sent = folders
+            .iter()
+            .find(|f| f.role == MailboxRole::Sent)
+            .unwrap();
+        assert_eq!(sent.name, "Sent Mail");
+        assert_eq!(
+            sent.parent_id.as_ref().map(|id| id.as_str()),
+            Some("[Gmail]")
+        );
     }
 }

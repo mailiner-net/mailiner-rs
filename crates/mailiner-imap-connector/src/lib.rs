@@ -3,7 +3,9 @@ mod section_path;
 mod sent;
 mod sort;
 
-pub use sent::{find_sent_mailbox, role_from_name, special_use_from_attrs, ListedMailbox};
+pub use sent::{
+    find_sent_mailbox, folders_from_listed, role_from_name, special_use_from_attrs, ListedMailbox,
+};
 
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +28,7 @@ use tracing::info;
 
 use mailiner_core::{
     Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag,
-    Folder, FolderCounts, FolderId, FolderListState, Group, MailboxRole, MailinerError, MessageId,
+    Folder, FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId,
     MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
@@ -808,49 +810,9 @@ where
     }
 
     async fn list_folders(&self, account_id: &AccountId) -> MailinerResult<Vec<Folder>> {
-        let listed = self.list_all_mailboxes().await.unwrap_or_default();
-        let roles: std::collections::HashMap<String, MailboxRole> =
-            listed.iter().map(|m| (m.name.clone(), m.role())).collect();
-
-        let mut imap = self.imap.lock().await;
-        if let ImapSession::Authenticated(session) = &mut *imap {
-            let mut mailboxes = Vec::new();
-            let mut list = session
-                .lsub(Some(""), Some("*"))
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to list folders: {}", e)))?;
-
-            while let Some(result) = list.next().await {
-                let mailbox =
-                    result.map_err(|e| ImapError::Imap(format!("Failed to get mailbox: {}", e)))?;
-                let full_name = mailbox.name().to_string();
-                let delim = mailbox.delimiter().unwrap_or("/");
-                let name_chunked = full_name.split(delim).collect::<Vec<&str>>();
-                let role = roles
-                    .get(&full_name)
-                    .copied()
-                    .unwrap_or_else(|| role_from_name(&full_name, Some(delim)));
-                mailboxes.push(Folder {
-                    id: FolderId::new(mailbox.name().to_string()),
-                    account_id: account_id.clone(),
-                    name: name_chunked.last().unwrap_or(&mailbox.name()).to_string(),
-                    parent_id: if name_chunked.len() > 1 {
-                        Some(FolderId::new(
-                            name_chunked[..name_chunked.len() - 1].join(delim),
-                        ))
-                    } else {
-                        None
-                    },
-                    role,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                });
-            }
-
-            Ok(mailboxes)
-        } else {
-            Err(ImapError::NotAuthenticated.into())
-        }
+        // Full LIST (not LSUB): unsubscribed mailboxes are still selectable.
+        let listed = self.list_all_mailboxes().await?;
+        Ok(folders_from_listed(account_id, &listed))
     }
 
     async fn folder_counts(

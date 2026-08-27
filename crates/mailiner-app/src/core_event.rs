@@ -135,6 +135,8 @@ pub enum CoreEvent {
         account_id: AccountId,
         request: SubmitRequest,
         display: OutboxDisplay,
+        /// Sent-folder copy with `Bcc:` restored. `None` when it matches `request.rfc822`.
+        rfc822_sent: Option<Vec<u8>>,
     },
     TestSmtpConnection {
         request_id: AccountId,
@@ -355,6 +357,7 @@ pub async fn core_loop(
                 account_id,
                 request,
                 display,
+                rfc822_sent,
             } => {
                 handle_send_message(
                     &mut manager,
@@ -366,6 +369,7 @@ pub async fn core_loop(
                     account_id,
                     request,
                     display,
+                    rfc822_sent,
                 )
                 .await;
             }
@@ -1978,6 +1982,7 @@ async fn handle_send_message(
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
+    rfc822_sent: Option<Vec<u8>>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2014,6 +2019,17 @@ async fn handle_send_message(
             return;
         }
     };
+    if let Some(sent) = rfc822_sent.as_deref() {
+        if let Err(e) = item.set_sent_copy(sent) {
+            ctx.send_status.set(Some(SendState::Failed {
+                account_id,
+                kind: SendErrorKind::MessageTooLarge,
+                message: e.to_string(),
+                retryable: false,
+            }));
+            return;
+        }
+    }
     if let Err(e) = outbox.upsert(&item).await {
         ctx.send_status.set(Some(SendState::Failed {
             account_id,
@@ -2024,6 +2040,8 @@ async fn handle_send_message(
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
+    // Draft is durable in the outbox — close compose even if SMTP is queued.
+    ctx.compose_draft.set(None);
     if inflight.is_some() {
         ctx.send_status.set(Some(SendState::Idle));
         return;
@@ -2226,7 +2244,7 @@ async fn handle_smtp_finished(
         } => {
             let rfc822 = if let Some(id) = &flight.outbox_id {
                 match outbox.get(id).await {
-                    Ok(Some(item)) => item.rfc822().ok(),
+                    Ok(Some(item)) => item.rfc822_for_mailbox().ok(),
                     _ => None,
                 }
             } else {

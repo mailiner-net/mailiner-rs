@@ -140,6 +140,6 @@ mod tests {
         let a = MessageId::new(FolderId::new("IN\u{1f}BOX"), "12");
         let b = MessageId::new(FolderId::new("IN"), "BOX\u{1f}12");
         assert_ne!(a.to_string(), b.to_string());
-        assert_eq!(a.to_string(), format!("6:IN\u{1f}BOX\u{1f}12"));
+        assert_eq!(a.to_string(), "6:IN\u{1f}BOX\u{1f}12");
     }
 }

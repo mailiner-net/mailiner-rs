@@ -95,7 +95,7 @@ fn finish_base64(mut pending: Vec<u8>) -> Result<Vec<u8>, DecodeError> {
     }
     let rem = pending.len() % 4;
     if rem != 0 {
-        pending.extend(std::iter::repeat(b'=').take(4 - rem));
+        pending.extend(std::iter::repeat_n(b'=', 4 - rem));
     }
     base64_decode(&pending)
 }

@@ -25,10 +25,8 @@ pub fn charset_decode(buf: &[u8], from_charset: &str) -> Result<String, DecodeEr
     }
 
     // 3) ISO-8859-15 lenient
-    {
-        let (cow, _used, _had_errors) = encoding_rs::ISO_8859_15.decode(buf);
-        return Ok(cow.into_owned());
-    }
+    let (cow, _used, _had_errors) = encoding_rs::ISO_8859_15.decode(buf);
+    Ok(cow.into_owned())
 }
 
 /// Last-resort lossy latin1 (each byte → U+00xx), like TS `arr2str`.

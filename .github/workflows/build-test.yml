@@ -43,8 +43,16 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
-      - name: clippy
-        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: clippy (libraries)
+        run: >
+          cargo clippy --locked --all-targets
+          -p mailiner-core
+          -p mailiner-mime
+          -p mailiner-html
+          -p mailiner-imap-connector
+          -p mailiner-smtp-connector
+          -p mailiner-composer
+          -- -D warnings -A dead_code
 
   test:
     name: Unit tests

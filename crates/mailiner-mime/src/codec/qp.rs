@@ -114,7 +114,7 @@ pub fn qp_encode(raw: &[u8]) -> Vec<u8> {
             continue;
         }
 
-        let encode = b == b'=' || b < 32 || b > 126;
+        let encode = b == b'=' || !(32..=126).contains(&b);
         let token: Vec<u8> = if encode {
             format!("={b:02X}").into_bytes()
         } else {

@@ -1071,14 +1071,12 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
-        match run_copyuid_command(session, dest_folder_id, &format!("UID MOVE {uids} {dest}")).await
+        if let Ok(dest_uids) =
+            run_copyuid_command(session, dest_folder_id, &format!("UID MOVE {uids} {dest}")).await
         {
-            Ok(dest_uids) => {
-                drop(imap);
-                self.forget_messages(folder_id, message_ids).await;
-                return Ok(dest_uids);
-            }
-            Err(_) => {}
+            drop(imap);
+            self.forget_messages(folder_id, message_ids).await;
+            return Ok(dest_uids);
         }
 
         // RFC 6851 fallback: COPY + \Deleted + EXPUNGE.

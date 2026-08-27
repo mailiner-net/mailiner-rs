@@ -240,6 +240,7 @@ pub enum DraftValidationError {
 /// - local and domain parts both non-empty
 /// - no whitespace anywhere
 /// - domain contains at least one `.`
+///
 /// Reject angle brackets and commas in the email field.
 pub fn is_valid_email_v1(email: &str) -> bool {
     let email = email.trim();

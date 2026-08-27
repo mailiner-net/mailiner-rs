@@ -150,6 +150,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_folder(
     out: &mut Vec<Folder>,
     seen: &mut std::collections::HashSet<String>,

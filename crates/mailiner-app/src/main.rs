@@ -16,7 +16,7 @@ use crate::components::{
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
-use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache, hydrate_account};
+use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 
 mod account;
@@ -217,7 +217,7 @@ async fn run_bootstrap(
     let active = resolve_active_id(store.as_ref(), &list).await;
     ctx.selected_account.set(active.clone());
     if let Some(account_id) = active.as_ref() {
-        hydrate_cached_mail(cache.as_ref(), ctx, account_id).await;
+        crate::core_event::hydrate_account_into(cache.as_ref(), ctx, account_id).await;
     }
     info!(
         "Bootstrap: {} account(s) from store → Ready (active={:?})",
@@ -231,18 +231,6 @@ async fn run_bootstrap(
         outbox,
         cache,
         initial_bootstrap: InitialBootstrap::Run { active },
-    }
-}
-
-/// Apply a cache hit so the folder tree / list paint before IMAP connects.
-async fn hydrate_cached_mail(cache: &dyn MailCache, ctx: &mut AppContext, account_id: &AccountId) {
-    let sort = *ctx.message_sort.peek();
-    let saved = crate::ui_prefs::load_last_mailbox(account_id);
-    let ack = crate::ui_prefs::load_ack_unread(account_id);
-    match hydrate_account(cache, account_id, sort, saved.as_ref(), &ack).await {
-        Ok(Some(hydrated)) => crate::core_event::apply_hydrated(ctx, hydrated),
-        Ok(None) => {}
-        Err(e) => warn!("mail cache hydrate failed for {account_id}: {e}"),
     }
 }
 

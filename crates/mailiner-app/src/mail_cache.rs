@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use dioxus::logger::tracing::warn;
 use mailiner_core::ids::AccountId;
 use mailiner_core::models::{Envelope, Folder, FolderCounts, MessageSort};
 use serde::{Deserialize, Serialize};
@@ -126,6 +127,11 @@ impl CachedFolderTree {
                 },
             );
         }
+        folders.sort_by(|a, b| {
+            folder_depth(&MailboxId::from(a.id.clone()), nodes)
+                .cmp(&folder_depth(&MailboxId::from(b.id.clone()), nodes))
+                .then_with(|| a.id.to_string().cmp(&b.id.to_string()))
+        });
         Self { folders, counts }
     }
 
@@ -135,6 +141,19 @@ impl CachedFolderTree {
             .map(|(id, c)| (mailiner_core::FolderId::new(id.clone()), *c))
             .collect()
     }
+}
+
+fn folder_depth(id: &MailboxId, nodes: &HashMap<MailboxId, MailboxNode>) -> usize {
+    let mut depth = 0;
+    let mut current = nodes.get(id).and_then(|n| n.parent.clone());
+    while let Some(parent) = current {
+        depth += 1;
+        current = nodes.get(&parent).and_then(|n| n.parent.clone());
+        if depth > 64 {
+            break;
+        }
+    }
+    depth
 }
 
 /// Contiguous message-list prefix for one folder (indices `0..envelopes.len()`).
@@ -236,10 +255,15 @@ pub async fn hydrate_account(
     apply_unread_new_state(&mut nodes, &counts, acknowledged);
     let selected = resolve_startup_mailbox(saved_mailbox, &nodes, &roots);
     let messages = match selected.as_ref() {
-        Some(mailbox_id) => cache
-            .load_messages(account_id, mailbox_id, sort)
-            .await?
-            .map(|list| list.to_ui_prefix()),
+        Some(mailbox_id) => match cache.load_messages(account_id, mailbox_id, sort).await {
+            Ok(list) => list.map(|list| list.to_ui_prefix()),
+            Err(e) => {
+                // Keep the folder tree; a list read / LRU-touch write must
+                // not look like a cache miss to the caller.
+                warn!("mail cache load messages failed for {account_id}: {e}");
+                None
+            }
+        },
         None => None,
     };
     Ok(Some(HydratedAccount {
@@ -614,9 +638,12 @@ impl<K: StringKvStore> MailCache for BrowserMailCache<K> {
     ) -> Result<Option<CachedMessageList>, AccountStoreError> {
         let mut blob = self.load_blob()?;
         let got = blob.take_messages(account_id, mailbox_id, sort);
-        // Only persist the LRU touch on a hit.
-        if got.is_some() {
-            self.save_blob(&mut blob)?;
+        // Only persist the LRU touch on a hit. A failed recency write must
+        // still return the already-loaded prefix.
+        if got.is_some()
+            && let Err(e) = self.save_blob(&mut blob)
+        {
+            warn!("mail cache LRU touch failed: {e}");
         }
         Ok(got)
     }
@@ -669,11 +696,21 @@ mod tests {
     }
 
     fn folder(account: &str, id: &str, name: &str, role: MailboxRole) -> Folder {
+        folder_parent(account, id, name, None, role)
+    }
+
+    fn folder_parent(
+        account: &str,
+        id: &str,
+        name: &str,
+        parent: Option<&str>,
+        role: MailboxRole,
+    ) -> Folder {
         Folder {
             id: FolderId::new(id),
             account_id: AccountId::new(account),
             name: name.into(),
-            parent_id: None,
+            parent_id: parent.map(FolderId::new),
             role,
             selectable: true,
             created_at: ts(),
@@ -1062,6 +1099,48 @@ mod tests {
         assert_eq!(
             hydrated.selected_mailbox.as_ref().map(|id| id.as_str()),
             Some("INBOX")
+        );
+    }
+
+    #[test]
+    fn from_nodes_roundtrip_keeps_nested_children() {
+        let acc = AccountId::new("acc");
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder_parent("acc", "KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+            folder_parent("acc", "KDE", "KDE", None, MailboxRole::Other),
+        ]);
+        assert!(
+            nodes
+                .get(&MailboxId::from("KDE".to_string()))
+                .is_some_and(|n| n.children.iter().any(|c| c.as_str() == "KDE.pim")),
+            "precondition: child-first LIST must keep the child"
+        );
+        let tree = CachedFolderTree::from_nodes(&acc, &nodes);
+        assert!(
+            tree.folders
+                .iter()
+                .position(|f| f.id.to_string() == "KDE")
+                .zip(
+                    tree.folders
+                        .iter()
+                        .position(|f| f.id.to_string() == "KDE.pim")
+                )
+                .is_some_and(|(parent, child)| parent < child),
+            "parent should be persisted before child: {:?}",
+            tree.folders
+                .iter()
+                .map(|f| f.id.to_string())
+                .collect::<Vec<_>>()
+        );
+        let (roots2, nodes2) = build_mailbox_tree(tree.folders);
+        assert_eq!(roots.len(), roots2.len());
+        let kde = nodes2
+            .get(&MailboxId::from("KDE".to_string()))
+            .expect("parent after hydrate");
+        assert!(
+            kde.children.iter().any(|id| id.as_str() == "KDE.pim"),
+            "cached nested child disappeared: {:?}",
+            kde.children
         );
     }
 

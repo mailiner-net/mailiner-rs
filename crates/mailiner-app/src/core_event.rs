@@ -527,9 +527,10 @@ async fn handle_select_account(
     account_id: AccountId,
 ) {
     ctx.selected_account.set(Some(account_id.clone()));
-    if !hydrate_account_into(manager.cache(), ctx, &account_id).await {
-        clear_mailbox_ui(ctx);
-    }
+    // Drop the previous account's selection / body before hydrate so a
+    // cache hit cannot leave the old message view painted over the new tree.
+    clear_mailbox_ui(ctx);
+    hydrate_account_into(manager.cache(), ctx, &account_id).await;
 
     let Some(config) = manager.resolve_config(&account_id).await else {
         error!("SelectAccount: unknown account {}", account_id);
@@ -970,7 +971,7 @@ fn apply_cached_message_list(ctx: &mut AppContext, cached: &CachedMessageList) {
 }
 
 /// `true` when a folder tree was applied from cache.
-async fn hydrate_account_into(
+pub(crate) async fn hydrate_account_into(
     cache: &dyn MailCache,
     ctx: &mut AppContext,
     account_id: &AccountId,
@@ -1004,10 +1005,14 @@ async fn persist_folder_tree(cache: &dyn MailCache, ctx: &AppContext, account_id
     }
 }
 
-async fn persist_selected_messages(cache: &dyn MailCache, ctx: &AppContext) {
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+async fn persist_selected_messages(
+    cache: &dyn MailCache,
+    ctx: &AppContext,
+    account_id: &AccountId,
+) {
+    if ctx.selected_account.read().as_ref() != Some(account_id) {
         return;
-    };
+    }
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         return;
     };
@@ -1028,9 +1033,22 @@ async fn persist_selected_messages(cache: &dyn MailCache, ctx: &AppContext) {
         return;
     }
     let snapshot = CachedMessageList::from_prefix(&mailbox_id, sort, total, unread, prefix);
-    if let Err(e) = cache.save_messages(&account_id, &snapshot).await {
+    if let Err(e) = cache.save_messages(account_id, &snapshot).await {
         warn!("mail cache save messages failed: {e}");
     }
+}
+
+fn contiguous_loaded_prefix_len<T: Clone>(list: &SparseList<T>) -> usize {
+    let cap = list.total_count();
+    let mut n = 0;
+    while n < cap && list.has_item(n) {
+        n += 1;
+    }
+    n
+}
+
+fn selected_account_is(ctx: &AppContext, account_id: &AccountId) -> bool {
+    ctx.selected_account.read().as_ref() == Some(account_id)
 }
 
 async fn invalidate_mailbox_messages(
@@ -1122,7 +1140,9 @@ async fn handle_select_mailbox(
             } else {
                 Ok(Vec::new())
             };
-            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+                || !selected_account_is(ctx, &account_id)
+            {
                 return;
             }
             match live {
@@ -1132,7 +1152,7 @@ async fn handle_select_mailbox(
                     list.insert_batch(0, batch);
                     ctx.messages.set(list);
                     ctx.messages_loading.set(false);
-                    persist_selected_messages(manager.cache(), ctx).await;
+                    persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
                 }
                 Err(e) => {
@@ -1142,8 +1162,16 @@ async fn handle_select_mailbox(
                         e
                     );
                     ctx.messages_loading.set(false);
-                    if ctx.messages.read().total_count() == 0 {
-                        ctx.messages.set(SparseList::new(state.total));
+                    {
+                        let mut list = ctx.messages.write();
+                        if list.cached_count() == 0 {
+                            *list = SparseList::new(state.total);
+                        } else if list.total_count() != state.total {
+                            list.set_total_count(state.total);
+                        }
+                    }
+                    if ctx.messages.read().cached_count() > 0 {
+                        persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     }
                 }
             }
@@ -1226,13 +1254,18 @@ async fn handle_fetch_message_range(
         .await
     {
         Ok(envelopes) => {
-            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+                || !selected_account_is(ctx, &account_id)
+            {
                 return;
             }
+            let prefix_before = contiguous_loaded_prefix_len(&ctx.messages.read());
             let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
             ctx.messages.write().insert_batch(range.start, batch);
-            // Extending the contiguous head updates the persisted prefix.
-            persist_selected_messages(manager.cache(), ctx).await;
+            // Only rewrite localStorage when the contiguous cached prefix grew.
+            if contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before {
+                persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            }
         }
         Err(e) => {
             error!(
@@ -1445,9 +1478,9 @@ async fn handle_select_message(
                         true,
                     )
                     .await;
-                    persist_selected_messages(manager.cache(), ctx).await;
                     let account_id = ctx.selected_account.read().clone();
                     if let Some(account_id) = account_id {
+                        persist_selected_messages(manager.cache(), ctx, &account_id).await;
                         persist_folder_tree(manager.cache(), ctx, &account_id).await;
                     }
                 }
@@ -1681,7 +1714,7 @@ async fn handle_mark_read(
         return;
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
-    persist_selected_messages(manager.cache(), ctx).await;
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
     persist_folder_tree(manager.cache(), ctx, &account_id).await;
 }
 
@@ -1758,6 +1791,7 @@ async fn handle_move_messages(
                 ctx.show_toast(ToastAction::moved(
                     dest_label,
                     MoveUndo {
+                        account_id: account_id.clone(),
                         from: dest_mailbox_id.clone(),
                         to: mailbox_id,
                         dest_ids,
@@ -1768,7 +1802,7 @@ async fn handle_move_messages(
                 ctx.show_toast(ToastAction::info(format!("Moved to {dest_label}")));
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
-            persist_selected_messages(manager.cache(), ctx).await;
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
             invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
         }
@@ -1821,7 +1855,7 @@ async fn handle_move_to_trash(
     let core_ids = core_message_ids(&message_ids);
 
     if source_is_trash || trash_id.as_ref() == Some(&mailbox_id) {
-        schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
+        schedule_permanent_delete(manager, ctx, account_id, mailbox_id, &message_ids).await;
         return;
     }
 
@@ -1844,6 +1878,7 @@ async fn handle_move_to_trash(
             let dest_ids = dest_uids;
             if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
                 ctx.show_toast(ToastAction::trashed(MoveUndo {
+                    account_id: account_id.clone(),
                     from: trash_id.clone(),
                     to: mailbox_id,
                     dest_ids,
@@ -1853,7 +1888,7 @@ async fn handle_move_to_trash(
                 ctx.show_toast(ToastAction::info("Moved to Trash"));
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
-            persist_selected_messages(manager.cache(), ctx).await;
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
             invalidate_mailbox_messages(manager.cache(), &account_id, &trash_id).await;
         }
@@ -1893,44 +1928,53 @@ async fn handle_delete_messages(
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
     }
-    schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
+    schedule_permanent_delete(manager, ctx, account_id, mailbox_id, &message_ids).await;
 }
 
 async fn schedule_permanent_delete(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: &[MessageId],
 ) {
     let (snapshots, removed_sel) = take_messages_from_ui(ctx, message_ids);
-    ctx.show_toast(ToastAction::deleted(mailbox_id, snapshots));
+    ctx.show_toast(ToastAction::deleted(
+        account_id.clone(),
+        mailbox_id,
+        snapshots,
+    ));
     select_after_removed_row(manager, ctx, removed_sel).await;
-    let account_id = ctx.selected_account.read().clone();
-    if let Some(account_id) = account_id {
-        persist_selected_messages(manager.cache(), ctx).await;
-        persist_folder_tree(manager.cache(), ctx, &account_id).await;
-    }
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+    persist_folder_tree(manager.cache(), ctx, &account_id).await;
 }
 
 async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, undo: UndoRequest) {
     match undo {
         UndoRequest::RestoreLocal {
+            account_id,
             mailbox_id,
             snapshots,
         } => {
+            if !selected_account_is(ctx, &account_id) {
+                ctx.show_toast(ToastAction::error(
+                    "Undo is not available after switching accounts",
+                ));
+                return;
+            }
             restore_snapshots(ctx, &mailbox_id, snapshots, None);
             ctx.show_toast(ToastAction::info("Undone"));
-            let account_id = ctx.selected_account.read().clone();
-            if let Some(account_id) = account_id {
-                persist_selected_messages(manager.cache(), ctx).await;
-                persist_folder_tree(manager.cache(), ctx, &account_id).await;
-            }
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
         }
         UndoRequest::ReverseMove(undo) => {
-            let Some(account_id) = ctx.selected_account.read().clone() else {
-                ctx.show_toast(ToastAction::error("No account selected"));
+            if !selected_account_is(ctx, &undo.account_id) {
+                ctx.show_toast(ToastAction::error(
+                    "Undo is not available after switching accounts",
+                ));
                 return;
-            };
+            }
+            let account_id = undo.account_id.clone();
             let Some(connector) = manager.get(&account_id) else {
                 ctx.show_toast(ToastAction::error("Not connected"));
                 return;
@@ -1951,9 +1995,15 @@ async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, u
                     let new_ids = new_uids;
                     restore_snapshots(ctx, &undo.to, undo.snapshots, Some(&new_ids));
                     ctx.show_toast(ToastAction::info("Undone"));
-                    persist_selected_messages(manager.cache(), ctx).await;
+                    persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
-                    invalidate_mailbox_messages(manager.cache(), &account_id, &undo.from).await;
+                    let selected = ctx.selected_mailbox.read().clone();
+                    if selected.as_ref() != Some(&undo.from) {
+                        invalidate_mailbox_messages(manager.cache(), &account_id, &undo.from).await;
+                    }
+                    if selected.as_ref() != Some(&undo.to) {
+                        invalidate_mailbox_messages(manager.cache(), &account_id, &undo.to).await;
+                    }
                 }
                 Err(e) => {
                     error!("Failed to undo move: {}", e);
@@ -1971,12 +2021,10 @@ async fn handle_commit_dismissed(
 ) {
     match commit {
         DismissCommit::Delete {
+            account_id,
             mailbox_id,
             message_ids,
         } => {
-            let Some(account_id) = ctx.selected_account.read().clone() else {
-                return;
-            };
             let Some(connector) = manager.get(&account_id) else {
                 return;
             };

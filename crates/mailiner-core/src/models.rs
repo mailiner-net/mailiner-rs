@@ -79,7 +79,7 @@ pub struct FolderListState {
 }
 
 /// IMAP `STATUS` totals for one mailbox (`MESSAGES` / `UNSEEN`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderCounts {
     pub total_messages: u64,
     pub unread_messages: u64,
@@ -124,7 +124,7 @@ impl MailboxRole {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: FolderId,
     pub account_id: AccountId,

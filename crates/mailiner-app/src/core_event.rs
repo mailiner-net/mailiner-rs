@@ -1095,7 +1095,7 @@ async fn handle_select_list_click(
 ) {
     if extend {
         apply_index_range_selection(manager, ctx, index).await;
-        handle_select_message(manager, ctx, message_id, true, false).await;
+        handle_select_message(manager, ctx, message_id, false, false).await;
         return;
     }
     if toggle {
@@ -1105,7 +1105,7 @@ async fn handle_select_list_click(
         let Some(focus) = ctx.selection.read().focus().cloned() else {
             return;
         };
-        handle_select_message(manager, ctx, focus, true, false).await;
+        handle_select_message(manager, ctx, focus, false, false).await;
         return;
     }
     handle_select_message(manager, ctx, message_id, true, true).await;
@@ -1158,7 +1158,14 @@ async fn select_list_index(
     let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
         return;
     };
-    handle_select_message(manager, ctx, message_id, true, replace_selection).await;
+    handle_select_message(
+        manager,
+        ctx,
+        message_id,
+        replace_selection,
+        replace_selection,
+    )
+    .await;
 }
 
 async fn select_after_removed_row(
@@ -1238,7 +1245,8 @@ async fn handle_select_message(
                 .read()
                 .find(|m| m.id == message_id)
                 .is_some_and(|m| !m.is_read);
-            if was_unread && auto_mark_read {
+            let is_multi = ctx.selection.read().is_multi();
+            if was_unread && crate::selection::should_auto_mark_read(auto_mark_read, is_multi) {
                 apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
                 if let Err(e) = connector
                     .update_envelope_flags(

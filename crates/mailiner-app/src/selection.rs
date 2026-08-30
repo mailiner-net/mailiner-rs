@@ -27,6 +27,11 @@ impl MessageSelection {
         self.ids.len()
     }
 
+    /// True when more than one row is selected (batch-action, not a read).
+    pub fn is_multi(&self) -> bool {
+        self.ids.len() > 1
+    }
+
     pub fn contains(&self, id: &MessageId) -> bool {
         self.ids.contains(id)
     }
@@ -124,6 +129,15 @@ impl MessageSelection {
     }
 }
 
+/// Auto-mark `\Seen` only when opening a single message.
+///
+/// `requested` is the caller's intent (plain click / arrow, or Unread-first
+/// mailbox-open which already passes `false`). Multi-select is a batch-action
+/// gesture and must not consume unread.
+pub fn should_auto_mark_read(requested: bool, is_multi: bool) -> bool {
+    requested && !is_multi
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,8 +185,25 @@ mod tests {
         s.replace(id("a"), Some(2));
         s.set_range([id("a"), id("b"), id("c")], id("c"), Some(4));
         assert_eq!(s.len(), 3);
+        assert!(s.is_multi());
         assert_eq!(s.focus(), Some(&id("c")));
         assert_eq!(s.anchor_index(), Some(2));
         assert_eq!(s.focus_at_index(), Some(4));
+    }
+
+    #[test]
+    fn single_select_is_not_multi() {
+        let mut s = MessageSelection::default();
+        assert!(!s.is_multi());
+        s.replace(id("a"), Some(0));
+        assert!(!s.is_multi());
+    }
+
+    #[test]
+    fn auto_mark_only_when_opening_one_message() {
+        assert!(should_auto_mark_read(true, false));
+        assert!(!should_auto_mark_read(true, true));
+        assert!(!should_auto_mark_read(false, false));
+        assert!(!should_auto_mark_read(false, true));
     }
 }

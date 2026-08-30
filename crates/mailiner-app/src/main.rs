@@ -16,6 +16,7 @@ use crate::components::{
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
+use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 
 mod account;
@@ -28,6 +29,7 @@ mod core_event;
 mod download;
 mod formatter;
 mod layout;
+mod mail_cache;
 mod mailbox;
 mod message;
 mod message_loader;
@@ -122,6 +124,7 @@ fn main() {
 struct BootstrapOutcome {
     store: Rc<dyn AccountStore>,
     outbox: Rc<dyn OutboxStore>,
+    cache: Rc<dyn MailCache>,
     initial_bootstrap: InitialBootstrap,
 }
 
@@ -144,6 +147,14 @@ async fn run_bootstrap(
         }
     };
 
+    let cache: Rc<dyn MailCache> = match BrowserMailCache::open().await {
+        Ok(s) => Rc::new(s),
+        Err(e) => {
+            warn!("BrowserMailCache open failed ({e}); using in-memory mail cache");
+            Rc::new(InMemoryMailCache::new())
+        }
+    };
+
     let store: Rc<dyn AccountStore> = match BrowserAccountStore::open().await {
         Ok(s) => Rc::new(s),
         Err(e) => {
@@ -160,6 +171,7 @@ async fn run_bootstrap(
             return BootstrapOutcome {
                 store: Rc::new(InMemoryAccountStore::new()),
                 outbox,
+                cache,
                 initial_bootstrap: InitialBootstrap::Skip,
             };
         }
@@ -176,6 +188,7 @@ async fn run_bootstrap(
             return BootstrapOutcome {
                 store,
                 outbox,
+                cache,
                 initial_bootstrap: InitialBootstrap::Skip,
             };
         }
@@ -189,6 +202,7 @@ async fn run_bootstrap(
         return BootstrapOutcome {
             store,
             outbox,
+            cache,
             initial_bootstrap: InitialBootstrap::Run { active: None },
         };
     }
@@ -202,6 +216,9 @@ async fn run_bootstrap(
 
     let active = resolve_active_id(store.as_ref(), &list).await;
     ctx.selected_account.set(active.clone());
+    if let Some(account_id) = active.as_ref() {
+        crate::core_event::hydrate_account_into(cache.as_ref(), ctx, account_id).await;
+    }
     info!(
         "Bootstrap: {} account(s) from store → Ready (active={:?})",
         list.len(),
@@ -212,6 +229,7 @@ async fn run_bootstrap(
     BootstrapOutcome {
         store,
         outbox,
+        cache,
         initial_bootstrap: InitialBootstrap::Run { active },
     }
 }
@@ -324,6 +342,7 @@ fn App() -> Element {
                 ctx,
                 outcome.store,
                 outcome.outbox,
+                outcome.cache,
                 outcome.initial_bootstrap,
             )
             .await;

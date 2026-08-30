@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::account::AccountId;
 use crate::mailbox::MailboxId;
 use crate::message::{Message, MessageId};
 
@@ -39,6 +40,7 @@ pub enum ToastAction {
     },
     /// Permanent delete. IMAP runs when the toast dismisses unless undone.
     Deleted {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         snapshots: Vec<RemovedMessage>,
     },
@@ -48,6 +50,7 @@ pub enum ToastAction {
 /// Inverse of a move that already succeeded on the server (new dest UIDs).
 #[derive(Clone, Debug)]
 pub struct MoveUndo {
+    pub account_id: AccountId,
     pub from: MailboxId,
     pub to: MailboxId,
     pub dest_ids: Vec<MessageId>,
@@ -66,6 +69,7 @@ pub struct RemovedMessage {
 pub enum UndoRequest {
     ReverseMove(MoveUndo),
     RestoreLocal {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         snapshots: Vec<RemovedMessage>,
     },
@@ -75,6 +79,7 @@ pub enum UndoRequest {
 #[derive(Clone, Debug)]
 pub enum DismissCommit {
     Delete {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
@@ -104,8 +109,13 @@ impl ToastAction {
         Self::Trashed { undo }
     }
 
-    pub fn deleted(mailbox_id: MailboxId, snapshots: Vec<RemovedMessage>) -> Self {
+    pub fn deleted(
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        snapshots: Vec<RemovedMessage>,
+    ) -> Self {
         Self::Deleted {
+            account_id,
             mailbox_id,
             snapshots,
         }
@@ -135,9 +145,11 @@ impl ToastAction {
                 Some(UndoRequest::ReverseMove(undo.clone()))
             }
             Self::Deleted {
+                account_id,
                 mailbox_id,
                 snapshots,
             } => Some(UndoRequest::RestoreLocal {
+                account_id: account_id.clone(),
                 mailbox_id: mailbox_id.clone(),
                 snapshots: snapshots.clone(),
             }),
@@ -153,9 +165,11 @@ impl ToastAction {
     pub fn on_dismiss(&self) -> Option<DismissCommit> {
         match self {
             Self::Deleted {
+                account_id,
                 mailbox_id,
                 snapshots,
             } => Some(DismissCommit::Delete {
+                account_id: account_id.clone(),
                 mailbox_id: mailbox_id.clone(),
                 message_ids: snapshots.iter().map(|s| s.message.id.clone()).collect(),
             }),
@@ -214,6 +228,7 @@ mod tests {
     #[test]
     fn moved_pairs_with_reverse_move() {
         let undo = MoveUndo {
+            account_id: AccountId::new("a"),
             from: MailboxId::from("Trash".to_string()),
             to: MailboxId::from("INBOX".to_string()),
             dest_ids: vec![MessageId::new(FolderId::new("INBOX"), "9")],
@@ -232,6 +247,7 @@ mod tests {
     #[test]
     fn deleted_undo_is_local_and_dismiss_commits() {
         let a = ToastAction::deleted(
+            AccountId::new("a"),
             MailboxId::from("Trash".to_string()),
             vec![RemovedMessage {
                 index: 2,

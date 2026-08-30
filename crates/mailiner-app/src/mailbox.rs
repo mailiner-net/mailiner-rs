@@ -96,7 +96,6 @@ pub fn build_mailbox_tree(
                 role,
                 selectable: folder.selectable,
             });
-        mboxes.insert(mailbox_id.clone(), folder.clone().into());
         if let Some(parent_id) = folder.parent_id.clone() {
             mboxes
                 .entry(parent_id.clone().into())
@@ -543,6 +542,23 @@ mod tests {
             false,
         )]);
         assert!(find_mailbox_with_role(&nodes, MailboxRole::Trash).is_none());
+    }
+
+    #[test]
+    fn build_tree_keeps_children_when_child_arrives_first() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+            folder("KDE", "KDE", None, MailboxRole::Other),
+        ]);
+        assert!(roots.iter().any(|id| id.as_str() == "KDE"));
+        let kde = nodes
+            .get(&MailboxId::from("KDE".to_string()))
+            .expect("parent");
+        assert!(
+            kde.children.iter().any(|id| id.as_str() == "KDE.pim"),
+            "synthesized parent children must survive the real folder: {:?}",
+            kde.children
+        );
     }
 
     #[test]

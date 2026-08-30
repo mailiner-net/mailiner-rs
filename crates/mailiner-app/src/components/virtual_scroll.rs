@@ -665,6 +665,17 @@ mod tests {
     }
 
     #[test]
+    fn cached_prefix_still_reports_holes_for_incremental_fetch() {
+        // Mail cache stores only a contiguous head; virtual scroll must keep
+        // requesting the unloaded tail (and any interior holes).
+        let mut list = SparseList::new(40);
+        list.insert_batch(0, vec!["m0", "m1", "m2", "m3", "m4"]);
+        assert!(list.missing_ranges(0, 5).is_empty());
+        assert_eq!(list.missing_ranges(0, 12), vec![5..12]);
+        assert_eq!(list.missing_ranges(20, 25), vec![20..25]);
+    }
+
+    #[test]
     fn sparse_list_no_dense_allocation() {
         let mut list = SparseList::new(60_000);
         list.insert(0, 1);

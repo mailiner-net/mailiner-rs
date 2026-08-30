@@ -25,6 +25,7 @@ use mailiner_imap_connector::ImapConnector;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::context::AppContext;
+use crate::mail_cache::MailCache;
 use crate::websocket_stream::WebSocketStream;
 
 /// Overall connect budget: WS open + TLS + LOGIN (wall clock).
@@ -219,21 +220,27 @@ pub struct AccountConnectionManager {
     /// See module docs: v1 serializes connects; generation is defensive / future-proof.
     connect_generation: HashMap<AccountId, u64>,
     store: Rc<dyn AccountStore>,
+    cache: Rc<dyn MailCache>,
 }
 
 impl AccountConnectionManager {
-    pub fn new(store: Rc<dyn AccountStore>) -> Self {
+    pub fn new(store: Rc<dyn AccountStore>, cache: Rc<dyn MailCache>) -> Self {
         Self {
             connectors: HashMap::new(),
             configs: HashMap::new(),
             memory_only: HashSet::new(),
             connect_generation: HashMap::new(),
             store,
+            cache,
         }
     }
 
     pub fn store(&self) -> &Rc<dyn AccountStore> {
         &self.store
+    }
+
+    pub fn cache(&self) -> &dyn MailCache {
+        self.cache.as_ref()
     }
 
     pub fn get(&self, account_id: &AccountId) -> Option<&ImapConnector<WebSocketStream>> {

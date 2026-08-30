@@ -23,6 +23,10 @@ use crate::connection::{
 };
 use crate::context::{AppContext, MessageViewState};
 use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
+use crate::mail_cache::{
+    CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
+    hydrate_account,
+};
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 use crate::message_loader::load_message;
@@ -189,9 +193,10 @@ pub async fn core_loop(
     mut ctx: AppContext,
     store: Rc<dyn AccountStore>,
     outbox: Rc<dyn OutboxStore>,
+    cache: Rc<dyn MailCache>,
     initial_bootstrap: InitialBootstrap,
 ) {
-    let mut manager = AccountConnectionManager::new(store);
+    let mut manager = AccountConnectionManager::new(store, cache);
     let mut smtp_generation: u64 = 0;
     let mut inflight: Option<InFlightSmtp> = None;
 
@@ -492,6 +497,10 @@ async fn handle_bootstrap(
     }
 
     ctx.selected_account.set(Some(account_id.clone()));
+    // Re-hydrate if bootstrap skipped it (e.g. later Bootstrap event).
+    if ctx.mailbox_roots.read().is_empty() {
+        hydrate_account_into(manager.cache(), ctx, &account_id).await;
+    }
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
         .await
@@ -504,7 +513,10 @@ async fn handle_bootstrap(
                 "Bootstrap connect failed for {}: {} ({:?})",
                 account_id, e.message, e.kind
             );
-            clear_mailbox_ui(ctx);
+            // Keep a cache hit visible while disconnected.
+            if ctx.mailbox_roots.read().is_empty() {
+                clear_mailbox_ui(ctx);
+            }
         }
     }
 }
@@ -515,7 +527,10 @@ async fn handle_select_account(
     account_id: AccountId,
 ) {
     ctx.selected_account.set(Some(account_id.clone()));
+    // Drop the previous account's selection / body before hydrate so a
+    // cache hit cannot leave the old message view painted over the new tree.
     clear_mailbox_ui(ctx);
+    hydrate_account_into(manager.cache(), ctx, &account_id).await;
 
     let Some(config) = manager.resolve_config(&account_id).await else {
         error!("SelectAccount: unknown account {}", account_id);
@@ -780,6 +795,9 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     refresh_ui_accounts(manager, ctx).await;
     crate::ui_prefs::retain_last_mailboxes(&known);
     crate::ui_prefs::retain_ack_unread(&known);
+    if let Err(e) = manager.cache().retain_accounts(&known).await {
+        warn!("mail cache retain_accounts failed: {e}");
+    }
 }
 
 /// Rebuild UI accounts from the store plus explicitly memory-only configs.
@@ -879,13 +897,15 @@ async fn list_folders_soft(
                     }
                 }
             }
+            persist_folder_tree(manager.cache(), ctx, account_id).await;
         }
         Err(e) => {
             error!("Failed to list folders for {}: {}", account_id, e);
-            ctx.mailbox_nodes.set(HashMap::new());
-            ctx.mailbox_roots.set(Vec::new());
-            // Soft-fail: keep Ready connection but surface list failure on state if desired.
-            // Leave connection Ready; empty tree is the UI signal.
+            // Keep a cached tree if we already painted one.
+            if ctx.mailbox_roots.read().is_empty() {
+                ctx.mailbox_nodes.set(HashMap::new());
+                ctx.mailbox_roots.set(Vec::new());
+            }
         }
     }
 }
@@ -919,6 +939,128 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.mailbox_roots.set(Vec::new());
 }
 
+/// Paint a [`HydratedAccount`] onto UI signals (cache hit, no IMAP).
+pub(crate) fn apply_hydrated(ctx: &mut AppContext, hydrated: HydratedAccount) {
+    ctx.mailbox_nodes.set(hydrated.nodes);
+    ctx.mailbox_roots.set(hydrated.roots);
+    if let Some(mailbox_id) = hydrated.selected_mailbox {
+        ctx.selected_mailbox.set(Some(mailbox_id));
+    }
+    match hydrated.messages {
+        Some(msgs) => {
+            let mut list = SparseList::new(msgs.total);
+            list.insert_batch(0, msgs.prefix);
+            ctx.messages.set(list);
+            ctx.messages_loading.set(false);
+        }
+        None => {
+            if ctx.selected_mailbox.read().is_some() {
+                ctx.messages.set(SparseList::new(0));
+                ctx.messages_loading.set(true);
+            }
+        }
+    }
+}
+
+fn apply_cached_message_list(ctx: &mut AppContext, cached: &CachedMessageList) {
+    let ui = cached.to_ui_prefix();
+    let mut list = SparseList::new(ui.total);
+    list.insert_batch(0, ui.prefix);
+    ctx.messages.set(list);
+    ctx.messages_loading.set(false);
+}
+
+/// `true` when a folder tree was applied from cache.
+pub(crate) async fn hydrate_account_into(
+    cache: &dyn MailCache,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) -> bool {
+    let sort = *ctx.message_sort.peek();
+    let saved = crate::ui_prefs::load_last_mailbox(account_id);
+    let ack = crate::ui_prefs::load_ack_unread(account_id);
+    match hydrate_account(cache, account_id, sort, saved.as_ref(), &ack).await {
+        Ok(Some(hydrated)) => {
+            apply_hydrated(ctx, hydrated);
+            true
+        }
+        Ok(None) => false,
+        Err(e) => {
+            warn!("mail cache hydrate failed for {account_id}: {e}");
+            false
+        }
+    }
+}
+
+async fn persist_folder_tree(cache: &dyn MailCache, ctx: &AppContext, account_id: &AccountId) {
+    let tree = {
+        let nodes = ctx.mailbox_nodes.read();
+        CachedFolderTree::from_nodes(account_id, &nodes)
+    };
+    if tree.folders.is_empty() {
+        return;
+    }
+    if let Err(e) = cache.save_folders(account_id, &tree).await {
+        warn!("mail cache save folders failed: {e}");
+    }
+}
+
+async fn persist_selected_messages(
+    cache: &dyn MailCache,
+    ctx: &AppContext,
+    account_id: &AccountId,
+) {
+    if ctx.selected_account.read().as_ref() != Some(account_id) {
+        return;
+    }
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        return;
+    };
+    let sort = *ctx.message_sort.peek();
+    let (total, unread, prefix) = {
+        let list = ctx.messages.read();
+        let total = list.total_count();
+        let unread = ctx
+            .mailbox_nodes
+            .read()
+            .get(&mailbox_id)
+            .map(|n| n.unread_count);
+        let prefix = contiguous_envelope_prefix(|i| list.get(i).map(|m| m.envelope.clone()), total);
+        (total, unread, prefix)
+    };
+    if total > 0 && prefix.is_empty() {
+        // Don't clobber a previous prefix with an empty hole at index 0.
+        return;
+    }
+    let snapshot = CachedMessageList::from_prefix(&mailbox_id, sort, total, unread, prefix);
+    if let Err(e) = cache.save_messages(account_id, &snapshot).await {
+        warn!("mail cache save messages failed: {e}");
+    }
+}
+
+fn contiguous_loaded_prefix_len<T: Clone>(list: &SparseList<T>) -> usize {
+    let cap = list.total_count();
+    let mut n = 0;
+    while n < cap && list.has_item(n) {
+        n += 1;
+    }
+    n
+}
+
+fn selected_account_is(ctx: &AppContext, account_id: &AccountId) -> bool {
+    ctx.selected_account.read().as_ref() == Some(account_id)
+}
+
+async fn invalidate_mailbox_messages(
+    cache: &dyn MailCache,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+) {
+    if let Err(e) = cache.invalidate_messages(account_id, mailbox_id).await {
+        warn!("mail cache invalidate {} failed: {e}", mailbox_id.as_str());
+    }
+}
+
 async fn handle_select_mailbox(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -933,12 +1075,35 @@ async fn handle_select_mailbox(
     {
         return;
     }
-    ctx.selection.write().clear();
-    ctx.message_view.set(MessageViewState::Empty);
-    ctx.download_status.set(HashMap::new());
-    ctx.messages.set(SparseList::new(0));
-    ctx.messages_loading.set(true);
-    ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+
+    let already_showing = ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
+        && ctx.messages.read().cached_count() > 0;
+    if !already_showing {
+        ctx.selection.write().clear();
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
+        ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+        let sort = *ctx.message_sort.peek();
+        let account = ctx.selected_account.read().clone();
+        let hydrated = match account {
+            Some(account_id) => manager
+                .cache()
+                .load_messages(&account_id, &mailbox_id, sort)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        if let Some(cached) = hydrated {
+            apply_cached_message_list(ctx, &cached);
+        } else {
+            ctx.messages.set(SparseList::new(0));
+            ctx.messages_loading.set(true);
+        }
+    } else {
+        ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+        ctx.messages_loading.set(false);
+    }
 
     let Some(account_id) = ctx.selected_account.read().clone() else {
         error!("SelectMailbox: no account selected");
@@ -946,7 +1111,7 @@ async fn handle_select_mailbox(
         return;
     };
     let Some(connector) = manager.get(&account_id) else {
-        error!("SelectMailbox: no connector for {}", account_id);
+        // Offline / still connecting: keep the cache visible.
         ctx.messages_loading.set(false);
         return;
     };
@@ -965,12 +1130,53 @@ async fn handle_select_mailbox(
                 .set(state.supports_size_sender);
             ctx.message_sort.set(state.sort);
             crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
-            ctx.messages.set(SparseList::new(state.total));
-            ctx.messages_loading.set(false);
             acknowledge_mailbox_open(ctx, &account_id, &mailbox_id, state.total, state.unread);
+
+            // Fetch the first page, then swap the list atomically so a cache
+            // hit stays on screen until live envelopes arrive.
+            let end = state.total.min(20);
+            let live = if end > 0 {
+                connector.list_envelopes_range(&folder_id, 0..end).await
+            } else {
+                Ok(Vec::new())
+            };
+            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+                || !selected_account_is(ctx, &account_id)
+            {
+                return;
+            }
+            match live {
+                Ok(envelopes) => {
+                    let mut list = SparseList::new(state.total);
+                    let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
+                    list.insert_batch(0, batch);
+                    ctx.messages.set(list);
+                    ctx.messages_loading.set(false);
+                    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+                    persist_folder_tree(manager.cache(), ctx, &account_id).await;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to fetch first page of {}: {}",
+                        mailbox_id.as_str(),
+                        e
+                    );
+                    ctx.messages_loading.set(false);
+                    {
+                        let mut list = ctx.messages.write();
+                        if list.cached_count() == 0 {
+                            *list = SparseList::new(state.total);
+                        } else if list.total_count() != state.total {
+                            list.set_total_count(state.total);
+                        }
+                    }
+                    if ctx.messages.read().cached_count() > 0 {
+                        persist_selected_messages(manager.cache(), ctx, &account_id).await;
+                    }
+                }
+            }
+
             if select_first && state.total > 0 {
-                let end = state.total.min(20);
-                handle_fetch_message_range(manager, ctx, mailbox_id.clone(), 0..end).await;
                 let first_id = ctx.messages.read().get(0).map(|m| m.id.clone());
                 if let Some(id) = first_id {
                     // Unread-first: selecting the top row would immediately
@@ -997,6 +1203,9 @@ async fn handle_set_message_sort(
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         return;
     };
+    // Drop the previous sort's rows so we don't treat them as a cache hit.
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
     handle_select_mailbox(manager, ctx, mailbox_id, true).await;
 }
 
@@ -1009,9 +1218,13 @@ async fn handle_fetch_message_range(
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
-    if range.start >= range.end {
+    let total = ctx.messages.read().total_count();
+    let start = range.start.min(total);
+    let end = range.end.min(total);
+    if start >= end {
         return;
     }
+    let range = start..end;
 
     let already = {
         let messages = ctx.messages.read();
@@ -1041,11 +1254,18 @@ async fn handle_fetch_message_range(
         .await
     {
         Ok(envelopes) => {
-            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+            if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+                || !selected_account_is(ctx, &account_id)
+            {
                 return;
             }
+            let prefix_before = contiguous_loaded_prefix_len(&ctx.messages.read());
             let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
             ctx.messages.write().insert_batch(range.start, batch);
+            // Only rewrite localStorage when the contiguous cached prefix grew.
+            if contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before {
+                persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            }
         }
         Err(e) => {
             error!(
@@ -1266,6 +1486,11 @@ async fn handle_select_message(
                         true,
                     )
                     .await;
+                    let account_id = ctx.selected_account.read().clone();
+                    if let Some(account_id) = account_id {
+                        persist_selected_messages(manager.cache(), ctx, &account_id).await;
+                        persist_folder_tree(manager.cache(), ctx, &account_id).await;
+                    }
                 }
             }
         }
@@ -1497,6 +1722,8 @@ async fn handle_mark_read(
         return;
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+    persist_folder_tree(manager.cache(), ctx, &account_id).await;
 }
 
 /// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.
@@ -1572,7 +1799,8 @@ async fn handle_move_messages(
                 ctx.show_toast(ToastAction::moved(
                     dest_label,
                     MoveUndo {
-                        from: dest_mailbox_id,
+                        account_id: account_id.clone(),
+                        from: dest_mailbox_id.clone(),
                         to: mailbox_id,
                         dest_ids,
                         snapshots,
@@ -1582,6 +1810,9 @@ async fn handle_move_messages(
                 ctx.show_toast(ToastAction::info(format!("Moved to {dest_label}")));
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
         }
         Err(mailiner_core::MailinerError::PartialMove {
             dest_ids: _,
@@ -1632,7 +1863,7 @@ async fn handle_move_to_trash(
     let core_ids = core_message_ids(&message_ids);
 
     if source_is_trash || trash_id.as_ref() == Some(&mailbox_id) {
-        schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
+        schedule_permanent_delete(manager, ctx, account_id, mailbox_id, &message_ids).await;
         return;
     }
 
@@ -1655,7 +1886,8 @@ async fn handle_move_to_trash(
             let dest_ids = dest_uids;
             if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
                 ctx.show_toast(ToastAction::trashed(MoveUndo {
-                    from: trash_id,
+                    account_id: account_id.clone(),
+                    from: trash_id.clone(),
                     to: mailbox_id,
                     dest_ids,
                     snapshots,
@@ -1664,6 +1896,9 @@ async fn handle_move_to_trash(
                 ctx.show_toast(ToastAction::info("Moved to Trash"));
             }
             select_after_removed_row(manager, ctx, removed_sel).await;
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            invalidate_mailbox_messages(manager.cache(), &account_id, &trash_id).await;
         }
         Err(mailiner_core::MailinerError::PartialMove {
             dest_ids: _,
@@ -1701,34 +1936,53 @@ async fn handle_delete_messages(
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
     }
-    schedule_permanent_delete(manager, ctx, mailbox_id, &message_ids).await;
+    schedule_permanent_delete(manager, ctx, account_id, mailbox_id, &message_ids).await;
 }
 
 async fn schedule_permanent_delete(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: &[MessageId],
 ) {
     let (snapshots, removed_sel) = take_messages_from_ui(ctx, message_ids);
-    ctx.show_toast(ToastAction::deleted(mailbox_id, snapshots));
+    ctx.show_toast(ToastAction::deleted(
+        account_id.clone(),
+        mailbox_id,
+        snapshots,
+    ));
     select_after_removed_row(manager, ctx, removed_sel).await;
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+    persist_folder_tree(manager.cache(), ctx, &account_id).await;
 }
 
 async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, undo: UndoRequest) {
     match undo {
         UndoRequest::RestoreLocal {
+            account_id,
             mailbox_id,
             snapshots,
         } => {
+            if !selected_account_is(ctx, &account_id) {
+                ctx.show_toast(ToastAction::error(
+                    "Undo is not available after switching accounts",
+                ));
+                return;
+            }
             restore_snapshots(ctx, &mailbox_id, snapshots, None);
             ctx.show_toast(ToastAction::info("Undone"));
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
         }
         UndoRequest::ReverseMove(undo) => {
-            let Some(account_id) = ctx.selected_account.read().clone() else {
-                ctx.show_toast(ToastAction::error("No account selected"));
+            if !selected_account_is(ctx, &undo.account_id) {
+                ctx.show_toast(ToastAction::error(
+                    "Undo is not available after switching accounts",
+                ));
                 return;
-            };
+            }
+            let account_id = undo.account_id.clone();
             let Some(connector) = manager.get(&account_id) else {
                 ctx.show_toast(ToastAction::error("Not connected"));
                 return;
@@ -1749,6 +2003,15 @@ async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, u
                     let new_ids = new_uids;
                     restore_snapshots(ctx, &undo.to, undo.snapshots, Some(&new_ids));
                     ctx.show_toast(ToastAction::info("Undone"));
+                    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+                    persist_folder_tree(manager.cache(), ctx, &account_id).await;
+                    let selected = ctx.selected_mailbox.read().clone();
+                    if selected.as_ref() != Some(&undo.from) {
+                        invalidate_mailbox_messages(manager.cache(), &account_id, &undo.from).await;
+                    }
+                    if selected.as_ref() != Some(&undo.to) {
+                        invalidate_mailbox_messages(manager.cache(), &account_id, &undo.to).await;
+                    }
                 }
                 Err(e) => {
                     error!("Failed to undo move: {}", e);
@@ -1766,12 +2029,10 @@ async fn handle_commit_dismissed(
 ) {
     match commit {
         DismissCommit::Delete {
+            account_id,
             mailbox_id,
             message_ids,
         } => {
-            let Some(account_id) = ctx.selected_account.read().clone() else {
-                return;
-            };
             let Some(connector) = manager.get(&account_id) else {
                 return;
             };

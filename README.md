@@ -66,6 +66,39 @@ for user proxies, `img-src` open for intentional remote images, and retain
 
 ## Running Mailiner locally
 
+Step 0 (optional): start a local IMAP + SMTP server with a seeded inbox:
+
+```
+docker compose up --build
+```
+
+This runs Dovecot (IMAPS 993, IMAP 143) and Postfix (SMTPS 465, submission 587, SMTP 25) in `mailiner-mail`. Default account:
+
+| Field | Value |
+|---|---|
+| Email / username | `dev@mailiner.test` (or `dev`) |
+| Password | `dev` |
+| IMAP | `localhost:993` (implicit TLS) |
+| SMTP | `localhost:465` (implicit TLS) |
+
+The container delivers a handful of fixture messages (plain text, HTML, multipart/alternative, attachments, inline CID image, remote image, RFC 2047 subject, a two-message thread, sanitizer bait, plus Drafts / Sent / Trash). Authenticated SMTP to any recipient is rewritten to the test inbox, so a Mailiner Send lands where you can open it. TLS uses a **test-only** CA at `docker/mail/tls/ca.crt`. Debug `dx serve` builds (and `--features dev-defaults`) trust that CA automatically; a stock release build will reject the certificate.
+
+Re-seed an existing volume with `FORCE_SEED=1 docker compose up`. Override `MAIL_USER` / `MAIL_PASSWORD` / `MAIL_NAME` if you want a different login.
+
+Prefill the onboarding form against this container (does **not** auto-connect):
+
+```
+MAILINER_DEV_DISPLAY_NAME=Dev \
+MAILINER_DEV_EMAIL=dev@mailiner.test \
+MAILINER_DEV_IMAP_HOST=localhost \
+MAILINER_DEV_IMAP_PORT=993 \
+MAILINER_DEV_IMAP_USER=dev@mailiner.test \
+MAILINER_DEV_IMAP_PASSWORD=dev \
+dx serve -p mailiner-app
+```
+
+Fill SMTP as `localhost` / `465` / same username and password (or leave the password blank to reuse the IMAP one).
+
 Step 1: run the ws-tcp-proxy (from the separate `mailiner/ws-tcp-proxy` repo):
 
 ```

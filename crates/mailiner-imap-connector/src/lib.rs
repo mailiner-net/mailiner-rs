@@ -114,6 +114,35 @@ struct ListIndex {
     unread: Option<usize>,
 }
 
+/// Trust the bundled local-mail CA in debug builds / `local-ca`.
+///
+/// The Docker Dovecot/Postfix container (`docker/mail`) presents a cert
+/// signed by `docker/mail/tls/ca.crt`. rustls only has `webpki_roots`, so
+/// without this hook Mailiner cannot complete IMAPS against localhost.
+fn add_local_dev_ca(root_store: &mut RootCertStore) {
+    #[cfg(any(debug_assertions, feature = "local-ca"))]
+    {
+        use rustls_pki_types::pem::PemObject;
+        use rustls_pki_types::CertificateDer;
+
+        const PEM: &[u8] = include_bytes!("../../../docker/mail/tls/ca.crt");
+        for item in CertificateDer::pem_slice_iter(PEM) {
+            match item {
+                Ok(cert) => {
+                    if let Err(e) = root_store.add(cert) {
+                        tracing::warn!("local mail CA not added: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("local mail CA parse failed: {e}"),
+            }
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "local-ca")))]
+    {
+        let _ = root_store;
+    }
+}
+
 impl<S> ImapConnector<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
@@ -179,9 +208,10 @@ where
         let mut imap = self.imap.lock().await;
         match *imap {
             ImapSession::Disconnected => {
-                let root_store = RootCertStore {
+                let mut root_store = RootCertStore {
                     roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
                 };
+                add_local_dev_ca(&mut root_store);
                 let config = ClientConfig::builder()
                     .with_root_certificates(root_store)
                     .with_no_client_auth();
@@ -1373,6 +1403,19 @@ fn part_size_from_structure(root: &BodyPart, section: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_mail_ca_is_trusted_in_debug() {
+        let mut store = RootCertStore::empty();
+        add_local_dev_ca(&mut store);
+        #[cfg(any(debug_assertions, feature = "local-ca"))]
+        assert!(
+            !store.is_empty(),
+            "debug/local-ca builds must load docker/mail/tls/ca.crt"
+        );
+        #[cfg(not(any(debug_assertions, feature = "local-ca")))]
+        assert!(store.is_empty());
+    }
 
     fn leaf(size: u64) -> BodyPart {
         BodyPart {

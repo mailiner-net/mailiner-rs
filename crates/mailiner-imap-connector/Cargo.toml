@@ -22,3 +22,9 @@ mailiner-mime = { path = "../mailiner-mime" }
 uuid = { version = "1.16", features = ["js"] }
 webpki-roots = "0.26"
 tracing = { version = "0.1" }
+
+[features]
+# Trust docker/mail/tls/ca.crt (the local Dovecot/Postfix container).
+# Enabled automatically in debug builds; wire this from mailiner-app's
+# `dev-defaults` so release-with-prefill can still talk to the container.
+local-ca = []

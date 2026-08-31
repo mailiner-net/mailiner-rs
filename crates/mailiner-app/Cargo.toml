@@ -78,8 +78,12 @@ web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
 # Prefill onboarding form fields in release builds (also on under debug_assertions).
-# Does not auto-connect or write the account store.
-dev-defaults = []
+# Does not auto-connect or write the account store. Also trusts the local
+# docker-mail CA so `dx serve --features dev-defaults` can reach the container.
+dev-defaults = [
+    "mailiner-imap-connector/local-ca",
+    "mailiner-smtp-connector/local-ca",
+]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

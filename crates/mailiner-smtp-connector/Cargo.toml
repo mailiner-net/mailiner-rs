@@ -15,5 +15,9 @@ thiserror = "2.0"
 tracing = "0.1"
 mailiner-core = { path = "../mailiner-core" }
 
+[features]
+# Trust docker/mail/tls/ca.crt (the local Dovecot/Postfix container).
+local-ca = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }

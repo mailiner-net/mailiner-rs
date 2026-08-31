@@ -2,13 +2,14 @@
 # Start Dovecot + Postfix and seed the test mailbox on first run.
 set -eu
 
-MAIL_USER="${MAIL_USER:-dev@mailiner.test}"
+# Dovecot applies auth_username_format=%Lu before passwd-file lookup.
+MAIL_USER="$(printf '%s' "${MAIL_USER:-dev@mailiner.test}" | tr '[:upper:]' '[:lower:]')"
 MAIL_PASSWORD="${MAIL_PASSWORD:-dev}"
 MAIL_NAME="${MAIL_NAME:-Dev User}"
 FORCE_SEED="${FORCE_SEED:-0}"
 
 case "$MAIL_USER" in
-  *@*)
+  ?*@?*)
     MAIL_LOCAL="${MAIL_USER%@*}"
     MAIL_DOMAIN="${MAIL_USER#*@}"
     ;;
@@ -37,6 +38,10 @@ HASH="$(doveadm pw -s SHA512-CRYPT -p "$MAIL_PASSWORD")"
 } > /etc/dovecot/users
 chmod 600 /etc/dovecot/users
 
+# FORCE_SEED=1 must replace the persisted Maildir, not append another copy.
+if [ "$FORCE_SEED" = "1" ]; then
+  rm -rf "$MAIL_HOME"
+fi
 mkdir -p "$MAIL_HOME"
 chown -R mailiner:mailiner /var/mail/vmail
 
@@ -67,6 +72,10 @@ if [ ! -S /var/spool/postfix/private/auth ]; then
   echo "Dovecot auth socket did not appear" >&2
   exit 1
 fi
+if [ ! -S /var/spool/postfix/private/dovecot-lmtp ]; then
+  echo "Dovecot LMTP socket did not appear" >&2
+  exit 1
+fi
 
 if [ ! -f "$SEEDED_MARKER" ] || [ "$FORCE_SEED" = "1" ]; then
   /usr/local/bin/seed-mail.sh
@@ -80,7 +89,7 @@ echo "  IMAPS  : 993  (implicit TLS)"
 echo "  SMTPS  : 465  (implicit TLS)"
 echo "  submit : 587  (STARTTLS)"
 echo "  user   : ${MAIL_USER}  (also ${MAIL_LOCAL})"
-echo "  pass   : ${MAIL_PASSWORD}"
+echo "  pass   : (from MAIL_PASSWORD)"
 
 # Keep PID 1 in the foreground; stop both daemons on signal.
 term() {
@@ -90,9 +99,15 @@ term() {
 }
 trap term INT TERM
 
-# Dovecot is already daemonized; wait on its master pid.
+# Dovecot is already daemonized; wait on its master pid, and also
+# fail if Postfix dies so PID 1 does not keep a half-working container.
 DOVECOT_PID="$(cat /run/dovecot/master.pid)"
 while kill -0 "$DOVECOT_PID" 2>/dev/null; do
+  if ! postfix status >/dev/null 2>&1; then
+    echo "Postfix exited unexpectedly" >&2
+    doveadm stop || true
+    exit 1
+  fi
   sleep 5
 done
 echo "Dovecot exited unexpectedly" >&2

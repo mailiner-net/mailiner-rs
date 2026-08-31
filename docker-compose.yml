@@ -10,11 +10,11 @@ services:
     image: mailiner-mail:local
     container_name: mailiner-mail
     ports:
-      - "993:993"
-      - "465:465"
-      - "587:587"
-      - "143:143"
-      - "25:25"
+      - "127.0.0.1:993:993"
+      - "127.0.0.1:465:465"
+      - "127.0.0.1:587:587"
+      - "127.0.0.1:143:143"
+      - "127.0.0.1:25:25"
     environment:
       MAIL_USER: ${MAIL_USER:-dev@mailiner.test}
       MAIL_PASSWORD: ${MAIL_PASSWORD:-dev}

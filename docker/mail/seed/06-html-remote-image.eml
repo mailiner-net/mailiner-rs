@@ -1,0 +1,28 @@
+From: Tracking News <news@example.net>
+To: Dev User <dev@mailiner.test>
+Subject: Remote image should stay blocked
+Date: Thu, 06 Aug 2026 11:20:00 +0000
+Message-ID: <remote-image@mailiner.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt-remote"
+
+--alt-remote
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+This HTML part references a remote image. Mailiner should block it until
+the user clicks "Allow remote resources".
+
+--alt-remote
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Remote image (blocked by default):</p>
+  <p><img src="https://example.net/tracker.png" alt="remote tracker"></p>
+  <p style="background-image:url(https://example.net/bg.png)">Styled with a remote background.</p>
+</body>
+</html>
+--alt-remote--

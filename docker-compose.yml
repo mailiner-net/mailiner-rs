@@ -1,0 +1,28 @@
+# Local IMAP + SMTP for Mailiner development.
+#   docker compose up --build
+#
+# Default account: dev@mailiner.test / dev
+# Ports: 993 (IMAPS), 465 (SMTPS), 587 (submission STARTTLS), 143, 25
+services:
+  mail:
+    build:
+      context: ./docker/mail
+    image: mailiner-mail:local
+    container_name: mailiner-mail
+    ports:
+      - "993:993"
+      - "465:465"
+      - "587:587"
+      - "143:143"
+      - "25:25"
+    environment:
+      MAIL_USER: ${MAIL_USER:-dev@mailiner.test}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-dev}
+      MAIL_NAME: ${MAIL_NAME:-Dev User}
+      FORCE_SEED: ${FORCE_SEED:-0}
+    volumes:
+      - mail-data:/var/mail/vmail
+    restart: unless-stopped
+
+volumes:
+  mail-data:

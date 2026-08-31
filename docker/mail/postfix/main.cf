@@ -1,0 +1,55 @@
+# Local-development Postfix. Not for production.
+# Hostname / virtual maps are finalized by entrypoint.sh.
+compatibility_level = 3.6
+myhostname = mail.mailiner.test
+mydomain = mailiner.test
+myorigin = $mydomain
+inet_interfaces = all
+inet_protocols = ipv4
+mydestination =
+mynetworks = 127.0.0.0/8
+relayhost =
+mailbox_size_limit = 0
+recipient_delimiter = +
+home_mailbox = Maildir/
+
+# All local virtual mail is handed to Dovecot LMTP.
+virtual_mailbox_domains = mailiner.test
+virtual_mailbox_maps = static:1
+virtual_transport = lmtp:unix:private/dovecot-lmtp
+# Envelope-only rewrite so any authenticated recipient lands in the test inbox.
+recipient_canonical_maps = regexp:/etc/postfix/recipient_canonical
+recipient_canonical_classes = envelope_recipient
+
+alias_maps =
+alias_database =
+
+smtpd_banner = $myhostname ESMTP Mailiner local
+biff = no
+append_dot_mydomain = no
+
+smtpd_tls_cert_file = /etc/ssl/mail/server-chain.crt
+smtpd_tls_key_file = /etc/ssl/mail/server.key
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_mandatory_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_loglevel = 1
+tls_preempt_cipherlist = yes
+
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_tls_security_options = noanonymous
+smtpd_sasl_local_domain = $mydomain
+broken_sasl_auth_clients = yes
+
+smtpd_helo_required = no
+smtpd_delay_reject = yes
+smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
+smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
+smtpd_sender_restrictions =
+smtpd_data_restrictions =
+
+maillog_file = /dev/stdout

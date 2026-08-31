@@ -1,0 +1,11 @@
+From: Old Thread <old@example.com>
+To: Dev User <dev@mailiner.test>
+Subject: Already in Trash
+Date: Sat, 15 Aug 2026 08:00:00 +0000
+Message-ID: <trashed@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+This message was seeded directly into Trash so delete / empty-folder
+paths have something to show.

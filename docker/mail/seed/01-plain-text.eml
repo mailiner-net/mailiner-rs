@@ -1,0 +1,18 @@
+From: Mailiner Fixtures <fixtures@mailiner.test>
+To: Dev User <dev@mailiner.test>
+Subject: Welcome to Mailiner
+Date: Sat, 01 Aug 2026 09:00:00 +0000
+Message-ID: <welcome-plain@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Hello Dev,
+
+This is a plain-text fixture used by the local mail container.
+
+* No HTML alternative
+* 7bit transfer encoding
+* Already marked \Seen so the inbox is not all-unread
+
+— Fixtures

@@ -1,6 +1,6 @@
 //! Non-UI helpers for compose attachments (size labels, MIME guess).
 
-use crate::model::{AttachmentData, AttachmentId, FileAttachment};
+use crate::model::{caps, AttachmentData, AttachmentId, DraftDocument, FileAttachment};
 
 /// Human-readable size (B / KiB / MiB).
 pub fn human_size(bytes: u64) -> String {
@@ -69,6 +69,27 @@ pub fn resolve_content_type(filename: &str, reported: Option<&str>) -> String {
     guess_content_type(filename)
 }
 
+/// Bytes already counted toward [`caps::MAX_DRAFT_BYTES`] (bodies + files + inlines).
+pub fn draft_payload_bytes(draft: &DraftDocument) -> u64 {
+    let mut total = draft.plain_body.len() as u64 + draft.html_body.len() as u64;
+    for a in &draft.attachments {
+        total = total.saturating_add(a.size);
+    }
+    for img in &draft.inline_images {
+        let sz = match &img.data {
+            AttachmentData::Bytes(b) => b.len() as u64,
+            AttachmentData::Pending => 0,
+        };
+        total = total.saturating_add(sz);
+    }
+    total
+}
+
+/// True when `current + extra` would fail [`caps::MAX_DRAFT_BYTES`].
+pub fn would_exceed_draft_cap(current: u64, extra: u64) -> bool {
+    current.saturating_add(extra) > caps::MAX_DRAFT_BYTES
+}
+
 /// Buffered [`FileAttachment`] with a fresh id and `size` matching `data`.
 pub fn file_attachment(
     filename: impl Into<String>,
@@ -130,5 +151,28 @@ mod tests {
         assert_eq!(att.content_type, "text/plain");
         assert_eq!(att.size, 2);
         assert!(matches!(att.data, AttachmentData::Bytes(ref b) if b == b"hi"));
+    }
+
+    #[test]
+    fn file_attachment_keeps_zero_byte_payload() {
+        let att = file_attachment("empty.txt", "text/plain", Vec::new());
+        assert_eq!(att.size, 0);
+        assert!(matches!(att.data, AttachmentData::Bytes(ref b) if b.is_empty()));
+    }
+
+    #[test]
+    fn draft_payload_includes_bodies_and_files() {
+        let id = crate::identity::FromIdentity::new("Me", "me@example.com");
+        let mut d = DraftDocument::new_empty(&id);
+        d.plain_body = "hello".into();
+        d.html_body = "<p>x</p>".into();
+        d.attachments.push(file_attachment(
+            "a.bin",
+            "application/octet-stream",
+            vec![0; 10],
+        ));
+        assert_eq!(draft_payload_bytes(&d), 5 + 8 + 10);
+        assert!(!would_exceed_draft_cap(draft_payload_bytes(&d), 0));
+        assert!(would_exceed_draft_cap(caps::MAX_DRAFT_BYTES, 1));
     }
 }

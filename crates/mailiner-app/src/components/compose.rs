@@ -8,7 +8,7 @@ use super::icons::{Icon, IconButton, IconKind};
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
-    file_attachment, human_size, resolve_content_type,
+    draft_payload_bytes, file_attachment, human_size, resolve_content_type, would_exceed_draft_cap,
 };
 use mailiner_composer::{
     ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
@@ -121,8 +121,9 @@ fn submit_compose(
     mut error: Signal<Option<String>>,
     mut submitting: Signal<bool>,
     mut submitted_id: Signal<Option<String>>,
+    attaching: Signal<bool>,
 ) {
-    if submitting() {
+    if submitting() || attaching() {
         return;
     }
     error.set(None);
@@ -188,24 +189,44 @@ fn open_draft_id(compose_draft: Signal<Option<ComposeSession>>) -> Option<String
         .map(|s| s.draft.id.as_str().to_string())
 }
 
+enum PushAttachment {
+    Added,
+    TooMany,
+    Stale,
+    TooLarge,
+}
+
+fn live_payload_bytes(draft: &DraftDocument, live_plain_len: usize) -> u64 {
+    draft_payload_bytes(draft)
+        .saturating_sub(draft.plain_body.len() as u64)
+        .saturating_add(live_plain_len as u64)
+}
+
 fn push_attachment_on_draft(
     mut compose_draft: Signal<Option<ComposeSession>>,
     draft_id: &str,
     attachment: FileAttachment,
-) -> bool {
+    live_plain_len: usize,
+) -> PushAttachment {
     let mut slot = compose_draft.write();
     let Some(session) = slot.as_mut() else {
-        return false;
+        return PushAttachment::Stale;
     };
     if session.draft.id.as_str() != draft_id {
-        return false;
+        return PushAttachment::Stale;
     }
     if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS {
-        return false;
+        return PushAttachment::TooMany;
+    }
+    if would_exceed_draft_cap(
+        live_payload_bytes(&session.draft, live_plain_len),
+        attachment.size,
+    ) {
+        return PushAttachment::TooLarge;
     }
     session.draft.attachments.push(attachment);
     session.draft.touch();
-    true
+    PushAttachment::Added
 }
 
 fn remove_attachment(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
@@ -229,10 +250,27 @@ fn too_many_message() -> String {
     format!("You can attach at most {} files.", caps::MAX_ATTACHMENTS)
 }
 
+fn oversize_draft_message() -> String {
+    let max_mib = caps::MAX_DRAFT_BYTES / (1024 * 1024);
+    format!("Attachments would exceed the {max_mib} MiB draft limit.")
+}
+
+fn set_attach_error_if_current(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    mut error: Signal<Option<String>>,
+    msg: String,
+) {
+    if open_draft_id(compose_draft).as_deref() == Some(draft_id) {
+        error.set(Some(msg));
+    }
+}
+
 async fn attach_selected_files(
     ctx: AppContext,
     files: Vec<dioxus::html::FileData>,
-    mut error: Signal<Option<String>>,
+    body: Signal<String>,
+    error: Signal<Option<String>>,
 ) {
     let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
         return;
@@ -240,20 +278,33 @@ async fn attach_selected_files(
     let mut first_err = None::<String>;
     for file in files {
         let filename = file.name();
-        if file.size() > caps::MAX_FILE_BYTES {
+        let declared = file.size();
+        if declared > caps::MAX_FILE_BYTES {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
         }
-        let current = ctx
+        let live_plain_len = body().len();
+        let Some((count, used)) = ctx
             .compose_draft
             .read()
             .as_ref()
             .filter(|s| s.draft.id.as_str() == draft_id)
-            .map(|s| s.draft.attachments.len())
-            .unwrap_or(0);
-        if current >= caps::MAX_ATTACHMENTS {
+            .map(|s| {
+                (
+                    s.draft.attachments.len(),
+                    live_payload_bytes(&s.draft, live_plain_len),
+                )
+            })
+        else {
+            break;
+        };
+        if count >= caps::MAX_ATTACHMENTS {
             first_err.get_or_insert_with(too_many_message);
             break;
+        }
+        if would_exceed_draft_cap(used, declared) {
+            first_err.get_or_insert_with(oversize_draft_message);
+            continue;
         }
         let bytes = match file.read_bytes().await {
             Ok(b) => b,
@@ -262,22 +313,27 @@ async fn attach_selected_files(
                 continue;
             }
         };
-        if bytes.is_empty() {
-            continue;
-        }
         if bytes.len() as u64 > caps::MAX_FILE_BYTES {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
         }
         let content_type = resolve_content_type(&filename, file.content_type().as_deref());
         let attachment = file_attachment(filename, content_type, bytes.to_vec());
-        if !push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment) {
-            first_err.get_or_insert_with(too_many_message);
-            break;
+        match push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment, live_plain_len) {
+            PushAttachment::Added => {}
+            PushAttachment::TooMany => {
+                first_err.get_or_insert_with(too_many_message);
+                break;
+            }
+            PushAttachment::Stale => break,
+            PushAttachment::TooLarge => {
+                first_err.get_or_insert_with(oversize_draft_message);
+                continue;
+            }
         }
     }
     if let Some(msg) = first_err {
-        error.set(Some(msg));
+        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
     }
 }
 
@@ -297,6 +353,7 @@ pub fn ComposeOverlay() -> Element {
     // closes (outbox drain) and must not disable a newly opened draft.
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
+    let mut attaching = use_signal(|| false);
     let mut attach_input_gen = use_signal(|| 0u32);
 
     let (open, title, attachments) = {
@@ -315,12 +372,15 @@ pub fn ComposeOverlay() -> Element {
         }
     };
     let sending = submitting();
+    let attaching_now = attaching();
+    let busy = sending || attaching_now;
 
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
+        let mut attaching = attaching;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
@@ -337,12 +397,14 @@ pub fn ComposeOverlay() -> Element {
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
+                    attaching.set(false);
                     submitted_id.set(None);
                 }
             }
             None => {
                 last_draft_id.set(None);
                 submitting.set(false);
+                attaching.set(false);
                 submitted_id.set(None);
             }
         });
@@ -421,6 +483,7 @@ pub fn ComposeOverlay() -> Element {
                                     error,
                                     submitting,
                                     submitted_id,
+                                    attaching,
                                 );
                             }
                         }
@@ -509,19 +572,19 @@ pub fn ComposeOverlay() -> Element {
                     div {
                         class: "compose-attachments",
                         label {
-                            class: if sending { "compose-attach is-disabled" } else { "compose-attach" },
+                            class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
                             title: "Attach files",
                             input {
                                 key: "{attach_input_gen()}",
                                 class: "compose-attach-input",
                                 r#type: "file",
                                 multiple: true,
-                                disabled: sending,
+                                disabled: busy,
                                 aria_label: "Attach files",
                                 onchange: {
                                     let ctx = ctx.clone();
                                     move |evt: FormEvent| {
-                                        if sending {
+                                        if sending || attaching() {
                                             return;
                                         }
                                         let files = evt.files();
@@ -530,9 +593,12 @@ pub fn ComposeOverlay() -> Element {
                                             return;
                                         }
                                         error.set(None);
+                                        attaching.set(true);
                                         let ctx = ctx.clone();
+                                        let mut attaching = attaching;
                                         spawn(async move {
-                                            attach_selected_files(ctx, files, error).await;
+                                            attach_selected_files(ctx, files, body, error).await;
+                                            attaching.set(false);
                                         });
                                     }
                                 },
@@ -593,7 +659,7 @@ pub fn ComposeOverlay() -> Element {
                         }
                         button {
                             class: "ui-btn ui-btn-primary",
-                            disabled: sending,
+                            disabled: busy,
                             onclick: {
                                 let ctx = ctx.clone();
                                 move |_| {
@@ -608,10 +674,17 @@ pub fn ComposeOverlay() -> Element {
                                         error,
                                         submitting,
                                         submitted_id,
+                                        attaching,
                                     );
                                 }
                             },
-                            if sending { "Sending…" } else { "Send" }
+                            if sending {
+                                "Sending…"
+                            } else if attaching_now {
+                                "Attaching…"
+                            } else {
+                                "Send"
+                            }
                         }
                     }
                 }

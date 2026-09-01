@@ -83,6 +83,9 @@ where
     /// Permanently delete messages (STORE \Deleted + EXPUNGE).
     async fn delete_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) -> Result<()>;
 
+    /// Permanently delete every message in `folder_id`. An already-empty folder is success.
+    async fn empty_folder(&self, folder_id: &FolderId) -> Result<()>;
+
     /// FETCH BODYSTRUCTURE for one message (UID). Selects `folder_id` if needed.
     async fn get_body_structure(
         &self,
@@ -355,6 +358,10 @@ where
         Ok(())
     }
 
+    async fn empty_folder(&self, _folder_id: &FolderId) -> Result<()> {
+        Ok(())
+    }
+
     async fn get_body_structure(
         &self,
         _folder_id: &FolderId,
@@ -426,6 +433,52 @@ pub fn mock_text_part(envelope_id: MessageId, part_id: &str, text: &str) -> Mess
 mod tests {
     use super::*;
     use crate::models::LoadedMessage;
+
+    #[test]
+    fn mock_empty_folder_succeeds() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+        #[derive(Debug)]
+        struct NoopStream;
+
+        impl AsyncRead for NoopStream {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                _: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for NoopStream {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let connector = MockConnector::new();
+        let folder = FolderId::new("trash");
+        let result = futures::executor::block_on(EmailConnector::<NoopStream>::empty_folder(
+            &connector, &folder,
+        ));
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn mock_structure_has_mixed_root() {

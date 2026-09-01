@@ -343,6 +343,21 @@ where
         (is_read, is_starred, is_flagged, is_draft, is_deleted)
     }
 
+    /// Drop cached BODYSTRUCTURE rows and the list index for this folder.
+    async fn forget_folder(&self, folder_id: &FolderId) {
+        {
+            let mut cache = self.structure_cache.lock().await;
+            cache.retain(|(fid, _), _| fid != folder_id);
+        }
+        let mut slot = self.list_index.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|idx| idx.folder == folder_id.as_str())
+        {
+            *slot = None;
+        }
+    }
+
     /// Drop cached BODYSTRUCTURE rows and the list index entries for these UIDs.
     /// Sequence fallback (no UID list) is cleared entirely — EXPUNGE shifts numbers.
     async fn forget_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) {
@@ -573,6 +588,9 @@ where
         Ok(sort::arrival_uid_order(set))
     }
 }
+
+/// UID set covering every message in the selected mailbox (`UID STORE 1:*`).
+const ALL_UIDS: &str = "1:*";
 
 fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     match flag {
@@ -1118,6 +1136,26 @@ where
         Ok(())
     }
 
+    async fn empty_folder(&self, folder_id: &FolderId) -> MailinerResult<()> {
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+
+            let mailbox = session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            // Empty folder is success. `UID STORE 1:*` would be invalid with EXISTS 0.
+            if mailbox.exists > 0 {
+                delete_selected_uids(session, ALL_UIDS).await?;
+            }
+        }
+        self.forget_folder(folder_id).await;
+        Ok(())
+    }
+
     async fn get_body_structure(
         &self,
         folder_id: &FolderId,
@@ -1437,6 +1475,11 @@ mod tests {
             MessageId::new(FolderId::new("Sent"), "44"),
         ];
         assert!(uid_set(&FolderId::new("INBOX"), &mixed).is_err());
+    }
+
+    #[test]
+    fn empty_folder_uses_all_uids() {
+        assert_eq!(ALL_UIDS, "1:*");
     }
 
     #[test]

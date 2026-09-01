@@ -170,6 +170,11 @@ pub fn apply_unread_new_state(
     }
 }
 
+/// Trash special-use folder that can be selected (not `\\Noselect`).
+pub fn can_empty_trash(node: &MailboxNode) -> bool {
+    node.selectable && node.role == MailboxRole::Trash
+}
+
 /// First mailbox with `role`, if any.
 pub fn find_mailbox_with_role(
     nodes: &HashMap<MailboxId, MailboxNode>,
@@ -530,6 +535,22 @@ mod tests {
             .map(|e| e.id.to_string())
             .collect();
         assert_eq!(entries, vec!["INBOX", "[Gmail]/Sent Mail"]);
+    }
+
+    #[test]
+    fn can_empty_trash_requires_selectable_trash() {
+        let trash = MailboxNode::from(folder("Trash", "Trash", None, MailboxRole::Trash));
+        assert!(can_empty_trash(&trash));
+        let inbox = MailboxNode::from(folder("INBOX", "INBOX", None, MailboxRole::Inbox));
+        assert!(!can_empty_trash(&inbox));
+        let hidden = MailboxNode::from(folder_sel(
+            "virtual-trash",
+            "Trash",
+            None,
+            MailboxRole::Trash,
+            false,
+        ));
+        assert!(!can_empty_trash(&hidden));
     }
 
     #[test]

@@ -12,20 +12,33 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::send::{ComposeSession, OutboxDisplay, SendState};
 
+fn join_address_emails(addrs: &[ComposerAddress]) -> String {
+    addrs
+        .iter()
+        .map(|a| a.email.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
+    raw.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(ComposerAddress::email_only)
+        .collect()
+}
+
 fn apply_draft_fields(
     draft: &DraftDocument,
     to: &mut Signal<String>,
+    cc: &mut Signal<String>,
+    bcc: &mut Signal<String>,
     subject: &mut Signal<String>,
     body: &mut Signal<String>,
 ) {
-    to.set(
-        draft
-            .to
-            .iter()
-            .map(|a| a.email.as_str())
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
+    to.set(join_address_emails(&draft.to));
+    cc.set(join_address_emails(&draft.cc));
+    bcc.set(join_address_emails(&draft.bcc));
     subject.set(draft.subject.clone());
     body.set(draft.plain_body.clone());
 }
@@ -96,8 +109,11 @@ pub fn ComposeOverlay() -> Element {
     let ctx = use_context::<AppContext>();
     let core = use_coroutine_handle::<CoreEvent>();
     let mut to = use_signal(String::new);
+    let mut cc = use_signal(String::new);
+    let mut bcc = use_signal(String::new);
     let mut subject = use_signal(String::new);
     let mut body = use_signal(String::new);
+    let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let last_draft_id = use_signal(|| None::<String>);
     // Local only: global `send_status` stays `Sending` after the dialog
@@ -124,7 +140,15 @@ pub fn ComposeOverlay() -> Element {
                 let id = session.draft.id.as_str().to_string();
                 if last_draft_id() != Some(id.clone()) {
                     last_draft_id.set(Some(id));
-                    apply_draft_fields(&session.draft, &mut to, &mut subject, &mut body);
+                    apply_draft_fields(
+                        &session.draft,
+                        &mut to,
+                        &mut cc,
+                        &mut bcc,
+                        &mut subject,
+                        &mut body,
+                    );
+                    show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
                     submitted_id.set(None);
@@ -204,16 +228,53 @@ pub fn ComposeOverlay() -> Element {
                             onclick: close,
                         }
                     }
-                    label {
-                        class: "ui-field",
-                        span { "To" }
-                        input {
-                            class: "ui-input",
-                            r#type: "email",
-                            value: to(),
-                            disabled: sending,
-                            placeholder: "name@example.com",
-                            oninput: move |e| to.set(e.value()),
+                    div {
+                        class: "compose-to-row",
+                        label {
+                            class: "ui-field",
+                            span { "To" }
+                            input {
+                                class: "ui-input",
+                                r#type: "email",
+                                value: to(),
+                                disabled: sending,
+                                placeholder: "name@example.com",
+                                oninput: move |e| to.set(e.value()),
+                            }
+                        }
+                        button {
+                            class: "compose-cc-toggle",
+                            r#type: "button",
+                            title: if show_cc_bcc() { "Hide Cc/Bcc" } else { "Show Cc/Bcc" },
+                            aria_expanded: if show_cc_bcc() { "true" } else { "false" },
+                            onclick: move |_| show_cc_bcc.set(!show_cc_bcc()),
+                            "Cc/Bcc"
+                        }
+                    }
+                    if show_cc_bcc() {
+                        label {
+                            class: "ui-field",
+                            span { "Cc" }
+                            input {
+                                class: "ui-input",
+                                r#type: "email",
+                                value: cc(),
+                                disabled: sending,
+                                placeholder: "name@example.com",
+                                oninput: move |e| cc.set(e.value()),
+                            }
+                        }
+                        label {
+                            class: "ui-field",
+                            span { "Bcc" }
+                            input {
+                                class: "ui-input",
+                                r#type: "email",
+                                value: bcc(),
+                                disabled: sending,
+                                placeholder: "name@example.com",
+                                oninput: move |e| bcc.set(e.value()),
+                            }
                         }
                     }
                     label {
@@ -275,12 +336,9 @@ pub fn ComposeOverlay() -> Element {
                                 draft.html_body.clear();
                                 draft.plain_body = body();
                                 draft.subject = subject();
-                                draft.to = to()
-                                    .split(',')
-                                    .map(|s| s.trim())
-                                    .filter(|s| !s.is_empty())
-                                    .map(ComposerAddress::email_only)
-                                    .collect();
+                                draft.to = parse_address_list(&to());
+                                draft.cc = parse_address_list(&cc());
+                                draft.bcc = parse_address_list(&bcc());
                                 match prepare_submit(&draft, &identity) {
                                     Ok(prepared) => {
                                         let display = OutboxDisplay {

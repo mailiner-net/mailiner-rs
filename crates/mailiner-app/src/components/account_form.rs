@@ -276,6 +276,7 @@ pub fn use_form_test_status_cleanup(
 ) {
     use_drop(move || {
         if let Some(rid) = test_request_id.peek().clone() {
+            ctx.smtp_test_abandoned.write().insert(rid.clone());
             ctx.smtp_test_status.write().remove(&rid);
             ctx.connection_states.write().remove(&rid);
         }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use dioxus::logger::tracing::{info, warn};
@@ -294,6 +294,7 @@ fn App() -> Element {
     let download_status = use_signal(HashMap::new);
     let send_status = use_signal(|| None);
     let smtp_test_status = use_signal(HashMap::new);
+    let smtp_test_abandoned = use_signal(HashSet::new);
     let outbox = use_signal(Vec::new);
     let toast = use_signal(|| None);
     let compose_draft = use_signal(|| None);
@@ -315,6 +316,7 @@ fn App() -> Element {
         connection_states,
         send_status,
         smtp_test_status,
+        smtp_test_abandoned,
         outbox,
         toast,
         compose_draft,

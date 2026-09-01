@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dioxus::prelude::*;
@@ -74,6 +74,8 @@ pub struct AppContext {
     pub send_status: Signal<Option<SendState>>,
     /// Form Test SMTP, keyed by ephemeral request id.
     pub smtp_test_status: Signal<HashMap<AccountId, SendState>>,
+    /// Test SMTP request ids whose form unmounted before the result arrived.
+    pub smtp_test_abandoned: Signal<HashSet<AccountId>>,
     /// Outbox list (no rfc822 / no passwords).
     pub outbox: Signal<Vec<OutboxListEntry>>,
     /// Ephemeral toast (e.g. “Sent”).
@@ -97,5 +99,17 @@ impl AppContext {
             .map(|t| t.id.wrapping_add(1))
             .unwrap_or(1);
         toast.set(Some(Toast { id, action }));
+    }
+
+    /// Record a Test SMTP UI state unless the form already unmounted.
+    ///
+    /// Returns `false` if `request_id` was abandoned; the caller must not
+    /// leave a map entry or spawn further work for this id.
+    pub fn set_smtp_test_status(&mut self, request_id: AccountId, state: SendState) -> bool {
+        if self.smtp_test_abandoned.write().remove(&request_id) {
+            return false;
+        }
+        self.smtp_test_status.write().insert(request_id, state);
+        true
     }
 }

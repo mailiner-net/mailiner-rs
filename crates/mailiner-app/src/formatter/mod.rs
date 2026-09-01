@@ -12,6 +12,8 @@ pub use plain::format_plain;
 #[derive(Debug, Clone, Default)]
 pub struct FormatOptions {
     pub allow_remote_resources: bool,
+    /// Prefer a non-hidden `text/plain` part over HTML when both exist.
+    pub prefer_plain: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -43,9 +45,28 @@ impl MessageFormatter {
     }
 
     /// First non-hidden part that a formatter accepts wins.
+    /// When `prefer_plain`, a non-hidden `text/plain` part is tried first.
     pub fn format(&mut self, parts: &[MessagePart]) -> Option<FormatResult> {
-        for part in parts.iter().filter(|p| !p.is_hidden) {
-            if let Some(result) = self.format_part(part, parts) {
+        if self.options.prefer_plain {
+            if let Some(result) = self.format_first(
+                parts
+                    .iter()
+                    .filter(|p| !p.is_hidden && p.kind == PartKind::TextPlain),
+                parts,
+            ) {
+                return Some(result);
+            }
+        }
+        self.format_first(parts.iter().filter(|p| !p.is_hidden), parts)
+    }
+
+    fn format_first<'a>(
+        &mut self,
+        candidates: impl Iterator<Item = &'a MessagePart>,
+        all: &[MessagePart],
+    ) -> Option<FormatResult> {
+        for part in candidates {
+            if let Some(result) = self.format_part(part, all) {
                 self.prevented_remote_resources |= result.prevented_remote_resources;
                 return Some(result);
             }
@@ -155,5 +176,32 @@ mod tests {
         let mut f = MessageFormatter::with_defaults();
         let r = f.format(&parts).unwrap();
         assert!(!r.html.to_ascii_lowercase().contains("javascript:"));
+    }
+
+    #[test]
+    fn html_and_plain_uses_html_by_default() {
+        let parts = vec![
+            part(PartKind::TextHtml, "text/html", "<p>HTML body</p>"),
+            part(PartKind::TextPlain, "text/plain", "PLAIN body"),
+        ];
+        let mut f = MessageFormatter::with_defaults();
+        let r = f.format(&parts).unwrap();
+        assert!(r.html.contains("HTML body"));
+        assert!(!r.html.contains("PLAIN body"));
+    }
+
+    #[test]
+    fn html_and_plain_uses_plain_when_preferred() {
+        let parts = vec![
+            part(PartKind::TextHtml, "text/html", "<p>HTML body</p>"),
+            part(PartKind::TextPlain, "text/plain", "PLAIN body"),
+        ];
+        let mut f = MessageFormatter::new(FormatOptions {
+            allow_remote_resources: false,
+            prefer_plain: true,
+        });
+        let r = f.format(&parts).unwrap();
+        assert!(r.html.contains("PLAIN body"));
+        assert!(!r.html.contains("HTML body"));
     }
 }

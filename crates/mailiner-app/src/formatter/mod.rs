@@ -44,18 +44,18 @@ impl MessageFormatter {
         Self::new(FormatOptions::default())
     }
 
-    /// First non-hidden part that a formatter accepts wins.
-    /// When `prefer_plain`, a non-hidden `text/plain` part is tried first.
+    /// Prefer HTML unless `prefer_plain`. Falls back to the first formatable part.
     pub fn format(&mut self, parts: &[MessagePart]) -> Option<FormatResult> {
-        if self.options.prefer_plain {
-            if let Some(result) = self.format_first(
-                parts
-                    .iter()
-                    .filter(|p| !p.is_hidden && p.kind == PartKind::TextPlain),
-                parts,
-            ) {
-                return Some(result);
-            }
+        let preferred = if self.options.prefer_plain {
+            PartKind::TextPlain
+        } else {
+            PartKind::TextHtml
+        };
+        if let Some(result) = self.format_first(
+            parts.iter().filter(|p| !p.is_hidden && p.kind == preferred),
+            parts,
+        ) {
+            return Some(result);
         }
         self.format_first(parts.iter().filter(|p| !p.is_hidden), parts)
     }
@@ -180,14 +180,22 @@ mod tests {
 
     #[test]
     fn html_and_plain_uses_html_by_default() {
-        let parts = vec![
-            part(PartKind::TextHtml, "text/html", "<p>HTML body</p>"),
-            part(PartKind::TextPlain, "text/plain", "PLAIN body"),
-        ];
-        let mut f = MessageFormatter::with_defaults();
-        let r = f.format(&parts).unwrap();
-        assert!(r.html.contains("HTML body"));
-        assert!(!r.html.contains("PLAIN body"));
+        // Parser emits alternatives in document order (plain then HTML).
+        for parts in [
+            vec![
+                part(PartKind::TextHtml, "text/html", "<p>HTML body</p>"),
+                part(PartKind::TextPlain, "text/plain", "PLAIN body"),
+            ],
+            vec![
+                part(PartKind::TextPlain, "text/plain", "PLAIN body"),
+                part(PartKind::TextHtml, "text/html", "<p>HTML body</p>"),
+            ],
+        ] {
+            let mut f = MessageFormatter::with_defaults();
+            let r = f.format(&parts).unwrap();
+            assert!(r.html.contains("HTML body"));
+            assert!(!r.html.contains("PLAIN body"));
+        }
     }
 
     #[test]

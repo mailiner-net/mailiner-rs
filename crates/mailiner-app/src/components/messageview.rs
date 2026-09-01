@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use mailiner_composer::ComposeIntent;
 
 use mailiner_core::MailboxRole;
-use mailiner_core::models::PartKind;
+use mailiner_core::models::{MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
@@ -321,13 +321,17 @@ pub fn MessageView() -> Element {
     }
 }
 
+fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {
+    matches!(part.content, MessageContent::Text(_))
+}
+
 fn has_html_and_plain(parts: &[mailiner_core::models::MessagePart]) -> bool {
     let has_html = parts
         .iter()
-        .any(|p| !p.is_hidden && p.kind == PartKind::TextHtml);
+        .any(|p| !p.is_hidden && p.kind == PartKind::TextHtml && has_decoded_text(p));
     let has_plain = parts
         .iter()
-        .any(|p| !p.is_hidden && p.kind == PartKind::TextPlain);
+        .any(|p| !p.is_hidden && p.kind == PartKind::TextPlain && has_decoded_text(p));
     has_html && has_plain
 }
 

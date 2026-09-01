@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use mailiner_composer::ComposeIntent;
 
 use mailiner_core::MailboxRole;
+use mailiner_core::models::{MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MessageViewState};
@@ -193,6 +194,7 @@ fn view_message_key(state: &MessageViewState) -> Option<String> {
 pub fn MessageView() -> Element {
     let ctx = use_context::<AppContext>();
     let mut allow_remote = use_signal(|| false);
+    let mut prefer_plain = use_signal(|| false);
     let mut formatted_html = use_signal(|| String::new());
     let mut prevented_remote = use_signal(|| false);
     let last_msg_key = use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(None::<String>)));
@@ -205,14 +207,16 @@ pub fn MessageView() -> Element {
         use_effect(move || {
             let view = ctx.message_view.read().clone();
             let allow = *allow_remote.read();
+            let prefer = *prefer_plain.read();
             let key = view_message_key(&view);
 
-            // Reset privacy toggle when the selected message changes.
+            // Reset per-message toggles when the selected message changes.
             if *last_msg_key.borrow() != key {
                 *last_msg_key.borrow_mut() = key.clone();
-                if allow {
+                if allow || prefer {
                     allow_remote.set(false);
-                    // Effect will re-run after allow_remote clears.
+                    prefer_plain.set(false);
+                    // Effect will re-run after toggles clear.
                     return;
                 }
             }
@@ -221,6 +225,7 @@ pub fn MessageView() -> Element {
                 MessageViewState::Ready { loaded, .. } => {
                     let mut fmt = MessageFormatter::new(FormatOptions {
                         allow_remote_resources: allow,
+                        prefer_plain: prefer,
                     });
                     if let Some(result) = fmt.format(&loaded.parts) {
                         prevented_remote.set(result.prevented_remote_resources && !allow);
@@ -265,7 +270,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Loading { .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env }
+                        MessageHeader { message: env, prefer_plain }
                     }
                     div {
                         class: "message-view-loading",
@@ -274,7 +279,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Error { message, .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env }
+                        MessageHeader { message: env, prefer_plain }
                     }
                     div {
                         class: "message-view-error",
@@ -283,7 +288,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Ready { .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env }
+                        MessageHeader { message: env, prefer_plain }
                     }
 
                     if *prevented_remote.read() {
@@ -316,6 +321,20 @@ pub fn MessageView() -> Element {
     }
 }
 
+fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {
+    matches!(part.content, MessageContent::Text(_))
+}
+
+fn has_html_and_plain(parts: &[mailiner_core::models::MessagePart]) -> bool {
+    let has_html = parts
+        .iter()
+        .any(|p| !p.is_hidden && p.kind == PartKind::TextHtml && has_decoded_text(p));
+    let has_plain = parts
+        .iter()
+        .any(|p| !p.is_hidden && p.kind == PartKind::TextPlain && has_decoded_text(p));
+    has_html && has_plain
+}
+
 pub(crate) fn ready_loaded(
     ctx: &AppContext,
     message_id: &MessageId,
@@ -330,12 +349,16 @@ pub(crate) fn ready_loaded(
 }
 
 #[component]
-fn MessageHeader(message: Arc<Message>) -> Element {
+fn MessageHeader(message: Arc<Message>, mut prefer_plain: Signal<bool>) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let date = format_date(&message.date);
     let reply_to = message.reply_to();
-    let actions_ready = ready_loaded(&ctx, &message.id).is_some();
+    let loaded = ready_loaded(&ctx, &message.id);
+    let actions_ready = loaded.is_some();
+    let show_plain_toggle = loaded
+        .as_ref()
+        .is_some_and(|loaded| has_html_and_plain(&loaded.parts));
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()
@@ -388,6 +411,14 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                 }
                 div {
                     class: "message-view-actions",
+                    if show_plain_toggle {
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            title: if prefer_plain() { "Show HTML" } else { "Plain text" },
+                            onclick: move |_| prefer_plain.set(!prefer_plain()),
+                            if prefer_plain() { "Show HTML" } else { "Plain text" }
+                        }
+                    }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,

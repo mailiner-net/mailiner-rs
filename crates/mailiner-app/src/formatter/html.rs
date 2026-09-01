@@ -342,6 +342,7 @@ mod tests {
             &[html.clone()],
             &FormatOptions {
                 allow_remote_resources: true,
+                prefer_plain: false,
             },
         )
         .unwrap();

@@ -902,6 +902,35 @@ textarea.ui-input {
     width: min(40rem, 94vw);
 }
 
+.compose-to-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+}
+
+.compose-to-row .ui-field {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.compose-cc-toggle {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--item-accent);
+    background: none;
+    border: none;
+    padding: 0.45rem 0.2rem;
+    margin: 0;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.compose-cc-toggle:hover {
+    text-decoration: underline;
+}
+
 .picker-backdrop {
     position: fixed;
     inset: 0;

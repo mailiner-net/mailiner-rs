@@ -1341,6 +1341,19 @@ textarea.ui-input {
     white-space: nowrap;
 }
 
+.message-list-item-meta {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.25rem;
+}
+
+.message-attachment-indicator {
+    flex-shrink: 0;
+    display: inline-flex;
+    color: var(--text-muted);
+}
+
 .message-date {
     flex: 0 0 auto;
     font-size: var(--text-xs);

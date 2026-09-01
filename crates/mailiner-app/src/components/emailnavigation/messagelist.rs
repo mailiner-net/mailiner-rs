@@ -4,6 +4,7 @@ use std::sync::Arc;
 use dioxus::prelude::*;
 
 use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
+use crate::components::icons::{Icon, IconKind};
 use crate::components::virtual_scroll::VirtualScroll;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -89,8 +90,20 @@ pub fn MessageList() -> Element {
                             "{message.from_preview()}"
                         }
                         div {
-                            class: "message-date",
-                            "{list_date(&message.date)}"
+                            class: "message-list-item-meta",
+                            if message.has_attachments {
+                                span {
+                                    class: "message-attachment-indicator",
+                                    role: "img",
+                                    aria_label: "Has attachments",
+                                    title: "Has attachments",
+                                    Icon { size: 14, icon: IconKind::PaperClip }
+                                }
+                            }
+                            div {
+                                class: "message-date",
+                                "{list_date(&message.date)}"
+                            }
                         }
                     }
 

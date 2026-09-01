@@ -1,25 +1,26 @@
-# Development
+# mailiner-app
 
-Your new bare-bones project includes minimal organization with a single `main.rs` file and a few assets.
+The Dioxus/WASM UI crate for [Mailiner](../../README.md).
 
-```
-project/
-├─ assets/ # Any assets that are used by the app should be placed here
-├─ src/
-│  ├─ main.rs # main.rs is the entry point to your application and currently contains all components for the app
-├─ Cargo.toml # The Cargo.toml file defines the dependencies and feature flags for your project
-```
+For local development (ws-tcp-proxy, docker mail, onboarding), see the
+[workspace README](../../README.md).
 
-### Serving Your App
+## Serve / build
 
-Run the following command in the root of your project to start developing with the default platform:
+From the workspace root:
 
 ```bash
-dx serve
+dx serve -p mailiner-app
 ```
 
-To run for a different platform, use the `--platform platform` flag. E.g.
+Optional form prefill for local development (does **not** auto-connect):
+
 ```bash
-dx serve --platform desktop
+dx serve -p mailiner-app --features dev-defaults
 ```
 
+Release (size-optimized, what CI deploys):
+
+```bash
+dx build -p mailiner-app --release --web --debug-symbols=false
+```

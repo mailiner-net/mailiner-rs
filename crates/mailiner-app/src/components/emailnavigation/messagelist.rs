@@ -91,6 +91,24 @@ pub fn MessageList() -> Element {
                         }
                         div {
                             class: "message-list-item-meta",
+                            if message.is_starred {
+                                span {
+                                    class: "message-star-indicator",
+                                    role: "img",
+                                    aria_label: "Starred",
+                                    title: "Starred",
+                                    Icon { size: 14, icon: IconKind::Star }
+                                }
+                            }
+                            if message.is_flagged {
+                                span {
+                                    class: "message-flag-indicator",
+                                    role: "img",
+                                    aria_label: "Flagged",
+                                    title: "Flagged",
+                                    Icon { size: 14, icon: IconKind::Flag }
+                                }
+                            }
                             if message.has_attachments {
                                 span {
                                     class: "message-attachment-indicator",

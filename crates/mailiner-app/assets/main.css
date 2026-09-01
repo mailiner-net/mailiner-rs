@@ -1348,6 +1348,8 @@ textarea.ui-input {
     gap: 0.25rem;
 }
 
+.message-star-indicator,
+.message-flag-indicator,
 .message-attachment-indicator {
     flex-shrink: 0;
     display: inline-flex;

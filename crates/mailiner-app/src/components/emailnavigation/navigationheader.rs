@@ -6,6 +6,25 @@ use super::super::icons::{Icon, IconKind};
 use crate::Route;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::mailbox::can_empty_trash;
+
+/// Confirm before permanently emptying Trash. Non-web builds fail closed.
+fn confirm_empty_trash() -> bool {
+    #[cfg(feature = "web")]
+    {
+        web_sys::window()
+            .and_then(|window| {
+                window
+                    .confirm_with_message("Permanently delete all messages in Trash?")
+                    .ok()
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        false
+    }
+}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Mode {
@@ -28,9 +47,13 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let current_account_id = ctx.selected_account.read();
     let sort = *ctx.message_sort.read();
     let supports_size_sender = *ctx.sort_supports_size_sender.read();
+    let message_total = ctx.messages.read().total_count();
 
     let current_mailbox = current_mailbox_id.as_ref().and_then(|id| mailboxes.get(id));
     let current_account = current_account_id.as_ref().and_then(|id| accounts.get(id));
+    let show_empty_trash = props.mode == Mode::MessageList
+        && current_mailbox.is_some_and(can_empty_trash)
+        && message_total > 0;
     rsx! {
         header {
             class: "pane-header",
@@ -89,6 +112,28 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             },
                             "{option.label()}"
                         }
+                    }
+                }
+            }
+
+            if show_empty_trash {
+                if let (Some(mailbox_id), Some(account_id)) =
+                    (current_mailbox_id.clone(), current_account_id.clone())
+                {
+                    button {
+                        class: "empty-trash",
+                        title: "Permanently delete all messages in Trash",
+                        aria_label: "Empty Trash",
+                        onclick: move |_| {
+                            if !confirm_empty_trash() {
+                                return;
+                            }
+                            let _ = core_tx.send(CoreEvent::EmptyTrash {
+                                account_id: account_id.clone(),
+                                mailbox_id: mailbox_id.clone(),
+                            });
+                        },
+                        "Empty Trash"
                     }
                 }
             }

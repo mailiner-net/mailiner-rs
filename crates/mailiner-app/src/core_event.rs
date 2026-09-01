@@ -84,6 +84,11 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Permanently delete every message in the Trash special-use folder.
+    EmptyTrash {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+    },
     /// Inverse of a toasted action (central undo).
     Undo(UndoRequest),
     /// Work held until a toast dismissed without Undo (permanent delete).
@@ -331,6 +336,12 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_delete_messages(&manager, &mut ctx, mailbox_id, message_ids).await;
+            }
+            CoreEvent::EmptyTrash {
+                account_id,
+                mailbox_id,
+            } => {
+                handle_empty_trash(&manager, &mut ctx, account_id, mailbox_id).await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -1937,6 +1948,55 @@ async fn handle_delete_messages(
         return;
     }
     schedule_permanent_delete(manager, ctx, account_id, mailbox_id, &message_ids).await;
+}
+
+async fn handle_empty_trash(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let is_trash = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(crate::mailbox::can_empty_trash);
+    if !is_trash {
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    match connector.empty_folder(&folder_id).await {
+        Ok(()) => {
+            ctx.messages.set(SparseList::new(0));
+            ctx.selection.write().clear();
+            ctx.message_view.set(MessageViewState::Empty);
+            ctx.download_status.set(HashMap::new());
+            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
+                node.total_count = 0;
+                node.unread_count = 0;
+                node.has_new = false;
+            }
+            crate::ui_prefs::save_ack_unread(&account_id, &mailbox_id, 0);
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            ctx.show_toast(ToastAction::info("Trash emptied"));
+        }
+        Err(e) => {
+            error!("Failed to empty trash: {}", e);
+            ctx.show_toast(ToastAction::error(format!("Could not empty Trash: {e}")));
+        }
+    }
 }
 
 async fn schedule_permanent_delete(

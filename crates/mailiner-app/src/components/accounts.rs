@@ -12,7 +12,8 @@ use crate::account::AccountId;
 use crate::account_config::{AccountConfig, DEFAULT_SMTP_PORT, dev_form_prefill};
 use crate::components::account_form::{
     AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
-    build_config_from_form, credentials_changed, kind_label,
+    apply_smtp_test_outcome, build_config_from_form, credentials_changed, kind_label,
+    start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -361,6 +362,7 @@ pub fn AccountNewPage() -> Element {
     let account_id = use_hook(|| AccountId::new(Uuid::new_v4().to_string()));
     let account_id_effect = account_id.clone();
     let account_id_test = account_id.clone();
+    let account_id_smtp_test = account_id.clone();
     let account_id_save = account_id.clone();
 
     let mut display_name = use_signal(|| prefill.display_name.clone());
@@ -385,6 +387,9 @@ pub fn AccountNewPage() -> Element {
     let mut save_seen_progress = use_signal(|| false);
     let mut test_seen_progress = use_signal(|| false);
 
+    use_form_test_status_cleanup(ctx.clone(), test_request_id, phase);
+
+    let ctx_smtp = ctx.clone();
     use_effect(move || {
         let states = ctx.connection_states.read().clone();
         match phase() {
@@ -453,7 +458,18 @@ pub fn AccountNewPage() -> Element {
                     }
                 }
             }
-            FormPhase::Idle | FormPhase::TestingSmtp => {}
+            FormPhase::TestingSmtp => {
+                if let Some(rid) = test_request_id() {
+                    apply_smtp_test_outcome(
+                        ctx_smtp.clone(),
+                        &rid,
+                        phase,
+                        test_request_id,
+                        status_message,
+                    );
+                }
+            }
+            FormPhase::Idle => {}
         }
     });
 
@@ -501,6 +517,34 @@ pub fn AccountNewPage() -> Element {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));
             }
         }
+    };
+
+    let on_test_smtp = move |_| {
+        start_smtp_test(
+            build_config_from_form(
+                &account_id_smtp_test,
+                &display_name(),
+                &email(),
+                &imap_host(),
+                &imap_port(),
+                &imap_username(),
+                &imap_password(),
+                &proxy_base_url(),
+                &proxy_token(),
+                &remote_host(),
+                &remote_port(),
+                &smtp_host(),
+                &smtp_port(),
+                &smtp_username(),
+                &smtp_password(),
+                smtp_use_tls(),
+                Utc::now(),
+            ),
+            phase,
+            test_request_id,
+            status_message,
+            core_tx,
+        );
     };
 
     let on_save = move |_| {
@@ -612,6 +656,13 @@ pub fn AccountNewPage() -> Element {
                         }
                         button {
                             r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy,
+                            onclick: on_test_smtp,
+                            if matches!(phase(), FormPhase::TestingSmtp) { "Testing SMTP…" } else { "Test SMTP" }
+                        }
+                        button {
+                            r#type: "button",
                             class: "onboarding-btn onboarding-btn-primary",
                             disabled: busy,
                             onclick: on_save,
@@ -650,6 +701,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let account_id = AccountId::new(id.clone());
     let account_id_effect = account_id.clone();
     let account_id_test = account_id.clone();
+    let account_id_smtp_test = account_id.clone();
     let account_id_save = account_id.clone();
 
     let mut load_state = use_signal(|| EditLoadState::Loading);
@@ -680,6 +732,8 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut save_via_commit = use_signal(|| false);
     // Prior store `updated_at` when credential save starts; success requires a newer value.
     let mut save_baseline_updated_at = use_signal(|| None::<chrono::DateTime<Utc>>);
+
+    use_form_test_status_cleanup(ctx.clone(), test_request_id, phase);
 
     // Load secrets only into component-local state.
     use_future(move || {
@@ -736,6 +790,7 @@ pub fn AccountEditPage(id: String) -> Element {
     // Watch connection_states for Save (credential commit) and Test independently.
     // Test must not require save_via_commit (BUG-1). Save waits for upsert via store
     // updated_at (and/or final Ready after demoted Connecting) — not connect-Ready alone.
+    let ctx_smtp = ctx.clone();
     use_effect(move || {
         let states = ctx.connection_states.read().clone();
         match phase() {
@@ -836,7 +891,18 @@ pub fn AccountEditPage(id: String) -> Element {
                     }
                 }
             }
-            FormPhase::Saving | FormPhase::Idle | FormPhase::TestingSmtp => {}
+            FormPhase::TestingSmtp => {
+                if let Some(rid) = test_request_id() {
+                    apply_smtp_test_outcome(
+                        ctx_smtp.clone(),
+                        &rid,
+                        phase,
+                        test_request_id,
+                        status_message,
+                    );
+                }
+            }
+            FormPhase::Saving | FormPhase::Idle => {}
         }
     });
 
@@ -936,6 +1002,37 @@ pub fn AccountEditPage(id: String) -> Element {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));
             }
         }
+    };
+
+    let on_test_smtp = move |_| {
+        let Some(orig) = original() else {
+            return;
+        };
+        start_smtp_test(
+            build_config_from_form(
+                &account_id_smtp_test,
+                &display_name(),
+                &email(),
+                &imap_host(),
+                &imap_port(),
+                &imap_username(),
+                &imap_password(),
+                &proxy_base_url(),
+                &proxy_token(),
+                &remote_host(),
+                &remote_port(),
+                &smtp_host(),
+                &smtp_port(),
+                &smtp_username(),
+                &smtp_password(),
+                smtp_use_tls(),
+                orig.created_at,
+            ),
+            phase,
+            test_request_id,
+            status_message,
+            core_tx,
+        );
     };
 
     let on_save = move |_| {
@@ -1091,6 +1188,13 @@ pub fn AccountEditPage(id: String) -> Element {
                             disabled: busy,
                             onclick: on_test,
                             if matches!(phase(), FormPhase::Testing) { "Testing…" } else { "Test connection" }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy,
+                            onclick: on_test_smtp,
+                            if matches!(phase(), FormPhase::TestingSmtp) { "Testing SMTP…" } else { "Test SMTP" }
                         }
                         button {
                             r#type: "button",

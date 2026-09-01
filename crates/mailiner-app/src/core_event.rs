@@ -2512,7 +2512,7 @@ async fn handle_test_smtp(
     config: AccountConfig,
 ) {
     if inflight.is_some() {
-        ctx.smtp_test_status.write().insert(
+        ctx.set_smtp_test_status(
             request_id,
             SendState::Failed {
                 account_id: config.id.clone(),
@@ -2524,8 +2524,8 @@ async fn handle_test_smtp(
         return;
     }
     if let Err(err) = preflight(&config) {
-        ctx.smtp_test_status.write().insert(
-            request_id.clone(),
+        ctx.set_smtp_test_status(
+            request_id,
             SendState::Failed {
                 account_id: config.id.clone(),
                 kind: err.kind,
@@ -2544,13 +2544,16 @@ async fn handle_test_smtp(
         outbox_id: None,
         is_test: true,
     });
-    ctx.smtp_test_status.write().insert(
+    if !ctx.set_smtp_test_status(
         request_id.clone(),
         SendState::Sending {
             account_id: config.id.clone(),
             phase: SendPhase::Connecting,
         },
-    );
+    ) {
+        *inflight = None;
+        return;
+    }
     spawn_test(config, request_id, generation, cancel_rx, smtp_tx.clone());
 }
 
@@ -2646,7 +2649,7 @@ async fn handle_smtp_finished(
                     retryable: err.kind.is_retryable(),
                 },
             };
-            ctx.smtp_test_status.write().insert(request_id, state);
+            ctx.set_smtp_test_status(request_id, state);
         }
     }
     refresh_outbox_signal(outbox, ctx).await;

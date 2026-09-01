@@ -205,18 +205,23 @@ mod tests {
         let root = mock_multipart_structure();
         let parser = MessageParser::with_defaults();
         let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
-        // Should have HTML (from alternative) + PDF attachment
+        // Both alternatives stay displayable; formatter prefers HTML unless asked.
         assert!(
             parts.iter().any(|p| p.kind == PartKind::TextHtml),
             "expected html part, got {:?}",
             parts.iter().map(|p| &p.content_type).collect::<Vec<_>>()
         );
-        assert!(
-            !parts.iter().any(|p| p.kind == PartKind::TextPlain),
-            "plain should be superseded by html"
-        );
+        let plain = parts
+            .iter()
+            .find(|p| p.kind == PartKind::TextPlain)
+            .expect("plain alternative should be kept");
+        assert_eq!(plain.section(), "1.1");
+        assert!(!plain.is_hidden);
+        assert!(plain.should_prefetch());
+
         let html = parts.iter().find(|p| p.kind == PartKind::TextHtml).unwrap();
         assert_eq!(html.section(), "1.2");
+        assert!(!html.is_hidden);
         assert!(html.should_prefetch());
 
         let pdf = parts
@@ -226,6 +231,38 @@ mod tests {
         assert_eq!(pdf.section(), "2");
         assert!(!pdf.should_prefetch());
         assert_eq!(pdf.filename.as_deref(), Some("report.pdf"));
+    }
+
+    #[test]
+    fn alternative_plain_and_html_are_both_kept() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "alternative".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "html".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].kind, PartKind::TextPlain);
+        assert_eq!(parts[0].section(), "1");
+        assert!(!parts[0].is_hidden);
+        assert_eq!(parts[1].kind, PartKind::TextHtml);
+        assert_eq!(parts[1].section(), "2");
+        assert!(!parts[1].is_hidden);
     }
 
     #[test]

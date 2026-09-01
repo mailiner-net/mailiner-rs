@@ -20,8 +20,10 @@ impl PartParser for MultipartAlternativeParser {
         part_id: &str,
         path: &[String],
     ) -> Vec<MessagePart> {
-        // Prefer last subpart we can parse (RFC / TS).
-        for (i, sub) in part.subparts.iter().enumerate().rev() {
+        // Keep every parseable alternative so the viewer can toggle HTML / plain.
+        // Default rendering still prefers HTML via FormatOptions.prefer_plain.
+        let mut out = Vec::new();
+        for (i, sub) in part.subparts.iter().enumerate() {
             let ct = sub.content_type();
             if !ctx.registry.can_parse(&ct) {
                 continue;
@@ -29,11 +31,12 @@ impl PartParser for MultipartAlternativeParser {
             let mut sub_path = path.to_vec();
             sub_path.push((i + 1).to_string());
             let sub_id = format!("{part_id}.alternative.{i}");
-            return ctx
-                .registry
-                .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path);
+            out.extend(
+                ctx.registry
+                    .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+            );
         }
-        Vec::new()
+        out
     }
 }
 

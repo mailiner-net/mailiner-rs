@@ -7,7 +7,12 @@ use super::icons::{Icon, IconButton, IconKind};
 
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
-use mailiner_composer::{ComposeIntent, PrepareSubmitError, build_draft, prepare_submit};
+use mailiner_composer::shell::attachment_list::{
+    file_attachment, human_size, resolve_content_type,
+};
+use mailiner_composer::{
+    ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
+};
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -176,6 +181,106 @@ fn submit_compose(
     }
 }
 
+fn open_draft_id(compose_draft: Signal<Option<ComposeSession>>) -> Option<String> {
+    compose_draft
+        .read()
+        .as_ref()
+        .map(|s| s.draft.id.as_str().to_string())
+}
+
+fn push_attachment_on_draft(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    attachment: FileAttachment,
+) -> bool {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return false;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return false;
+    }
+    if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS {
+        return false;
+    }
+    session.draft.attachments.push(attachment);
+    session.draft.touch();
+    true
+}
+
+fn remove_attachment(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    let before = session.draft.attachments.len();
+    session.draft.attachments.retain(|a| a.id.0 != id);
+    if session.draft.attachments.len() != before {
+        session.draft.touch();
+    }
+}
+
+fn oversize_message(filename: &str) -> String {
+    let max_mib = caps::MAX_FILE_BYTES / (1024 * 1024);
+    format!("\"{filename}\" is larger than {max_mib} MiB.")
+}
+
+fn too_many_message() -> String {
+    format!("You can attach at most {} files.", caps::MAX_ATTACHMENTS)
+}
+
+async fn attach_selected_files(
+    ctx: AppContext,
+    files: Vec<dioxus::html::FileData>,
+    mut error: Signal<Option<String>>,
+) {
+    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
+        return;
+    };
+    let mut first_err = None::<String>;
+    for file in files {
+        let filename = file.name();
+        if file.size() > caps::MAX_FILE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        let current = ctx
+            .compose_draft
+            .read()
+            .as_ref()
+            .filter(|s| s.draft.id.as_str() == draft_id)
+            .map(|s| s.draft.attachments.len())
+            .unwrap_or(0);
+        if current >= caps::MAX_ATTACHMENTS {
+            first_err.get_or_insert_with(too_many_message);
+            break;
+        }
+        let bytes = match file.read_bytes().await {
+            Ok(b) => b,
+            Err(_) => {
+                first_err.get_or_insert_with(|| format!("Could not read \"{filename}\"."));
+                continue;
+            }
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        if bytes.len() as u64 > caps::MAX_FILE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        let content_type = resolve_content_type(&filename, file.content_type().as_deref());
+        let attachment = file_attachment(filename, content_type, bytes.to_vec());
+        if !push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment) {
+            first_err.get_or_insert_with(too_many_message);
+            break;
+        }
+    }
+    if let Some(msg) = first_err {
+        error.set(Some(msg));
+    }
+}
+
 #[component]
 pub fn ComposeOverlay() -> Element {
     let ctx = use_context::<AppContext>();
@@ -192,14 +297,23 @@ pub fn ComposeOverlay() -> Element {
     // closes (outbox drain) and must not disable a newly opened draft.
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
+    let mut attach_input_gen = use_signal(|| 0u32);
 
-    let session = ctx.compose_draft.read().clone();
-    let open = session.is_some();
-    let title = session
-        .as_ref()
-        .map(|s| s.title.as_str())
-        .unwrap_or("New message")
-        .to_string();
+    let (open, title, attachments) = {
+        let slot = ctx.compose_draft.read();
+        match slot.as_ref() {
+            Some(s) => (
+                true,
+                s.title.clone(),
+                s.draft
+                    .attachments
+                    .iter()
+                    .map(|a| (a.id.0.clone(), a.filename.clone(), a.size))
+                    .collect::<Vec<_>>(),
+            ),
+            None => (false, "New message".to_string(), Vec::new()),
+        }
+    };
     let sending = submitting();
 
     // Apply a newly opened draft once (do not clobber typing).
@@ -390,6 +504,77 @@ pub fn ComposeOverlay() -> Element {
                             disabled: sending,
                             rows: 10,
                             oninput: move |e| body.set(e.value()),
+                        }
+                    }
+                    div {
+                        class: "compose-attachments",
+                        label {
+                            class: if sending { "compose-attach is-disabled" } else { "compose-attach" },
+                            title: "Attach files",
+                            input {
+                                key: "{attach_input_gen()}",
+                                class: "compose-attach-input",
+                                r#type: "file",
+                                multiple: true,
+                                disabled: sending,
+                                aria_label: "Attach files",
+                                onchange: {
+                                    let ctx = ctx.clone();
+                                    move |evt: FormEvent| {
+                                        if sending {
+                                            return;
+                                        }
+                                        let files = evt.files();
+                                        attach_input_gen.set(attach_input_gen() + 1);
+                                        if files.is_empty() {
+                                            return;
+                                        }
+                                        error.set(None);
+                                        let ctx = ctx.clone();
+                                        spawn(async move {
+                                            attach_selected_files(ctx, files, error).await;
+                                        });
+                                    }
+                                },
+                            }
+                            Icon { size: 16, icon: IconKind::PaperClip }
+                            "Attach"
+                        }
+                        if !attachments.is_empty() {
+                            ul {
+                                class: "compose-attachment-list",
+                                for (id, filename, size) in attachments {
+                                    li {
+                                        key: "{id}",
+                                        class: "compose-attachment",
+                                        span {
+                                            class: "compose-attachment-name",
+                                            title: "{filename}",
+                                            "{filename}"
+                                        }
+                                        span {
+                                            class: "compose-attachment-size",
+                                            "{human_size(size)}"
+                                        }
+                                        button {
+                                            class: "compose-attachment-remove",
+                                            r#type: "button",
+                                            title: "Remove",
+                                            disabled: sending,
+                                            onclick: {
+                                                let id = id.clone();
+                                                move |_| {
+                                                    if sending {
+                                                        return;
+                                                    }
+                                                    remove_attachment(compose_draft, &id);
+                                                }
+                                            },
+                                            Icon { size: 14, icon: IconKind::XMark }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     if let Some(err) = error() {

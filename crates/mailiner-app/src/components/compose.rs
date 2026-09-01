@@ -399,7 +399,8 @@ pub fn ComposeOverlay() -> Element {
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
-                    attach_gen.set(attach_gen() + 1);
+                    let next = *attach_gen.peek() + 1;
+                    attach_gen.set(next);
                     attaching.set(false);
                     submitted_id.set(None);
                 }
@@ -407,7 +408,8 @@ pub fn ComposeOverlay() -> Element {
             None => {
                 last_draft_id.set(None);
                 submitting.set(false);
-                attach_gen.set(attach_gen() + 1);
+                let next = *attach_gen.peek() + 1;
+                attach_gen.set(next);
                 attaching.set(false);
                 submitted_id.set(None);
             }

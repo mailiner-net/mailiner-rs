@@ -1335,12 +1335,6 @@ textarea.ui-input {
 
 /* Nested mail-chrome rules. Do not append new top-level CSS after this. */
 #app {
-    #sidebar {
-        flex: 0 0 auto;
-        background-color: var(--sidebar);
-        padding: var(--margin);
-    }
-
     #emailnavigation {
         flex: 0 0 var(--folder-pane-width);
         display: flex;

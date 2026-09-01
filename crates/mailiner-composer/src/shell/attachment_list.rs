@@ -73,7 +73,11 @@ pub fn resolve_content_type(filename: &str, reported: Option<&str>) -> String {
 pub fn draft_payload_bytes(draft: &DraftDocument) -> u64 {
     let mut total = draft.plain_body.len() as u64 + draft.html_body.len() as u64;
     for a in &draft.attachments {
-        total = total.saturating_add(a.size);
+        let sz = match &a.data {
+            AttachmentData::Bytes(b) => b.len() as u64,
+            AttachmentData::Pending => 0,
+        };
+        total = total.saturating_add(sz);
     }
     for img in &draft.inline_images {
         let sz = match &img.data {
@@ -174,5 +178,26 @@ mod tests {
         assert_eq!(draft_payload_bytes(&d), 5 + 8 + 10);
         assert!(!would_exceed_draft_cap(draft_payload_bytes(&d), 0));
         assert!(would_exceed_draft_cap(caps::MAX_DRAFT_BYTES, 1));
+    }
+
+    #[test]
+    fn draft_payload_counts_bytes_not_declared_size() {
+        let id = crate::identity::FromIdentity::new("Me", "me@example.com");
+        let mut d = DraftDocument::new_empty(&id);
+        d.attachments.push(FileAttachment {
+            id: AttachmentId::new(),
+            filename: "a.bin".into(),
+            content_type: "application/octet-stream".into(),
+            size: 999,
+            data: AttachmentData::Bytes(vec![1, 2, 3]),
+        });
+        d.attachments.push(FileAttachment {
+            id: AttachmentId::new(),
+            filename: "p.bin".into(),
+            content_type: "application/octet-stream".into(),
+            size: 1000,
+            data: AttachmentData::Pending,
+        });
+        assert_eq!(draft_payload_bytes(&d), 3);
     }
 }

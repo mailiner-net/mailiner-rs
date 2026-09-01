@@ -206,7 +206,7 @@ fn push_attachment_on_draft(
     mut compose_draft: Signal<Option<ComposeSession>>,
     draft_id: &str,
     attachment: FileAttachment,
-    live_plain_len: usize,
+    body: Signal<String>,
 ) -> PushAttachment {
     let mut slot = compose_draft.write();
     let Some(session) = slot.as_mut() else {
@@ -219,7 +219,7 @@ fn push_attachment_on_draft(
         return PushAttachment::TooMany;
     }
     if would_exceed_draft_cap(
-        live_payload_bytes(&session.draft, live_plain_len),
+        live_payload_bytes(&session.draft, body().len()),
         attachment.size,
     ) {
         return PushAttachment::TooLarge;
@@ -319,7 +319,7 @@ async fn attach_selected_files(
         }
         let content_type = resolve_content_type(&filename, file.content_type().as_deref());
         let attachment = file_attachment(filename, content_type, bytes.to_vec());
-        match push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment, live_plain_len) {
+        match push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment, body) {
             PushAttachment::Added => {}
             PushAttachment::TooMany => {
                 first_err.get_or_insert_with(too_many_message);
@@ -354,6 +354,7 @@ pub fn ComposeOverlay() -> Element {
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
     let mut attaching = use_signal(|| false);
+    let mut attach_gen = use_signal(|| 0u32);
     let mut attach_input_gen = use_signal(|| 0u32);
 
     let (open, title, attachments) = {
@@ -381,6 +382,7 @@ pub fn ComposeOverlay() -> Element {
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
         let mut attaching = attaching;
+        let mut attach_gen = attach_gen;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
@@ -397,6 +399,7 @@ pub fn ComposeOverlay() -> Element {
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
+                    attach_gen.set(attach_gen() + 1);
                     attaching.set(false);
                     submitted_id.set(None);
                 }
@@ -404,6 +407,7 @@ pub fn ComposeOverlay() -> Element {
             None => {
                 last_draft_id.set(None);
                 submitting.set(false);
+                attach_gen.set(attach_gen() + 1);
                 attaching.set(false);
                 submitted_id.set(None);
             }
@@ -593,12 +597,16 @@ pub fn ComposeOverlay() -> Element {
                                             return;
                                         }
                                         error.set(None);
+                                        let generation = attach_gen() + 1;
+                                        attach_gen.set(generation);
                                         attaching.set(true);
                                         let ctx = ctx.clone();
                                         let mut attaching = attaching;
                                         spawn(async move {
                                             attach_selected_files(ctx, files, body, error).await;
-                                            attaching.set(false);
+                                            if attach_gen() == generation {
+                                                attaching.set(false);
+                                            }
                                         });
                                     }
                                 },

@@ -1,5 +1,6 @@
 //! Plain-text compose overlay (v1 send).
 
+use dioxus::html::Key;
 use dioxus::prelude::*;
 
 use super::icons::{Icon, IconButton, IconKind};
@@ -104,6 +105,77 @@ pub fn open_reply_or_forward(
     }
 }
 
+fn submit_compose(
+    ctx: &AppContext,
+    core: &Coroutine<CoreEvent>,
+    to: Signal<String>,
+    cc: Signal<String>,
+    bcc: Signal<String>,
+    subject: Signal<String>,
+    body: Signal<String>,
+    mut error: Signal<Option<String>>,
+    mut submitting: Signal<bool>,
+    mut submitted_id: Signal<Option<String>>,
+) {
+    if submitting() {
+        return;
+    }
+    error.set(None);
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        error.set(Some("Select an account first.".into()));
+        return;
+    };
+    let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
+        error.set(Some("Account not found.".into()));
+        return;
+    };
+    let identity = FromIdentity::new(account.name.clone(), account.email.clone());
+    let mut draft = ctx
+        .compose_draft
+        .read()
+        .as_ref()
+        .map(|s| s.draft.clone())
+        .unwrap_or_else(|| DraftDocument::new_empty(&identity));
+    draft.mode = BodyMode::Plain;
+    draft.html_body.clear();
+    draft.plain_body = body();
+    draft.subject = subject();
+    draft.to = parse_address_list(&to());
+    draft.cc = parse_address_list(&cc());
+    draft.bcc = parse_address_list(&bcc());
+    match prepare_submit(&draft, &identity) {
+        Ok(prepared) => {
+            let display = OutboxDisplay {
+                subject: draft.subject.clone(),
+                to_preview: prepared.envelope.rcpt_to.join(", "),
+            };
+            let draft_id = draft.id.as_str().to_string();
+            submitted_id.set(Some(draft_id.clone()));
+            submitting.set(true);
+            core.send(CoreEvent::SendMessage {
+                account_id,
+                request: mailiner_core::SubmitRequest {
+                    mail_from: prepared.envelope.mail_from,
+                    rcpt_to: prepared.envelope.rcpt_to,
+                    rfc822: prepared.rfc822,
+                    message_id: prepared.message_id,
+                },
+                display,
+                draft_id,
+                bcc_header: prepared.bcc_header,
+            });
+        }
+        Err(PrepareSubmitError::Validation(errs)) => {
+            submitting.set(false);
+            error.set(Some(format!("Cannot send: {errs:?}")));
+        }
+        Err(e) => {
+            submitting.set(false);
+            error.set(Some(e.to_string()));
+        }
+    }
+}
+
 #[component]
 pub fn ComposeOverlay() -> Element {
     let ctx = use_context::<AppContext>();
@@ -118,7 +190,7 @@ pub fn ComposeOverlay() -> Element {
     let last_draft_id = use_signal(|| None::<String>);
     // Local only: global `send_status` stays `Sending` after the dialog
     // closes (outbox drain) and must not disable a newly opened draft.
-    let mut submitting = use_signal(|| false);
+    let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
 
     let session = ctx.compose_draft.read().clone();
@@ -217,6 +289,28 @@ pub fn ComposeOverlay() -> Element {
                     role: "dialog",
                     aria_label: "{title}",
                     onclick: move |evt| evt.stop_propagation(),
+                    onkeydown: {
+                        let ctx = ctx.clone();
+                        move |evt: KeyboardEvent| {
+                            if matches!(evt.key(), Key::Enter)
+                                && (evt.modifiers().ctrl() || evt.modifiers().meta())
+                            {
+                                evt.prevent_default();
+                                submit_compose(
+                                    &ctx,
+                                    &core,
+                                    to,
+                                    cc,
+                                    bcc,
+                                    subject,
+                                    body,
+                                    error,
+                                    submitting,
+                                    submitted_id,
+                                );
+                            }
+                        }
+                    },
                     div {
                         class: "ui-dialog-head",
                         h2 { class: "ui-dialog-title", "{title}" }
@@ -315,60 +409,21 @@ pub fn ComposeOverlay() -> Element {
                         button {
                             class: "ui-btn ui-btn-primary",
                             disabled: sending,
-                            onclick: move |_| {
-                                error.set(None);
-                                let Some(account_id) = ctx.selected_account.read().clone() else {
-                                    error.set(Some("Select an account first.".into()));
-                                    return;
-                                };
-                                let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-                                    error.set(Some("Account not found.".into()));
-                                    return;
-                                };
-                                let identity = FromIdentity::new(account.name.clone(), account.email.clone());
-                                let mut draft = ctx
-                                    .compose_draft
-                                    .read()
-                                    .as_ref()
-                                    .map(|s| s.draft.clone())
-                                    .unwrap_or_else(|| DraftDocument::new_empty(&identity));
-                                draft.mode = BodyMode::Plain;
-                                draft.html_body.clear();
-                                draft.plain_body = body();
-                                draft.subject = subject();
-                                draft.to = parse_address_list(&to());
-                                draft.cc = parse_address_list(&cc());
-                                draft.bcc = parse_address_list(&bcc());
-                                match prepare_submit(&draft, &identity) {
-                                    Ok(prepared) => {
-                                        let display = OutboxDisplay {
-                                            subject: draft.subject.clone(),
-                                            to_preview: prepared.envelope.rcpt_to.join(", "),
-                                        };
-                                        let draft_id = draft.id.as_str().to_string();
-                                        submitted_id.set(Some(draft_id.clone()));
-                                        submitting.set(true);
-                                        core.send(CoreEvent::SendMessage {
-                                            account_id,
-                                            request: mailiner_core::SubmitRequest {
-                                                mail_from: prepared.envelope.mail_from,
-                                                rcpt_to: prepared.envelope.rcpt_to,
-                                                rfc822: prepared.rfc822,
-                                                message_id: prepared.message_id,
-                                            },
-                                            display,
-                                            draft_id,
-                                            bcc_header: prepared.bcc_header,
-                                        });
-                                    }
-                                    Err(PrepareSubmitError::Validation(errs)) => {
-                                        submitting.set(false);
-                                        error.set(Some(format!("Cannot send: {errs:?}")));
-                                    }
-                                    Err(e) => {
-                                        submitting.set(false);
-                                        error.set(Some(e.to_string()));
-                                    }
+                            onclick: {
+                                let ctx = ctx.clone();
+                                move |_| {
+                                    submit_compose(
+                                        &ctx,
+                                        &core,
+                                        to,
+                                        cc,
+                                        bcc,
+                                        subject,
+                                        body,
+                                        error,
+                                        submitting,
+                                        submitted_id,
+                                    );
                                 }
                             },
                             if sending { "Sending…" } else { "Send" }

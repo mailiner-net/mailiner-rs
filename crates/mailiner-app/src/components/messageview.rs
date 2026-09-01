@@ -316,7 +316,7 @@ pub fn MessageView() -> Element {
     }
 }
 
-fn ready_loaded(
+pub(crate) fn ready_loaded(
     ctx: &AppContext,
     message_id: &MessageId,
 ) -> Option<Arc<mailiner_core::models::LoadedMessage>> {
@@ -600,7 +600,7 @@ fn MessageHeader(message: Arc<Message>) -> Element {
     }
 }
 
-fn find_envelope(ctx: &AppContext, message_id: &MessageId) -> Option<Arc<Message>> {
+pub(crate) fn find_envelope(ctx: &AppContext, message_id: &MessageId) -> Option<Arc<Message>> {
     let messages = ctx.messages.read();
     messages.find(|m| &m.id == message_id).cloned()
 }

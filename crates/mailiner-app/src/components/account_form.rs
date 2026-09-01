@@ -2,12 +2,16 @@
 
 use chrono::Utc;
 use dioxus::prelude::*;
+use uuid::Uuid;
 
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, DEFAULT_SMTP_PORT, ImapSettings, ProxySettings, optional_smtp_from_fields,
 };
 use crate::connection::ConnectErrorKind;
+use crate::context::AppContext;
+use crate::core_event::CoreEvent;
+use crate::send::{SendState, send_kind_label};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FormPhase {
@@ -202,6 +206,80 @@ pub fn credentials_changed(old: &AccountConfig, new: &AccountConfig) -> bool {
         || old.imap.password != new.imap.password
         || old.imap.use_tls != new.imap.use_tls
         || old.proxy != new.proxy
+}
+
+/// Consume a terminal Test SMTP outcome for `rid` into the form banner.
+pub fn apply_smtp_test_outcome(
+    mut ctx: AppContext,
+    rid: &AccountId,
+    mut phase: Signal<FormPhase>,
+    mut test_request_id: Signal<Option<AccountId>>,
+    mut status_message: Signal<Option<StatusMessage>>,
+) {
+    let outcome = ctx.smtp_test_status.read().get(rid).cloned();
+    match outcome {
+        Some(SendState::Sending { .. }) | Some(SendState::Idle) | None => {}
+        Some(SendState::Sent { .. }) => {
+            phase.set(FormPhase::Idle);
+            ctx.smtp_test_status.write().remove(rid);
+            test_request_id.set(None);
+            status_message.set(Some(StatusMessage::success("SMTP sign-in succeeded.")));
+        }
+        Some(SendState::Failed { kind, message, .. }) => {
+            phase.set(FormPhase::Idle);
+            ctx.smtp_test_status.write().remove(rid);
+            test_request_id.set(None);
+            status_message.set(Some(StatusMessage::error(send_kind_label(kind), message)));
+        }
+    }
+}
+
+/// Kick off `TestSmtpConnection` for a built account config.
+///
+/// No-ops unless the form is Idle. Missing SMTP host is a validation error.
+pub fn start_smtp_test(
+    config: Result<AccountConfig, String>,
+    mut phase: Signal<FormPhase>,
+    mut test_request_id: Signal<Option<AccountId>>,
+    mut status_message: Signal<Option<StatusMessage>>,
+    core_tx: Coroutine<CoreEvent>,
+) {
+    if !matches!(phase(), FormPhase::Idle) {
+        return;
+    }
+    match config {
+        Ok(config) => {
+            if config.smtp.is_none() {
+                status_message.set(Some(StatusMessage::error(
+                    "SMTP",
+                    "Fill in an SMTP host first.",
+                )));
+                return;
+            }
+            let request_id = AccountId::new(Uuid::new_v4().to_string());
+            test_request_id.set(Some(request_id.clone()));
+            phase.set(FormPhase::TestingSmtp);
+            status_message.set(Some(StatusMessage::info("Testing SMTP…")));
+            core_tx.send(CoreEvent::TestSmtpConnection { request_id, config });
+        }
+        Err(msg) => {
+            status_message.set(Some(StatusMessage::error("Validation", &msg)));
+        }
+    }
+}
+
+/// Drop ephemeral Test SMTP / IMAP-test keys when the form unmounts so a
+/// completed result cannot linger in `AppContext` after navigation.
+pub fn use_form_test_status_cleanup(
+    mut ctx: AppContext,
+    test_request_id: Signal<Option<AccountId>>,
+) {
+    use_drop(move || {
+        if let Some(rid) = test_request_id.peek().clone() {
+            ctx.smtp_test_status.write().remove(&rid);
+            ctx.connection_states.write().remove(&rid);
+        }
+    });
 }
 
 #[component]

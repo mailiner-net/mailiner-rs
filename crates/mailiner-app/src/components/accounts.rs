@@ -12,12 +12,12 @@ use crate::account::AccountId;
 use crate::account_config::{AccountConfig, DEFAULT_SMTP_PORT, dev_form_prefill};
 use crate::components::account_form::{
     AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
-    build_config_from_form, credentials_changed, kind_label,
+    apply_smtp_test_outcome, build_config_from_form, credentials_changed, kind_label,
+    start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
-use crate::send::{SendState, send_kind_label};
 
 /// Debounce for rapid account-switch clicks (ms).
 const SWITCH_DEBOUNCE_MS: u32 = 200;
@@ -387,6 +387,9 @@ pub fn AccountNewPage() -> Element {
     let mut save_seen_progress = use_signal(|| false);
     let mut test_seen_progress = use_signal(|| false);
 
+    use_form_test_status_cleanup(ctx.clone(), test_request_id);
+
+    let ctx_smtp = ctx.clone();
     use_effect(move || {
         let states = ctx.connection_states.read().clone();
         match phase() {
@@ -457,24 +460,13 @@ pub fn AccountNewPage() -> Element {
             }
             FormPhase::TestingSmtp => {
                 if let Some(rid) = test_request_id() {
-                    let outcome = ctx.smtp_test_status.read().get(&rid).cloned();
-                    match outcome {
-                        Some(SendState::Sending { .. }) | Some(SendState::Idle) | None => {}
-                        Some(SendState::Sent { .. }) => {
-                            phase.set(FormPhase::Idle);
-                            ctx.smtp_test_status.write().remove(&rid);
-                            test_request_id.set(None);
-                            status_message
-                                .set(Some(StatusMessage::success("SMTP sign-in succeeded.")));
-                        }
-                        Some(SendState::Failed { kind, message, .. }) => {
-                            phase.set(FormPhase::Idle);
-                            ctx.smtp_test_status.write().remove(&rid);
-                            test_request_id.set(None);
-                            status_message
-                                .set(Some(StatusMessage::error(send_kind_label(kind), message)));
-                        }
-                    }
+                    apply_smtp_test_outcome(
+                        ctx_smtp.clone(),
+                        &rid,
+                        phase,
+                        test_request_id,
+                        status_message,
+                    );
                 }
             }
             FormPhase::Idle => {}
@@ -528,46 +520,31 @@ pub fn AccountNewPage() -> Element {
     };
 
     let on_test_smtp = move |_| {
-        if busy {
-            return;
-        }
-        match build_config_from_form(
-            &account_id_smtp_test,
-            &display_name(),
-            &email(),
-            &imap_host(),
-            &imap_port(),
-            &imap_username(),
-            &imap_password(),
-            &proxy_base_url(),
-            &proxy_token(),
-            &remote_host(),
-            &remote_port(),
-            &smtp_host(),
-            &smtp_port(),
-            &smtp_username(),
-            &smtp_password(),
-            smtp_use_tls(),
-            Utc::now(),
-        ) {
-            Ok(config) => {
-                if config.smtp.is_none() {
-                    status_message.set(Some(StatusMessage::error(
-                        "SMTP",
-                        "Fill in an SMTP host first.",
-                    )));
-                    return;
-                }
-                let request_id = AccountId::new(Uuid::new_v4().to_string());
-                test_request_id.set(Some(request_id.clone()));
-                phase.set(FormPhase::TestingSmtp);
-                status_message.set(Some(StatusMessage::info("Testing SMTP…")));
-                core_tx.send(CoreEvent::TestSmtpConnection { request_id, config });
-            }
-            Err(msg) => {
-                status_message.set(Some(StatusMessage::error("Validation", &msg)));
-            }
-        }
+        start_smtp_test(
+            build_config_from_form(
+                &account_id_smtp_test,
+                &display_name(),
+                &email(),
+                &imap_host(),
+                &imap_port(),
+                &imap_username(),
+                &imap_password(),
+                &proxy_base_url(),
+                &proxy_token(),
+                &remote_host(),
+                &remote_port(),
+                &smtp_host(),
+                &smtp_port(),
+                &smtp_username(),
+                &smtp_password(),
+                smtp_use_tls(),
+                Utc::now(),
+            ),
+            phase,
+            test_request_id,
+            status_message,
+            core_tx,
+        );
     };
 
     let on_save = move |_| {
@@ -756,6 +733,8 @@ pub fn AccountEditPage(id: String) -> Element {
     // Prior store `updated_at` when credential save starts; success requires a newer value.
     let mut save_baseline_updated_at = use_signal(|| None::<chrono::DateTime<Utc>>);
 
+    use_form_test_status_cleanup(ctx.clone(), test_request_id);
+
     // Load secrets only into component-local state.
     use_future(move || {
         let account_id = account_id.clone();
@@ -811,6 +790,7 @@ pub fn AccountEditPage(id: String) -> Element {
     // Watch connection_states for Save (credential commit) and Test independently.
     // Test must not require save_via_commit (BUG-1). Save waits for upsert via store
     // updated_at (and/or final Ready after demoted Connecting) — not connect-Ready alone.
+    let ctx_smtp = ctx.clone();
     use_effect(move || {
         let states = ctx.connection_states.read().clone();
         match phase() {
@@ -913,24 +893,13 @@ pub fn AccountEditPage(id: String) -> Element {
             }
             FormPhase::TestingSmtp => {
                 if let Some(rid) = test_request_id() {
-                    let outcome = ctx.smtp_test_status.read().get(&rid).cloned();
-                    match outcome {
-                        Some(SendState::Sending { .. }) | Some(SendState::Idle) | None => {}
-                        Some(SendState::Sent { .. }) => {
-                            phase.set(FormPhase::Idle);
-                            ctx.smtp_test_status.write().remove(&rid);
-                            test_request_id.set(None);
-                            status_message
-                                .set(Some(StatusMessage::success("SMTP sign-in succeeded.")));
-                        }
-                        Some(SendState::Failed { kind, message, .. }) => {
-                            phase.set(FormPhase::Idle);
-                            ctx.smtp_test_status.write().remove(&rid);
-                            test_request_id.set(None);
-                            status_message
-                                .set(Some(StatusMessage::error(send_kind_label(kind), message)));
-                        }
-                    }
+                    apply_smtp_test_outcome(
+                        ctx_smtp.clone(),
+                        &rid,
+                        phase,
+                        test_request_id,
+                        status_message,
+                    );
                 }
             }
             FormPhase::Saving | FormPhase::Idle => {}
@@ -1036,49 +1005,34 @@ pub fn AccountEditPage(id: String) -> Element {
     };
 
     let on_test_smtp = move |_| {
-        if busy {
-            return;
-        }
         let Some(orig) = original() else {
             return;
         };
-        match build_config_from_form(
-            &account_id_smtp_test,
-            &display_name(),
-            &email(),
-            &imap_host(),
-            &imap_port(),
-            &imap_username(),
-            &imap_password(),
-            &proxy_base_url(),
-            &proxy_token(),
-            &remote_host(),
-            &remote_port(),
-            &smtp_host(),
-            &smtp_port(),
-            &smtp_username(),
-            &smtp_password(),
-            smtp_use_tls(),
-            orig.created_at,
-        ) {
-            Ok(config) => {
-                if config.smtp.is_none() {
-                    status_message.set(Some(StatusMessage::error(
-                        "SMTP",
-                        "Fill in an SMTP host first.",
-                    )));
-                    return;
-                }
-                let request_id = AccountId::new(Uuid::new_v4().to_string());
-                test_request_id.set(Some(request_id.clone()));
-                phase.set(FormPhase::TestingSmtp);
-                status_message.set(Some(StatusMessage::info("Testing SMTP…")));
-                core_tx.send(CoreEvent::TestSmtpConnection { request_id, config });
-            }
-            Err(msg) => {
-                status_message.set(Some(StatusMessage::error("Validation", &msg)));
-            }
-        }
+        start_smtp_test(
+            build_config_from_form(
+                &account_id_smtp_test,
+                &display_name(),
+                &email(),
+                &imap_host(),
+                &imap_port(),
+                &imap_username(),
+                &imap_password(),
+                &proxy_base_url(),
+                &proxy_token(),
+                &remote_host(),
+                &remote_port(),
+                &smtp_host(),
+                &smtp_port(),
+                &smtp_username(),
+                &smtp_password(),
+                smtp_use_tls(),
+                orig.created_at,
+            ),
+            phase,
+            test_request_id,
+            status_message,
+            core_tx,
+        );
     };
 
     let on_save = move |_| {

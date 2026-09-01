@@ -387,7 +387,7 @@ pub fn AccountNewPage() -> Element {
     let mut save_seen_progress = use_signal(|| false);
     let mut test_seen_progress = use_signal(|| false);
 
-    use_form_test_status_cleanup(ctx.clone(), test_request_id);
+    use_form_test_status_cleanup(ctx.clone(), test_request_id, phase);
 
     let ctx_smtp = ctx.clone();
     use_effect(move || {
@@ -733,7 +733,7 @@ pub fn AccountEditPage(id: String) -> Element {
     // Prior store `updated_at` when credential save starts; success requires a newer value.
     let mut save_baseline_updated_at = use_signal(|| None::<chrono::DateTime<Utc>>);
 
-    use_form_test_status_cleanup(ctx.clone(), test_request_id);
+    use_form_test_status_cleanup(ctx.clone(), test_request_id, phase);
 
     // Load secrets only into component-local state.
     use_future(move || {

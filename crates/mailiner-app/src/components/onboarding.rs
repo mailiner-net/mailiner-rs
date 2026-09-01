@@ -57,7 +57,7 @@ pub fn OnboardingForm() -> Element {
     let mut save_seen_progress = use_signal(|| false);
     let mut test_seen_progress = use_signal(|| false);
 
-    use_form_test_status_cleanup(ctx.clone(), test_request_id);
+    use_form_test_status_cleanup(ctx.clone(), test_request_id, phase);
 
     // Watch connection_states for Save / Test outcomes.
     // Success: set Ready; AppShell replaces `/onboarding` → `/`.

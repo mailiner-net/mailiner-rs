@@ -647,9 +647,9 @@ a.accounts-link-btn {
     font: inherit;
     font-size: var(--text-sm);
     font-weight: 500;
-    color: var(--foreground);
+    color: var(--danger);
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--danger);
     border-radius: var(--radius-sm);
     padding: 2px 8px;
     cursor: pointer;
@@ -657,7 +657,7 @@ a.accounts-link-btn {
 }
 
 .empty-trash:hover {
-    background: var(--item-hover-background);
+    background: var(--danger-soft);
 }
 
 .pane-header-account-link {

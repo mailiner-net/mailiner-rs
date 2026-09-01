@@ -86,6 +86,7 @@ pub enum CoreEvent {
     },
     /// Permanently delete every message in the Trash special-use folder.
     EmptyTrash {
+        account_id: AccountId,
         mailbox_id: MailboxId,
     },
     /// Inverse of a toasted action (central undo).
@@ -336,8 +337,11 @@ pub async fn core_loop(
             } => {
                 handle_delete_messages(&manager, &mut ctx, mailbox_id, message_ids).await;
             }
-            CoreEvent::EmptyTrash { mailbox_id } => {
-                handle_empty_trash(&manager, &mut ctx, mailbox_id).await;
+            CoreEvent::EmptyTrash {
+                account_id,
+                mailbox_id,
+            } => {
+                handle_empty_trash(&manager, &mut ctx, account_id, mailbox_id).await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -1949,8 +1953,12 @@ async fn handle_delete_messages(
 async fn handle_empty_trash(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
 ) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
@@ -1962,10 +1970,6 @@ async fn handle_empty_trash(
     if !is_trash {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;

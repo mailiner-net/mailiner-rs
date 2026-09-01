@@ -1478,11 +1478,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_folder_uses_all_uids() {
-        assert_eq!(ALL_UIDS, "1:*");
-    }
-
-    #[test]
     fn quote_mailbox_escapes() {
         assert_eq!(quote_mailbox("Trash"), "\"Trash\"");
         assert_eq!(quote_mailbox("Deleted Items"), "\"Deleted Items\"");

@@ -8,6 +8,24 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::mailbox::can_empty_trash;
 
+/// Confirm before permanently emptying Trash. Non-web builds fail closed.
+fn confirm_empty_trash() -> bool {
+    #[cfg(feature = "web")]
+    {
+        web_sys::window()
+            .and_then(|window| {
+                window
+                    .confirm_with_message("Permanently delete all messages in Trash?")
+                    .ok()
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        false
+    }
+}
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum Mode {
     MailboxTreeView,
@@ -99,25 +117,19 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if show_empty_trash {
-                if let Some(mailbox_id) = current_mailbox_id.clone() {
+                if let (Some(mailbox_id), Some(account_id)) =
+                    (current_mailbox_id.clone(), current_account_id.clone())
+                {
                     button {
                         class: "empty-trash",
                         title: "Permanently delete all messages in Trash",
                         aria_label: "Empty Trash",
                         onclick: move |_| {
-                            #[cfg(feature = "web")]
-                            {
-                                let Some(window) = web_sys::window() else {
-                                    return;
-                                };
-                                match window.confirm_with_message(
-                                    "Permanently delete all messages in Trash?",
-                                ) {
-                                    Ok(true) => {}
-                                    _ => return,
-                                }
+                            if !confirm_empty_trash() {
+                                return;
                             }
                             let _ = core_tx.send(CoreEvent::EmptyTrash {
+                                account_id: account_id.clone(),
                                 mailbox_id: mailbox_id.clone(),
                             });
                         },

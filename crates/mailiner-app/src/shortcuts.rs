@@ -3,6 +3,11 @@
 /// Stable id used by the window handler to run an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutId {
+    Compose,
+    Reply,
+    ReplyAll,
+    Forward,
+    Send,
     JumpToFolder,
     MoveToFolder,
     NextMessage,
@@ -44,6 +49,7 @@ impl ShortcutGroup {
 
 /// One global shortcut. `keys` are `KeyboardEvent.key` values.
 ///
+/// Empty `keys` is help-dialog only (modifier chords handled locally).
 /// `require_shift` bindings only fire with Shift held. Other bindings still
 /// match when Shift is held (so J and Shift+J both jump), unless a
 /// `require_shift` shortcut claims that key first.
@@ -59,6 +65,48 @@ pub struct Shortcut {
 
 /// All global shortcuts. Add new ones here only.
 pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
+    Shortcut {
+        id: ShortcutId::Compose,
+        keys: &["c", "C"],
+        require_shift: false,
+        label: "C",
+        description: "New message",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::Reply,
+        keys: &["r", "R"],
+        require_shift: false,
+        label: "R",
+        description: "Reply",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::ReplyAll,
+        keys: &["a", "A"],
+        require_shift: false,
+        label: "A",
+        description: "Reply all",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::Forward,
+        keys: &["f", "F"],
+        require_shift: false,
+        label: "F",
+        description: "Forward",
+        group: ShortcutGroup::Mail,
+    },
+    // Ctrl/Cmd+Enter is handled on the compose dialog; empty keys keep
+    // shortcut_for_key from stealing Enter.
+    Shortcut {
+        id: ShortcutId::Send,
+        keys: &[],
+        require_shift: false,
+        label: "Ctrl/⌘+Enter",
+        description: "Send message",
+        group: ShortcutGroup::Mail,
+    },
     Shortcut {
         id: ShortcutId::JumpToFolder,
         keys: &["j", "J"],
@@ -194,12 +242,52 @@ mod tests {
     #[test]
     fn every_bound_key_resolves_to_its_shortcut() {
         for shortcut in GLOBAL_SHORTCUTS {
+            if shortcut.keys.is_empty() {
+                continue;
+            }
             for key in shortcut.keys {
                 let found = shortcut_for_key(key, shortcut.require_shift).expect(key);
                 assert_eq!(found.id, shortcut.id);
                 assert_eq!(found.description, shortcut.description);
             }
         }
+    }
+
+    #[test]
+    fn compose_reply_and_forward_keys_resolve() {
+        assert_eq!(
+            shortcut_for_key("c", false).map(|s| s.id),
+            Some(ShortcutId::Compose)
+        );
+        assert_eq!(
+            shortcut_for_key("C", true).map(|s| s.id),
+            Some(ShortcutId::Compose)
+        );
+        assert_eq!(
+            shortcut_for_key("r", false).map(|s| s.id),
+            Some(ShortcutId::Reply)
+        );
+        assert_eq!(
+            shortcut_for_key("a", false).map(|s| s.id),
+            Some(ShortcutId::ReplyAll)
+        );
+        assert_eq!(
+            shortcut_for_key("f", false).map(|s| s.id),
+            Some(ShortcutId::Forward)
+        );
+    }
+
+    #[test]
+    fn send_is_help_only_and_does_not_steal_enter() {
+        let send = GLOBAL_SHORTCUTS
+            .iter()
+            .find(|s| s.id == ShortcutId::Send)
+            .expect("Send catalog entry");
+        assert!(send.keys.is_empty());
+        assert_eq!(send.label, "Ctrl/⌘+Enter");
+        assert_eq!(send.description, "Send message");
+        assert!(shortcut_for_key("Enter", false).is_none());
+        assert!(shortcut_for_key("Enter", true).is_none());
     }
 
     #[test]

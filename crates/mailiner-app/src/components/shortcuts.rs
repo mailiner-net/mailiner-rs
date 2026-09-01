@@ -6,8 +6,11 @@ use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
+use mailiner_composer::ComposeIntent;
+
+use super::compose::{open_new_message, open_reply_or_forward};
 use super::icons::{IconButton, IconKind};
-use super::messageview::{MessageScroll, scroll_message_view};
+use super::messageview::{MessageScroll, find_envelope, ready_loaded, scroll_message_view};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
@@ -56,6 +59,19 @@ fn run_shortcut(
     help_open: &mut Signal<bool>,
 ) {
     match id {
+        ShortcutId::Compose => {
+            open_new_message(ctx);
+        }
+        ShortcutId::Reply => {
+            reply_or_forward_from_focus(ctx, ComposeIntent::Reply);
+        }
+        ShortcutId::ReplyAll => {
+            reply_or_forward_from_focus(ctx, ComposeIntent::ReplyAll);
+        }
+        ShortcutId::Forward => {
+            reply_or_forward_from_focus(ctx, ComposeIntent::Forward);
+        }
+        ShortcutId::Send => {}
         ShortcutId::JumpToFolder => {
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Jump));
         }
@@ -124,6 +140,22 @@ fn run_shortcut(
             help_open.set(true);
         }
     }
+}
+
+fn reply_or_forward_from_focus(ctx: &mut AppContext, intent: ComposeIntent) {
+    let Some(message_id) = ctx.selection.peek().focus().cloned() else {
+        ctx.show_toast(ToastAction::info("Select a message first"));
+        return;
+    };
+    let Some(message) = find_envelope(ctx, &message_id) else {
+        ctx.show_toast(ToastAction::info("Select a message first"));
+        return;
+    };
+    let Some(loaded) = ready_loaded(ctx, &message_id) else {
+        ctx.show_toast(ToastAction::info("Message still loading"));
+        return;
+    };
+    open_reply_or_forward(ctx, intent, &message.envelope, &loaded);
 }
 
 fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<MessageId>)> {

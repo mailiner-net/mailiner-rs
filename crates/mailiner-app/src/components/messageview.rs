@@ -410,6 +410,26 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
+                        title: "Reply all",
+                        onclick: {
+                            let message = message.clone();
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                if let Some(loaded) = ready_loaded(&ctx, &message.id) {
+                                    open_reply_or_forward(
+                                        &mut ctx,
+                                        ComposeIntent::ReplyAll,
+                                        &message.envelope,
+                                        &loaded,
+                                    );
+                                }
+                            }
+                        },
+                        "Reply All"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: !actions_ready,
                         title: "Forward",
                         onclick: {
                             let message = message.clone();

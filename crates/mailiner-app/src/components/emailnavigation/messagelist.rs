@@ -94,6 +94,8 @@ pub fn MessageList() -> Element {
                             if message.has_attachments {
                                 span {
                                     class: "message-attachment-indicator",
+                                    role: "img",
+                                    aria_label: "Has attachments",
                                     title: "Has attachments",
                                     Icon { size: 14, icon: IconKind::PaperClip }
                                 }

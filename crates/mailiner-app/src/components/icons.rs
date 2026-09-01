@@ -89,6 +89,7 @@ pub fn Icon(icon: IconKind, #[props(default = 20)] size: u32) -> Element {
             fill: "currentColor",
             width: "{size}",
             height: "{size}",
+            aria_hidden: "true",
             path {
                 d: path.d,
                 fill_rule: if path.evenodd { "evenodd" },

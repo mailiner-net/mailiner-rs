@@ -20,6 +20,8 @@ pub struct Message {
     pub date: DateTime<Utc>,
     pub has_attachments: bool,
     pub is_read: bool,
+    pub is_starred: bool,
+    pub is_flagged: bool,
     /// Original IMAP envelope for reply/forward prefill.
     pub envelope: Envelope,
 }
@@ -183,6 +185,40 @@ mod tests {
     }
 
     #[test]
+    fn from_envelope_keeps_star_and_flag() {
+        use mailiner_core::{AccountId, FolderId};
+
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let envelope = Envelope {
+            id: MessageId::new(FolderId::new("INBOX"), "1"),
+            account_id: AccountId::new("acc"),
+            folder_id: FolderId::new("INBOX"),
+            subject: Some("s".into()),
+            from: None,
+            to: None,
+            cc: None,
+            bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: vec![],
+            date: now,
+            is_read: false,
+            is_starred: true,
+            is_flagged: true,
+            is_draft: false,
+            is_deleted: false,
+            has_attachments: false,
+            size: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let msg = Message::from(envelope);
+        assert!(msg.is_starred);
+        assert!(msg.is_flagged);
+    }
+
+    #[test]
     fn avatar_color_is_stable_and_case_insensitive() {
         let a = avatar_color_for("me@dvratil.cz");
         assert_eq!(a, avatar_color_for("ME@dvratil.cz"));
@@ -237,6 +273,8 @@ impl From<Envelope> for Message {
             date: envelope.date,
             has_attachments: envelope.has_attachments,
             is_read: envelope.is_read,
+            is_starred: envelope.is_starred,
+            is_flagged: envelope.is_flagged,
             envelope,
         }
     }

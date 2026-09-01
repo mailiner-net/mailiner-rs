@@ -949,6 +949,98 @@ textarea.ui-input {
     text-decoration: underline;
 }
 
+.compose-attachments {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.compose-attach {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    align-self: flex-start;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--item-accent);
+    cursor: pointer;
+}
+
+.compose-attach:hover {
+    text-decoration: underline;
+}
+
+.compose-attach.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    text-decoration: none;
+}
+
+.compose-attach-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.compose-attachment-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.compose-attachment {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    min-width: 0;
+}
+
+.compose-attachment-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compose-attachment-size {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+}
+
+.compose-attachment-remove {
+    flex: 0 0 auto;
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    padding: 0.15rem;
+    cursor: pointer;
+}
+
+.compose-attachment-remove:hover:not(:disabled) {
+    color: var(--danger);
+}
+
+.compose-attachment-remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .picker-backdrop {
     position: fixed;
     inset: 0;

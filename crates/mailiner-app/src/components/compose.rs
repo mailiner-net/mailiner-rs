@@ -7,7 +7,12 @@ use super::icons::{Icon, IconButton, IconKind};
 
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
-use mailiner_composer::{ComposeIntent, PrepareSubmitError, build_draft, prepare_submit};
+use mailiner_composer::shell::attachment_list::{
+    draft_payload_bytes, file_attachment, human_size, resolve_content_type, would_exceed_draft_cap,
+};
+use mailiner_composer::{
+    ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
+};
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -116,8 +121,9 @@ fn submit_compose(
     mut error: Signal<Option<String>>,
     mut submitting: Signal<bool>,
     mut submitted_id: Signal<Option<String>>,
+    attaching: Signal<bool>,
 ) {
-    if submitting() {
+    if submitting() || attaching() {
         return;
     }
     error.set(None);
@@ -176,6 +182,161 @@ fn submit_compose(
     }
 }
 
+fn open_draft_id(compose_draft: Signal<Option<ComposeSession>>) -> Option<String> {
+    compose_draft
+        .read()
+        .as_ref()
+        .map(|s| s.draft.id.as_str().to_string())
+}
+
+enum PushAttachment {
+    Added,
+    TooMany,
+    Stale,
+    TooLarge,
+}
+
+fn live_payload_bytes(draft: &DraftDocument, live_plain_len: usize) -> u64 {
+    draft_payload_bytes(draft)
+        .saturating_sub(draft.plain_body.len() as u64)
+        .saturating_add(live_plain_len as u64)
+}
+
+fn push_attachment_on_draft(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    attachment: FileAttachment,
+    body: Signal<String>,
+) -> PushAttachment {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return PushAttachment::Stale;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return PushAttachment::Stale;
+    }
+    if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS {
+        return PushAttachment::TooMany;
+    }
+    if would_exceed_draft_cap(
+        live_payload_bytes(&session.draft, body().len()),
+        attachment.size,
+    ) {
+        return PushAttachment::TooLarge;
+    }
+    session.draft.attachments.push(attachment);
+    session.draft.touch();
+    PushAttachment::Added
+}
+
+fn remove_attachment(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    let before = session.draft.attachments.len();
+    session.draft.attachments.retain(|a| a.id.0 != id);
+    if session.draft.attachments.len() != before {
+        session.draft.touch();
+    }
+}
+
+fn oversize_message(filename: &str) -> String {
+    let max_mib = caps::MAX_FILE_BYTES / (1024 * 1024);
+    format!("\"{filename}\" is larger than {max_mib} MiB.")
+}
+
+fn too_many_message() -> String {
+    format!("You can attach at most {} files.", caps::MAX_ATTACHMENTS)
+}
+
+fn oversize_draft_message() -> String {
+    let max_mib = caps::MAX_DRAFT_BYTES / (1024 * 1024);
+    format!("Attachments would exceed the {max_mib} MiB draft limit.")
+}
+
+fn set_attach_error_if_current(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    mut error: Signal<Option<String>>,
+    msg: String,
+) {
+    if open_draft_id(compose_draft).as_deref() == Some(draft_id) {
+        error.set(Some(msg));
+    }
+}
+
+async fn attach_selected_files(
+    ctx: AppContext,
+    files: Vec<dioxus::html::FileData>,
+    body: Signal<String>,
+    error: Signal<Option<String>>,
+) {
+    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
+        return;
+    };
+    let mut first_err = None::<String>;
+    for file in files {
+        let filename = file.name();
+        let declared = file.size();
+        if declared > caps::MAX_FILE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        let live_plain_len = body().len();
+        let Some((count, used)) = ctx
+            .compose_draft
+            .read()
+            .as_ref()
+            .filter(|s| s.draft.id.as_str() == draft_id)
+            .map(|s| {
+                (
+                    s.draft.attachments.len(),
+                    live_payload_bytes(&s.draft, live_plain_len),
+                )
+            })
+        else {
+            break;
+        };
+        if count >= caps::MAX_ATTACHMENTS {
+            first_err.get_or_insert_with(too_many_message);
+            break;
+        }
+        if would_exceed_draft_cap(used, declared) {
+            first_err.get_or_insert_with(oversize_draft_message);
+            continue;
+        }
+        let bytes = match file.read_bytes().await {
+            Ok(b) => b,
+            Err(_) => {
+                first_err.get_or_insert_with(|| format!("Could not read \"{filename}\"."));
+                continue;
+            }
+        };
+        if bytes.len() as u64 > caps::MAX_FILE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        let content_type = resolve_content_type(&filename, file.content_type().as_deref());
+        let attachment = file_attachment(filename, content_type, bytes.to_vec());
+        match push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment, body) {
+            PushAttachment::Added => {}
+            PushAttachment::TooMany => {
+                first_err.get_or_insert_with(too_many_message);
+                break;
+            }
+            PushAttachment::Stale => break,
+            PushAttachment::TooLarge => {
+                first_err.get_or_insert_with(oversize_draft_message);
+                continue;
+            }
+        }
+    }
+    if let Some(msg) = first_err {
+        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+    }
+}
+
 #[component]
 pub fn ComposeOverlay() -> Element {
     let ctx = use_context::<AppContext>();
@@ -192,21 +353,36 @@ pub fn ComposeOverlay() -> Element {
     // closes (outbox drain) and must not disable a newly opened draft.
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
+    let mut attaching = use_signal(|| false);
+    let mut attach_gen = use_signal(|| 0u32);
+    let mut attach_input_gen = use_signal(|| 0u32);
 
-    let session = ctx.compose_draft.read().clone();
-    let open = session.is_some();
-    let title = session
-        .as_ref()
-        .map(|s| s.title.as_str())
-        .unwrap_or("New message")
-        .to_string();
+    let (open, title, attachments) = {
+        let slot = ctx.compose_draft.read();
+        match slot.as_ref() {
+            Some(s) => (
+                true,
+                s.title.clone(),
+                s.draft
+                    .attachments
+                    .iter()
+                    .map(|a| (a.id.0.clone(), a.filename.clone(), a.size))
+                    .collect::<Vec<_>>(),
+            ),
+            None => (false, "New message".to_string(), Vec::new()),
+        }
+    };
     let sending = submitting();
+    let attaching_now = attaching();
+    let busy = sending || attaching_now;
 
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
+        let mut attaching = attaching;
+        let mut attach_gen = attach_gen;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
@@ -223,12 +399,18 @@ pub fn ComposeOverlay() -> Element {
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
+                    let next = *attach_gen.peek() + 1;
+                    attach_gen.set(next);
+                    attaching.set(false);
                     submitted_id.set(None);
                 }
             }
             None => {
                 last_draft_id.set(None);
                 submitting.set(false);
+                let next = *attach_gen.peek() + 1;
+                attach_gen.set(next);
+                attaching.set(false);
                 submitted_id.set(None);
             }
         });
@@ -307,6 +489,7 @@ pub fn ComposeOverlay() -> Element {
                                     error,
                                     submitting,
                                     submitted_id,
+                                    attaching,
                                 );
                             }
                         }
@@ -392,6 +575,84 @@ pub fn ComposeOverlay() -> Element {
                             oninput: move |e| body.set(e.value()),
                         }
                     }
+                    div {
+                        class: "compose-attachments",
+                        label {
+                            class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
+                            title: "Attach files",
+                            input {
+                                key: "{attach_input_gen()}",
+                                class: "compose-attach-input",
+                                r#type: "file",
+                                multiple: true,
+                                disabled: busy,
+                                aria_label: "Attach files",
+                                onchange: {
+                                    let ctx = ctx.clone();
+                                    move |evt: FormEvent| {
+                                        if sending || attaching() {
+                                            return;
+                                        }
+                                        let files = evt.files();
+                                        attach_input_gen.set(attach_input_gen() + 1);
+                                        if files.is_empty() {
+                                            return;
+                                        }
+                                        error.set(None);
+                                        let generation = attach_gen() + 1;
+                                        attach_gen.set(generation);
+                                        attaching.set(true);
+                                        let ctx = ctx.clone();
+                                        let mut attaching = attaching;
+                                        spawn(async move {
+                                            attach_selected_files(ctx, files, body, error).await;
+                                            if attach_gen() == generation {
+                                                attaching.set(false);
+                                            }
+                                        });
+                                    }
+                                },
+                            }
+                            Icon { size: 16, icon: IconKind::PaperClip }
+                            "Attach"
+                        }
+                        if !attachments.is_empty() {
+                            ul {
+                                class: "compose-attachment-list",
+                                for (id, filename, size) in attachments {
+                                    li {
+                                        key: "{id}",
+                                        class: "compose-attachment",
+                                        span {
+                                            class: "compose-attachment-name",
+                                            title: "{filename}",
+                                            "{filename}"
+                                        }
+                                        span {
+                                            class: "compose-attachment-size",
+                                            "{human_size(size)}"
+                                        }
+                                        button {
+                                            class: "compose-attachment-remove",
+                                            r#type: "button",
+                                            title: "Remove",
+                                            disabled: sending,
+                                            onclick: {
+                                                let id = id.clone();
+                                                move |_| {
+                                                    if sending {
+                                                        return;
+                                                    }
+                                                    remove_attachment(compose_draft, &id);
+                                                }
+                                            },
+                                            Icon { size: 14, icon: IconKind::XMark }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if let Some(err) = error() {
                         p { class: "ui-alert-error", "{err}" }
                     }
@@ -408,7 +669,7 @@ pub fn ComposeOverlay() -> Element {
                         }
                         button {
                             class: "ui-btn ui-btn-primary",
-                            disabled: sending,
+                            disabled: busy,
                             onclick: {
                                 let ctx = ctx.clone();
                                 move |_| {
@@ -423,10 +684,17 @@ pub fn ComposeOverlay() -> Element {
                                         error,
                                         submitting,
                                         submitted_id,
+                                        attaching,
                                     );
                                 }
                             },
-                            if sending { "Sending…" } else { "Send" }
+                            if sending {
+                                "Sending…"
+                            } else if attaching_now {
+                                "Attaching…"
+                            } else {
+                                "Send"
+                            }
                         }
                     }
                 }

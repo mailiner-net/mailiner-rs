@@ -246,7 +246,7 @@ pub fn ComposeOverlay() -> Element {
                             class: "compose-cc-toggle",
                             r#type: "button",
                             title: if show_cc_bcc() { "Hide Cc/Bcc" } else { "Show Cc/Bcc" },
-                            aria_expanded: show_cc_bcc(),
+                            aria_expanded: if show_cc_bcc() { "true" } else { "false" },
                             onclick: move |_| show_cc_bcc.set(!show_cc_bcc()),
                             "Cc/Bcc"
                         }

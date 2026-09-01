@@ -34,6 +34,23 @@ impl Message {
         preview_mailbox(&self.to)
     }
 
+    pub fn cc_preview(&self) -> &str {
+        preview_mailbox(self.cc.as_deref().unwrap_or(""))
+    }
+
+    pub fn bcc_preview(&self) -> &str {
+        preview_mailbox(self.bcc.as_deref().unwrap_or(""))
+    }
+
+    /// Formatted Reply-To when the envelope has a non-empty address.
+    pub fn reply_to(&self) -> Option<String> {
+        self.envelope
+            .reply_to
+            .as_ref()
+            .map(ToString::to_string)
+            .filter(|s| !s.trim().is_empty())
+    }
+
     /// CSS color for the list avatar; stable for the same sender.
     pub fn avatar_color(&self) -> &'static str {
         avatar_color_for(self.avatar_seed())
@@ -74,7 +91,7 @@ fn nonempty_email(addr: &EmailAddr) -> Option<&str> {
     addr.email.as_deref().filter(|s| !s.is_empty())
 }
 
-fn preview_mailbox(value: &str) -> &str {
+pub(crate) fn preview_mailbox(value: &str) -> &str {
     if let Some((name, rest)) = value.split_once(" <") {
         if !name.is_empty() && rest.ends_with('>') {
             return name;
@@ -94,6 +111,75 @@ mod tests {
             "Mailiner Test"
         );
         assert_eq!(preview_mailbox("solo@example.com"), "solo@example.com");
+        assert_eq!(
+            preview_mailbox("Ada <ada@example.com>, Bob <bob@example.com>"),
+            "Ada"
+        );
+    }
+
+    #[test]
+    fn cc_bcc_reply_to_preview_from_envelope() {
+        use mailiner_core::{AccountId, FolderId};
+
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let mut envelope = Envelope {
+            id: MessageId::new(FolderId::new("INBOX"), "1"),
+            account_id: AccountId::new("acc"),
+            folder_id: FolderId::new("INBOX"),
+            subject: Some("s".into()),
+            from: None,
+            to: None,
+            cc: Some(EmailAddress::List(vec![EmailAddr {
+                name: Some("Cc Name".into()),
+                email: Some("cc@example.com".into()),
+            }])),
+            bcc: Some(EmailAddress::List(vec![EmailAddr {
+                name: Some("Bcc Name".into()),
+                email: Some("bcc@example.com".into()),
+            }])),
+            reply_to: Some(EmailAddress::List(vec![EmailAddr {
+                name: Some("Reply Name".into()),
+                email: Some("reply@example.com".into()),
+            }])),
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: vec![],
+            date: now,
+            is_read: false,
+            is_starred: false,
+            is_flagged: false,
+            is_draft: false,
+            is_deleted: false,
+            has_attachments: false,
+            size: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let msg = Message::from(envelope.clone());
+        assert_eq!(msg.cc.as_deref(), Some("Cc Name <cc@example.com>"));
+        assert_eq!(msg.cc_preview(), "Cc Name");
+        assert_eq!(msg.bcc.as_deref(), Some("Bcc Name <bcc@example.com>"));
+        assert_eq!(msg.bcc_preview(), "Bcc Name");
+        assert_eq!(
+            msg.reply_to().as_deref(),
+            Some("Reply Name <reply@example.com>")
+        );
+        assert_eq!(
+            preview_mailbox(msg.reply_to().as_deref().unwrap()),
+            "Reply Name"
+        );
+
+        envelope.cc = Some(EmailAddress::List(vec![]));
+        envelope.bcc = Some(EmailAddress::List(vec![EmailAddr {
+            name: None,
+            email: None,
+        }]));
+        envelope.reply_to = Some(EmailAddress::List(vec![]));
+        let empty = Message::from(envelope);
+        assert_eq!(empty.cc.as_deref(), Some(""));
+        assert!(empty.cc.as_deref().is_some_and(|s| s.trim().is_empty()));
+        assert!(empty.bcc.as_deref().is_some_and(|s| s.trim().is_empty()));
+        assert!(empty.reply_to().is_none());
     }
 
     #[test]

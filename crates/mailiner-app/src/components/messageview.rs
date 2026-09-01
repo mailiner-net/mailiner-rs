@@ -12,7 +12,7 @@ use crate::context::{AppContext, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::formatter::{FormatOptions, MessageFormatter};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
-use crate::message::{Message, MessageId};
+use crate::message::{Message, MessageId, preview_mailbox};
 
 use super::compose::open_reply_or_forward;
 
@@ -334,6 +334,7 @@ fn MessageHeader(message: Arc<Message>) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let date = format_date(&message.date);
+    let reply_to = message.reply_to();
     let actions_ready = ready_loaded(&ctx, &message.id).is_some();
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
@@ -563,6 +564,30 @@ fn MessageHeader(message: Arc<Message>) -> Element {
                         title: "{message.to}",
                         span { class: "message-view-meta-k", "To" }
                         " {message.to_preview()}"
+                    }
+                }
+                if let Some(cc) = message.cc.as_deref().filter(|s| !s.trim().is_empty()) {
+                    span {
+                        class: "message-view-meta-item",
+                        title: "{cc}",
+                        span { class: "message-view-meta-k", "Cc" }
+                        " {message.cc_preview()}"
+                    }
+                }
+                if let Some(bcc) = message.bcc.as_deref().filter(|s| !s.trim().is_empty()) {
+                    span {
+                        class: "message-view-meta-item",
+                        title: "{bcc}",
+                        span { class: "message-view-meta-k", "Bcc" }
+                        " {message.bcc_preview()}"
+                    }
+                }
+                if let Some(reply_to) = reply_to.as_deref() {
+                    span {
+                        class: "message-view-meta-item",
+                        title: "{reply_to}",
+                        span { class: "message-view-meta-k", "Reply-To" }
+                        " {preview_mailbox(reply_to)}"
                     }
                 }
                 span {

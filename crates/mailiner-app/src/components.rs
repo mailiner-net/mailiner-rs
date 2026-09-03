@@ -9,6 +9,7 @@ mod mailbox_picker;
 mod messageview;
 mod onboarding;
 mod outbox;
+mod recipient_field;
 mod shortcuts;
 mod split;
 mod toast;

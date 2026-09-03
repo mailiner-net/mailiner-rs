@@ -592,11 +592,9 @@ async fn handle_select_account(
     ctx: &mut AppContext,
     account_id: AccountId,
 ) {
-    let previous = ctx.selected_account.read().clone();
     ctx.selected_account.set(Some(account_id.clone()));
-    if previous.as_ref() != Some(&account_id) {
-        manager.cancel_pending_reconnects(Some(&account_id), ctx);
-    }
+    // UI may already have written `selected_account` before this event.
+    manager.cancel_pending_reconnects(Some(&account_id), ctx);
     // Drop the previous account's selection / body before hydrate so a
     // cache hit cannot leave the old message view painted over the new tree.
     clear_mailbox_ui(ctx);
@@ -700,6 +698,8 @@ async fn handle_session_dropped(
             )
         });
     if busy {
+        // Don't bump generation (would cancel an in-flight connect / timer).
+        manager.remove_ws_watch(&account_id);
         return;
     }
     let is_ready = ctx
@@ -708,14 +708,16 @@ async fn handle_session_dropped(
         .get(&account_id)
         .is_some_and(|s| matches!(s, ConnectionState::Ready));
     if !is_ready {
-        return;
-    }
-    if ctx.selected_account.read().as_ref() != Some(&account_id) {
+        manager.remove_ws_watch(&account_id);
         return;
     }
 
     warn!("IMAP session dropped for {account_id}");
     manager.drop_dead_connector(&account_id);
+    if ctx.selected_account.read().as_ref() != Some(&account_id) {
+        set_connection_state(ctx, &account_id, ConnectionState::Disconnected);
+        return;
+    }
     start_auto_reconnect(manager, ctx, event_tx, account_id).await;
 }
 

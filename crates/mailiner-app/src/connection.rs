@@ -409,6 +409,11 @@ impl AccountConnectionManager {
         self.bump_generation(account_id);
     }
 
+    /// Remove a death watch without bumping generation (avoids a closed-watch busy loop).
+    pub fn remove_ws_watch(&mut self, account_id: &AccountId) {
+        self.ws_watches.remove(account_id);
+    }
+
     /// Disconnect all accounts except optionally `keep`.
     pub async fn disconnect_others(&mut self, keep: Option<&AccountId>, ctx: &mut AppContext) {
         let ids: Vec<AccountId> = self

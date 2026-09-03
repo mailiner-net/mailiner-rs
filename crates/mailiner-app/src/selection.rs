@@ -147,6 +147,11 @@ impl MessageSelection {
         self.replace_with(inverted);
     }
 
+    /// Next Shift-range starts at the current focus row (after a bulk select).
+    pub fn reset_range_anchor(&mut self) {
+        self.anchor_index = self.focus_at_index;
+    }
+
     fn replace_with(&mut self, ids: impl IntoIterator<Item = MessageId>) {
         let ordered: Vec<MessageId> = ids.into_iter().collect();
         if ordered.is_empty() {
@@ -160,11 +165,11 @@ impl MessageSelection {
         } else {
             None
         };
-        // Fresh range origin at the surviving focus, not a pre-bulk Shift anchor.
-        self.anchor_index = keep_focus_at;
         self.ids = set;
         self.focus = keep_focus.or_else(|| ordered.first().cloned());
         self.focus_at_index = keep_focus_at;
+        // Drop a pre-bulk Shift start; caller syncs from the live focus index.
+        self.anchor_index = None;
     }
 }
 
@@ -257,20 +262,24 @@ mod tests {
         assert!(s.contains(&id("b")));
         assert!(s.contains(&id("c")));
         assert_eq!(s.focus(), Some(&id("b")));
-        assert_eq!(s.anchor_index(), Some(1));
+        assert_eq!(s.anchor_index(), None);
         assert_eq!(s.focus_at_index(), Some(1));
         assert!(!should_auto_mark_read(true, s.is_multi()));
     }
 
     #[test]
-    fn select_all_resets_stale_range_anchor_to_focus() {
+    fn select_all_drops_stale_range_anchor() {
         let mut s = MessageSelection::default();
         s.replace(id("a"), Some(0));
         s.set_range([id("a"), id("b")], id("b"), Some(1));
         assert_eq!(s.anchor_index(), Some(0));
         s.select_all([id("a"), id("b"), id("c")]);
         assert_eq!(s.focus(), Some(&id("b")));
-        assert_eq!(s.anchor_index(), Some(1));
+        assert_eq!(s.anchor_index(), None);
+        s.note_focus(id("b"), Some(4));
+        s.reset_range_anchor();
+        assert_eq!(s.anchor_index(), Some(4));
+        assert_eq!(s.focus_at_index(), Some(4));
     }
 
     #[test]
@@ -316,7 +325,7 @@ mod tests {
         s.select_unread([id("b"), id("c")]);
         assert_eq!(s.focus(), Some(&id("b")));
         assert_eq!(s.focus_at_index(), Some(1));
-        assert_eq!(s.anchor_index(), Some(1));
+        assert_eq!(s.anchor_index(), None);
     }
 
     #[test]

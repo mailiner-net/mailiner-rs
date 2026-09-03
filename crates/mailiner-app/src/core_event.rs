@@ -1427,6 +1427,8 @@ async fn handle_select_known(
     };
     // Multi-select must not consume unread (`should_auto_mark_read`).
     handle_select_message(manager, ctx, focus, false, false).await;
+    // `note_focus` has the current (post-relocate) index; use it as the range start.
+    ctx.selection.write().reset_range_anchor();
 }
 
 async fn handle_select_list_click(

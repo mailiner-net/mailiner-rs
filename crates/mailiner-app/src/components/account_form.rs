@@ -12,7 +12,9 @@ use crate::account_config::{
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
-use crate::provider_preset::{PresetFormFields, ProviderPreset, apply_preset, matching_preset};
+use crate::provider_preset::{
+    PresetFormFields, ProviderPreset, apply_email_change, apply_preset, matching_preset,
+};
 use crate::send::{SendState, send_kind_label};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -408,7 +410,33 @@ pub fn AccountConnectionFields(
                 label: "Email",
                 id: "{id_prefix}-email",
                 value: email.clone(),
-                oninput: move |v| set_email.call(v),
+                oninput: {
+                    let imap_username = imap_username.clone();
+                    let smtp_username = smtp_username.clone();
+                    let smtp_host = smtp_host.clone();
+                    move |v: String| {
+                        let mut next = PresetFormFields {
+                            imap_host: String::new(),
+                            imap_port: String::new(),
+                            imap_username: imap_username.clone(),
+                            smtp_host: smtp_host.clone(),
+                            smtp_port: String::new(),
+                            smtp_username: smtp_username.clone(),
+                            smtp_use_tls: true,
+                        };
+                        apply_email_change(&v, &mut next);
+                        set_email.call(v);
+                        if next.imap_username != imap_username {
+                            set_imap_username.call(next.imap_username);
+                        }
+                        if next.smtp_username != smtp_username {
+                            set_smtp_username.call(next.smtp_username);
+                        }
+                        if next.smtp_host != smtp_host {
+                            set_smtp_host.call(next.smtp_host);
+                        }
+                    }
+                },
                 input_type: "email",
                 autocomplete: "email",
                 disabled: busy,
@@ -425,9 +453,9 @@ pub fn AccountConnectionFields(
                     imap_host: imap_host.clone(),
                     imap_port: imap_port.clone(),
                     imap_username: imap_username.clone(),
-                    smtp_host,
-                    smtp_port,
-                    smtp_username,
+                    smtp_host: smtp_host.clone(),
+                    smtp_port: smtp_port.clone(),
+                    smtp_username: smtp_username.clone(),
                     smtp_use_tls,
                 },
                 on_apply: move |next: PresetFormFields| {

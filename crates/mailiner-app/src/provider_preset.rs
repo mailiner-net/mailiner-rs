@@ -62,7 +62,10 @@ impl ProviderPreset {
     }
 
     /// Named-provider server defaults. [`Self::Custom`] has none.
-    pub fn servers(self) -> Option<PresetServers> {
+    ///
+    /// Outlook SMTP host depends on `email`: consumer Outlook.com family
+    /// uses `smtp-mail.outlook.com`; Microsoft 365 uses `smtp.office365.com`.
+    pub fn servers(self, email: &str) -> Option<PresetServers> {
         match self {
             // IMAP 993 implicit TLS. SMTP 465 implicit TLS (also documents 587 STARTTLS).
             Self::Gmail => Some(PresetServers {
@@ -72,11 +75,11 @@ impl ProviderPreset {
                 smtp_port: 465,
                 smtp_use_tls: true,
             }),
-            // Microsoft 365 / Outlook: IMAP 993 implicit; SMTP 587 STARTTLS (not 465).
+            // IMAP 993 implicit; SMTP 587 STARTTLS (Microsoft does not document 465).
             Self::Outlook => Some(PresetServers {
                 imap_host: "outlook.office365.com",
                 imap_port: 993,
-                smtp_host: "smtp.office365.com",
+                smtp_host: outlook_smtp_host(email),
                 smtp_port: 587,
                 smtp_use_tls: true,
             }),
@@ -124,7 +127,7 @@ impl PresetFormFields {
 /// [`ProviderPreset::Custom`] is a no-op (keeps user tweaks). Named presets
 /// overwrite host/port/TLS only. Usernames are filled from `email` when empty.
 pub fn apply_preset(preset: ProviderPreset, email: &str, fields: &mut PresetFormFields) {
-    let Some(servers) = preset.servers() else {
+    let Some(servers) = preset.servers(email) else {
         return;
     };
     fields.imap_host = servers.imap_host.to_string();
@@ -132,13 +135,27 @@ pub fn apply_preset(preset: ProviderPreset, email: &str, fields: &mut PresetForm
     fields.smtp_host = servers.smtp_host.to_string();
     fields.smtp_port = servers.smtp_port.to_string();
     fields.smtp_use_tls = servers.smtp_use_tls;
-    if let Some(user) = username_from_email(email) {
-        if fields.imap_username.trim().is_empty() {
-            fields.imap_username = user.clone();
-        }
-        if fields.smtp_username.trim().is_empty() {
-            fields.smtp_username = user;
-        }
+    fill_empty_usernames(email, fields);
+}
+
+/// After the email field changes: fill empty usernames, and if SMTP is still
+/// a documented Microsoft host, switch consumer vs Microsoft 365.
+pub fn apply_email_change(email: &str, fields: &mut PresetFormFields) {
+    fill_empty_usernames(email, fields);
+    if is_microsoft_smtp_host(&fields.smtp_host) {
+        fields.smtp_host = outlook_smtp_host(email).to_string();
+    }
+}
+
+fn fill_empty_usernames(email: &str, fields: &mut PresetFormFields) {
+    let Some(user) = username_from_email(email) else {
+        return;
+    };
+    if fields.imap_username.trim().is_empty() {
+        fields.imap_username = user.clone();
+    }
+    if fields.smtp_username.trim().is_empty() {
+        fields.smtp_username = user;
     }
 }
 
@@ -149,12 +166,18 @@ pub fn matching_preset(fields: &PresetFormFields) -> ProviderPreset {
         ProviderPreset::Outlook,
         ProviderPreset::Fastmail,
     ] {
-        let Some(servers) = preset.servers() else {
+        // Email only affects Outlook's SMTP host; matching accepts both.
+        let Some(servers) = preset.servers("") else {
             continue;
+        };
+        let smtp_ok = if preset == ProviderPreset::Outlook {
+            is_microsoft_smtp_host(&fields.smtp_host)
+        } else {
+            hosts_eq(&fields.smtp_host, servers.smtp_host)
         };
         if hosts_eq(&fields.imap_host, servers.imap_host)
             && parse_port(&fields.imap_port) == Some(servers.imap_port)
-            && hosts_eq(&fields.smtp_host, servers.smtp_host)
+            && smtp_ok
             && parse_port(&fields.smtp_port) == Some(servers.smtp_port)
             && fields.smtp_use_tls == servers.smtp_use_tls
         {
@@ -162,6 +185,40 @@ pub fn matching_preset(fields: &PresetFormFields) -> ProviderPreset {
         }
     }
     ProviderPreset::Custom
+}
+
+/// Consumer Outlook.com family → `smtp-mail.outlook.com`; else Microsoft 365.
+fn outlook_smtp_host(email: &str) -> &'static str {
+    if is_outlook_consumer_email(email) {
+        "smtp-mail.outlook.com"
+    } else {
+        "smtp.office365.com"
+    }
+}
+
+fn is_microsoft_smtp_host(host: &str) -> bool {
+    hosts_eq(host, "smtp.office365.com") || hosts_eq(host, "smtp-mail.outlook.com")
+}
+
+fn is_outlook_consumer_email(email: &str) -> bool {
+    let Some((_, domain)) = email.trim().rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    const SUFFIXES: &[&str] = &[
+        "outlook.com",
+        "outlook.co.uk",
+        "hotmail.com",
+        "hotmail.co.uk",
+        "hotmail.fr",
+        "hotmail.de",
+        "live.com",
+        "live.co.uk",
+        "msn.com",
+    ];
+    SUFFIXES
+        .iter()
+        .any(|s| domain == *s || domain.ends_with(&format!(".{s}")))
 }
 
 fn username_from_email(email: &str) -> Option<String> {
@@ -211,7 +268,10 @@ mod tests {
         );
         assert_eq!(matching_preset(&fields), ProviderPreset::Gmail);
         assert_eq!(
-            ProviderPreset::Gmail.servers().unwrap().smtp_tls_mode(),
+            ProviderPreset::Gmail
+                .servers("ada@gmail.com")
+                .unwrap()
+                .smtp_tls_mode(),
             SmtpTlsMode::Implicit
         );
     }
@@ -232,9 +292,55 @@ mod tests {
         );
         assert_eq!(matching_preset(&fields), ProviderPreset::Outlook);
         assert_eq!(
-            ProviderPreset::Outlook.servers().unwrap().smtp_tls_mode(),
+            ProviderPreset::Outlook
+                .servers("ada@contoso.com")
+                .unwrap()
+                .smtp_tls_mode(),
             SmtpTlsMode::StartTls
         );
+    }
+
+    #[test]
+    fn outlook_consumer_uses_smtp_mail_outlook_com() {
+        for email in [
+            "ada@outlook.com",
+            "ada@hotmail.com",
+            "ada@live.com",
+            "ada@msn.com",
+            "ada@hotmail.co.uk",
+            "Ada@Outlook.Com",
+        ] {
+            let fields = apply(ProviderPreset::Outlook, email);
+            assert_eq!(fields.smtp_host, "smtp-mail.outlook.com", "email={email}");
+            assert_eq!(fields.imap_host, "outlook.office365.com");
+            assert_eq!(fields.smtp_port, "587");
+            assert_eq!(matching_preset(&fields), ProviderPreset::Outlook);
+        }
+    }
+
+    #[test]
+    fn email_change_fills_empty_usernames_and_outlook_smtp() {
+        let mut fields = apply(ProviderPreset::Outlook, "");
+        assert!(fields.imap_username.is_empty());
+        assert_eq!(fields.smtp_host, "smtp.office365.com");
+
+        apply_email_change("ada@outlook.com", &mut fields);
+        assert_eq!(fields.imap_username, "ada@outlook.com");
+        assert_eq!(fields.smtp_username, "ada@outlook.com");
+        assert_eq!(fields.smtp_host, "smtp-mail.outlook.com");
+
+        apply_email_change("ada@contoso.com", &mut fields);
+        assert_eq!(fields.imap_username, "ada@outlook.com");
+        assert_eq!(fields.smtp_host, "smtp.office365.com");
+    }
+
+    #[test]
+    fn email_change_does_not_overwrite_custom_smtp_host() {
+        let mut fields = apply(ProviderPreset::Gmail, "");
+        fields.smtp_host = "smtp.example.com".into();
+        apply_email_change("ada@gmail.com", &mut fields);
+        assert_eq!(fields.smtp_host, "smtp.example.com");
+        assert_eq!(fields.imap_username, "ada@gmail.com");
     }
 
     #[test]

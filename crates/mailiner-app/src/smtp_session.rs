@@ -205,7 +205,7 @@ async fn open_stream(
     })?;
     let url = config
         .proxy
-        .websocket_url_for(&smtp.host, smtp.port)
+        .websocket_url_for_smtp(smtp)
         .map_err(|e| ClassifiedSendError {
             kind: SendErrorKind::Internal,
             message: e.to_string(),
@@ -328,5 +328,25 @@ mod tests {
     fn preflight_rejects_missing_smtp() {
         let err = preflight(&config_with(None)).unwrap_err();
         assert_eq!(err.kind, SendErrorKind::NotConfigured);
+    }
+
+    #[test]
+    fn smtp_proxy_url_uses_remote_override_not_sni_host() {
+        let mut smtp = SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        );
+        smtp.remote_host = Some("smtp-backend.internal".into());
+        smtp.remote_port = Some(2525);
+        let config = config_with(Some(smtp));
+        let smtp = config.smtp.as_ref().unwrap();
+        let url = config.proxy.websocket_url_for_smtp(smtp).unwrap();
+        assert!(url.contains("remote=smtp-backend.internal:2525"), "{url}");
+        assert!(!url.contains("smtp.example.com"));
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.dial_host(), "smtp-backend.internal");
     }
 }

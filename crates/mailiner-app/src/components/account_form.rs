@@ -71,6 +71,29 @@ pub fn kind_label(kind: ConnectErrorKind) -> &'static str {
     }
 }
 
+fn parse_optional_override_host(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn parse_optional_override_port(raw: &str, field: &str) -> Result<Option<u16>, String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let p: u16 = t
+        .parse()
+        .map_err(|_| format!("{field} must be a number between 1 and 65535."))?;
+    if p == 0 {
+        return Err(format!("{field} must be a number between 1 and 65535."));
+    }
+    Ok(Some(p))
+}
+
 /// Suggest `imap.{domain}` as a **placeholder only** (never auto-submitted).
 pub fn email_to_imap_host_hint(email: &str) -> String {
     email
@@ -99,6 +122,8 @@ pub fn build_config_from_form(
     smtp_username: &str,
     smtp_password: &str,
     smtp_tls_mode: SmtpTlsMode,
+    smtp_remote_host: &str,
+    smtp_remote_port: &str,
     created_at: chrono::DateTime<Utc>,
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
@@ -138,36 +163,30 @@ pub fn build_config_from_form(
         return Err("Proxy base URL is required (e.g. ws://localhost:9400/proxy).".into());
     }
 
-    let remote_host = {
-        let t = remote_host.trim();
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.to_string())
-        }
-    };
-    let remote_port = {
-        let t = remote_port.trim();
-        if t.is_empty() {
-            None
-        } else {
-            let p: u16 = t
-                .parse()
-                .map_err(|_| "Remote port must be a number between 1 and 65535.".to_string())?;
-            if p == 0 {
-                return Err("Remote port must be a number between 1 and 65535.".into());
-            }
-            Some(p)
-        }
-    };
+    let remote_host = parse_optional_override_host(remote_host);
+    let remote_port = parse_optional_override_port(remote_port, "Remote port")?;
+    let smtp_remote_host = parse_optional_override_host(smtp_remote_host);
+    let smtp_remote_port = parse_optional_override_port(smtp_remote_port, "SMTP remote port")?;
 
-    let smtp = optional_smtp_from_tls_mode(
+    let mut smtp = optional_smtp_from_tls_mode(
         smtp_host,
         smtp_port,
         smtp_username,
         smtp_password,
         smtp_tls_mode,
     )?;
+    match smtp.as_mut() {
+        Some(smtp) => {
+            smtp.remote_host = smtp_remote_host;
+            smtp.remote_port = smtp_remote_port;
+        }
+        None if smtp_remote_host.is_some() || smtp_remote_port.is_some() => {
+            return Err("SMTP host is required when other SMTP fields are filled. \
+                 Clear SMTP fields to skip outbound settings."
+                .into());
+        }
+        None => {}
+    }
 
     let now = Utc::now();
     let config = AccountConfig {
@@ -334,6 +353,8 @@ pub fn AccountConnectionFields(
     proxy_token: String,
     remote_host: String,
     remote_port: String,
+    smtp_remote_host: String,
+    smtp_remote_port: String,
     set_display_name: EventHandler<String>,
     set_email: EventHandler<String>,
     set_imap_host: EventHandler<String>,
@@ -344,6 +365,8 @@ pub fn AccountConnectionFields(
     set_proxy_token: EventHandler<String>,
     set_remote_host: EventHandler<String>,
     set_remote_port: EventHandler<String>,
+    set_smtp_remote_host: EventHandler<String>,
+    set_smtp_remote_port: EventHandler<String>,
     busy: bool,
     #[props(default)] open_advanced: bool,
 ) -> Element {
@@ -466,6 +489,25 @@ pub fn AccountConnectionFields(
                     value: remote_port,
                     oninput: move |v| set_remote_port.call(v),
                     placeholder: "Defaults to IMAP port",
+                    input_type: "number",
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                FormField {
+                    label: "SMTP remote host (optional)",
+                    id: "{id_prefix}-smtp-remote-host",
+                    value: smtp_remote_host,
+                    oninput: move |v| set_smtp_remote_host.call(v),
+                    placeholder: "Defaults to SMTP host",
+                    autocomplete: "off",
+                    disabled: busy,
+                }
+                FormField {
+                    label: "SMTP remote port (optional)",
+                    id: "{id_prefix}-smtp-remote-port",
+                    value: smtp_remote_port,
+                    oninput: move |v| set_smtp_remote_port.call(v),
+                    placeholder: "Defaults to SMTP port",
                     input_type: "number",
                     autocomplete: "off",
                     disabled: busy,
@@ -660,6 +702,16 @@ mod tests {
         smtp_port: &str,
         smtp_tls_mode: SmtpTlsMode,
     ) -> Result<AccountConfig, String> {
+        form_config_with_remotes(smtp_host, smtp_port, smtp_tls_mode, "", "")
+    }
+
+    fn form_config_with_remotes(
+        smtp_host: &str,
+        smtp_port: &str,
+        smtp_tls_mode: SmtpTlsMode,
+        smtp_remote_host: &str,
+        smtp_remote_port: &str,
+    ) -> Result<AccountConfig, String> {
         build_config_from_form(
             &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
             "Work",
@@ -677,7 +729,23 @@ mod tests {
             "",
             "",
             smtp_tls_mode,
+            smtp_remote_host,
+            smtp_remote_port,
             Utc::now(),
+        )
+    }
+
+    fn form(
+        smtp_host: &str,
+        smtp_remote_host: &str,
+        smtp_remote_port: &str,
+    ) -> Result<AccountConfig, String> {
+        form_config_with_remotes(
+            smtp_host,
+            "465",
+            SmtpTlsMode::Implicit,
+            smtp_remote_host,
+            smtp_remote_port,
         )
     }
 
@@ -718,5 +786,42 @@ mod tests {
     fn form_empty_smtp_section_is_none() {
         let config = form_config("", "465", SmtpTlsMode::Implicit).unwrap();
         assert!(config.smtp.is_none());
+    }
+
+    #[test]
+    fn smtp_remotes_persist_on_settings() {
+        let cfg = form("smtp.example.com", "smtp-backend.internal", "2525").unwrap();
+        let smtp = cfg.smtp.expect("smtp");
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.port, 465);
+        assert_eq!(smtp.remote_host.as_deref(), Some("smtp-backend.internal"));
+        assert_eq!(smtp.remote_port, Some(2525));
+        let url = cfg.proxy.websocket_url_for_smtp(&smtp).unwrap();
+        assert!(url.contains("remote=smtp-backend.internal:2525"), "{url}");
+        assert!(!url.contains("smtp.example.com"));
+    }
+
+    #[test]
+    fn smtp_remotes_empty_stay_none() {
+        let cfg = form("smtp.example.com", "  ", "").unwrap();
+        let smtp = cfg.smtp.expect("smtp");
+        assert!(smtp.remote_host.is_none());
+        assert!(smtp.remote_port.is_none());
+        assert_eq!(smtp.dial_host(), "smtp.example.com");
+        assert_eq!(smtp.dial_port(), 465);
+    }
+
+    #[test]
+    fn smtp_remote_without_host_is_error() {
+        let err = form("", "smtp-backend.internal", "").unwrap_err();
+        assert!(err.contains("SMTP host"), "{err}");
+    }
+
+    #[test]
+    fn smtp_remote_port_must_be_valid() {
+        let err = form("smtp.example.com", "", "0").unwrap_err();
+        assert!(err.contains("SMTP remote port"), "{err}");
+        let err = form("smtp.example.com", "", "nope").unwrap_err();
+        assert!(err.contains("SMTP remote port"), "{err}");
     }
 }

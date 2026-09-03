@@ -98,6 +98,13 @@ fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
     }
 }
 
+fn compose_body_mode_from_draft(draft: &DraftDocument) -> ComposeBodyMode {
+    match draft.mode {
+        BodyMode::Plain => ComposeBodyMode::Plain,
+        BodyMode::Rich => ComposeBodyMode::Rich,
+    }
+}
+
 fn find_unquoted(s: &str, needle: char) -> Option<usize> {
     let mut in_quotes = false;
     let mut escaped = false;
@@ -389,10 +396,11 @@ fn submit_compose(
         return;
     };
     let identity = identity_from_account(account.name.clone(), account.email.clone());
+    let mode = compose_body_mode_from_draft(&draft);
     draft.from = Some(composer_address_from_identity(&identity));
     draft.plain_body = form.body.peek().clone();
     draft.subject = form.subject.peek().clone();
-    apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
+    apply_compose_body_mode(&mut draft, mode);
     if !draft.inline_images.is_empty() {
         draft.html_body = html_for_plain_with_inlines(&draft.plain_body, &draft.inline_images);
         draft.plain_cache_dirty = false;
@@ -454,10 +462,17 @@ enum AttachKind {
     Inline,
 }
 
-fn live_payload_bytes(draft: &DraftDocument, live_plain_len: usize) -> u64 {
+fn live_payload_bytes(draft: &DraftDocument, live_plain: &str) -> u64 {
+    let live_html_len = if draft.mode == BodyMode::Rich {
+        plain_to_html(live_plain).len() as u64
+    } else {
+        0
+    };
     draft_payload_bytes(draft)
         .saturating_sub(draft.plain_body.len() as u64)
-        .saturating_add(live_plain_len as u64)
+        .saturating_sub(draft.html_body.len() as u64)
+        .saturating_add(live_plain.len() as u64)
+        .saturating_add(live_html_len)
 }
 
 fn push_attachment_on_draft(
@@ -476,10 +491,7 @@ fn push_attachment_on_draft(
     if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS {
         return PushAttachment::TooMany;
     }
-    if would_exceed_draft_cap(
-        live_payload_bytes(&session.draft, body().len()),
-        attachment.size,
-    ) {
+    if would_exceed_draft_cap(live_payload_bytes(&session.draft, &body()), attachment.size) {
         return PushAttachment::TooLarge;
     }
     session.draft.attachments.push(attachment);
@@ -519,7 +531,7 @@ fn push_inline_on_draft(
         mailiner_composer::AttachmentData::Bytes(b) => b.len() as u64,
         mailiner_composer::AttachmentData::Pending => 0,
     };
-    if would_exceed_draft_cap(live_payload_bytes(&session.draft, body().len()), extra) {
+    if would_exceed_draft_cap(live_payload_bytes(&session.draft, &body()), extra) {
         return PushAttachment::TooLarge;
     }
     session.draft.inline_images.push(image);
@@ -581,7 +593,7 @@ struct IncomingBytes {
 fn draft_slot_counts(
     compose_draft: Signal<Option<ComposeSession>>,
     draft_id: &str,
-    live_plain_len: usize,
+    live_plain: &str,
 ) -> Option<(usize, usize, u64)> {
     compose_draft
         .read()
@@ -591,7 +603,7 @@ fn draft_slot_counts(
             (
                 s.draft.attachments.len(),
                 s.draft.inline_images.len(),
-                live_payload_bytes(&s.draft, live_plain_len),
+                live_payload_bytes(&s.draft, live_plain),
             )
         })
 }
@@ -616,7 +628,7 @@ fn pre_read_fits(
 ) -> PreRead {
     let (_, max_count, too_many) = kind_limits(kind);
     let Some((file_count, inline_count, used)) =
-        draft_slot_counts(compose_draft, draft_id, body().len())
+        draft_slot_counts(compose_draft, draft_id, &body())
     else {
         return PreRead::Stop;
     };
@@ -682,7 +694,7 @@ fn attach_one_bytes(
         return AttachStep::Continue;
     }
     let Some((file_count, inline_count, used)) =
-        draft_slot_counts(compose_draft, draft_id, body().len())
+        draft_slot_counts(compose_draft, draft_id, &body())
     else {
         return AttachStep::Stop;
     };
@@ -1585,5 +1597,29 @@ mod tests {
         assert_eq!(draft.html_body, plain_to_html("Hello\n\nWorld"));
         assert!(draft.html_body.contains("<p>Hello</p>"));
         assert!(draft.html_body.contains("<p>World</p>"));
+    }
+
+    #[test]
+    fn submit_uses_draft_mode_not_current_pref() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hi".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        let mode = compose_body_mode_from_draft(&draft);
+        draft.plain_body = "Hi there".into();
+        apply_compose_body_mode(&mut draft, mode);
+        assert_eq!(draft.mode, BodyMode::Rich);
+        assert_eq!(draft.html_body, plain_to_html("Hi there"));
+    }
+
+    #[test]
+    fn live_payload_counts_current_rich_html() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hi".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        let opened = draft_payload_bytes(&draft);
+        let live = live_payload_bytes(&draft, "Hi there");
+        let expected_html = plain_to_html("Hi there").len() as u64;
+        assert!(live > opened);
+        assert_eq!(live, "Hi there".len() as u64 + expected_html);
     }
 }

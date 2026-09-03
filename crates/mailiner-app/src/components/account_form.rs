@@ -591,14 +591,17 @@ pub fn AccountSmtpFields(
                         },
                         option {
                             value: "implicit",
+                            selected: smtp_tls_mode == SmtpTlsMode::Implicit,
                             "Implicit TLS (port 465)"
                         }
                         option {
                             value: "start_tls",
+                            selected: smtp_tls_mode == SmtpTlsMode::StartTls,
                             "STARTTLS (port 587)"
                         }
                         option {
                             value: "none",
+                            selected: smtp_tls_mode == SmtpTlsMode::None,
                             "None (plaintext)"
                         }
                     }

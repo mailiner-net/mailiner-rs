@@ -104,11 +104,11 @@ Do not re-open these.
 ### 16. Leftover `Account` / timestamps / `TlsModeUnsupported`
 
 - [x] `TlsModeUnsupported` removed. Persisted `"tls_mode_unsupported"` becomes `Permanent` via `#[serde(other)]`.
-- Still open: `authenticate` returns unused `Account`; `created_at` / `updated_at` on `Account` / `Folder` / `Envelope` are write-only.
+- [x] `authenticate` returns `Result<()>`. Unused core `Account` type and write-only `created_at` / `updated_at` on `Folder` / `Envelope` dropped. Serde still ignores leftover fields in existing mail-cache blobs. App-level account store / `DraftDocument` timestamps kept.
 
 ---
 
 ## Suggested order
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
-3. Slim the connector trait (13) and leftover `Account`/timestamps (16).
+3. Slim the connector trait (13).

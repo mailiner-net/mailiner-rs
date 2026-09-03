@@ -27,8 +27,8 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
-    Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag,
-    Folder, FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId, MessageSort,
+    AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
+    FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId, MessageSort,
     PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
@@ -317,8 +317,6 @@ where
             is_deleted,
             has_attachments,
             size: fetch.size.map(|s| s as u64),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         })
     }
 
@@ -787,7 +785,7 @@ where
         Ok(())
     }
 
-    async fn authenticate(&self, credentials: &str) -> MailinerResult<Account> {
+    async fn authenticate(&self, credentials: &str) -> MailinerResult<()> {
         let mut imap = self.imap.lock().await;
         if let ImapSession::Unauthenticated(_) = &*imap {
             // Temporarily transition to Authenticating state and consume the imap session,
@@ -807,21 +805,9 @@ where
                     "IMAP session in invalid state".to_string(),
                 ));
             }
-            Ok(Account {
-                id: self.account_id.clone(),
-                name: self.username.clone(),
-                email: self.username.clone(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
+            Ok(())
         } else if let ImapSession::Authenticated(_) = &*imap {
-            Ok(Account {
-                id: self.account_id.clone(),
-                name: self.username.clone(),
-                email: self.username.clone(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
+            Ok(())
         } else {
             Err(ImapError::Connection("Not connected".to_string()).into())
         }

@@ -311,8 +311,6 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         }
     }
 

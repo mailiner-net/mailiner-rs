@@ -374,7 +374,6 @@ fn sort_mailbox_ids(ids: &mut [MailboxId], mboxes: &HashMap<MailboxId, MailboxNo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
     use mailiner_core::{AccountId, Folder};
 
     fn folder(id: &str, name: &str, parent: Option<&str>, role: MailboxRole) -> Folder {
@@ -388,7 +387,6 @@ mod tests {
         role: MailboxRole,
         selectable: bool,
     ) -> Folder {
-        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         Folder {
             id: FolderId::new(id),
             account_id: AccountId::new("acc"),
@@ -396,8 +394,6 @@ mod tests {
             parent_id: parent.map(FolderId::new),
             role,
             selectable,
-            created_at: ts,
-            updated_at: ts,
         }
     }
 

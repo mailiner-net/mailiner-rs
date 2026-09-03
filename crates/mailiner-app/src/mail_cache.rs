@@ -102,7 +102,6 @@ impl CachedFolderTree {
 
     /// Convert UI tree nodes back into a persistable snapshot.
     pub fn from_nodes(account_id: &AccountId, nodes: &HashMap<MailboxId, MailboxNode>) -> Self {
-        let now = Utc::now();
         let mut folders = Vec::with_capacity(nodes.len());
         let mut counts = HashMap::with_capacity(nodes.len());
         for node in nodes.values() {
@@ -116,8 +115,6 @@ impl CachedFolderTree {
                     .map(|p| mailiner_core::FolderId::new(p.as_str())),
                 role: node.role,
                 selectable: node.selectable,
-                created_at: now,
-                updated_at: now,
             });
             counts.insert(
                 node.id.as_str().to_string(),
@@ -713,8 +710,6 @@ mod tests {
             parent_id: parent.map(FolderId::new),
             role,
             selectable: true,
-            created_at: ts(),
-            updated_at: ts(),
         }
     }
 
@@ -744,8 +739,6 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
-            created_at: ts(),
-            updated_at: ts(),
         }
     }
 

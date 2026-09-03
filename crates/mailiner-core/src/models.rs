@@ -5,15 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{AccountId, FolderId, MessageId, MessagePartId};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
-    pub id: AccountId,
-    pub name: String,
-    pub email: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// How the message list is ordered for a selected folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -135,8 +126,6 @@ pub struct Folder {
     /// False for `\\Noselect` / synthesized ancestors. Default true for older blobs.
     #[serde(default = "default_true")]
     pub selectable: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 fn default_true() -> bool {
@@ -256,8 +245,6 @@ pub struct Envelope {
     /// RFC822.SIZE when the server sent it.
     #[serde(default)]
     pub size: Option<u64>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// MIME Content-Transfer-Encoding.

@@ -1,7 +1,6 @@
 //! Account configuration model (connection settings + secrets).
 //!
-//! This is separate from `mailiner_core::models::Account` (mail-cache metadata)
-//! and from the thin UI `account::Account` display type.
+//! This is separate from the thin UI `account::Account` display type.
 
 use chrono::{DateTime, Utc};
 use mailiner_core::ids::AccountId;

@@ -3714,7 +3714,6 @@ async fn handle_send_message(
         ctx.compose_draft.set(None);
     }
     if inflight.is_busy(&account_id) {
-        ctx.set_send_status(account_id, SendState::Idle);
         return;
     }
     item.attempts = 1;

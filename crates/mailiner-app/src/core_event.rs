@@ -17,7 +17,10 @@ use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageSort};
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
-use crate::components::virtual_scroll::{SparseList, adjacent_index, index_after_removal};
+use crate::components::virtual_scroll::{
+    SparseList, UnreadScan, adjacent_index, index_after_removal, next_unread_index,
+    unread_scan_from, unread_scan_resume,
+};
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
@@ -74,6 +77,10 @@ pub enum CoreEvent {
     SelectUnreadKnown,
     /// Invert membership over currently loaded rows.
     InvertSelection,
+    /// Jump to the next (`delta > 0`) or previous unread row, fetching if needed.
+    SelectAdjacentUnread {
+        delta: i32,
+    },
     MarkRead {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
@@ -377,6 +384,9 @@ pub async fn core_loop(
             }
             CoreEvent::InvertSelection => {
                 handle_select_known(&manager, &mut ctx, KnownSelect::Invert).await;
+            }
+            CoreEvent::SelectAdjacentUnread { delta } => {
+                handle_select_adjacent_unread(&manager, &mut ctx, delta).await;
             }
             CoreEvent::MarkRead {
                 mailbox_id,
@@ -1725,6 +1735,32 @@ async fn handle_fetch_message_range(
     }
 }
 
+fn current_list_index(ctx: &AppContext) -> Option<usize> {
+    ctx.selection.read().focus_at_index().or_else(|| {
+        ctx.selection
+            .read()
+            .focus()
+            .cloned()
+            .and_then(|id| ctx.messages.read().position(|m| m.id == id))
+    })
+}
+
+fn unread_scan_start(ctx: &AppContext, delta: i32) -> Option<usize> {
+    let stored = ctx.selection.read().focus_at_index();
+    let live = ctx
+        .selection
+        .read()
+        .focus()
+        .cloned()
+        .and_then(|id| ctx.messages.read().position(|m| m.id == id));
+    unread_scan_from(stored, live, delta)
+}
+
+/// Same window `select_list_index` fetches when a keyboard move lands on a hole.
+fn adjacent_fetch_range(index: usize, total: usize) -> Range<usize> {
+    index.saturating_sub(5)..(index + 15).min(total)
+}
+
 async fn handle_select_adjacent(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -1738,13 +1774,7 @@ async fn handle_select_adjacent(
         return;
     }
     let total = ctx.messages.read().total_count();
-    let current = ctx.selection.read().focus_at_index().or_else(|| {
-        ctx.selection
-            .read()
-            .focus()
-            .cloned()
-            .and_then(|id| ctx.messages.read().position(|m| m.id == id))
-    });
+    let current = current_list_index(ctx);
     let Some(index) = adjacent_index(total, current, delta) else {
         return;
     };
@@ -1813,6 +1843,55 @@ async fn handle_select_known(
     ctx.selection.write().reset_range_anchor();
 }
 
+async fn handle_select_adjacent_unread(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    delta: i32,
+) {
+    if ctx.selected_mailbox.peek().is_none() {
+        return;
+    }
+    if *ctx.messages_loading.peek() {
+        return;
+    }
+    let mut from = unread_scan_start(ctx, delta);
+    loop {
+        let total = ctx.messages.read().total_count();
+        let scan = {
+            let messages = ctx.messages.read();
+            next_unread_index(total, from, delta, |i| messages.get(i).map(|m| !m.is_read))
+        };
+        match scan {
+            UnreadScan::Found(index) => {
+                select_list_index(manager, ctx, index, true).await;
+                return;
+            }
+            UnreadScan::Hole(index) => {
+                let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+                    return;
+                };
+                let range = adjacent_fetch_range(index, total);
+                handle_fetch_message_range(manager, ctx, mailbox_id, range).await;
+                if ctx.messages.read().has_item(index) {
+                    from = unread_scan_resume(index, delta);
+                } else {
+                    // Advance past this hole so a failed fetch cannot stall.
+                    from = Some(index);
+                }
+            }
+            UnreadScan::None => {
+                let message = if delta > 0 {
+                    "No next unread message"
+                } else {
+                    "No previous unread message"
+                };
+                ctx.show_toast(ToastAction::info(message));
+                return;
+            }
+        }
+    }
+}
+
 async fn handle_select_list_click(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -1879,9 +1958,8 @@ async fn select_list_index(
         let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
             return;
         };
-        let start = index.saturating_sub(5);
-        let end = (index + 15).min(total);
-        handle_fetch_message_range(manager, ctx, mailbox_id, start..end).await;
+        handle_fetch_message_range(manager, ctx, mailbox_id, adjacent_fetch_range(index, total))
+            .await;
     }
     let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
         return;
@@ -2147,6 +2225,15 @@ fn take_messages_from_ui(
         .messages
         .write()
         .take_matching(|m| idset.contains(&m.id));
+    if selected_removed_index.is_none() {
+        let mut indices: Vec<usize> = taken.iter().map(|(i, _)| *i).collect();
+        indices.sort_unstable();
+        indices.reverse();
+        let mut selection = ctx.selection.write();
+        for i in indices {
+            selection.note_removed_at(i);
+        }
+    }
     let n = taken.len();
     let unread_n = taken.iter().filter(|(_, m)| !m.is_read).count() as i32;
     let mb = ctx.selected_mailbox.read().clone();
@@ -2195,6 +2282,12 @@ fn restore_snapshots(
     {
         let unread_n = unread_in_removed(&snapshots);
         let mut list = ctx.messages.write();
+        {
+            let mut selection = ctx.selection.write();
+            for snap in &snapshots {
+                selection.note_inserted_at(snap.index);
+            }
+        }
         for snap in snapshots {
             list.insert_at(snap.index, snap.message);
         }

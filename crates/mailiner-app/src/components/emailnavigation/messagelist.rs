@@ -6,10 +6,11 @@ use dioxus::prelude::*;
 use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
 use crate::components::icons::{Icon, IconKind};
 use crate::components::virtual_scroll::VirtualScroll;
-use crate::context::AppContext;
+use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 use crate::message::Message;
+use crate::selection::drag_message_ids;
 use chrono::{DateTime, Utc};
 
 fn list_date(dt: &DateTime<Utc>) -> String {
@@ -48,13 +49,20 @@ pub fn MessageList() -> Element {
         let (index, message) = args;
         let core_tx = use_coroutine_handle::<CoreEvent>();
         let ctx = use_context::<AppContext>();
+        let mut message_drag = ctx.message_drag;
         let selection = ctx.selection.read();
         let is_selected = selection.contains(&message.id);
         let is_focused = selection.focus() == Some(&message.id);
+        let is_dragging = message_drag
+            .read()
+            .as_ref()
+            .is_some_and(|d| d.message_ids.contains(&message.id));
         let avatar = message.avatar_color();
         let message_id = message.id.clone();
         let star_id = message.id.clone();
         let flag_id = message.id.clone();
+        let click_id = message.id.clone();
+        let drag_id = message.id.clone();
         let row_account = ctx.selected_account.peek().clone();
         let row_mailbox = MailboxId::from(message.id.folder_id().clone());
         let star_account = row_account.clone();
@@ -70,7 +78,9 @@ pub fn MessageList() -> Element {
                 class: if is_selected { "selected" },
                 class: if is_focused { "focused" },
                 class: if !message.is_read { "unread" },
+                class: if is_dragging { "dragging" },
                 aria_selected: if is_selected { "true" } else { "false" },
+                draggable: "true",
 
                 onmousedown: move |evt: MouseEvent| {
                     if evt.modifiers().shift() || evt.modifiers().ctrl() || evt.modifiers().meta() {
@@ -81,11 +91,26 @@ pub fn MessageList() -> Element {
                 onclick: move |evt: MouseEvent| {
                     evt.prevent_default();
                     let _ = core_tx.send(CoreEvent::SelectListClick {
-                        message_id: message_id.clone(),
+                        message_id: click_id.clone(),
                         index,
                         extend: evt.modifiers().shift(),
                         toggle: evt.modifiers().ctrl() || evt.modifiers().meta(),
                     });
+                },
+
+                ondragstart: move |evt: DragEvent| {
+                    let ids = drag_message_ids(&ctx.selection.peek(), &drag_id);
+                    let dt = evt.data_transfer();
+                    let _ = dt.set_data("text/plain", "mailiner-messages");
+                    dt.set_effect_allowed("move");
+                    message_drag.set(Some(MessageDrag {
+                        message_ids: ids,
+                        over: None,
+                    }));
+                },
+
+                ondragend: move |_| {
+                    message_drag.set(None);
                 },
 
                 div {

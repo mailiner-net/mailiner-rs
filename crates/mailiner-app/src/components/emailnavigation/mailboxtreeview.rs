@@ -11,6 +11,15 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::mailbox::{MailboxId, mailbox_tree_filter_ids};
 
+fn is_valid_drop_target(
+    selectable: bool,
+    dest: &MailboxId,
+    current: Option<&MailboxId>,
+    dragging: bool,
+) -> bool {
+    dragging && selectable && current.is_some_and(|id| id != dest)
+}
+
 fn role_icon(role: MailboxRole) -> IconKind {
     match role {
         MailboxRole::Inbox => IconKind::Inbox,
@@ -32,6 +41,7 @@ pub fn MailboxTreeView() -> Element {
     let nodes = ctx.mailbox_nodes.read();
     let visible = mailbox_tree_filter_ids(&roots, &nodes, &query.read()).map(Rc::new);
     let no_matches = visible.as_ref().is_some_and(|ids| ids.is_empty());
+    let drop_active = ctx.message_drag.read().is_some();
     rsx! {
         div {
             class: "mailbox-tree-filter",
@@ -54,6 +64,7 @@ pub fn MailboxTreeView() -> Element {
         }
         div {
             id: "mailboxtreeview",
+            class: if drop_active { "drop-active" },
 
             if no_matches {
                 p {
@@ -85,6 +96,7 @@ pub struct MailboxTreeViewItemProps {
 pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
+    let mut message_drag = ctx.message_drag;
     let mailboxes = ctx.mailbox_nodes.read();
     let mailbox = mailboxes.get(&props.mailbox_id).unwrap();
     let selectable = mailbox.selectable;
@@ -101,6 +113,11 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
         .iter()
         .any(|id| props.visible.as_ref().is_none_or(|ids| ids.contains(id)));
     let show_children = has_visible_children && (filtering || children_visible());
+    let is_drop_target = message_drag
+        .read()
+        .as_ref()
+        .is_some_and(|d| d.over.as_ref() == Some(&props.mailbox_id));
+    let mailbox_id = props.mailbox_id.clone();
     // Reveal a nested restored/jumped folder so the selected row is visible.
     {
         let mailbox_id = props.mailbox_id.clone();
@@ -122,12 +139,95 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
             div {
                 class: "mailbox-row",
                 class: if is_selected { "selected" },
+                class: if is_drop_target { "drop-target" },
 
-                onclick: move |_| {
-                    if !selectable {
-                        return;
+                onclick: {
+                    let mailbox_id = mailbox_id.clone();
+                    move |_| {
+                        if !selectable {
+                            return;
+                        }
+                        let _ = core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
                     }
-                    let _ = core_tx.send(CoreEvent::SelectMailbox(props.mailbox_id.clone()));
+                },
+
+                ondragover: {
+                    let mailbox_id = mailbox_id.clone();
+                    move |evt: DragEvent| {
+                        if !is_valid_drop_target(
+                            selectable,
+                            &mailbox_id,
+                            ctx.selected_mailbox.peek().as_ref(),
+                            message_drag.peek().is_some(),
+                        ) {
+                            return;
+                        }
+                        evt.prevent_default();
+                        evt.data_transfer().set_drop_effect("move");
+                        if let Some(mut d) = message_drag()
+                            && d.over.as_ref() != Some(&mailbox_id)
+                        {
+                            d.over = Some(mailbox_id.clone());
+                            message_drag.set(Some(d));
+                        }
+                    }
+                },
+
+                ondragenter: {
+                    let mailbox_id = mailbox_id.clone();
+                    move |evt: DragEvent| {
+                        if !is_valid_drop_target(
+                            selectable,
+                            &mailbox_id,
+                            ctx.selected_mailbox.peek().as_ref(),
+                            message_drag.peek().is_some(),
+                        ) {
+                            return;
+                        }
+                        evt.prevent_default();
+                    }
+                },
+
+                ondragleave: {
+                    let mailbox_id = mailbox_id.clone();
+                    move |_| {
+                        if let Some(mut d) = message_drag()
+                            && d.over.as_ref() == Some(&mailbox_id)
+                        {
+                            d.over = None;
+                            message_drag.set(Some(d));
+                        }
+                    }
+                },
+
+                ondrop: {
+                    let dest_mailbox_id = mailbox_id.clone();
+                    move |evt: DragEvent| {
+                        evt.prevent_default();
+                        evt.stop_propagation();
+                        let Some(drag) = message_drag.take() else {
+                            return;
+                        };
+                        if !is_valid_drop_target(
+                            selectable,
+                            &dest_mailbox_id,
+                            ctx.selected_mailbox.peek().as_ref(),
+                            true,
+                        ) {
+                            return;
+                        }
+                        let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
+                            return;
+                        };
+                        if drag.message_ids.is_empty() {
+                            return;
+                        }
+                        let _ = core_tx.send(CoreEvent::MoveMessages {
+                            mailbox_id,
+                            message_ids: drag.message_ids,
+                            dest_mailbox_id: dest_mailbox_id.clone(),
+                        });
+                    }
                 },
 
                 if has_visible_children && !filtering {
@@ -177,5 +277,25 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(s: &str) -> MailboxId {
+        MailboxId::from(s.to_string())
+    }
+
+    #[test]
+    fn drop_requires_drag_selectable_and_other_folder() {
+        let inbox = id("INBOX");
+        let sent = id("Sent");
+        assert!(is_valid_drop_target(true, &sent, Some(&inbox), true));
+        assert!(!is_valid_drop_target(true, &inbox, Some(&inbox), true));
+        assert!(!is_valid_drop_target(false, &sent, Some(&inbox), true));
+        assert!(!is_valid_drop_target(true, &sent, Some(&inbox), false));
+        assert!(!is_valid_drop_target(true, &sent, None, true));
     }
 }

@@ -645,16 +645,21 @@ fn MessageHeader(
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
-                        disabled: eml_busy || mailbox_id.is_none(),
+                        disabled: eml_busy || mailbox_id.is_none() || ctx.selected_account.read().is_none(),
                         title: "Save as .eml",
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
                             let message = message.clone();
+                            let account_id = ctx.selected_account.read().clone();
                             move |_| {
                                 let Some(mailbox_id) = mailbox_id.clone() else {
                                     return;
                                 };
+                                let Some(account_id) = account_id.clone() else {
+                                    return;
+                                };
                                 let _ = core_tx.send(CoreEvent::SaveMessageEml {
+                                    account_id,
                                     mailbox_id,
                                     message_id: message.id.clone(),
                                     filename: eml_filename(&message.subject),

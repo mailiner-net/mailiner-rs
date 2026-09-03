@@ -101,16 +101,11 @@ pub fn eml_filename(subject: &str) -> String {
 fn sanitize_filename_stem(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(MAX_EML_STEM));
     let mut last_was_space = false;
-    let mut nchars = 0usize;
     for ch in raw.chars() {
-        if nchars >= MAX_EML_STEM {
-            break;
-        }
         if ch.is_whitespace() {
-            if !last_was_space && !out.is_empty() {
+            if !last_was_space && !out.is_empty() && out.len() + 1 <= MAX_EML_STEM {
                 out.push(' ');
                 last_was_space = true;
-                nchars += 1;
             }
             continue;
         }
@@ -122,9 +117,12 @@ fn sanitize_filename_stem(raw: &str) -> String {
         {
             continue;
         }
+        let add = ch.len_utf8();
+        if out.len() + add > MAX_EML_STEM {
+            break;
+        }
         last_was_space = false;
         out.push(ch);
-        nchars += 1;
     }
     out.trim().trim_matches('.').trim().to_string()
 }
@@ -363,11 +361,15 @@ mod tests {
         let long = "x".repeat(300);
         let name = eml_filename(&long);
         assert!(name.ends_with(".eml"));
-        assert_eq!(name.chars().count(), MAX_EML_STEM + 4);
+        assert_eq!(name.len(), MAX_EML_STEM + 4);
         assert!(
             name.chars()
                 .all(|c| c == 'x' || c == '.' || c == 'e' || c == 'm' || c == 'l')
         );
+        let wide = "é".repeat(200);
+        let wide_name = eml_filename(&wide);
+        assert!(wide_name.ends_with(".eml"));
+        assert!(wide_name.len() <= MAX_EML_STEM + 4);
     }
 
     #[test]

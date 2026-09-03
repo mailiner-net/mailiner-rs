@@ -1412,37 +1412,52 @@ where
     ) -> MailinerResult<Vec<u8>> {
         require_folder(folder_id, std::slice::from_ref(message_id))?;
 
-        let mut imap = self.imap.lock().await;
-        let ImapSession::Authenticated(session) = &mut *imap else {
-            return Err(ImapError::NotAuthenticated.into());
-        };
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            session
+                .select(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
-        // BODY.PEEK[] is the full RFC 822 message and does not set \Seen.
-        let mut fetch = session
-            .uid_fetch(message_id.as_uid(), "(BODY.PEEK[])")
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
+            let mut fetch = session
+                .uid_fetch(message_id.as_uid(), "(RFC822.SIZE)")
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch message size: {e}")))?;
 
-        let fetch = fetch
-            .next()
-            .await
-            .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
-            .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
-
-        let bytes = Self::extract_section_bytes(&fetch, "")?;
-        if bytes.len() as u64 > Self::MAX_DOWNLOAD {
-            return Err(MailinerError::Connector(format!(
-                "message exceeds download limit ({} > {})",
-                bytes.len(),
-                Self::MAX_DOWNLOAD
-            )));
+            if let Some(fetch) = fetch.next().await {
+                let fetch = fetch
+                    .map_err(|e| ImapError::Imap(format!("Failed to fetch message size: {e}")))?;
+                if let Some(size) = fetch.size {
+                    if u64::from(size) > Self::MAX_DOWNLOAD {
+                        return Err(MailinerError::Connector(format!(
+                            "message exceeds download limit ({size} > {})",
+                            Self::MAX_DOWNLOAD
+                        )));
+                    }
+                }
+            }
         }
-        Ok(bytes)
+
+        // Partial BODY.PEEK[] so an oversized/stale SIZE cannot materialize the
+        // whole literal before the cap is applied.
+        let mut stream = self.stream_raw_part(folder_id, message_id, "").await?;
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            let chunk = item?;
+            let next = (out.len() as u64).saturating_add(chunk.data.len() as u64);
+            if next > Self::MAX_DOWNLOAD {
+                return Err(MailinerError::Connector(format!(
+                    "message exceeds download limit (> {})",
+                    Self::MAX_DOWNLOAD
+                )));
+            }
+            out.extend_from_slice(&chunk.data);
+        }
+        Ok(out)
     }
 }
 

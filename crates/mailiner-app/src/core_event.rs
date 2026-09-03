@@ -115,6 +115,7 @@ pub enum CoreEvent {
     },
     /// FETCH the raw RFC 822 message and save it as `.eml`.
     SaveMessageEml {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_id: MessageId,
         filename: String,
@@ -414,13 +415,14 @@ pub async fn core_loop(
                 .await;
             }
             CoreEvent::SaveMessageEml {
+                account_id,
                 mailbox_id,
                 message_id,
                 filename,
                 size_hint,
             } => {
                 handle_save_message_eml(
-                    &manager, &mut ctx, mailbox_id, message_id, filename, size_hint,
+                    &manager, &mut ctx, account_id, mailbox_id, message_id, filename, size_hint,
                 )
                 .await;
             }
@@ -2364,11 +2366,15 @@ async fn handle_download_attachment(
 async fn handle_save_message_eml(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
     filename: String,
     size_hint: Option<u64>,
 ) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
     if ctx.selection.read().focus() != Some(&message_id) {
         return;
     }
@@ -2378,7 +2384,7 @@ async fn handle_save_message_eml(
     ) {
         return;
     }
-    if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
+    if size_hint.is_some_and(|s| s > MAX_DOWNLOAD_BYTES as u64) {
         ctx.show_toast(ToastAction::error(format!(
             "Message is too large to save (max {} bytes)",
             MAX_DOWNLOAD_BYTES
@@ -2386,10 +2392,6 @@ async fn handle_save_message_eml(
         return;
     }
 
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
@@ -2420,7 +2422,7 @@ async fn handle_save_message_eml(
         }
     };
 
-    if ctx.selection.read().focus() != Some(&message_id) {
+    if !selected_account_is(ctx, &account_id) || ctx.selection.read().focus() != Some(&message_id) {
         ctx.download_status.write().remove(EML_DOWNLOAD_KEY);
         return;
     }

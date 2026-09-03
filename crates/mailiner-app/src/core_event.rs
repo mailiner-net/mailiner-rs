@@ -22,7 +22,9 @@ use crate::connection::{
     set_connection_state,
 };
 use crate::context::{AppContext, MessageViewState};
-use crate::download::{DownloadStatus, MAX_DOWNLOAD_BYTES, StreamingBlobDownload};
+use crate::download::{
+    DownloadStatus, EML_DOWNLOAD_KEY, MAX_DOWNLOAD_BYTES, StreamingBlobDownload,
+};
 use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
     hydrate_account,
@@ -109,6 +111,13 @@ pub enum CoreEvent {
         filename: String,
         content_type: String,
         encoding: TransferEncoding,
+        size_hint: Option<u64>,
+    },
+    /// FETCH the raw RFC 822 message and save it as `.eml`.
+    SaveMessageEml {
+        mailbox_id: MailboxId,
+        message_id: MessageId,
+        filename: String,
         size_hint: Option<u64>,
     },
 
@@ -401,6 +410,17 @@ pub async fn core_loop(
                     content_type,
                     encoding,
                     size_hint,
+                )
+                .await;
+            }
+            CoreEvent::SaveMessageEml {
+                mailbox_id,
+                message_id,
+                filename,
+                size_hint,
+            } => {
+                handle_save_message_eml(
+                    &manager, &mut ctx, mailbox_id, message_id, filename, size_hint,
                 )
                 .await;
             }
@@ -2339,6 +2359,97 @@ async fn handle_download_attachment(
                 .insert(section, DownloadStatus::Error(e));
         }
     }
+}
+
+async fn handle_save_message_eml(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_id: MessageId,
+    filename: String,
+    size_hint: Option<u64>,
+) {
+    if ctx.selection.read().focus() != Some(&message_id) {
+        return;
+    }
+    if matches!(
+        ctx.download_status.read().get(EML_DOWNLOAD_KEY),
+        Some(DownloadStatus::InProgress { .. })
+    ) {
+        return;
+    }
+    if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
+        ctx.show_toast(ToastAction::error(format!(
+            "Message is too large to save (max {} bytes)",
+            MAX_DOWNLOAD_BYTES
+        )));
+        return;
+    }
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.show_toast(ToastAction::error("No account selected"));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    ctx.download_status.write().insert(
+        EML_DOWNLOAD_KEY.into(),
+        DownloadStatus::InProgress {
+            received: 0,
+            total: size_hint,
+        },
+    );
+    ctx.show_toast(ToastAction::info("Saving message…"));
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    info!("Saving message {} as {}", message_id, filename);
+
+    let bytes = match connector.fetch_raw_message(&folder_id, &message_id).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            error!("fetch_raw_message failed: {}", e);
+            ctx.download_status.write().insert(
+                EML_DOWNLOAD_KEY.into(),
+                DownloadStatus::Error(e.to_string()),
+            );
+            ctx.show_toast(ToastAction::error(format!("Could not save message: {e}")));
+            return;
+        }
+    };
+
+    if ctx.selection.read().focus() != Some(&message_id) {
+        ctx.download_status.write().remove(EML_DOWNLOAD_KEY);
+        return;
+    }
+
+    let mut download = StreamingBlobDownload::new(
+        TransferEncoding::SevenBit,
+        filename,
+        "message/rfc822".into(),
+    );
+    if let Err(e) = download.push_wire_chunk(&bytes) {
+        error!("save .eml failed: {}", e);
+        ctx.download_status
+            .write()
+            .insert(EML_DOWNLOAD_KEY.into(), DownloadStatus::Error(e.clone()));
+        ctx.show_toast(ToastAction::error(format!("Could not save message: {e}")));
+        return;
+    }
+    if let Err(e) = download.finish_and_save() {
+        error!("save .eml failed: {}", e);
+        ctx.download_status
+            .write()
+            .insert(EML_DOWNLOAD_KEY.into(), DownloadStatus::Error(e.clone()));
+        ctx.show_toast(ToastAction::error(format!("Could not save message: {e}")));
+        return;
+    }
+
+    ctx.download_status
+        .write()
+        .insert(EML_DOWNLOAD_KEY.into(), DownloadStatus::Finished);
 }
 
 async fn refresh_outbox_signal(outbox: &dyn OutboxStore, ctx: &mut AppContext) {

@@ -46,6 +46,12 @@ pub fn size_to_human(bytes: u64) -> String {
     }
 }
 
+/// Download-status key for the full-message `.eml` export.
+pub const EML_DOWNLOAD_KEY: &str = "EML";
+
+/// Max length of the filename stem (before `.eml`).
+const MAX_EML_STEM: usize = 120;
+
 /// Suggested filename for an attachment part.
 pub fn attachment_filename(
     filename: &Option<String>,
@@ -71,6 +77,56 @@ pub fn attachment_filename(
         _ => "bin",
     };
     format!("attachment.{ext}")
+}
+
+/// Suggested `.eml` filename from a message subject.
+///
+/// Strips characters that are unsafe in download filenames. Empty or
+/// unusable subjects fall back to `message.eml`.
+pub fn eml_filename(subject: &str) -> String {
+    let trimmed = subject.trim();
+    let without_ext = if trimmed.len() >= 4 && trimmed.to_ascii_lowercase().ends_with(".eml") {
+        &trimmed[..trimmed.len() - 4]
+    } else {
+        trimmed
+    };
+    let stem = sanitize_filename_stem(without_ext);
+    if stem.is_empty() {
+        "message.eml".into()
+    } else {
+        format!("{stem}.eml")
+    }
+}
+
+fn sanitize_filename_stem(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_EML_STEM));
+    let mut last_was_space = false;
+    let mut nchars = 0usize;
+    for ch in raw.chars() {
+        if nchars >= MAX_EML_STEM {
+            break;
+        }
+        if ch.is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+                nchars += 1;
+            }
+            continue;
+        }
+        if ch.is_control()
+            || matches!(
+                ch,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'
+            )
+        {
+            continue;
+        }
+        last_was_space = false;
+        out.push(ch);
+        nchars += 1;
+    }
+    out.trim().trim_matches('.').trim().to_string()
 }
 
 // Re-export for callers that check content-part caps.
@@ -281,6 +337,43 @@ mod tests {
             attachment_filename(&None, &None, "application/pdf"),
             "attachment.pdf"
         );
+    }
+
+    #[test]
+    fn eml_filename_fallback_when_empty() {
+        assert_eq!(eml_filename(""), "message.eml");
+        assert_eq!(eml_filename("   "), "message.eml");
+        assert_eq!(eml_filename("..."), "message.eml");
+        assert_eq!(eml_filename("///"), "message.eml");
+        assert_eq!(eml_filename(".eml"), "message.eml");
+    }
+
+    #[test]
+    fn eml_filename_uses_sanitized_subject() {
+        assert_eq!(eml_filename("Hello World"), "Hello World.eml");
+        assert_eq!(eml_filename("  Re: Hello / World?  "), "Re Hello World.eml");
+        assert_eq!(eml_filename("foo/bar:baz*qux"), "foobarbazqux.eml");
+        assert_eq!(eml_filename("hello.eml"), "hello.eml");
+        assert_eq!(eml_filename("a\\b|c\"d"), "abcd.eml");
+    }
+
+    #[test]
+    fn eml_filename_strips_controls_and_caps_length() {
+        assert_eq!(eml_filename("hi\nthere\tnow"), "hi there now.eml");
+        let long = "x".repeat(300);
+        let name = eml_filename(&long);
+        assert!(name.ends_with(".eml"));
+        assert_eq!(name.chars().count(), MAX_EML_STEM + 4);
+        assert!(
+            name.chars()
+                .all(|c| c == 'x' || c == '.' || c == 'e' || c == 'm' || c == 'l')
+        );
+    }
+
+    #[test]
+    fn eml_filename_blocks_path_traversal() {
+        assert_eq!(eml_filename("../../etc/passwd"), "etcpasswd.eml");
+        assert_eq!(eml_filename("..\\..\\secret"), "secret.eml");
     }
 
     #[test]

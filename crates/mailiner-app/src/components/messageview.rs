@@ -11,6 +11,7 @@ use mailiner_core::models::{MessageContent, PartKind};
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
+use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::{FormatOptions, MessageFormatter, drop_inlined_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
@@ -537,6 +538,10 @@ fn MessageHeader(
     } else {
         message.is_read
     };
+    let eml_busy = matches!(
+        ctx.download_status.read().get(EML_DOWNLOAD_KEY),
+        Some(DownloadStatus::InProgress { .. })
+    );
 
     rsx! {
         header {
@@ -637,6 +642,27 @@ fn MessageHeader(
                             }
                         },
                         "Print"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: eml_busy || mailbox_id.is_none(),
+                        title: "Save as .eml",
+                        onclick: {
+                            let mailbox_id = mailbox_id.clone();
+                            let message = message.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::SaveMessageEml {
+                                    mailbox_id,
+                                    message_id: message.id.clone(),
+                                    filename: eml_filename(&message.subject),
+                                    size_hint: message.envelope.size,
+                                });
+                            }
+                        },
+                        if eml_busy { "Saving…" } else { "Save as .eml" }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",

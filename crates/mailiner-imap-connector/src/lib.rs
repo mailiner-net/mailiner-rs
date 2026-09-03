@@ -389,10 +389,17 @@ where
     ///
     /// Works for both full and partial (`BODY[sec]<origin>`) responses — the
     /// section path match does not filter on the origin index.
+    /// Empty `section` is the full message (`BODY[]` / `RFC822`).
     fn extract_section_bytes(
         fetch: &async_imap::types::Fetch,
         section: &str,
     ) -> Result<Vec<u8>, ImapError> {
+        if section.is_empty() {
+            return fetch
+                .body()
+                .map(|b| b.to_vec())
+                .ok_or_else(|| ImapError::InvalidData("missing BODY[]".into()));
+        }
         if section.eq_ignore_ascii_case("TEXT") {
             return fetch
                 .text()
@@ -1396,6 +1403,46 @@ where
                 }
             },
         )))
+    }
+
+    async fn fetch_raw_message(
+        &self,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+    ) -> MailinerResult<Vec<u8>> {
+        require_folder(folder_id, std::slice::from_ref(message_id))?;
+
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+
+        // BODY.PEEK[] is the full RFC 822 message and does not set \Seen.
+        let mut fetch = session
+            .uid_fetch(message_id.as_uid(), "(BODY.PEEK[])")
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
+
+        let fetch = fetch
+            .next()
+            .await
+            .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
+            .map_err(|e| ImapError::Imap(format!("Failed to fetch message: {e}")))?;
+
+        let bytes = Self::extract_section_bytes(&fetch, "")?;
+        if bytes.len() as u64 > Self::MAX_DOWNLOAD {
+            return Err(MailinerError::Connector(format!(
+                "message exceeds download limit ({} > {})",
+                bytes.len(),
+                Self::MAX_DOWNLOAD
+            )));
+        }
+        Ok(bytes)
     }
 }
 

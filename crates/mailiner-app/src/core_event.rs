@@ -2225,6 +2225,15 @@ fn take_messages_from_ui(
         .messages
         .write()
         .take_matching(|m| idset.contains(&m.id));
+    if selected_removed_index.is_none() {
+        let mut indices: Vec<usize> = taken.iter().map(|(i, _)| *i).collect();
+        indices.sort_unstable();
+        indices.reverse();
+        let mut selection = ctx.selection.write();
+        for i in indices {
+            selection.note_removed_at(i);
+        }
+    }
     let n = taken.len();
     let unread_n = taken.iter().filter(|(_, m)| !m.is_read).count() as i32;
     let mb = ctx.selected_mailbox.read().clone();

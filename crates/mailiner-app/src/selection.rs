@@ -172,6 +172,21 @@ impl MessageSelection {
         self.anchor_index = None;
     }
 
+    /// A row was removed at `index`. Shift stored indices so they still
+    /// refer to the same messages. Pair with [`Self::note_inserted_at`].
+    pub fn note_removed_at(&mut self, index: usize) {
+        if let Some(i) = self.focus_at_index.as_mut()
+            && *i > index
+        {
+            *i -= 1;
+        }
+        if let Some(i) = self.anchor_index.as_mut()
+            && *i > index
+        {
+            *i -= 1;
+        }
+    }
+
     /// A row was inserted at `index`. Shift stored indices so they still
     /// refer to the same messages (unread-sort relocate leaves these stale
     /// on purpose; undo-restore must not).
@@ -270,6 +285,10 @@ mod tests {
         assert_eq!(s.focus_at_index(), Some(3));
         s.note_inserted_at(3);
         assert_eq!(s.focus_at_index(), Some(4));
+        s.note_removed_at(0);
+        assert_eq!(s.focus_at_index(), Some(3));
+        s.note_removed_at(3);
+        assert_eq!(s.focus_at_index(), Some(3));
     }
 
     #[test]

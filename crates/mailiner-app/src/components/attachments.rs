@@ -1,14 +1,16 @@
-//! Attachments bar and per-item download UI.
+//! Attachments bar, per-item download, and inline image/PDF preview.
 
 use std::collections::HashMap;
 
+use dioxus::html::Key;
 use dioxus::prelude::*;
 use mailiner_core::models::TransferEncoding;
 
+use super::icons::{IconButton, IconKind};
 use crate::account::AccountId;
 use crate::context::{AppContext, MessageViewState};
 use crate::core_event::CoreEvent;
-use crate::download::{DownloadStatus, size_to_human};
+use crate::download::{DownloadStatus, PreviewKind, preview_kind, size_to_human};
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
 
@@ -31,7 +33,7 @@ pub fn AttachmentsFooter() -> Element {
     let mailbox = ctx.selected_mailbox.read().clone();
 
     let account = ctx.selected_account.read().clone();
-    let (account_id, message_id, mailbox_id, rows) = match (view, mailbox, account) {
+    let prepared = match (view, mailbox, account) {
         (MessageViewState::Ready { message_id, loaded }, Some(mailbox_id), Some(account_id)) => {
             let rows: Vec<AttachmentRow> = loaded
                 .parts
@@ -52,89 +54,96 @@ pub fn AttachmentsFooter() -> Element {
                 })
                 .collect();
             if rows.is_empty() {
-                return rsx! {};
+                None
+            } else {
+                Some((account_id, message_id, mailbox_id, rows))
             }
-            (account_id, message_id, mailbox_id, rows)
         }
-        _ => return rsx! {},
+        _ => None,
     };
-
-    let count = rows.len();
-    let summary = if count == 1 {
-        "1 attachment".to_string()
-    } else {
-        format!("{count} attachments")
-    };
-    let any_busy = {
-        let map = ctx.download_status.read();
-        any_download_busy(&map, rows.iter().map(|r| r.section.as_str()))
-    };
-    let save_all_rows = rows.clone();
-    let save_all_mailbox = mailbox_id.clone();
-    let save_all_message = message_id.clone();
-    let save_all_account = account_id.clone();
-    let mut download_status = ctx.download_status;
 
     rsx! {
-        footer {
-            class: "message-attachments",
-            details {
-                class: "message-attachments-details",
-                summary {
-                    class: "message-attachments-summary",
-                    div {
-                        class: "message-attachments-summary-inner",
-                        span { "{summary}" }
-                        if count > 1 {
-                            button {
-                                class: "attachment-download-btn",
-                                r#type: "button",
-                                disabled: any_busy,
-                                title: "Download every attachment",
-                                aria_label: "Save all attachments",
-                                onclick: move |evt| {
-                                    evt.stop_propagation();
-                                    evt.prevent_default();
-                                    // Hold the button disabled across the serial queue gap
-                                    // (Finished of N before InProgress of N+1).
-                                    mark_pending_downloads(
-                                        &mut download_status.write(),
-                                        &save_all_rows,
-                                    );
-                                    // Core loop is serial; queued events run one IMAP fetch at a time.
-                                    // A failure leaves later items queued so remaining files still save.
-                                    for event in save_all_events(
-                                        &save_all_account,
-                                        &save_all_mailbox,
-                                        &save_all_message,
-                                        &save_all_rows,
-                                    ) {
-                                        let _ = core_tx.send(event);
+        if let Some((account_id, message_id, mailbox_id, rows)) = prepared {
+            {
+                let count = rows.len();
+                let summary = if count == 1 {
+                    "1 attachment".to_string()
+                } else {
+                    format!("{count} attachments")
+                };
+                let any_busy = {
+                    let map = ctx.download_status.read();
+                    any_download_busy(&map, rows.iter().map(|r| r.section.as_str()))
+                };
+                let save_all_rows = rows.clone();
+                let save_all_mailbox = mailbox_id.clone();
+                let save_all_message = message_id.clone();
+                let save_all_account = account_id.clone();
+                let mut download_status = ctx.download_status;
+                rsx! {
+                    footer {
+                        class: "message-attachments",
+                        details {
+                            class: "message-attachments-details",
+                            summary {
+                                class: "message-attachments-summary",
+                                div {
+                                    class: "message-attachments-summary-inner",
+                                    span { "{summary}" }
+                                    if count > 1 {
+                                        button {
+                                            class: "attachment-download-btn",
+                                            r#type: "button",
+                                            disabled: any_busy,
+                                            title: "Download every attachment",
+                                            aria_label: "Save all attachments",
+                                            onclick: move |evt| {
+                                                evt.stop_propagation();
+                                                evt.prevent_default();
+                                                // Hold the button disabled across the serial queue gap
+                                                // (Finished of N before InProgress of N+1).
+                                                mark_pending_downloads(
+                                                    &mut download_status.write(),
+                                                    &save_all_rows,
+                                                );
+                                                // Core loop is serial; queued events run one IMAP fetch at a time.
+                                                // A failure leaves later items queued so remaining files still save.
+                                                for event in save_all_events(
+                                                    &save_all_account,
+                                                    &save_all_mailbox,
+                                                    &save_all_message,
+                                                    &save_all_rows,
+                                                ) {
+                                                    let _ = core_tx.send(event);
+                                                }
+                                            },
+                                            if any_busy {
+                                                "Saving…"
+                                            } else {
+                                                "Save all"
+                                            }
+                                        }
                                     }
-                                },
-                                if any_busy {
-                                    "Saving…"
-                                } else {
-                                    "Save all"
+                                }
+                            }
+                            ul {
+                                class: "message-attachments-list",
+                                for row in rows {
+                                    AttachmentItem {
+                                        key: "{row.section}",
+                                        account_id: account_id.clone(),
+                                        message_id: message_id.clone(),
+                                        mailbox_id: mailbox_id.clone(),
+                                        row: row,
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                ul {
-                    class: "message-attachments-list",
-                    for row in rows {
-                        AttachmentItem {
-                            key: "{row.section}",
-                            account_id: account_id.clone(),
-                            message_id: message_id.clone(),
-                            mailbox_id: mailbox_id.clone(),
-                            row: row,
-                        }
-                    }
-                }
             }
         }
+        AttachmentPreviewDialog {}
     }
 }
 
@@ -229,6 +238,14 @@ fn AttachmentItem(
     };
 
     let row_for_click = row.clone();
+    let can_preview = preview_kind(&row.content_type).is_some();
+    let section_for_preview = row.section.clone();
+    let filename_for_preview = row.filename.clone();
+    let content_type_for_preview = row.content_type.clone();
+    let mailbox_for_preview = mailbox_id.clone();
+    let message_for_preview = message_id.clone();
+    let encoding = row.encoding;
+    let size_hint = row.wire_size;
 
     rsx! {
         li {
@@ -244,25 +261,50 @@ fn AttachmentItem(
                         div { class: "attachment-item-error", "{err}" }
                     }
                 }
-                button {
-                    class: "attachment-download-btn",
-                    disabled: busy,
-                    onclick: move |_| {
-                        let _ = core_tx.send(attachment_download_event(
-                            &account_id,
-                            &mailbox_id,
-                            &message_id,
-                            &row_for_click,
-                        ));
-                    },
-                    if matches!(status, DownloadStatus::InProgress { .. }) {
-                        "Downloading…"
-                    } else if matches!(status, DownloadStatus::Queued) {
-                        "Waiting…"
-                    } else if matches!(status, DownloadStatus::Finished) {
-                        "Done"
-                    } else {
-                        "Download"
+                div {
+                    class: "attachment-item-actions",
+                    if can_preview {
+                        button {
+                            class: "attachment-preview-btn",
+                            disabled: busy,
+                            onclick: move |_| {
+                                let _ = core_tx.send(CoreEvent::PreviewAttachment {
+                                    mailbox_id: mailbox_for_preview.clone(),
+                                    message_id: message_for_preview.clone(),
+                                    section: section_for_preview.clone(),
+                                    filename: filename_for_preview.clone(),
+                                    content_type: content_type_for_preview.clone(),
+                                    encoding,
+                                    size_hint,
+                                });
+                            },
+                            if matches!(status, DownloadStatus::InProgress { .. }) {
+                                "Loading…"
+                            } else {
+                                "Preview"
+                            }
+                        }
+                    }
+                    button {
+                        class: "attachment-download-btn",
+                        disabled: busy,
+                        onclick: move |_| {
+                            let _ = core_tx.send(attachment_download_event(
+                                &account_id,
+                                &mailbox_id,
+                                &message_id,
+                                &row_for_click,
+                            ));
+                        },
+                        if matches!(status, DownloadStatus::InProgress { .. }) {
+                            "Downloading…"
+                        } else if matches!(status, DownloadStatus::Queued) {
+                            "Waiting…"
+                        } else if matches!(status, DownloadStatus::Finished) {
+                            "Done"
+                        } else {
+                            "Download"
+                        }
                     }
                 }
             }
@@ -273,6 +315,80 @@ fn AttachmentItem(
                     div {
                         class: "attachment-progress-bar",
                         style: "width: {progress_pct}%",
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn AttachmentPreviewDialog() -> Element {
+    let ctx = use_context::<AppContext>();
+    let Some(preview) = ctx.attachment_preview.read().clone() else {
+        return rsx! {};
+    };
+    let kind = preview_kind(&preview.content_type);
+    let filename = preview.filename.clone();
+    let url = preview.object_url.clone();
+    rsx! {
+        div {
+            class: "attachment-preview-backdrop",
+            onclick: {
+                let ctx = ctx.clone();
+                move |_| ctx.close_attachment_preview()
+            },
+            div {
+                class: "ui-dialog attachment-preview-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Preview {filename}",
+                tabindex: "0",
+                onclick: move |evt| evt.stop_propagation(),
+                onkeydown: {
+                    let ctx = ctx.clone();
+                    move |evt: KeyboardEvent| {
+                        if evt.key() == Key::Escape {
+                            evt.prevent_default();
+                            ctx.close_attachment_preview();
+                        }
+                    }
+                },
+                div {
+                    class: "ui-dialog-head",
+                    h2 { class: "ui-dialog-title", "{filename}" }
+                    IconButton {
+                        class: "flat ui-icon-btn",
+                        title: "Close",
+                        size: 20,
+                        icon: IconKind::XMark,
+                        onclick: {
+                            let ctx = ctx.clone();
+                            move |_| ctx.close_attachment_preview()
+                        },
+                    }
+                }
+                div {
+                    class: "attachment-preview-body",
+                    match kind {
+                        Some(PreviewKind::Image) => rsx! {
+                            img {
+                                class: "attachment-preview-image",
+                                src: "{url}",
+                                alt: "{filename}",
+                                referrerpolicy: "no-referrer",
+                            }
+                        },
+                        Some(PreviewKind::Pdf) => rsx! {
+                            iframe {
+                                class: "attachment-preview-frame",
+                                src: "{url}",
+                                title: "{filename}",
+                            }
+                        },
+                        None => rsx! {
+                            p { class: "attachment-preview-unsupported", "This type cannot be previewed." }
+                        },
                     }
                 }
             }

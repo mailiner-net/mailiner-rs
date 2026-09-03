@@ -54,9 +54,10 @@ send the header; HMR may also inject scripts after mount.
 | `default-src` | `'self'` | Deny unexpected origins by default |
 | `script-src` | `'self' 'wasm-unsafe-eval'` | App WASM only; no third-party JS. `wasm-unsafe-eval` is required to instantiate WASM (not full `unsafe-eval`) |
 | `style-src` | `'self' 'unsafe-inline'` | Dioxus uses inline `style=` (virtual list, layout). Strict style-src would break the UI. Remote stylesheets are stripped by the sanitizer |
-| `img-src` | `'self' data: blob: http: https:` | Inline message images (`data:` from cid rehydration); download previews (`blob:`); remote images when the user clicks **Allow remote resources** (privacy is gated in the HTML formatter first; CSP must not veto that path) |
+| `img-src` | `'self' data: blob: http: https:` | Inline message images (`data:` from cid rehydration); download / image-attachment previews (`blob:`); remote images when the user clicks **Allow remote resources** (privacy is gated in the HTML formatter first; CSP must not veto that path) |
 | `connect-src` | `'self' ws: wss: http: https:` | User-configured proxies can be any host; a strict host allowlist is not feasible without dynamic CSP. IMAP remains TLS-wrapped in the client |
-| `object-src` | `'none'` | No plugins |
+| `frame-src` | `'self' blob:` | PDF attachment preview (`<iframe src="blob:…">`). HTML/SVG attachments are not previewed |
+| `object-src` | `'none'` | No plugins; PDFs use `iframe`, not `<embed>`/`<object>` |
 | `base-uri` / `form-action` | `'self'` | Limit base URL and form targets |
 
 **Tradeoffs:** CSP is primarily XSS hardening for secrets stored in the origin.

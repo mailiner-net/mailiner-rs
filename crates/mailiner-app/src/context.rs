@@ -9,7 +9,7 @@ use mailiner_core::models::LoadedMessage;
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
-use crate::download::DownloadStatus;
+use crate::download::{DownloadStatus, revoke_object_url};
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 use crate::message_loader::LoadedMessageCache;
@@ -128,6 +128,10 @@ pub struct AppContext {
     pub message_source: Signal<MessageSourceState>,
     /// Per-section attachment download progress (section path → status).
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
+    /// Object URLs from streamed attachments (section → blob URL) for preview reuse.
+    pub attachment_blobs: Signal<HashMap<String, String>>,
+    /// Open attachment preview (`None` = closed).
+    pub attachment_preview: Signal<Option<AttachmentPreview>>,
     /// Per-account connection lifecycle (no secrets).
     pub connection_states: Signal<HashMap<AccountId, ConnectionState>>,
     /// Per-account composer send outcome (one SMTP op may run per account).
@@ -167,9 +171,41 @@ pub struct MessageDrag {
     pub over: Option<MailboxId>,
 }
 
+/// In-place preview of a streamed attachment blob.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttachmentPreview {
+    pub section: String,
+    pub filename: String,
+    pub content_type: String,
+    pub object_url: String,
+}
+
 impl AppContext {
     pub fn selected_ids(&self) -> Vec<MessageId> {
         self.selection.read().ids_vec()
+    }
+
+    /// Hide the preview dialog and revoke that attachment's object URL.
+    pub fn close_attachment_preview(&self) {
+        let mut preview_sig = self.attachment_preview;
+        let Some(preview) = preview_sig.write().take() else {
+            return;
+        };
+        let mut blobs = self.attachment_blobs;
+        blobs.write().remove(&preview.section);
+        revoke_object_url(&preview.object_url);
+    }
+
+    /// Drop download progress, close preview, and revoke held object URLs.
+    pub fn clear_attachment_downloads(&self) {
+        self.close_attachment_preview();
+        let mut blobs = self.attachment_blobs;
+        let urls: Vec<String> = blobs.write().drain().map(|(_, url)| url).collect();
+        for url in urls {
+            revoke_object_url(&url);
+        }
+        let mut download_status = self.download_status;
+        download_status.set(HashMap::new());
     }
 
     pub fn show_toast(&self, action: ToastAction) {

@@ -305,6 +305,14 @@ pub fn ShortcutsHost() -> Element {
                 return;
             }
 
+            if ctx.attachment_preview.peek().is_some() {
+                if evt.key() == "Escape" {
+                    claim_shortcut(&evt);
+                    ctx.close_attachment_preview();
+                }
+                return;
+            }
+
             let Some(shortcut) = shortcut_for_key(&evt.key(), evt.shift_key()) else {
                 return;
             };

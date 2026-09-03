@@ -1482,6 +1482,50 @@ textarea.ui-input {
     margin: 0;
     font-size: var(--text-sm);
     color: var(--text-muted);
+.attachment-preview-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 36;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    box-sizing: border-box;
+}
+
+.attachment-preview-dialog {
+    width: min(56rem, 96vw);
+    max-height: min(92vh, 64rem);
+}
+
+.attachment-preview-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #111;
+    border-radius: var(--radius-sm);
+}
+
+.attachment-preview-image {
+    max-width: 100%;
+    max-height: min(75vh, 48rem);
+    object-fit: contain;
+}
+
+.attachment-preview-frame {
+    width: 100%;
+    height: min(75vh, 48rem);
+    border: 0;
+    background: #fff;
+}
+
+.attachment-preview-unsupported {
+    margin: var(--space-4);
+    color: #eee;
 }
 
 .picker-backdrop {
@@ -2486,6 +2530,13 @@ textarea.ui-input {
             gap: 12px;
         }
 
+        .attachment-item-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
         .attachment-item-title {
             font-weight: 600;
             word-break: break-word;
@@ -2503,7 +2554,8 @@ textarea.ui-input {
             margin-top: 4px;
         }
 
-        .attachment-download-btn {
+        .attachment-download-btn,
+        .attachment-preview-btn {
             flex-shrink: 0;
             border: 1px solid var(--item-accent);
             background: var(--item-accent);
@@ -2515,7 +2567,13 @@ textarea.ui-input {
             font-weight: 500;
         }
 
-        .attachment-download-btn:disabled {
+        .attachment-preview-btn {
+            background: #fff;
+            color: var(--item-accent);
+        }
+
+        .attachment-download-btn:disabled,
+        .attachment-preview-btn:disabled {
             opacity: 0.6;
             cursor: default;
         }

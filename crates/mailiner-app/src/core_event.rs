@@ -29,9 +29,10 @@ use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
 };
-use crate::context::{AppContext, MessageHeadersState, MessageSourceState, MessageViewState};
+use crate::context::{AppContext, AttachmentPreview, MessageHeadersState, MessageSourceState, MessageViewState};
 use crate::download::{
-    DownloadStatus, EML_DOWNLOAD_KEY, MAX_DOWNLOAD_BYTES, StreamingBlobDownload,
+    DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAX_DOWNLOAD_BYTES,
+    StreamingBlobDownload, is_previewable_content_type,
 };
 use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
@@ -184,6 +185,16 @@ pub enum CoreEvent {
     FetchComposeAttachments {
         draft_id: String,
         account_id: AccountId,
+    },
+    /// Stream a previewable attachment and open an inline preview dialog.
+    PreviewAttachment {
+        mailbox_id: MailboxId,
+        message_id: MessageId,
+        section: String,
+        filename: String,
+        content_type: String,
+        encoding: TransferEncoding,
+        size_hint: Option<u64>,
     },
 
     /// Select account for UI + ensure connector + list folders.
@@ -615,6 +626,28 @@ pub async fn core_loop(
                 account_id,
             } => {
                 handle_fetch_compose_attachments(&manager, &mut ctx, draft_id, account_id).await;
+            }
+            CoreEvent::PreviewAttachment {
+                mailbox_id,
+                message_id,
+                section,
+                filename,
+                content_type,
+                encoding,
+                size_hint,
+            } => {
+                handle_preview_attachment(
+                    &manager,
+                    &mut ctx,
+                    mailbox_id,
+                    message_id,
+                    section,
+                    filename,
+                    content_type,
+                    encoding,
+                    size_hint,
+                )
+                .await;
             }
             CoreEvent::SendMessage {
                 account_id,
@@ -1410,6 +1443,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.message_headers.set(MessageHeadersState::Closed);
     ctx.message_source.set(MessageSourceState::Closed);
     ctx.download_status.set(HashMap::new());
+    ctx.clear_attachment_downloads();
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
     ctx.account_quota.set(None);
@@ -1625,6 +1659,7 @@ async fn handle_select_mailbox(
         ctx.message_headers.set(MessageHeadersState::Closed);
         ctx.message_source.set(MessageSourceState::Closed);
         ctx.download_status.set(HashMap::new());
+        ctx.clear_attachment_downloads();
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
         let sort = *ctx.message_sort.peek();
         let account = ctx.selected_account.read().clone();
@@ -2276,6 +2311,7 @@ async fn handle_select_message(
         return;
     }
 
+    ctx.clear_attachment_downloads();
     ctx.message_view.set(MessageViewState::Loading {
         message_id: message_id.clone(),
     });
@@ -2619,6 +2655,7 @@ fn take_messages_from_ui(
         ctx.message_headers.set(MessageHeadersState::Closed);
         ctx.message_source.set(MessageSourceState::Closed);
         ctx.download_status.set(HashMap::new());
+        ctx.clear_attachment_downloads();
     }
     let snapshots = taken
         .into_iter()
@@ -3282,6 +3319,7 @@ async fn handle_empty_trash(
             ctx.message_headers.set(MessageHeadersState::Closed);
             ctx.message_source.set(MessageSourceState::Closed);
             ctx.download_status.set(HashMap::new());
+            ctx.clear_attachment_downloads();
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
                 node.total_count = 0;
                 node.unread_count = 0;
@@ -3571,6 +3609,197 @@ async fn handle_download_attachment(
     if ctx.selection.read().focus() != Some(&message_id) || !selected_account_is(ctx, &account_id) {
         return;
     }
+    if let Some(finished) = cached_attachment_blob(ctx, &section, &filename, &content_type) {
+        match finished.trigger_save() {
+            Ok(()) => {
+                ctx.download_status
+                    .write()
+                    .insert(section, DownloadStatus::Finished);
+            }
+            Err(e) => {
+                error!("save download failed: {}", e);
+                ctx.download_status
+                    .write()
+                    .insert(section, DownloadStatus::Error(e));
+            }
+        }
+        return;
+    }
+
+    let Some(download) = stream_attachment_blob(
+        manager,
+        ctx,
+        mailbox_id,
+        message_id.clone(),
+        section.clone(),
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    )
+    .await
+    else {
+        return;
+    };
+    if ctx.selection.read().focus() != Some(&message_id) {
+        return;
+    }
+
+    match download.finish() {
+        Ok(finished) => {
+            let save_result = finished.trigger_save();
+            remember_or_revoke_blob(ctx, &section, finished);
+            match save_result {
+                Ok(()) => {
+                    ctx.download_status
+                        .write()
+                        .insert(section, DownloadStatus::Finished);
+                }
+                Err(e) => {
+                    error!("save download failed: {}", e);
+                    ctx.download_status
+                        .write()
+                        .insert(section, DownloadStatus::Error(e));
+                }
+            }
+        }
+        Err(e) => {
+            error!("save download failed: {}", e);
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Error(e));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_preview_attachment(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_id: MessageId,
+    section: String,
+    filename: String,
+    content_type: String,
+    encoding: TransferEncoding,
+    size_hint: Option<u64>,
+) {
+    if !is_previewable_content_type(&content_type) {
+        ctx.download_status.write().insert(
+            section,
+            DownloadStatus::Error("this attachment type cannot be previewed".into()),
+        );
+        return;
+    }
+
+    if let Some(url) = ctx
+        .attachment_blobs
+        .read()
+        .get(&section)
+        .cloned()
+        .filter(|url| !url.is_empty())
+    {
+        ctx.attachment_preview.set(Some(AttachmentPreview {
+            section,
+            filename,
+            content_type,
+            object_url: url,
+        }));
+        return;
+    }
+
+    let Some(download) = stream_attachment_blob(
+        manager,
+        ctx,
+        mailbox_id,
+        message_id.clone(),
+        section.clone(),
+        filename.clone(),
+        content_type.clone(),
+        encoding,
+        size_hint,
+    )
+    .await
+    else {
+        return;
+    };
+    if ctx.selection.read().focus() != Some(&message_id) {
+        return;
+    }
+
+    match download.finish() {
+        Ok(finished) => {
+            let url = finished.object_url.clone();
+            remember_or_revoke_blob(ctx, &section, finished);
+            if url.is_empty() {
+                ctx.download_status.write().insert(
+                    section,
+                    DownloadStatus::Error("preview is only available in the browser".into()),
+                );
+                return;
+            }
+            ctx.attachment_preview.set(Some(AttachmentPreview {
+                section: section.clone(),
+                filename,
+                content_type,
+                object_url: url,
+            }));
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Finished);
+        }
+        Err(e) => {
+            error!("preview assemble failed: {}", e);
+            ctx.download_status
+                .write()
+                .insert(section, DownloadStatus::Error(e));
+        }
+    }
+}
+
+fn cached_attachment_blob(
+    ctx: &AppContext,
+    section: &str,
+    filename: &str,
+    content_type: &str,
+) -> Option<FinishedAttachment> {
+    let url = ctx.attachment_blobs.read().get(section).cloned()?;
+    if url.is_empty() {
+        return None;
+    }
+    Some(FinishedAttachment {
+        object_url: url,
+        filename: filename.to_string(),
+        content_type: content_type.to_string(),
+    })
+}
+
+fn remember_or_revoke_blob(ctx: &mut AppContext, section: &str, finished: FinishedAttachment) {
+    if is_previewable_content_type(&finished.content_type) && !finished.object_url.is_empty() {
+        ctx.attachment_blobs
+            .write()
+            .insert(section.to_string(), finished.object_url);
+    } else {
+        finished.revoke();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_attachment_blob(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_id: MessageId,
+    section: String,
+    filename: String,
+    content_type: String,
+    encoding: TransferEncoding,
+    size_hint: Option<u64>,
+) -> Option<StreamingBlobDownload> {
+    // Ignore if user navigated away.
+    if ctx.selection.read().focus() != Some(&message_id) {
+        return None;
+    }
     if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
         ctx.download_status.write().insert(
             section.clone(),
@@ -3579,14 +3808,20 @@ async fn handle_download_attachment(
                 MAX_DOWNLOAD_BYTES
             )),
         );
-        return;
+        return None;
     }
 
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.download_status
+            .write()
+            .insert(section, DownloadStatus::Error("No account selected".into()));
+        return None;
+    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.download_status
             .write()
             .insert(section, DownloadStatus::Error("Not connected".into()));
-        return;
+        return None;
     };
 
     ctx.download_status.write().insert(
@@ -3615,14 +3850,13 @@ async fn handle_download_attachment(
             ctx.download_status
                 .write()
                 .insert(section, DownloadStatus::Error(e.to_string()));
-            return;
+            return None;
         }
     };
 
     // Stream wire → TE decode → Blob parts (no full-file Vec in Rust).
     let mut download = StreamingBlobDownload::new(encoding, filename, content_type);
     let mut total_hint = size_hint;
-    let mut failed = false;
 
     while let Some(item) = stream.next().await {
         match item {
@@ -3635,8 +3869,7 @@ async fn handle_download_attachment(
                     ctx.download_status
                         .write()
                         .insert(section.clone(), DownloadStatus::Error(e));
-                    failed = true;
-                    break;
+                    return None;
                 }
                 // Drop wire chunk after decode; only Blob parts retain decoded data.
                 drop(chunk);
@@ -3654,32 +3887,12 @@ async fn handle_download_attachment(
                 ctx.download_status
                     .write()
                     .insert(section.clone(), DownloadStatus::Error(e.to_string()));
-                failed = true;
-                break;
+                return None;
             }
         }
     }
 
-    if failed {
-        return;
-    }
-    if ctx.selection.read().focus() != Some(&message_id) {
-        return;
-    }
-
-    match download.finish_and_save() {
-        Ok(()) => {
-            ctx.download_status
-                .write()
-                .insert(section, DownloadStatus::Finished);
-        }
-        Err(e) => {
-            error!("save download failed: {}", e);
-            ctx.download_status
-                .write()
-                .insert(section, DownloadStatus::Error(e));
-        }
-    }
+    Some(download)
 }
 
 async fn handle_save_message_eml(

@@ -52,6 +52,52 @@ pub const EML_DOWNLOAD_KEY: &str = "EML";
 /// Max length of the filename stem (before `.eml`).
 const MAX_EML_STEM: usize = 120;
 
+/// Type/subtype of a Content-Type header, without parameters.
+pub fn primary_mime(content_type: &str) -> &str {
+    content_type.split(';').next().unwrap_or("").trim()
+}
+
+/// How an attachment can be shown inline (never HTML/SVG — XSS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewKind {
+    Image,
+    Pdf,
+}
+
+/// Safe image types and PDF. SVG/HTML are excluded even when labeled `image/*`.
+pub fn preview_kind(content_type: &str) -> Option<PreviewKind> {
+    let mime = primary_mime(content_type);
+    if mime.eq_ignore_ascii_case("image/png")
+        || mime.eq_ignore_ascii_case("image/jpeg")
+        || mime.eq_ignore_ascii_case("image/jpg")
+        || mime.eq_ignore_ascii_case("image/gif")
+        || mime.eq_ignore_ascii_case("image/webp")
+    {
+        Some(PreviewKind::Image)
+    } else if mime.eq_ignore_ascii_case("application/pdf") {
+        Some(PreviewKind::Pdf)
+    } else {
+        None
+    }
+}
+
+pub fn is_previewable_content_type(content_type: &str) -> bool {
+    preview_kind(content_type).is_some()
+}
+
+/// MIME type to stamp on the Blob (no parameters; `image/jpg` → `image/jpeg`).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+fn blob_mime_type(content_type: &str) -> &str {
+    let mime = primary_mime(content_type);
+    if mime.is_empty() {
+        return "application/octet-stream";
+    }
+    if mime.eq_ignore_ascii_case("image/jpg") {
+        return "image/jpeg";
+    }
+    mime
+}
+
 /// Suggested filename for an attachment part.
 pub fn attachment_filename(
     filename: &Option<String>,
@@ -68,7 +114,7 @@ pub fn attachment_filename(
             return d.clone();
         }
     }
-    let ext = match content_type.split(';').next().unwrap_or("").trim() {
+    let ext = match primary_mime(content_type).to_ascii_lowercase().as_str() {
         "application/pdf" => "pdf",
         "image/png" => "png",
         "image/jpeg" | "image/jpg" => "jpg",
@@ -125,6 +171,21 @@ fn sanitize_filename_stem(raw: &str) -> String {
         out.push(ch);
     }
     out.trim().trim_matches('.').trim().to_string()
+}
+
+/// Revoke a blob: object URL. Safe to call twice or with an empty string.
+pub fn revoke_object_url(url: &str) {
+    if url.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = web_sys::Url::revoke_object_url(url);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = url;
+    }
 }
 
 // Re-export for callers that check content-part caps.
@@ -238,15 +299,44 @@ impl StreamingBlobDownload {
         self.append_decoded(&decoded)
     }
 
-    /// Finish TE decode and trigger the browser download from assembled Blob parts.
-    pub fn finish_and_save(mut self) -> Result<(), String> {
+    /// Finish TE decode and assemble a Blob object URL (caller must revoke).
+    pub fn finish(mut self) -> Result<FinishedAttachment, String> {
         let decoder = self
             .decoder
             .take()
             .ok_or_else(|| "download already finished".to_string())?;
         let tail = decoder.finish().map_err(|e| e.to_string())?;
         self.append_decoded(&tail)?;
-        self.save()
+        self.into_finished()
+    }
+
+    /// Finish TE decode and trigger the browser download from assembled Blob parts.
+    pub fn finish_and_save(self) -> Result<(), String> {
+        let finished = self.finish()?;
+        let result = finished.trigger_save();
+        finished.revoke();
+        result
+    }
+
+    fn into_finished(self) -> Result<FinishedAttachment, String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let object_url = create_object_url(&self.parts, &self.content_type)?;
+            Ok(FinishedAttachment {
+                object_url,
+                filename: self.filename,
+                content_type: self.content_type,
+            })
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = self.parts;
+            Ok(FinishedAttachment {
+                object_url: String::new(),
+                filename: self.filename,
+                content_type: self.content_type,
+            })
+        }
     }
 
     fn append_decoded(&mut self, data: &[u8]) -> Result<(), String> {
@@ -275,51 +365,6 @@ impl StreamingBlobDownload {
         Ok(())
     }
 
-    fn save(self) -> Result<(), String> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen::JsCast;
-            use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
-
-            let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-            let document = window.document().ok_or_else(|| "no document".to_string())?;
-
-            let props = BlobPropertyBag::new();
-            let ct = if self.content_type.is_empty() {
-                "application/octet-stream"
-            } else {
-                self.content_type.as_str()
-            };
-            props.set_type(ct);
-
-            let blob = Blob::new_with_u8_array_sequence_and_options(&self.parts, &props)
-                .map_err(|e| format!("blob: {e:?}"))?;
-            let url = Url::create_object_url_with_blob(&blob)
-                .map_err(|e| format!("object url: {e:?}"))?;
-
-            let a = document
-                .create_element("a")
-                .map_err(|e| format!("create a: {e:?}"))?
-                .dyn_into::<HtmlAnchorElement>()
-                .map_err(|_| "not an anchor".to_string())?;
-            a.set_href(&url);
-            a.set_download(&self.filename);
-            let body = document.body().ok_or_else(|| "no body".to_string())?;
-            let _ = body.append_child(&a);
-            a.click();
-            let _ = body.remove_child(&a);
-            let _ = Url::revoke_object_url(&url);
-            Ok(())
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = self.filename;
-            let _ = self.content_type;
-            let _ = self.parts;
-            Ok(())
-        }
-    }
-
     /// Test helper: finish decode and return concatenated decoded bytes.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub fn finish_to_bytes(mut self) -> Result<Vec<u8>, String> {
@@ -331,6 +376,62 @@ impl StreamingBlobDownload {
         self.append_decoded(&tail)?;
         Ok(self.parts.into_iter().flatten().collect())
     }
+}
+
+/// Assembled attachment Blob, held as an object URL until [`Self::revoke`].
+pub struct FinishedAttachment {
+    pub object_url: String,
+    pub filename: String,
+    pub content_type: String,
+}
+
+impl FinishedAttachment {
+    /// Trigger a browser file save without revoking the object URL.
+    pub fn trigger_save(&self) -> Result<(), String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            use web_sys::HtmlAnchorElement;
+
+            if self.object_url.is_empty() {
+                return Err("no object url".into());
+            }
+            let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
+            let document = window.document().ok_or_else(|| "no document".to_string())?;
+            let a = document
+                .create_element("a")
+                .map_err(|e| format!("create a: {e:?}"))?
+                .dyn_into::<HtmlAnchorElement>()
+                .map_err(|_| "not an anchor".to_string())?;
+            a.set_href(&self.object_url);
+            a.set_download(&self.filename);
+            let body = document.body().ok_or_else(|| "no body".to_string())?;
+            let _ = body.append_child(&a);
+            a.click();
+            let _ = body.remove_child(&a);
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (&self.object_url, &self.filename, &self.content_type);
+            Ok(())
+        }
+    }
+
+    pub fn revoke(&self) {
+        revoke_object_url(&self.object_url);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn create_object_url(parts: &js_sys::Array, content_type: &str) -> Result<String, String> {
+    use web_sys::{Blob, BlobPropertyBag, Url};
+
+    let props = BlobPropertyBag::new();
+    props.set_type(blob_mime_type(content_type));
+    let blob = Blob::new_with_u8_array_sequence_and_options(parts, &props)
+        .map_err(|e| format!("blob: {e:?}"))?;
+    Url::create_object_url_with_blob(&blob).map_err(|e| format!("object url: {e:?}"))
 }
 
 #[cfg(test)]
@@ -442,5 +543,73 @@ mod tests {
         dl.wire_received = MAX_DOWNLOAD_BYTES as u64;
         let err = dl.push_wire_chunk(b"x").unwrap_err();
         assert!(err.contains("limit"));
+    }
+
+    #[test]
+    fn preview_allowlist_images_and_pdf() {
+        for mime in [
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/gif",
+            "image/webp",
+            "application/pdf",
+        ] {
+            assert!(
+                is_previewable_content_type(mime),
+                "expected previewable: {mime}"
+            );
+        }
+        assert_eq!(preview_kind("image/png"), Some(PreviewKind::Image));
+        assert_eq!(preview_kind("application/pdf"), Some(PreviewKind::Pdf));
+    }
+
+    #[test]
+    fn preview_allowlist_ignores_params_and_case() {
+        assert_eq!(
+            preview_kind("IMAGE/JPEG; name=\"Photo.JPG\""),
+            Some(PreviewKind::Image)
+        );
+        assert_eq!(
+            preview_kind("Application/PDF; name=report.pdf"),
+            Some(PreviewKind::Pdf)
+        );
+        assert!(is_previewable_content_type(
+            "image/webp; charset=binary; name=x.webp"
+        ));
+    }
+
+    #[test]
+    fn preview_allowlist_rejects_html_svg_and_other() {
+        for mime in [
+            "image/svg+xml",
+            "image/svg+xml; charset=utf-8",
+            "text/html",
+            "text/html; charset=utf-8",
+            "application/xhtml+xml",
+            "text/plain",
+            "application/octet-stream",
+            "image/bmp",
+            "image/tiff",
+            "application/javascript",
+            "",
+        ] {
+            assert!(
+                !is_previewable_content_type(mime),
+                "expected not previewable: {mime}"
+            );
+            assert_eq!(preview_kind(mime), None);
+        }
+    }
+
+    #[test]
+    fn blob_mime_normalizes_jpg_and_empty() {
+        assert_eq!(blob_mime_type("image/jpg"), "image/jpeg");
+        assert_eq!(blob_mime_type("IMAGE/JPG; name=a.jpg"), "image/jpeg");
+        assert_eq!(blob_mime_type(""), "application/octet-stream");
+        assert_eq!(
+            blob_mime_type("application/pdf; name=x.pdf"),
+            "application/pdf"
+        );
     }
 }

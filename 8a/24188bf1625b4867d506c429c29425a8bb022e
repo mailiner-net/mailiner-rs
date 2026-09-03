@@ -1,0 +1,19 @@
+crates/mailiner-app/src/formatter/mod.rs
+  s_18785d2ebb014c::t_2e750d2e0ea97a 65-68,70,361-368
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8a24188bf1625b4867d506c429c29425a8bb022e",
+  "prompts": {},
+  "sessions": {
+    "s_18785d2ebb014c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0697b-a12c-7f41-b7fc-543f6d7b3d68",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

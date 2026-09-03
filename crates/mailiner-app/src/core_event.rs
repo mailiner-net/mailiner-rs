@@ -1139,7 +1139,7 @@ async fn invalidate_mailbox_messages(
 }
 
 /// After a MOVE that finished on a different account/mailbox, keep folder totals
-/// in sync without mutating the now-current UI list.
+/// and unread badges in sync without mutating the now-current UI list.
 async fn persist_stale_move_counts(
     cache: &dyn MailCache,
     ctx: &mut AppContext,
@@ -1147,13 +1147,18 @@ async fn persist_stale_move_counts(
     source: &MailboxId,
     dest: &MailboxId,
     moved: usize,
+    unread: i32,
 ) {
-    if moved == 0 {
+    if moved == 0 && unread == 0 {
         return;
     }
     if selected_account_is(ctx, account_id) {
         bump_mailbox_total(ctx, source, -(moved as i32));
         bump_mailbox_total(ctx, dest, moved as i32);
+        if unread != 0 {
+            bump_mailbox_unread(ctx, source, -unread, true);
+            bump_mailbox_unread(ctx, dest, unread, false);
+        }
         persist_folder_tree(cache, ctx, account_id).await;
         return;
     }
@@ -1161,11 +1166,14 @@ async fn persist_stale_move_counts(
         return;
     };
     let moved = moved as u64;
+    let unread = unread.max(0) as u64;
     if let Some(src) = tree.counts.get_mut(source.as_str()) {
         src.total_messages = src.total_messages.saturating_sub(moved);
+        src.unread_messages = src.unread_messages.saturating_sub(unread);
     }
     if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
         dst.total_messages = dst.total_messages.saturating_add(moved);
+        dst.unread_messages = dst.unread_messages.saturating_add(unread);
     }
     if let Err(e) = cache.save_folders(account_id, &tree).await {
         warn!("mail cache adjust folder totals failed: {e}");
@@ -1905,6 +1913,7 @@ async fn handle_move_messages(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let dest_id = FolderId::new(dest_mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
+    let unread_n = unread_among(ctx, &message_ids);
     match connector
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
@@ -1921,6 +1930,7 @@ async fn handle_move_messages(
                     &mailbox_id,
                     &dest_mailbox_id,
                     moved,
+                    unread_n,
                 )
                 .await;
                 invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;

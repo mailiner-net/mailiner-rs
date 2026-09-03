@@ -205,6 +205,11 @@ fn AttachmentItem(
         let map = ctx.download_status.read();
         map.get(&section).cloned().unwrap_or(DownloadStatus::Idle)
     };
+    let any_busy = ctx
+        .download_status
+        .read()
+        .values()
+        .any(|s| matches!(s, DownloadStatus::InProgress { .. }));
 
     let title = if let Some(desc) = &row.description {
         if desc != &row.filename {
@@ -221,7 +226,7 @@ fn AttachmentItem(
         row.content_type
     );
 
-    let busy = status.is_busy();
+
     let progress_pct = match &status {
         DownloadStatus::InProgress {
             received,
@@ -242,6 +247,7 @@ fn AttachmentItem(
     let section_for_preview = row.section.clone();
     let filename_for_preview = row.filename.clone();
     let content_type_for_preview = row.content_type.clone();
+    let account_for_preview = account_id.clone();
     let mailbox_for_preview = mailbox_id.clone();
     let message_for_preview = message_id.clone();
     let encoding = row.encoding;
@@ -266,9 +272,10 @@ fn AttachmentItem(
                     if can_preview {
                         button {
                             class: "attachment-preview-btn",
-                            disabled: busy,
+                            disabled: any_busy,
                             onclick: move |_| {
                                 let _ = core_tx.send(CoreEvent::PreviewAttachment {
+                                    account_id: account_for_preview.clone(),
                                     mailbox_id: mailbox_for_preview.clone(),
                                     message_id: message_for_preview.clone(),
                                     section: section_for_preview.clone(),
@@ -287,7 +294,7 @@ fn AttachmentItem(
                     }
                     button {
                         class: "attachment-download-btn",
-                        disabled: busy,
+                        disabled: any_busy,
                         onclick: move |_| {
                             let _ = core_tx.send(attachment_download_event(
                                 &account_id,

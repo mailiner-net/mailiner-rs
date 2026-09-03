@@ -185,6 +185,19 @@ impl AppContext {
         self.selection.read().ids_vec()
     }
 
+    /// Show a preview, revoking the previously open dialog URL if it differs.
+    pub fn open_attachment_preview(&self, preview: AttachmentPreview) {
+        let mut preview_sig = self.attachment_preview;
+        if let Some(prev) = preview_sig.peek().clone() {
+            if prev.section != preview.section || prev.object_url != preview.object_url {
+                let mut blobs = self.attachment_blobs;
+                blobs.write().remove(&prev.section);
+                revoke_object_url(&prev.object_url);
+            }
+        }
+        preview_sig.set(Some(preview));
+    }
+
     /// Hide the preview dialog and revoke that attachment's object URL.
     pub fn close_attachment_preview(&self) {
         let mut preview_sig = self.attachment_preview;

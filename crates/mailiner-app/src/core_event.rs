@@ -188,6 +188,7 @@ pub enum CoreEvent {
     },
     /// Stream a previewable attachment and open an inline preview dialog.
     PreviewAttachment {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_id: MessageId,
         section: String,
@@ -628,6 +629,7 @@ pub async fn core_loop(
                 handle_fetch_compose_attachments(&manager, &mut ctx, draft_id, account_id).await;
             }
             CoreEvent::PreviewAttachment {
+                account_id,
                 mailbox_id,
                 message_id,
                 section,
@@ -639,6 +641,7 @@ pub async fn core_loop(
                 handle_preview_attachment(
                     &manager,
                     &mut ctx,
+                    account_id,
                     mailbox_id,
                     message_id,
                     section,
@@ -3605,8 +3608,7 @@ async fn handle_download_attachment(
     encoding: TransferEncoding,
     size_hint: Option<u64>,
 ) {
-    // Ignore if user navigated away or switched accounts (queued Save all).
-    if ctx.selection.read().focus() != Some(&message_id) || !selected_account_is(ctx, &account_id) {
+    if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
     if let Some(finished) = cached_attachment_blob(ctx, &section, &filename, &content_type) {
@@ -3629,7 +3631,8 @@ async fn handle_download_attachment(
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        mailbox_id,
+        account_id.clone(),
+        mailbox_id.clone(),
         message_id.clone(),
         section.clone(),
         filename,
@@ -3641,7 +3644,7 @@ async fn handle_download_attachment(
     else {
         return;
     };
-    if ctx.selection.read().focus() != Some(&message_id) {
+    if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
 
@@ -3676,6 +3679,7 @@ async fn handle_download_attachment(
 async fn handle_preview_attachment(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
     section: String,
@@ -3684,6 +3688,9 @@ async fn handle_preview_attachment(
     encoding: TransferEncoding,
     size_hint: Option<u64>,
 ) {
+    if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
+        return;
+    }
     if !is_previewable_content_type(&content_type) {
         ctx.download_status.write().insert(
             section,
@@ -3699,19 +3706,20 @@ async fn handle_preview_attachment(
         .cloned()
         .filter(|url| !url.is_empty())
     {
-        ctx.attachment_preview.set(Some(AttachmentPreview {
+        ctx.open_attachment_preview(AttachmentPreview {
             section,
             filename,
             content_type,
             object_url: url,
-        }));
+        });
         return;
     }
 
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        mailbox_id,
+        account_id.clone(),
+        mailbox_id.clone(),
         message_id.clone(),
         section.clone(),
         filename.clone(),
@@ -3723,7 +3731,7 @@ async fn handle_preview_attachment(
     else {
         return;
     };
-    if ctx.selection.read().focus() != Some(&message_id) {
+    if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
 
@@ -3738,12 +3746,12 @@ async fn handle_preview_attachment(
                 );
                 return;
             }
-            ctx.attachment_preview.set(Some(AttachmentPreview {
+            ctx.open_attachment_preview(AttachmentPreview {
                 section: section.clone(),
                 filename,
                 content_type,
                 object_url: url,
-            }));
+            });
             ctx.download_status
                 .write()
                 .insert(section, DownloadStatus::Finished);
@@ -3785,9 +3793,21 @@ fn remember_or_revoke_blob(ctx: &mut AppContext, section: &str, finished: Finish
 }
 
 #[allow(clippy::too_many_arguments)]
+fn attachment_request_still_current(
+    ctx: &AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    message_id: &MessageId,
+) -> bool {
+    selected_account_is(ctx, account_id)
+        && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
+        && ctx.selection.read().focus() == Some(message_id)
+}
+
 async fn stream_attachment_blob(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
     section: String,
@@ -3796,8 +3816,8 @@ async fn stream_attachment_blob(
     encoding: TransferEncoding,
     size_hint: Option<u64>,
 ) -> Option<StreamingBlobDownload> {
-    // Ignore if user navigated away.
-    if ctx.selection.read().focus() != Some(&message_id) {
+    // Ignore if user navigated away or switched account.
+    if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return None;
     }
     if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
@@ -3811,12 +3831,6 @@ async fn stream_attachment_blob(
         return None;
     }
 
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.download_status
-            .write()
-            .insert(section, DownloadStatus::Error("No account selected".into()));
-        return None;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.download_status
             .write()

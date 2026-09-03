@@ -668,5 +668,29 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let d = build_draft(ComposeIntent::New, &id, None, None, Some("Jane Doe")).unwrap();
         assert_eq!(d.plain_body, "\n-- \nJane Doe");
+        assert_eq!(d.mode, BodyMode::Plain);
+        assert!(d.html_body.is_empty());
+    }
+
+    #[test]
+    fn html_reply_with_signature_is_plain_authoritative() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_html_only("<p>Hi</p>");
+        let d = build_draft(
+            ComposeIntent::Reply,
+            &id,
+            Some(&env),
+            Some(&loaded),
+            Some("Jane Doe"),
+        )
+        .unwrap();
+        assert_eq!(d.mode, BodyMode::Plain);
+        assert!(d.html_body.is_empty());
+        assert!(
+            d.plain_body.ends_with("\n-- \nJane Doe"),
+            "{}",
+            d.plain_body
+        );
     }
 }

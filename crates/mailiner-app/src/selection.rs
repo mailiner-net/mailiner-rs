@@ -160,6 +160,9 @@ impl MessageSelection {
         } else {
             None
         };
+        if keep_focus.is_none() {
+            self.anchor_index = None;
+        }
         self.ids = set;
         self.focus = keep_focus.or_else(|| ordered.first().cloned());
         self.focus_at_index = keep_focus_at;
@@ -268,7 +271,7 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(s.focus(), Some(&id("a")));
         assert_eq!(s.focus_at_index(), None);
-        assert_eq!(s.anchor_index(), Some(9));
+        assert_eq!(s.anchor_index(), None);
     }
 
     #[test]
@@ -292,6 +295,7 @@ mod tests {
         assert!(!s.contains(&id("a")));
         assert_eq!(s.focus(), Some(&id("b")));
         assert_eq!(s.focus_at_index(), None);
+        assert_eq!(s.anchor_index(), None);
         assert!(!should_auto_mark_read(true, s.is_multi()));
     }
 
@@ -316,6 +320,7 @@ mod tests {
         assert!(!s.contains(&id("b")));
         assert_eq!(s.focus(), Some(&id("c")));
         assert_eq!(s.focus_at_index(), None);
+        assert_eq!(s.anchor_index(), None);
         assert!(!s.is_multi());
     }
 
@@ -338,5 +343,6 @@ mod tests {
         assert!(s.contains(&id("b")));
         assert!(!s.contains(&id("gone")));
         assert_eq!(s.focus(), Some(&id("a")));
+        assert_eq!(s.anchor_index(), None);
     }
 }

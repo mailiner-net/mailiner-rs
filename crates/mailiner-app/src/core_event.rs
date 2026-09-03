@@ -1421,6 +1421,8 @@ async fn handle_select_known(
     }
 
     let Some(focus) = ctx.selection.read().focus().cloned() else {
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
         return;
     };
     // Multi-select must not consume unread (`should_auto_mark_read`).

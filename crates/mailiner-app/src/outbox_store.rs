@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use mailiner_core::ids::AccountId;
+use mailiner_core::ids::{AccountId, MessageId};
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -66,6 +66,9 @@ pub struct OutboxItem {
     /// Formatted `Bcc` value inserted only on the Sent-folder copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bcc_header: Option<String>,
+    /// Original message to mark `\Answered` after a successful Reply / Reply All.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_source: Option<MessageId>,
     pub message_id: String,
     pub subject: String,
     pub to_preview: String,
@@ -104,6 +107,7 @@ impl OutboxItem {
             rcpt_to: request.rcpt_to.clone(),
             rfc822_b64: base64::engine::general_purpose::STANDARD.encode(&request.rfc822),
             bcc_header: None,
+            reply_source: None,
             message_id: request.message_id.clone(),
             subject,
             to_preview,
@@ -131,6 +135,11 @@ impl OutboxItem {
         if !bcc.is_empty() {
             self.bcc_header = Some(bcc);
         }
+    }
+
+    /// Remember the source message so a successful Reply can STORE `\Answered`.
+    pub fn set_reply_source(&mut self, source: MessageId) {
+        self.reply_source = Some(source);
     }
 
     /// Bytes to APPEND to Sent: SMTP body plus `Bcc:` when we stored one.
@@ -462,6 +471,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reply_source_round_trip() {
+        let store = BrowserOutboxStore::<MemoryKvStore>::open_memory();
+        let mut item = OutboxItem::from_request(
+            AccountId::new("a"),
+            &req(8),
+            "Re: Hi".into(),
+            "you@example.com".into(),
+        )
+        .unwrap();
+        item.set_reply_source(MessageId::new(mailiner_core::FolderId::new("INBOX"), "42"));
+        store.upsert(&item).await.unwrap();
+        let back = store.get(&item.id).await.unwrap().unwrap();
+        let source = back.reply_source.expect("reply source");
+        assert_eq!(source.folder_id().as_str(), "INBOX");
+        assert_eq!(source.as_uid(), "42");
+    }
+
     #[test]
     fn insert_bcc_before_body() {
         let raw = b"From: me@x.com\r\nTo: you@x.com\r\n\r\nHello";
@@ -498,6 +525,7 @@ mod tests {
         let blob = OutboxBlob::decode(&json).expect("legacy blob");
         assert_eq!(blob.items.len(), 1);
         assert!(blob.items[0].bcc_header.is_none());
+        assert!(blob.items[0].reply_source.is_none());
         assert_eq!(blob.items[0].rfc822().unwrap(), b"xx");
     }
 

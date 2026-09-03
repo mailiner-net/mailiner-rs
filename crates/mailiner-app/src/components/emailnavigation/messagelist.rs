@@ -91,6 +91,15 @@ pub fn MessageList() -> Element {
                         }
                         div {
                             class: "message-list-item-meta",
+                            if message.is_answered {
+                                span {
+                                    class: "message-answered-indicator",
+                                    role: "img",
+                                    aria_label: "Replied",
+                                    title: "Replied",
+                                    Icon { size: 14, icon: IconKind::ArrowUturnLeft }
+                                }
+                            }
                             if message.is_starred {
                                 span {
                                     class: "message-star-indicator",

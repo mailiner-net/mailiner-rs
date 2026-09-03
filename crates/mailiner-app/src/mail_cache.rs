@@ -738,6 +738,7 @@ mod tests {
             references: vec![],
             date: ts(),
             is_read: false,
+            is_answered: false,
             is_starred: false,
             is_flagged: false,
             is_draft: false,

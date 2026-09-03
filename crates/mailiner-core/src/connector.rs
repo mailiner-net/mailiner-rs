@@ -145,6 +145,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             references: Vec::new(),
             date: Utc::now(),
             is_read: n.is_multiple_of(3),
+            is_answered: n.is_multiple_of(7),
             is_starred: n.is_multiple_of(5),
             is_flagged: false,
             is_draft: false,

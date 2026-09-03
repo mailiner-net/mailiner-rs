@@ -70,6 +70,7 @@ pub fn open_new_message(ctx: &mut AppContext) {
         ComposeSession {
             title: "New message".into(),
             draft,
+            reply_source: None,
         },
     );
 }
@@ -98,11 +99,14 @@ pub fn open_reply_or_forward(
                 ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",
                 ComposeIntent::New => "New message",
             };
+            let reply_source = matches!(intent, ComposeIntent::Reply | ComposeIntent::ReplyAll)
+                .then(|| envelope.id.clone());
             open_compose(
                 ctx,
                 ComposeSession {
                     title: title.into(),
                     draft,
+                    reply_source,
                 },
             );
         }
@@ -136,12 +140,10 @@ fn submit_compose(
         return;
     };
     let identity = FromIdentity::new(account.name.clone(), account.email.clone());
-    let mut draft = ctx
-        .compose_draft
-        .read()
-        .as_ref()
-        .map(|s| s.draft.clone())
-        .unwrap_or_else(|| DraftDocument::new_empty(&identity));
+    let (mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
+        Some(session) => (session.draft.clone(), session.reply_source.clone()),
+        None => (DraftDocument::new_empty(&identity), None),
+    };
     draft.mode = BodyMode::Plain;
     draft.html_body.clear();
     draft.plain_body = body();
@@ -169,6 +171,7 @@ fn submit_compose(
                 display,
                 draft_id,
                 bcc_header: prepared.bcc_header,
+                reply_source,
             });
         }
         Err(PrepareSubmitError::Validation(errs)) => {

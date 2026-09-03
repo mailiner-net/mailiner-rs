@@ -218,6 +218,7 @@ impl fmt::Display for EmailAddress {
 #[serde(rename_all = "snake_case")]
 pub enum EnvelopeFlag {
     Read,
+    Answered,
     Flagged,
     Draft,
     Deleted,
@@ -248,6 +249,9 @@ pub struct Envelope {
     pub references: Vec<String>,
     pub date: DateTime<Utc>,
     pub is_read: bool,
+    /// IMAP `\Answered`. Default false for older cached envelopes.
+    #[serde(default)]
+    pub is_answered: bool,
     pub is_starred: bool,
     pub is_flagged: bool,
     pub is_draft: bool,
@@ -396,7 +400,7 @@ pub struct PartChunk {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmailAddr, EmailAddress, MessageSort};
+    use super::{EmailAddr, EmailAddress, Envelope, MessageSort};
 
     #[test]
     fn message_sort_key_roundtrip() {
@@ -409,6 +413,31 @@ mod tests {
         assert!(!MessageSort::Arrival.needs_sort_capability());
         assert_eq!(MessageSort::from_key("date"), Some(MessageSort::Arrival));
         assert!(!MessageSort::Unread.needs_sort_capability());
+    }
+
+    #[test]
+    fn envelope_answered_defaults_when_missing() {
+        let json = r#"{
+            "id":{"folder_id":"INBOX","uid":"1"},
+            "account_id":"a",
+            "folder_id":"INBOX",
+            "subject":null,
+            "from":null,
+            "to":null,
+            "cc":null,
+            "bcc":null,
+            "date":"2026-01-01T00:00:00Z",
+            "is_read":false,
+            "is_starred":false,
+            "is_flagged":false,
+            "is_draft":false,
+            "is_deleted":false,
+            "has_attachments":false,
+            "created_at":"2026-01-01T00:00:00Z",
+            "updated_at":"2026-01-01T00:00:00Z"
+        }"#;
+        let env: Envelope = serde_json::from_str(json).expect("legacy envelope");
+        assert!(!env.is_answered);
     }
 
     #[test]

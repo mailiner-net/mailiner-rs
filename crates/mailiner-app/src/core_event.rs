@@ -148,6 +148,8 @@ pub enum CoreEvent {
         draft_id: String,
         /// Formatted Bcc for the Sent copy. `None` when there is no Bcc.
         bcc_header: Option<String>,
+        /// Source message to mark `\Answered` after a successful Reply / Reply All.
+        reply_source: Option<MessageId>,
     },
     TestSmtpConnection {
         request_id: AccountId,
@@ -168,6 +170,11 @@ pub enum CoreEvent {
     ArchiveSent {
         account_id: AccountId,
         rfc822: Vec<u8>,
+    },
+    /// Best-effort IMAP STORE `\Answered` on the source after a successful reply.
+    MarkAnswered {
+        account_id: AccountId,
+        message_id: MessageId,
     },
 }
 
@@ -377,6 +384,7 @@ pub async fn core_loop(
                 display,
                 draft_id,
                 bcc_header,
+                reply_source,
             } => {
                 handle_send_message(
                     &mut manager,
@@ -390,6 +398,7 @@ pub async fn core_loop(
                     display,
                     draft_id,
                     bcc_header,
+                    reply_source,
                 )
                 .await;
             }
@@ -457,6 +466,12 @@ pub async fn core_loop(
             }
             CoreEvent::ArchiveSent { account_id, rfc822 } => {
                 handle_archive_sent(&manager, &mut ctx, account_id, rfc822).await;
+            }
+            CoreEvent::MarkAnswered {
+                account_id,
+                message_id,
+            } => {
+                handle_mark_answered(&manager, &mut ctx, account_id, message_id).await;
             }
         }
     }
@@ -2329,6 +2344,7 @@ async fn handle_send_message(
     display: OutboxDisplay,
     draft_id: String,
     bcc_header: Option<String>,
+    reply_source: Option<MessageId>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2367,6 +2383,9 @@ async fn handle_send_message(
     };
     if let Some(bcc) = bcc_header {
         item.set_bcc_header(bcc);
+    }
+    if let Some(source) = reply_source {
+        item.set_reply_source(source);
     }
     if let Err(e) = outbox.upsert(&item).await {
         ctx.send_status.set(Some(SendState::Failed {
@@ -2575,8 +2594,20 @@ async fn handle_smtp_finished(
             result: Ok(_),
         } = outcome
         {
+            let mark = match outbox.get(&id).await {
+                Ok(Some(item)) => item
+                    .reply_source
+                    .map(|message_id| (item.account_id, message_id)),
+                _ => None,
+            };
             let _ = outbox.delete(&id).await;
             refresh_outbox_signal(outbox, ctx).await;
+            if let Some((account_id, message_id)) = mark {
+                let _ = smtp_tx.unbounded_send(CoreEvent::MarkAnswered {
+                    account_id,
+                    message_id,
+                });
+            }
         }
         return;
     };
@@ -2589,13 +2620,13 @@ async fn handle_smtp_finished(
             result: Ok(receipt),
             ..
         } => {
-            let rfc822 = if let Some(id) = &flight.outbox_id {
+            let (rfc822, reply_source) = if let Some(id) = &flight.outbox_id {
                 match outbox.get(id).await {
-                    Ok(Some(item)) => item.rfc822_for_mailbox().ok(),
-                    _ => None,
+                    Ok(Some(item)) => (item.rfc822_for_mailbox().ok(), item.reply_source),
+                    _ => (None, None),
                 }
             } else {
-                None
+                (None, None)
             };
             if let Some(id) = flight.outbox_id {
                 let _ = outbox.delete(&id).await;
@@ -2607,8 +2638,14 @@ async fn handle_smtp_finished(
             let _ = receipt;
             if let Some(rfc822) = rfc822 {
                 let _ = smtp_tx.unbounded_send(CoreEvent::ArchiveSent {
-                    account_id: flight.account_id,
+                    account_id: flight.account_id.clone(),
                     rfc822,
+                });
+            }
+            if let Some(message_id) = reply_source {
+                let _ = smtp_tx.unbounded_send(CoreEvent::MarkAnswered {
+                    account_id: flight.account_id,
+                    message_id,
                 });
             }
         }
@@ -2696,6 +2733,53 @@ async fn handle_archive_sent(
         .is_some_and(|id| id.to_string() == sent);
     if viewing_account && viewing_sent {
         handle_select_mailbox(manager, ctx, MailboxId::from(sent), false).await;
+    }
+}
+
+async fn handle_mark_answered(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    message_id: MessageId,
+) {
+    let Some(connector) = manager.get(&account_id) else {
+        warn!("MarkAnswered: no IMAP connector for {account_id}");
+        return;
+    };
+    let folder_id = message_id.folder_id().clone();
+    if let Err(e) = connector
+        .update_envelope_flags(
+            &folder_id,
+            std::slice::from_ref(&message_id),
+            &[(EnvelopeFlag::Answered, true)],
+        )
+        .await
+    {
+        warn!("MarkAnswered: STORE \\Answered failed for {message_id}: {e}");
+        return;
+    }
+    info!("MarkAnswered: set \\Answered on {message_id}");
+    let viewing_source = ctx.selected_account.read().as_ref() == Some(&account_id)
+        && ctx
+            .selected_mailbox
+            .read()
+            .as_ref()
+            .is_some_and(|id| id.to_string() == folder_id.as_str());
+    if viewing_source {
+        apply_answered_flag(ctx, &message_id);
+        persist_selected_messages(manager.cache(), ctx, &account_id).await;
+    }
+}
+
+fn apply_answered_flag(ctx: &mut AppContext, id: &MessageId) {
+    for msg in ctx.messages.write().iter_mut() {
+        if msg.id == *id && !msg.is_answered {
+            let mut next = (**msg).clone();
+            next.is_answered = true;
+            next.envelope.is_answered = true;
+            *msg = Arc::new(next);
+            break;
+        }
     }
 }
 

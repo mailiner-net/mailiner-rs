@@ -1,6 +1,7 @@
 //! Composer send / Test SMTP UI state (no secrets).
 
 use mailiner_composer::DraftDocument;
+use mailiner_core::MessageId;
 use mailiner_core::submit::SendErrorKind;
 
 use crate::account::AccountId;
@@ -12,6 +13,8 @@ pub struct ComposeSession {
     pub title: String,
     /// Prefill document.
     pub draft: DraftDocument,
+    /// Source message to mark `\Answered` after a successful Reply / Reply All.
+    pub reply_source: Option<MessageId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

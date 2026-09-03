@@ -20,6 +20,7 @@ pub struct Message {
     pub date: DateTime<Utc>,
     pub has_attachments: bool,
     pub is_read: bool,
+    pub is_answered: bool,
     pub is_starred: bool,
     pub is_flagged: bool,
     /// Original IMAP envelope for reply/forward prefill.
@@ -148,6 +149,7 @@ mod tests {
             references: vec![],
             date: now,
             is_read: false,
+            is_answered: false,
             is_starred: false,
             is_flagged: false,
             is_draft: false,
@@ -185,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn from_envelope_keeps_star_and_flag() {
+    fn from_envelope_keeps_answered_star_and_flag() {
         use mailiner_core::{AccountId, FolderId};
 
         let now = DateTime::from_timestamp(0, 0).unwrap();
@@ -204,6 +206,7 @@ mod tests {
             references: vec![],
             date: now,
             is_read: false,
+            is_answered: true,
             is_starred: true,
             is_flagged: true,
             is_draft: false,
@@ -214,6 +217,7 @@ mod tests {
             updated_at: now,
         };
         let msg = Message::from(envelope);
+        assert!(msg.is_answered);
         assert!(msg.is_starred);
         assert!(msg.is_flagged);
     }
@@ -273,6 +277,7 @@ impl From<Envelope> for Message {
             date: envelope.date,
             has_attachments: envelope.has_attachments,
             is_read: envelope.is_read,
+            is_answered: envelope.is_answered,
             is_starred: envelope.is_starred,
             is_flagged: envelope.is_flagged,
             envelope,

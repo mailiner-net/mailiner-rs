@@ -51,13 +51,14 @@ impl MailboxNode {
     }
 }
 
-/// Upgrade pre-Archive cache rows whose leaf name is an archive folder.
+/// Upgrade pre-Archive / pre-Junk cache rows whose leaf name is a known special folder.
 fn inferred_mailbox_role(name: &str, role: MailboxRole) -> MailboxRole {
     if role != MailboxRole::Other {
         return role;
     }
     match name.to_ascii_lowercase().as_str() {
         "archive" | "archives" | "all mail" => MailboxRole::Archive,
+        "junk" | "spam" | "junk e-mail" | "junk email" => MailboxRole::Junk,
         _ => role,
     }
 }
@@ -79,7 +80,7 @@ impl From<Folder> for MailboxNode {
     }
 }
 
-/// Inbox, Archive, Drafts, Sent, Outbox, Trash, then remaining names A–Z.
+/// Inbox, Archive, Drafts, Sent, Outbox, Trash, Junk, then remaining names A–Z.
 pub fn build_mailbox_tree(
     folders: Vec<Folder>,
 ) -> (Vec<MailboxId>, HashMap<MailboxId, MailboxNode>) {
@@ -228,6 +229,40 @@ pub fn find_archive_mailbox(nodes: &HashMap<MailboxId, MailboxNode>) -> Option<M
     }
     first_sorted(&mut exact)
         .or_else(|| first_sorted(&mut all_mail))
+        .or_else(|| first_sorted(&mut other))
+}
+
+/// Junk target: Junk, then Spam, then Junk E-mail, then any other Junk-role folder.
+///
+/// Also matches pre-Junk cache rows still tagged `Other`. Ties use mailbox id order.
+pub fn find_junk_mailbox(nodes: &HashMap<MailboxId, MailboxNode>) -> Option<MailboxId> {
+    let mut junk = Vec::new();
+    let mut spam = Vec::new();
+    let mut junk_email = Vec::new();
+    let mut other = Vec::new();
+    for (id, node) in nodes {
+        if !node.selectable {
+            continue;
+        }
+        let leaf = node.name.to_ascii_lowercase();
+        let junk_role = node.role == MailboxRole::Junk;
+        match leaf.as_str() {
+            "junk" if junk_role || node.role == MailboxRole::Other => junk.push(id.clone()),
+            "spam" if junk_role || node.role == MailboxRole::Other => spam.push(id.clone()),
+            "junk e-mail" | "junk email" if junk_role || node.role == MailboxRole::Other => {
+                junk_email.push(id.clone());
+            }
+            _ if junk_role => other.push(id.clone()),
+            _ => {}
+        }
+    }
+    fn first_sorted(ids: &mut [MailboxId]) -> Option<MailboxId> {
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        ids.first().cloned()
+    }
+    first_sorted(&mut junk)
+        .or_else(|| first_sorted(&mut spam))
+        .or_else(|| first_sorted(&mut junk_email))
         .or_else(|| first_sorted(&mut other))
 }
 
@@ -474,14 +509,18 @@ mod tests {
         assert_eq!(node.title(), "Inbox");
         let archive = folder("All Mail", "All Mail", None, MailboxRole::Archive);
         assert_eq!(MailboxNode::from(archive).title(), "Archive");
-        let junk = folder("Junk", "Junk", None, MailboxRole::Other);
+        let junk_other = folder("Junk", "Junk", None, MailboxRole::Other);
+        assert_eq!(MailboxNode::from(junk_other).title(), "Junk");
+        let junk = folder("Spam", "Spam", None, MailboxRole::Junk);
         assert_eq!(MailboxNode::from(junk).title(), "Junk");
+        let lists = folder("Lists", "Lists", None, MailboxRole::Other);
+        assert_eq!(MailboxNode::from(lists).title(), "Lists");
     }
 
     #[test]
     fn roots_sort_special_first() {
         let (roots, nodes) = build_mailbox_tree(vec![
-            folder("Junk", "Junk", None, MailboxRole::Other),
+            folder("Junk", "Junk", None, MailboxRole::Junk),
             folder("Sent", "Sent", None, MailboxRole::Sent),
             folder("INBOX", "INBOX", None, MailboxRole::Inbox),
             folder("Drafts", "Drafts", None, MailboxRole::Drafts),
@@ -632,6 +671,85 @@ mod tests {
         assert_eq!(
             find_archive_mailbox(&nodes).unwrap().to_string(),
             "[Gmail]/All Mail"
+        );
+    }
+
+    #[test]
+    fn find_junk_role() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Junk", "Junk", None, MailboxRole::Junk),
+        ]);
+        let junk = find_mailbox_with_role(&nodes, MailboxRole::Junk).unwrap();
+        assert_eq!(junk.to_string(), "Junk");
+        assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Junk");
+        let hidden = build_mailbox_tree(vec![folder_sel(
+            "virtual-junk",
+            "Junk",
+            None,
+            MailboxRole::Junk,
+            false,
+        )])
+        .1;
+        assert!(find_mailbox_with_role(&hidden, MailboxRole::Junk).is_none());
+        assert!(find_junk_mailbox(&hidden).is_none());
+    }
+
+    #[test]
+    fn find_junk_prefers_named_junk_over_spam() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("[Gmail]/Spam", "Spam", Some("[Gmail]"), MailboxRole::Junk),
+            folder("Junk", "Junk", None, MailboxRole::Junk),
+        ]);
+        assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Junk");
+    }
+
+    #[test]
+    fn find_junk_accepts_other_role_named_junk() {
+        let mut nodes = HashMap::new();
+        let id = MailboxId::from("Junk".to_string());
+        nodes.insert(
+            id.clone(),
+            MailboxNode {
+                id: id.clone(),
+                name: "Junk".into(),
+                parent: None,
+                children: vec![],
+                unread_count: 0,
+                total_count: 0,
+                has_new: false,
+                role: MailboxRole::Other,
+                selectable: true,
+            },
+        );
+        assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Junk");
+    }
+
+    #[test]
+    fn find_junk_reads_pre_junk_cache_names() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Spam", "Spam", None, MailboxRole::Other),
+        ]);
+        assert_eq!(
+            nodes
+                .get(&MailboxId::from("Spam".to_string()))
+                .unwrap()
+                .role,
+            MailboxRole::Junk
+        );
+        assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Spam");
+    }
+
+    #[test]
+    fn find_junk_prefers_spam_over_junk_email() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("Junk E-mail", "Junk E-mail", None, MailboxRole::Junk),
+            folder("[Gmail]/Spam", "Spam", Some("[Gmail]"), MailboxRole::Junk),
+        ]);
+        assert_eq!(
+            find_junk_mailbox(&nodes).unwrap().to_string(),
+            "[Gmail]/Spam"
         );
     }
 

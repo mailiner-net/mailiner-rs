@@ -532,6 +532,10 @@ fn MessageHeader(
     let show_archive = archive_id
         .as_ref()
         .is_some_and(|id| mailbox_id.as_ref() != Some(id));
+    let junk_id = crate::mailbox::find_junk_mailbox(&ctx.mailbox_nodes.read());
+    let show_junk = junk_id
+        .as_ref()
+        .is_some_and(|id| mailbox_id.as_ref() != Some(id));
     let move_targets = {
         let nodes = ctx.mailbox_nodes.read();
         let roots = ctx.mailbox_roots.read();
@@ -878,6 +882,34 @@ fn MessageHeader(
                                 }
                             },
                             "Archive"
+                        }
+                    }
+                    if show_junk {
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            title: "Move to Junk",
+                            onclick: {
+                                let account_id = account_id.clone();
+                                let mailbox_id = mailbox_id.clone();
+                                let ids = selected_ids.clone();
+                                move |_| {
+                                    let Some(account_id) = account_id.clone() else {
+                                        return;
+                                    };
+                                    let Some(mailbox_id) = mailbox_id.clone() else {
+                                        return;
+                                    };
+                                    if ids.is_empty() {
+                                        return;
+                                    }
+                                    let _ = core_tx.send(CoreEvent::MoveToJunk {
+                                        account_id,
+                                        mailbox_id,
+                                        message_ids: ids.clone(),
+                                    });
+                                }
+                            },
+                            "Junk"
                         }
                     }
                     button {

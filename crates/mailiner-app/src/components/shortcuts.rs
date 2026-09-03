@@ -114,6 +114,20 @@ fn run_shortcut(
                 message_ids,
             });
         }
+        ShortcutId::MoveToJunk => {
+            let Some(account_id) = ctx.selected_account.peek().clone() else {
+                ctx.show_toast(ToastAction::error("No account selected"));
+                return;
+            };
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::MoveToJunk {
+                account_id,
+                mailbox_id,
+                message_ids,
+            });
+        }
         ShortcutId::NextMessage => {
             let _ = core.send(CoreEvent::SelectAdjacent {
                 delta: 1,

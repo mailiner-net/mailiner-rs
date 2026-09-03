@@ -121,6 +121,12 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Move to the Junk special-use folder when one exists.
+    MoveToJunk {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Permanently delete (IMAP on toast dismiss unless undone).
     DeleteMessages {
         mailbox_id: MailboxId,
@@ -487,6 +493,13 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_move_to_trash(&manager, &mut ctx, mailbox_id, message_ids).await;
+            }
+            CoreEvent::MoveToJunk {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_move_to_junk(&manager, &mut ctx, account_id, mailbox_id, message_ids).await;
             }
             CoreEvent::DeleteMessages {
                 mailbox_id,
@@ -2728,6 +2741,38 @@ async fn handle_archive_messages(
         mailbox_id,
         message_ids,
         archive_id,
+    )
+    .await;
+}
+
+async fn handle_move_to_junk(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let junk_id = crate::mailbox::find_junk_mailbox(&ctx.mailbox_nodes.read());
+    let Some(junk_id) = junk_id else {
+        ctx.show_toast(ToastAction::error("No Junk folder found on this account"));
+        return;
+    };
+    handle_move_messages(
+        manager,
+        ctx,
+        account_id,
+        mailbox_id,
+        message_ids,
+        junk_id,
     )
     .await;
 }

@@ -52,7 +52,7 @@ Do not re-open these.
 
 ### 4. Flags are stringly typed; star vs flag is unused
 
-- [x] Done. `EnvelopeFlag` is the trait argument; IMAP maps it to atoms. `Starred` (`\Starred`) and `Flagged` (`\Flagged`) stay distinct; the app still does not surface either.
+- [x] Done. `EnvelopeFlag` is the trait argument; IMAP maps it to atoms. `Starred` (`\Starred`) and `Flagged` (`\Flagged`) stay distinct; the message list shows both.
 
 ### 5. Unused `EmailConnector` methods
 

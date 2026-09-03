@@ -1,16 +1,57 @@
 # SMTP Sending in Mailiner via async-smtp
 
+> **Historical.** This document planned SMTP submission via `async-smtp`.
+> That series (S1–S7) shipped, and so did the S8/S9 follow-ups this draft
+> listed as non-goals. Do **not** re-plan STARTTLS, plaintext SMTP, or IMAP
+> APPEND to Sent — they are in the tree. See **What shipped** for the live
+> behavior. The original design is kept underneath as context.
+
 | Field | Value |
 |-------|-------|
 | **Title** | SMTP Sending in Mailiner via async-smtp |
 | **Author** | Mailiner design (agent) |
 | **Date** | 2026-08-17 |
-| **Status** | Draft (rev 5 — write-ahead outbox) |
+| **Status** | Historical (rev 5 planned the work; archived 2026-09-03) |
 | **Audience** | Senior engineers familiar with the Mailiner codebase |
 
 ---
 
-## Overview
+## What shipped
+
+Verified against `main` (2026-09-03). The “current state” and **Non-Goals**
+sections below are mid-August 2026 and are wrong if read as today’s backlog.
+
+- **`mailiner-smtp-connector`** submits one-shot sessions (EHLO → AUTH →
+  MAIL/RCPT/DATA → QUIT) over a caller-owned stream + rustls. Password is
+  never stored on the connector. IMAP stays up; SMTP is dropped after send.
+- **TLS modes all work.** `SmtpTlsMode::{Implicit, StartTls, None}` persist
+  under account schema 1 (dual-write `use_tls`). Send and Test SMTP accept
+  all three:
+  - Implicit TLS (typically 465): rustls then AUTH.
+  - STARTTLS (typically 587): plaintext greeting + EHLO + STARTTLS, then
+    rustls; **never AUTH before the wrap**.
+  - Plaintext: AUTH and DATA in the clear (including through the proxy).
+  `TlsModeUnsupported` was removed. Settings warn about the STARTTLS
+  plaintext window and about fully-clear AUTH/DATA.
+- **Composer Send** validates, `prepare_submit`s RFC 5322 bytes, and
+  write-ahead persists `mailiner.outbox.v1` before any SMTP I/O. One global
+  in-flight slot; drain is event-driven. Success toast is **“Sent”**.
+- **Test SMTP** in onboarding/settings (`smtp_test_status`, not IMAP
+  `connection_states`). Copy: *“Used when you click Send. … Implicit TLS
+  (port 465), STARTTLS (port 587), or plaintext.”*
+- **IMAP APPEND to Sent** after SMTP success: `CoreEvent::ArchiveSent` finds
+  `\Sent` (special-use, then name heuristics) and APPENDs `\Seen`. Failure
+  does not unsend; toast *“Could not save a copy in Sent.”*
+- **Proxy URL:** `websocket_url_for(host, port)` for SMTP. IMAP
+  `remote_host` / `remote_port` overrides are still IMAP-only.
+
+Still out of scope, same as the original leftover non-goals: OAuth /
+XOAUTH2, warm SMTP pool, SMTP-specific `remote_host`/`remote_port`,
+timer-based outbox backoff, account schema 2.
+
+---
+
+## Overview (historical)
 
 Mailiner is a browser-based IMAP client (Rust / Dioxus → WASM). Browsers cannot open raw TCP, so inbound mail already travels **browser WebSocket → `ws-tcp-proxy` → TCP**, with **client-side rustls** so the proxy only sees ciphertext. Outbound mail is not implemented: `SmtpSettings` is already persisted, the onboarding/settings forms collect optional SMTP fields, and the composer crate stops at a stub `export.rs`. There is **no** `crates/mailiner-app/src/send.rs` in the tree (the onboarding design mentioned a `StubTransport` there; that file was never added).
 

@@ -1,0 +1,20 @@
+crates/mailiner-app/src/snippet.rs
+  s_2700195d744e28::t_efe7c9c1a4254e 215-221
+  s_2700195d744e28::t_345c89ebf366d9 32-33,35-39,74-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "add4c82a5ae5e0162635a055a6ab0df6fb1349dc",
+  "prompts": {},
+  "sessions": {
+    "s_2700195d744e28": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06939-1b37-7420-8f7b-c10f53f97626",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

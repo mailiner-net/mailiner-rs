@@ -496,7 +496,6 @@ mod tests {
     #[test]
     fn unmapped_special_use_skips_name_heuristic() {
         use async_imap::types::NameAttribute;
-        use std::borrow::Cow;
         let (_, role) = special_use_from_attrs([NameAttribute::Flagged].iter());
         assert_eq!(role, Some(MailboxRole::Other));
         let listed = mb_attr("Deleted Mail", Some("/"), false, Some(MailboxRole::Other));

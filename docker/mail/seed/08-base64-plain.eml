@@ -1,0 +1,11 @@
+From: Encoder Bot <encoder@mailiner.test>
+To: Dev User <dev@mailiner.test>
+Subject: Base64-encoded plain text
+Date: Sat, 08 Aug 2026 07:40:00 +0000
+Message-ID: <base64-plain@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+VGhpcyBwbGFpbi10ZXh0IGJvZHkgaXMgYmFzZTY0LWVuY29kZWQuCgpMaW5lIHR3byBjb25maXJt
+cyBkZWNvZGluZyBhY3Jvc3MgYSB3cmFwLgo=

@@ -1,0 +1,41 @@
+From: Bob Example <bob@example.org>
+To: Dev User <dev@mailiner.test>
+Subject: Please review the attached notes
+Date: Tue, 04 Aug 2026 08:45:00 +0000
+Message-ID: <mixed-attachment@mailiner.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed-notes"
+
+--mixed-notes
+Content-Type: multipart/alternative; boundary="alt-notes"
+
+--alt-notes
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Please review the attached notes.txt before Friday.
+
+--alt-notes
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Please review the attached <strong>notes.txt</strong> before Friday.</p>
+</body>
+</html>
+--alt-notes--
+
+--mixed-notes
+Content-Type: text/plain; charset=utf-8; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+Content-Transfer-Encoding: 7bit
+
+Project notes
+-------------
+1. Local IMAP/SMTP is Dovecot + Postfix.
+2. Seed mail covers the MIME shapes Mailiner parses.
+3. Flagged so it stands out in the message list.
+
+--mixed-notes--

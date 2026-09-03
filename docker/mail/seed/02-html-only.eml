@@ -1,0 +1,20 @@
+From: Design Team <design@mailiner.test>
+To: Dev User <dev@mailiner.test>
+Subject: HTML-only announcement
+Date: Sun, 02 Aug 2026 10:15:00 +0000
+Message-ID: <html-only@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <h1 style="color:#2563eb">HTML only</h1>
+  <p>This message has <strong>no</strong> <code>text/plain</code> part.</p>
+  <ul>
+    <li>Bold, italic, and a <a href="https://mailiner.test">link</a></li>
+    <li>A short list to exercise the HTML formatter</li>
+  </ul>
+</body>
+</html>

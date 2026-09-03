@@ -1,0 +1,13 @@
+From: Dev User <dev@mailiner.test>
+To: Alice Example <alice@example.com>
+Subject: Sent copy: lunch confirmed
+Date: Fri, 14 Aug 2026 12:35:00 +0000
+Message-ID: <sent-copy@mailiner.test>
+In-Reply-To: <thread-root@mailiner.test>
+References: <thread-root@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+This is a Sent-folder copy of an outgoing message. Mailiner should
+classify this mailbox as Sent via SPECIAL-USE.

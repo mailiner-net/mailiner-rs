@@ -205,6 +205,7 @@ mod tests {
             references: Vec::new(),
             date: now,
             is_read: true,
+            is_answered: false,
             is_starred: false,
             is_flagged: false,
             is_draft: false,

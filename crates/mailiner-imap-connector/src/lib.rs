@@ -271,8 +271,8 @@ where
         let header = fetch
             .header()
             .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
-        let (is_read, is_starred, is_flagged, is_draft, is_deleted) =
-            Self::parse_flags(fetch.flags());
+        let (is_read, is_answered, is_starred, is_flagged, is_draft, is_deleted) =
+            parse_flags(fetch.flags());
         let uid = fetch
             .uid
             .ok_or_else(|| ImapError::InvalidData("No UID in FETCH response".to_string()))?;
@@ -311,6 +311,7 @@ where
             references: Self::header_ids(parsed_headers.references()),
             date: Self::parse_date(parsed_headers.date())?,
             is_read,
+            is_answered,
             is_starred,
             is_flagged,
             is_draft,
@@ -318,27 +319,6 @@ where
             has_attachments,
             size: fetch.size.map(|s| s as u64),
         })
-    }
-
-    fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> (bool, bool, bool, bool, bool) {
-        let mut is_read = false;
-        let mut is_starred = false;
-        let mut is_flagged = false;
-        let mut is_draft = false;
-        let mut is_deleted = false;
-
-        for flag in flags {
-            match flag {
-                Flag::Seen => is_read = true,
-                Flag::Flagged => is_flagged = true,
-                Flag::Draft => is_draft = true,
-                Flag::Deleted => is_deleted = true,
-                Flag::Custom(name) if name == "\\Starred" => is_starred = true,
-                _ => {}
-            }
-        }
-
-        (is_read, is_starred, is_flagged, is_draft, is_deleted)
     }
 
     /// Drop cached BODYSTRUCTURE rows and the list index for this folder.
@@ -593,11 +573,43 @@ const ALL_UIDS: &str = "1:*";
 fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     match flag {
         EnvelopeFlag::Read => "\\Seen",
+        EnvelopeFlag::Answered => "\\Answered",
         EnvelopeFlag::Flagged => "\\Flagged",
         EnvelopeFlag::Draft => "\\Draft",
         EnvelopeFlag::Deleted => "\\Deleted",
         EnvelopeFlag::Starred => "\\Starred",
     }
+}
+
+/// `(read, answered, starred, flagged, draft, deleted)`.
+fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> (bool, bool, bool, bool, bool, bool) {
+    let mut is_read = false;
+    let mut is_answered = false;
+    let mut is_starred = false;
+    let mut is_flagged = false;
+    let mut is_draft = false;
+    let mut is_deleted = false;
+
+    for flag in flags {
+        match flag {
+            Flag::Seen => is_read = true,
+            Flag::Answered => is_answered = true,
+            Flag::Flagged => is_flagged = true,
+            Flag::Draft => is_draft = true,
+            Flag::Deleted => is_deleted = true,
+            Flag::Custom(name) if name == "\\Starred" => is_starred = true,
+            _ => {}
+        }
+    }
+
+    (
+        is_read,
+        is_answered,
+        is_starred,
+        is_flagged,
+        is_draft,
+        is_deleted,
+    )
 }
 
 fn require_folder(folder_id: &FolderId, ids: &[MessageId]) -> Result<(), ImapError> {
@@ -1442,9 +1454,22 @@ mod tests {
     #[test]
     fn imap_flag_atoms() {
         assert_eq!(imap_flag_atom(EnvelopeFlag::Read), "\\Seen");
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Answered), "\\Answered");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Flagged), "\\Flagged");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Deleted), "\\Deleted");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Starred), "\\Starred");
+    }
+
+    #[test]
+    fn parse_flags_answered() {
+        let (is_read, is_answered, is_starred, is_flagged, is_draft, is_deleted) =
+            parse_flags([Flag::Answered, Flag::Seen].into_iter());
+        assert!(is_read);
+        assert!(is_answered);
+        assert!(!is_starred);
+        assert!(!is_flagged);
+        assert!(!is_draft);
+        assert!(!is_deleted);
     }
 
     #[test]

@@ -1479,6 +1479,7 @@ textarea.ui-input {
     gap: 0.25rem;
 }
 
+.message-answered-indicator,
 .message-star-indicator,
 .message-flag-indicator,
 .message-attachment-indicator {

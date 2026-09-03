@@ -9,7 +9,7 @@ use mailiner_core::MailboxRole;
 use mailiner_core::models::{MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
-use crate::context::{AppContext, MessageViewState};
+use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::formatter::{FormatOptions, MessageFormatter};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
@@ -547,6 +547,17 @@ fn MessageHeader(
                             }
                         },
                         if is_read { "Mark unread" } else { "Mark read" }
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        title: "Copy to folder",
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
+                            }
+                        },
+                        "Copy to…"
                     }
                     select {
                         key: "{move_seq}",

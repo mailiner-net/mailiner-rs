@@ -80,6 +80,18 @@ where
         dest_folder_id: &FolderId,
     ) -> Result<Vec<MessageId>>;
 
+    /// Copy messages from `folder_id` to `dest_folder_id` (IMAP UID COPY).
+    ///
+    /// Source messages stay; this must not add `\Deleted`. Returns destination
+    /// UIDs when the server sends `COPYUID` (same order as `message_ids`).
+    /// Empty if the server omitted it.
+    async fn copy_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        dest_folder_id: &FolderId,
+    ) -> Result<Vec<MessageId>>;
+
     /// Permanently delete messages (STORE \Deleted + EXPUNGE).
     async fn delete_messages(&self, folder_id: &FolderId, message_ids: &[MessageId]) -> Result<()>;
 
@@ -339,6 +351,16 @@ where
         Ok(Vec::new())
     }
 
+    async fn copy_messages(
+        &self,
+        _folder_id: &FolderId,
+        message_ids: &[MessageId],
+        _dest_folder_id: &FolderId,
+    ) -> Result<Vec<MessageId>> {
+        let _ = message_ids;
+        Ok(Vec::new())
+    }
+
     async fn delete_messages(
         &self,
         _folder_id: &FolderId,
@@ -422,51 +444,60 @@ pub fn mock_text_part(envelope_id: MessageId, part_id: &str, text: &str) -> Mess
 mod tests {
     use super::*;
     use crate::models::LoadedMessage;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    #[derive(Debug)]
+    struct NoopStream;
+
+    impl AsyncRead for NoopStream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for NoopStream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     #[test]
     fn mock_empty_folder_succeeds() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-        #[derive(Debug)]
-        struct NoopStream;
-
-        impl AsyncRead for NoopStream {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                _: &mut ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
-        impl AsyncWrite for NoopStream {
-            fn poll_write(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                buf: &[u8],
-            ) -> Poll<std::io::Result<usize>> {
-                Poll::Ready(Ok(buf.len()))
-            }
-            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-            fn poll_shutdown(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
         let connector = MockConnector::new();
         let folder = FolderId::new("trash");
         let result = futures::executor::block_on(EmailConnector::<NoopStream>::empty_folder(
             &connector, &folder,
         ));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn mock_copy_messages_keeps_source() {
+        let connector = MockConnector::new();
+        let from = FolderId::new("inbox");
+        let to = FolderId::new("archive");
+        let ids = [MessageId::new(from.clone(), "1")];
+        let dest = futures::executor::block_on(EmailConnector::<NoopStream>::copy_messages(
+            &connector, &from, &ids, &to,
+        ))
+        .expect("copy");
+        assert!(dest.is_empty());
     }
 
     #[test]

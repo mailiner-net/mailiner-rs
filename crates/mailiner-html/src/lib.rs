@@ -14,6 +14,20 @@ pub const SAFE_IMAGE_TYPES: &[&str] = &[
     "image/bmp",
 ];
 
+/// `<input accept>` list matching [`SAFE_IMAGE_TYPES`] (no SVG).
+pub const SAFE_IMAGE_ACCEPT: &str = "image/png,image/jpeg,image/gif,image/webp,image/bmp";
+
+/// True if `content_type` is a raster image allowed for inline/paste.
+pub fn is_safe_image_content_type(content_type: &str) -> bool {
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    SAFE_IMAGE_TYPES.iter().any(|t| *t == ct)
+}
+
 /// True if `data:` URL is a safe raster image.
 pub fn is_safe_data_image(url_lower: &str) -> bool {
     let u = url_lower.trim();
@@ -299,5 +313,15 @@ mod tests {
     fn safe_data_image_helper() {
         assert!(is_safe_data_image("data:image/png;base64,xx"));
         assert!(!is_safe_data_image("data:text/html;base64,xx"));
+    }
+
+    #[test]
+    fn safe_image_content_type_allows_raster_only() {
+        assert!(is_safe_image_content_type("image/png"));
+        assert!(is_safe_image_content_type("IMAGE/JPEG; charset=binary"));
+        assert!(is_safe_image_content_type(" image/webp "));
+        assert!(!is_safe_image_content_type("image/svg+xml"));
+        assert!(!is_safe_image_content_type("application/octet-stream"));
+        assert!(!is_safe_image_content_type(""));
     }
 }

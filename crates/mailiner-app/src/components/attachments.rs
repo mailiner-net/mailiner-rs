@@ -222,10 +222,7 @@ fn AttachmentItem(
         DownloadStatus::Finished => 100.0,
         _ => 0.0,
     };
-    let show_progress = matches!(
-        status,
-        DownloadStatus::InProgress { .. } | DownloadStatus::Finished
-    );
+    let show_progress = !matches!(status, DownloadStatus::Idle | DownloadStatus::Queued);
     let err_msg = match &status {
         DownloadStatus::Error(e) => Some(e.clone()),
         _ => None,

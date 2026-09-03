@@ -9,8 +9,11 @@ pub use sent::{
 };
 
 use std::fmt::Debug;
+use std::io;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use anyhow::Result;
 use async_imap::types::Flag;
@@ -21,7 +24,7 @@ use futures::{StreamExt, TryStreamExt};
 use imap_proto::types::BodyStructure;
 use mail_parser::{Address, HeaderValue, MessageParser};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::{client::TlsStream, TlsConnector};
@@ -68,12 +71,77 @@ impl From<ImapError> for MailinerError {
     }
 }
 
+/// How the IMAP byte stream is wrapped before LOGIN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImapTlsMode {
+    /// Implicit TLS (typically port 993).
+    #[default]
+    Implicit,
+    /// STARTTLS after a plaintext greeting (typically port 143).
+    StartTls,
+    /// No TLS. LOGIN and mail travel in the clear (including through the proxy).
+    None,
+}
+
+/// Session transport after connect: rustls or leftover plaintext.
+#[derive(Debug)]
+enum ImapIo<S> {
+    Tls(Box<TlsStream<S>>),
+    Plain(S),
+}
+
+impl<S> AsyncRead for ImapIo<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
+            Self::Plain(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<S> AsyncWrite for ImapIo<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
+            Self::Plain(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
+            Self::Plain(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
+            Self::Plain(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
 struct ImapClient<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     client: Client<TlsStream<S>>,
-    session: Option<Session<TlsStream<S>>>,
+    session: Option<Session<ImapIo<S>>>,
 }
 
 #[derive(Debug)]
@@ -82,9 +150,9 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     Disconnected,
-    Unauthenticated(Client<TlsStream<S>>),
+    Unauthenticated(Client<ImapIo<S>>),
     Authenticating,
-    Authenticated(Session<TlsStream<S>>),
+    Authenticated(Session<ImapIo<S>>),
 }
 
 pub struct ImapConnector<S>
@@ -96,6 +164,7 @@ where
     host: String,
     port: u16,
     username: String,
+    tls_mode: ImapTlsMode,
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by folder + UID.
@@ -129,12 +198,65 @@ where
             host,
             port,
             username,
+            tls_mode: ImapTlsMode::Implicit,
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
             has_sort: AtomicBool::new(false),
             has_quota: AtomicBool::new(false),
             list_index: Mutex::new(None),
         }
+    }
+
+    /// Override the default implicit-TLS connect path.
+    pub fn with_tls_mode(mut self, tls_mode: ImapTlsMode) -> Self {
+        self.tls_mode = tls_mode;
+        self
+    }
+
+    /// rustls over the provided byte stream (SNI = `host`). Used after implicit
+    /// TLS connect and after STARTTLS.
+    pub async fn wrap_tls(&self, stream: S) -> Result<TlsStream<S>, ImapError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let root_store = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let tls = TlsConnector::from(Arc::new(config));
+        let server_name = ServerName::try_from(self.host.clone())
+            .map_err(|e| ImapError::Tls(format!("Invalid server name: {}", e)))?;
+        info!("Establishing TLS connection...");
+        let tls_stream = tls
+            .connect(server_name, stream)
+            .await
+            .map_err(|e| ImapError::Tls(format!("Failed to establish TLS: {}", e)))?;
+        info!("TLS stream established");
+        Ok(tls_stream)
+    }
+
+    /// Speak greeting + STARTTLS on a plaintext stream. Returns the inner
+    /// stream ready for rustls. Does not LOGIN.
+    pub async fn starttls_handshake(&self, stream: S) -> Result<S, ImapError>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Debug,
+    {
+        let mut client = Client::new(stream);
+        client
+            .read_response()
+            .await
+            .map_err(|e| ImapError::Connection(format!("Failed to read IMAP greeting: {e}")))?
+            .ok_or_else(|| {
+                ImapError::Connection("IMAP connection closed before greeting".into())
+            })?;
+        info!(host = %self.host, "IMAP STARTTLS");
+        client
+            .run_command_and_check_ok("STARTTLS", None)
+            .await
+            .map_err(|e| ImapError::Tls(format!("IMAP STARTTLS failed: {e}")))?;
+        Ok(client.into_inner())
     }
 
     /// LIST all mailboxes and pick Sent (`\Sent`, else name heuristics).
@@ -229,24 +351,18 @@ where
         let mut imap = self.imap.lock().await;
         match *imap {
             ImapSession::Disconnected => {
-                let root_store = RootCertStore {
-                    roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+                let io = match self.tls_mode {
+                    ImapTlsMode::Implicit => ImapIo::Tls(Box::new(self.wrap_tls(stream).await?)),
+                    ImapTlsMode::StartTls => {
+                        let plain = self.starttls_handshake(stream).await?;
+                        ImapIo::Tls(Box::new(self.wrap_tls(plain).await?))
+                    }
+                    ImapTlsMode::None => {
+                        info!(host = %self.host, "IMAP plaintext");
+                        ImapIo::Plain(stream)
+                    }
                 };
-                let config = ClientConfig::builder()
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth();
-                let tls = TlsConnector::from(Arc::new(config));
-                let server_name = ServerName::try_from(self.host.clone())
-                    .map_err(|e| ImapError::Tls(format!("Invalid server name: {}", e)))?;
-
-                info!("Establishing TLS connection...");
-                let tls_stream = tls
-                    .connect(server_name, stream)
-                    .await
-                    .map_err(|e| ImapError::Tls(format!("Failed to establish TLS: {}", e)))?;
-                info!("TLS stream established");
-
-                *imap = ImapSession::Unauthenticated(Client::new(tls_stream));
+                *imap = ImapSession::Unauthenticated(Client::new(io));
             }
             _ => {
                 // Already connected
@@ -465,7 +581,7 @@ where
 
     /// One partial `UID FETCH … BODY.PEEK[section]<offset.length>`.
     async fn fetch_partial_chunk(
-        session: &mut Session<TlsStream<S>>,
+        session: &mut Session<ImapIo<S>>,
         folder_id: &str,
         message_id: &str,
         section: &str,
@@ -508,7 +624,7 @@ where
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
     async fn probe_capabilities(
-        session: &mut Session<TlsStream<S>>,
+        session: &mut Session<ImapIo<S>>,
         has_sort: &AtomicBool,
         has_quota: &AtomicBool,
     ) {
@@ -529,7 +645,7 @@ where
     }
 
     async fn build_list_index(
-        session: &mut Session<TlsStream<S>>,
+        session: &mut Session<ImapIo<S>>,
         folder_id: &str,
         requested: MessageSort,
         has_sort: bool,
@@ -611,7 +727,7 @@ where
         })
     }
 
-    async fn search_unseen_count(session: &mut Session<TlsStream<S>>) -> Option<usize> {
+    async fn search_unseen_count(session: &mut Session<ImapIo<S>>) -> Option<usize> {
         match session.uid_search("UNSEEN").await {
             Ok(set) => Some(set.len()),
             Err(e) => {
@@ -621,9 +737,7 @@ where
         }
     }
 
-    async fn search_arrival_uids(
-        session: &mut Session<TlsStream<S>>,
-    ) -> Result<Vec<u32>, ImapError> {
+    async fn search_arrival_uids(session: &mut Session<ImapIo<S>>) -> Result<Vec<u32>, ImapError> {
         let set = session
             .uid_search("ALL")
             .await
@@ -637,7 +751,7 @@ where
     /// The fetched page is not re-sorted — virtualized indices must stay stable
     /// for the whole mailbox, not just the current window.
     async fn search_date_uids(
-        session: &mut Session<TlsStream<S>>,
+        session: &mut Session<ImapIo<S>>,
         has_sort: bool,
     ) -> Result<Vec<u32>, ImapError> {
         if has_sort {
@@ -787,7 +901,7 @@ fn copyuid_dest(
 
 /// Run a tagged command and collect destination UIDs from COPYUID.
 async fn run_copyuid_command<S>(
-    session: &mut Session<TlsStream<S>>,
+    session: &mut Session<ImapIo<S>>,
     dest_folder_id: &FolderId,
     command: &str,
 ) -> MailinerResult<Vec<MessageId>>
@@ -835,7 +949,7 @@ where
 }
 
 async fn drain_uid_store<S>(
-    session: &mut Session<TlsStream<S>>,
+    session: &mut Session<ImapIo<S>>,
     uids: &str,
     query: &str,
 ) -> MailinerResult<()>
@@ -853,7 +967,7 @@ where
     Ok(())
 }
 
-async fn expunge_uids<S>(session: &mut Session<TlsStream<S>>, uids: &str) -> MailinerResult<()>
+async fn expunge_uids<S>(session: &mut Session<ImapIo<S>>, uids: &str) -> MailinerResult<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
@@ -882,10 +996,7 @@ where
     Ok(())
 }
 
-async fn delete_selected_uids<S>(
-    session: &mut Session<TlsStream<S>>,
-    uids: &str,
-) -> MailinerResult<()>
+async fn delete_selected_uids<S>(session: &mut Session<ImapIo<S>>, uids: &str) -> MailinerResult<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
@@ -1878,5 +1989,106 @@ mod tests {
         let raw: Vec<_> = ids.iter().map(MessageId::as_uid).collect();
         assert_eq!(raw, ["12", "20", "21", "22"]);
         assert!(ids.iter().all(|id| id.folder_id() == &folder));
+    }
+
+    fn connector() -> ImapConnector<tokio::io::DuplexStream> {
+        ImapConnector::new(
+            AccountId::new("acc"),
+            "imap.example.com".into(),
+            143,
+            "user@example.com".into(),
+        )
+        .with_tls_mode(ImapTlsMode::StartTls)
+    }
+
+    async fn write_all(w: &mut (impl tokio::io::AsyncWriteExt + Unpin), s: &str) {
+        tokio::io::AsyncWriteExt::write_all(w, s.as_bytes())
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::flush(w).await.unwrap();
+    }
+
+    async fn read_cmd(r: &mut (impl tokio::io::AsyncReadExt + Unpin), buf: &mut Vec<u8>) -> String {
+        buf.clear();
+        let mut tmp = [0u8; 512];
+        loop {
+            let n = tokio::io::AsyncReadExt::read(r, &mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(2).any(|w| w == b"\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(buf).into_owned()
+    }
+
+    #[tokio::test]
+    async fn starttls_handshake_issues_command_and_returns_stream() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let starttls = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                starttls.to_ascii_uppercase().contains("STARTTLS"),
+                "{starttls}"
+            );
+            let tag = starttls.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK Begin TLS\r\n")).await;
+        });
+
+        let _stream = conn.starttls_handshake(client).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn starttls_handshake_does_not_login() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cmd = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                cmd.to_ascii_uppercase().contains("STARTTLS"),
+                "expected STARTTLS, got {cmd}"
+            );
+            assert!(
+                !cmd.to_ascii_uppercase().contains("LOGIN"),
+                "LOGIN must not run before TLS wrap: {cmd}"
+            );
+            let tag = cmd.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK Begin TLS\r\n")).await;
+        });
+
+        let _stream = conn.starttls_handshake(client).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn starttls_rejected_is_tls_error() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector();
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cmd = read_cmd(&mut server, &mut buf).await;
+            let tag = cmd.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} BAD no STARTTLS\r\n")).await;
+        });
+
+        let err = conn.starttls_handshake(client).await.unwrap_err();
+        assert!(
+            matches!(err, ImapError::Tls(_)),
+            "expected Tls, got {err:?}"
+        );
+        assert!(err.to_string().contains("STARTTLS"), "{}", err);
+        let _ = server_task.await;
     }
 }

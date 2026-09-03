@@ -661,7 +661,8 @@ async fn connect_account(
             config.imap.host.clone(),
             config.imap.port,
             config.imap.username.clone(),
-        );
+        )
+        .with_tls_mode(config.imap.tls_mode.to_connector());
 
         info!("TLS + IMAP greeting for account {}…", account_id);
         connector

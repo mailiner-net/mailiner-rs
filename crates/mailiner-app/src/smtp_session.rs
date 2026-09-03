@@ -265,13 +265,13 @@ mod tests {
             display_name: "Work".into(),
             email: "user@example.com".into(),
             signature: None,
-            imap: ImapSettings {
-                host: "imap.example.com".into(),
-                port: 993,
-                username: "user".into(),
-                password: "secret".into(),
-                use_tls: true,
-            },
+            imap: ImapSettings::new(
+                "imap.example.com".into(),
+                993,
+                "user".into(),
+                "secret".into(),
+                crate::account_config::ImapTlsMode::Implicit,
+            ),
             smtp,
             proxy: ProxySettings {
                 base_url: "ws://localhost:9400/proxy".into(),

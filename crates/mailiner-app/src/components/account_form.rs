@@ -6,8 +6,9 @@ use uuid::Uuid;
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, ImapSettings, ProxySettings, SmtpTlsMode, default_port_for_tls_mode,
-    normalize_signature, optional_smtp_from_tls_mode, port_for_tls_mode_change,
+    AccountConfig, ImapSettings, ImapTlsMode, ProxySettings, SmtpTlsMode,
+    default_port_for_tls_mode, normalize_signature, optional_smtp_from_tls_mode,
+    port_for_imap_tls_mode_change, port_for_tls_mode_change,
 };
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
@@ -116,6 +117,7 @@ pub fn build_config_from_form(
     imap_port: &str,
     imap_username: &str,
     imap_password: &str,
+    imap_tls_mode: ImapTlsMode,
     proxy_base_url: &str,
     proxy_token: &str,
     remote_host: &str,
@@ -198,13 +200,13 @@ pub fn build_config_from_form(
         display_name: display_name.to_string(),
         email: email.to_string(),
         signature: normalize_signature(signature),
-        imap: ImapSettings {
+        imap: ImapSettings::new(
             host,
             port,
-            username: username.to_string(),
-            password: password.to_string(),
-            use_tls: true,
-        },
+            username.to_string(),
+            password.to_string(),
+            imap_tls_mode,
+        ),
         smtp,
         proxy: ProxySettings {
             base_url: proxy_base.to_string(),
@@ -229,6 +231,7 @@ pub fn credentials_changed(old: &AccountConfig, new: &AccountConfig) -> bool {
         || old.imap.port != new.imap.port
         || old.imap.username != new.imap.username
         || old.imap.password != new.imap.password
+        || old.imap.tls_mode != new.imap.tls_mode
         || old.imap.use_tls != new.imap.use_tls
         || old.proxy != new.proxy
 }
@@ -355,6 +358,7 @@ pub fn AccountConnectionFields(
     imap_port: String,
     imap_username: String,
     imap_password: String,
+    imap_tls_mode: ImapTlsMode,
     proxy_base_url: String,
     proxy_token: String,
     remote_host: String,
@@ -371,6 +375,7 @@ pub fn AccountConnectionFields(
     set_imap_port: EventHandler<String>,
     set_imap_username: EventHandler<String>,
     set_imap_password: EventHandler<String>,
+    set_imap_tls_mode: EventHandler<ImapTlsMode>,
     set_proxy_base_url: EventHandler<String>,
     set_proxy_token: EventHandler<String>,
     set_remote_host: EventHandler<String>,
@@ -386,6 +391,9 @@ pub fn AccountConnectionFields(
     #[props(default)] open_advanced: bool,
 ) -> Element {
     let host_placeholder = email_to_imap_host_hint(&email);
+    let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
+    let warn_plain = imap_tls_mode == ImapTlsMode::None;
+    let imap_port_for_tls = imap_port.clone();
     let insecure_proxy = {
         ProxySettings {
             base_url: proxy_base_url.clone(),
@@ -493,6 +501,65 @@ pub fn AccountConnectionFields(
                 input_type: "number",
                 autocomplete: "off",
                 disabled: busy,
+            }
+            div {
+                class: "onboarding-field",
+                label {
+                    r#for: "{id_prefix}-imap-tls",
+                    "TLS mode"
+                }
+                select {
+                    id: "{id_prefix}-imap-tls",
+                    name: "{id_prefix}-imap-tls",
+                    value: imap_tls_mode.as_form_value(),
+                    disabled: busy,
+                    onchange: move |e| {
+                        let new_mode = ImapTlsMode::from_form_value(&e.value());
+                        let next_port = port_for_imap_tls_mode_change(
+                            &imap_port_for_tls,
+                            imap_tls_mode,
+                            new_mode,
+                        );
+                        if next_port != imap_port_for_tls {
+                            set_imap_port.call(next_port);
+                        }
+                        set_imap_tls_mode.call(new_mode);
+                    },
+                    option {
+                        value: "implicit",
+                        selected: imap_tls_mode == ImapTlsMode::Implicit,
+                        "Implicit TLS (port 993)"
+                    }
+                    option {
+                        value: "start_tls",
+                        selected: imap_tls_mode == ImapTlsMode::StartTls,
+                        "STARTTLS (port 143)"
+                    }
+                    option {
+                        value: "none",
+                        selected: imap_tls_mode == ImapTlsMode::None,
+                        "None (plaintext)"
+                    }
+                }
+            }
+            if warn_starttls {
+                p {
+                    class: "onboarding-notice",
+                    role: "note",
+                    "STARTTLS (port 143) sends the server greeting and STARTTLS \
+                     in the clear, including through the proxy. LOGIN is encrypted \
+                     after the upgrade. Prefer implicit TLS on port 993 when the \
+                     server supports it."
+                }
+            }
+            if warn_plain {
+                p {
+                    class: "onboarding-notice",
+                    role: "alert",
+                    "Plaintext IMAP sends LOGIN and mail in the clear, including \
+                     through the proxy. Prefer implicit TLS on port 993 or STARTTLS \
+                     on port 143."
+                }
             }
             FormField {
                 label: "Username",
@@ -856,6 +923,8 @@ mod tests {
     use super::*;
 
     fn form_config(
+        imap_port: &str,
+        imap_tls_mode: ImapTlsMode,
         smtp_host: &str,
         smtp_port: &str,
         smtp_tls_mode: SmtpTlsMode,
@@ -875,9 +944,10 @@ mod tests {
             "Work",
             "user@example.com",
             "imap.example.com",
-            "993",
+            imap_port,
             "user@example.com",
             "secret",
+            imap_tls_mode,
             "ws://localhost:9400/proxy",
             "token",
             "",
@@ -908,42 +978,75 @@ mod tests {
         )
     }
 
+    fn smtp_form_config(
+        smtp_host: &str,
+        smtp_port: &str,
+        smtp_tls_mode: SmtpTlsMode,
+    ) -> Result<AccountConfig, String> {
+        form_config(
+            "993",
+            ImapTlsMode::Implicit,
+            smtp_host,
+            smtp_port,
+            smtp_tls_mode,
+        )
+    }
+
+    fn imap_form_config(
+        imap_port: &str,
+        imap_tls_mode: ImapTlsMode,
+    ) -> Result<AccountConfig, String> {
+        form_config(imap_port, imap_tls_mode, "", "", SmtpTlsMode::Implicit)
+    }
+
     #[test]
     fn form_implicit_tls_writes_tls_mode_and_use_tls() {
-        let smtp = form_config("smtp.example.com", "465", SmtpTlsMode::Implicit)
+        let smtp = smtp_form_config("smtp.example.com", "465", SmtpTlsMode::Implicit)
             .unwrap()
             .smtp
             .expect("Some");
         assert_eq!(smtp.tls_mode, SmtpTlsMode::Implicit);
         assert!(smtp.use_tls);
         assert_eq!(smtp.port, 465);
+        let imap = imap_form_config("993", ImapTlsMode::Implicit).unwrap().imap;
+        assert_eq!(imap.tls_mode, ImapTlsMode::Implicit);
+        assert!(imap.use_tls);
+        assert_eq!(imap.port, 993);
     }
 
     #[test]
     fn form_starttls_writes_mode_directly_not_from_port() {
-        let smtp = form_config("smtp.example.com", "465", SmtpTlsMode::StartTls)
+        let smtp = smtp_form_config("smtp.example.com", "465", SmtpTlsMode::StartTls)
             .unwrap()
             .smtp
             .expect("Some");
         assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
         assert!(smtp.use_tls);
         assert_eq!(smtp.port, 465);
+        let imap = imap_form_config("993", ImapTlsMode::StartTls).unwrap().imap;
+        assert_eq!(imap.tls_mode, ImapTlsMode::StartTls);
+        assert!(imap.use_tls);
+        assert_eq!(imap.port, 993);
     }
 
     #[test]
     fn form_none_writes_plaintext() {
-        let smtp = form_config("smtp.example.com", "25", SmtpTlsMode::None)
+        let smtp = smtp_form_config("smtp.example.com", "25", SmtpTlsMode::None)
             .unwrap()
             .smtp
             .expect("Some");
         assert_eq!(smtp.tls_mode, SmtpTlsMode::None);
         assert!(!smtp.use_tls);
         assert_eq!(smtp.port, 25);
+        let imap = imap_form_config("143", ImapTlsMode::None).unwrap().imap;
+        assert_eq!(imap.tls_mode, ImapTlsMode::None);
+        assert!(!imap.use_tls);
+        assert_eq!(imap.port, 143);
     }
 
     #[test]
     fn form_empty_smtp_section_is_none() {
-        let config = form_config("", "465", SmtpTlsMode::Implicit).unwrap();
+        let config = smtp_form_config("", "465", SmtpTlsMode::Implicit).unwrap();
         assert!(config.smtp.is_none());
     }
 

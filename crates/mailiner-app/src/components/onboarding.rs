@@ -7,8 +7,7 @@ use uuid::Uuid;
 use crate::AppBootstrapState;
 use crate::account::AccountId;
 use crate::account_config::DEFAULT_SMTP_PORT;
-use crate::account_config::SmtpTlsMode;
-use crate::account_config::dev_form_prefill;
+use crate::account_config::{SmtpTlsMode, dev_form_prefill, imap_tls_mode_from_legacy};
 use crate::components::account_form::{
     AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
     FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form, kind_label,
@@ -40,6 +39,7 @@ pub fn OnboardingForm() -> Element {
     let mut imap_port = use_signal(|| prefill.imap_port.to_string());
     let mut imap_username = use_signal(|| prefill.imap_username.clone());
     let mut imap_password = use_signal(|| prefill.imap_password.clone());
+    let mut imap_tls_mode = use_signal(|| imap_tls_mode_from_legacy(true, prefill.imap_port));
     let mut proxy_base_url = use_signal(|| prefill.proxy_base_url.clone());
     let mut proxy_token = use_signal(|| prefill.proxy_token.clone());
     let mut remote_host = use_signal(|| prefill.remote_host.clone());
@@ -168,6 +168,7 @@ pub fn OnboardingForm() -> Element {
             &imap_port(),
             &imap_username(),
             &imap_password(),
+            imap_tls_mode(),
             &proxy_base_url(),
             &proxy_token(),
             &remote_host(),
@@ -215,6 +216,7 @@ pub fn OnboardingForm() -> Element {
                 &imap_port(),
                 &imap_username(),
                 &imap_password(),
+                imap_tls_mode(),
                 &proxy_base_url(),
                 &proxy_token(),
                 &remote_host(),
@@ -249,6 +251,7 @@ pub fn OnboardingForm() -> Element {
             &imap_port(),
             &imap_username(),
             &imap_password(),
+            imap_tls_mode(),
             &proxy_base_url(),
             &proxy_token(),
             &remote_host(),
@@ -306,6 +309,7 @@ pub fn OnboardingForm() -> Element {
                         imap_port: imap_port(),
                         imap_username: imap_username(),
                         imap_password: imap_password(),
+                        imap_tls_mode: imap_tls_mode(),
                         proxy_base_url: proxy_base_url(),
                         proxy_token: proxy_token(),
                         remote_host: remote_host(),
@@ -318,6 +322,7 @@ pub fn OnboardingForm() -> Element {
                         set_imap_port: move |v| imap_port.set(v),
                         set_imap_username: move |v| imap_username.set(v),
                         set_imap_password: move |v| imap_password.set(v),
+                        set_imap_tls_mode: move |v| imap_tls_mode.set(v),
                         set_proxy_base_url: move |v| proxy_base_url.set(v),
                         set_proxy_token: move |v| proxy_token.set(v),
                         set_remote_host: move |v| remote_host.set(v),

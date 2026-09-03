@@ -6,7 +6,6 @@ use dioxus::prelude::*;
 use super::icons::{Icon, IconButton, IconKind};
 
 use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
-use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
     draft_payload_bytes, file_attachment, human_size, resolve_content_type, would_exceed_draft_cap,
@@ -15,9 +14,13 @@ use mailiner_composer::{
     ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
 };
 
+use crate::account::{Account, AccountId};
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
-use crate::send::{ComposeSession, OutboxDisplay, SendState};
+use crate::send::{
+    ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
+    identity_from_account, resolve_compose_account_id, set_session_from_account,
+};
 
 fn join_address_emails(addrs: &[ComposerAddress]) -> String {
     addrs
@@ -55,21 +58,37 @@ pub fn open_compose(ctx: &mut AppContext, session: ComposeSession) {
     ctx.compose_draft.set(Some(session));
 }
 
+fn listed_compose_accounts(ctx: &AppContext) -> Vec<Account> {
+    let mut listed: Vec<Account> = ctx.accounts.read().values().cloned().collect();
+    listed.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
+    listed
+}
+
+fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> Option<Account> {
+    let listed = listed_compose_accounts(ctx);
+    let stored: Vec<AccountId> = listed.iter().map(|a| a.id.clone()).collect();
+    let selected = ctx.selected_account.read().clone();
+    let id = resolve_compose_account_id(preferred, selected.as_ref(), &stored)?;
+    listed.into_iter().find(|a| a.id == id)
+}
+
 /// Open a blank compose for the selected account.
 pub fn open_new_message(ctx: &mut AppContext) {
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let selected = ctx.selected_account.read().clone();
+    let Some(account) = resolve_compose_account(ctx, selected.as_ref()) else {
         return;
     };
-    let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-        return;
-    };
-    let identity = FromIdentity::new(account.name, account.email);
+    let identity = identity_from_account(account.name, account.email);
     let mut draft = DraftDocument::new_empty(&identity);
     draft.mode = BodyMode::Plain;
     open_compose(
         ctx,
         ComposeSession {
-            account_id,
+            account_id: account.id,
             title: "New message".into(),
             draft,
             reply_source: None,
@@ -84,15 +103,11 @@ pub fn open_reply_or_forward(
     envelope: &mailiner_core::Envelope,
     loaded: &mailiner_core::models::LoadedMessage,
 ) {
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let Some(account) = resolve_compose_account(ctx, Some(&envelope.account_id)) else {
         ctx.show_toast(crate::toast::ToastAction::error("Select an account first."));
         return;
     };
-    let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-        ctx.show_toast(crate::toast::ToastAction::error("Account not found."));
-        return;
-    };
-    let identity = FromIdentity::new(account.name, account.email);
+    let identity = identity_from_account(account.name, account.email);
     match build_draft(intent, &identity, Some(envelope), Some(loaded)) {
         Ok(mut draft) => {
             draft.mode = BodyMode::Plain;
@@ -106,7 +121,7 @@ pub fn open_reply_or_forward(
             open_compose(
                 ctx,
                 ComposeSession {
-                    account_id,
+                    account_id: account.id,
                     title: title.into(),
                     draft,
                     reply_source,
@@ -134,7 +149,12 @@ fn submit_compose(
         return;
     }
     error.set(None);
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let Some(account_id) = ctx
+        .compose_draft
+        .read()
+        .as_ref()
+        .map(|s| s.account_id.clone())
+    else {
         error.set(Some("Select an account first.".into()));
         return;
     };
@@ -142,18 +162,13 @@ fn submit_compose(
         error.set(Some("Account not found.".into()));
         return;
     };
-    let identity = FromIdentity::new(account.name.clone(), account.email.clone());
+    let identity = identity_from_account(account.name.clone(), account.email.clone());
     let (mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
-        Some(session) if session.account_id != account_id => {
-            error.set(Some(
-                "This draft belongs to another account. Switch back to send it.".into(),
-            ));
-            return;
-        }
         Some(session) => (session.draft.clone(), session.reply_source.clone()),
         None => (DraftDocument::new_empty(&identity), None),
     };
     draft.mode = BodyMode::Plain;
+    draft.from = Some(composer_address_from_identity(&identity));
     draft.html_body.clear();
     draft.plain_body = body();
     draft.subject = subject();
@@ -369,7 +384,7 @@ pub fn ComposeOverlay() -> Element {
     let mut attach_gen = use_signal(|| 0u32);
     let mut attach_input_gen = use_signal(|| 0u32);
 
-    let (open, title, attachments) = {
+    let (open, title, attachments, from_account_id) = {
         let slot = ctx.compose_draft.read();
         match slot.as_ref() {
             Some(s) => (
@@ -380,10 +395,18 @@ pub fn ComposeOverlay() -> Element {
                     .iter()
                     .map(|a| (a.id.0.clone(), a.filename.clone(), a.size))
                     .collect::<Vec<_>>(),
+                Some(s.account_id.clone()),
             ),
-            None => (false, "New message".to_string(), Vec::new()),
+            None => (false, "New message".to_string(), Vec::new(), None),
         }
     };
+    let from_accounts = listed_compose_accounts(&ctx);
+    let from_label = from_account_id
+        .as_ref()
+        .and_then(|id| from_accounts.iter().find(|a| &a.id == id))
+        .map(|a| from_account_label(&a.name, &a.email))
+        .unwrap_or_default();
+    let multi_from = from_accounts.len() > 1;
     let sending = submitting();
     let attaching_now = attaching();
     let busy = sending || attaching_now;
@@ -455,7 +478,7 @@ pub fn ComposeOverlay() -> Element {
         });
     }
 
-    let no_account = ctx.selected_account.read().is_none();
+    let no_account = ctx.accounts.read().is_empty();
     let mut compose_draft = ctx.compose_draft;
     let close = move |_| {
         compose_draft.set(None);
@@ -515,6 +538,59 @@ pub fn ComposeOverlay() -> Element {
                             size: 20,
                             icon: IconKind::XMark,
                             onclick: close,
+                        }
+                    }
+                    label {
+                        class: "ui-field",
+                        span { "From" }
+                        if multi_from {
+                            select {
+                                class: "ui-input",
+                                value: from_account_id
+                                    .as_ref()
+                                    .map(|id| id.as_str().to_string())
+                                    .unwrap_or_default(),
+                                disabled: sending,
+                                aria_label: "From account",
+                                onchange: {
+                                    let ctx = ctx.clone();
+                                    let mut compose_draft = ctx.compose_draft;
+                                    move |evt: FormEvent| {
+                                        if sending {
+                                            return;
+                                        }
+                                        let id = AccountId::new(evt.value());
+                                        let Some(account) = ctx.accounts.read().get(&id).cloned()
+                                        else {
+                                            return;
+                                        };
+                                        let mut slot = compose_draft.write();
+                                        if let Some(session) = slot.as_mut() {
+                                            set_session_from_account(
+                                                session,
+                                                account.id,
+                                                &account.name,
+                                                &account.email,
+                                            );
+                                        }
+                                    }
+                                },
+                                for account in from_accounts.iter() {
+                                    option {
+                                        value: "{account.id}",
+                                        selected: from_account_id.as_ref() == Some(&account.id),
+                                        "{from_account_label(&account.name, &account.email)}"
+                                    }
+                                }
+                            }
+                        } else {
+                            input {
+                                class: "ui-input",
+                                value: "{from_label}",
+                                disabled: true,
+                                readonly: true,
+                                aria_label: "From account",
+                            }
                         }
                     }
                     div {

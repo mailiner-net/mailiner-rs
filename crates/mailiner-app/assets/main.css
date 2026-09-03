@@ -821,6 +821,11 @@ a.accounts-link-btn {
     background: #f0f0f0;
 }
 
+select.ui-input {
+    cursor: pointer;
+    appearance: auto;
+}
+
 textarea.ui-input {
     resize: vertical;
     min-height: 10rem;

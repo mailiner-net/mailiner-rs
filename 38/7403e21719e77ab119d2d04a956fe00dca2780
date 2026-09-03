@@ -1,0 +1,19 @@
+crates/mailiner-app/src/core_event.rs
+  s_1e917854f54709::t_4a4fa813594403 1099-1141,1867-1876
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "387403e21719e77ab119d2d04a956fe00dca2780",
+  "prompts": {},
+  "sessions": {
+    "s_1e917854f54709": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06931-4ae0-7aa0-9ff6-3988429c77fe",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -9,6 +9,7 @@ use super::recipient_field::RecipientField;
 use wasm_bindgen::JsCast;
 
 use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
+use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
     draft_payload_bytes, file_attachment, html_for_plain_with_inlines, human_size, image_filename,
@@ -281,19 +282,21 @@ fn compose_send_state(ctx: &AppContext) -> Option<SendState> {
     ctx.send_status.read().get(&account_id).cloned()
 }
 
-fn persist_session(account_id: &AccountId, session: &ComposeSession) {
+fn persist_session(session: &ComposeSession) {
     if session_has_content(session) {
-        draft_store::save_draft(account_id, session);
+        draft_store::save_draft(&session.account_id, session);
     } else {
-        draft_store::clear_draft(account_id);
+        draft_store::clear_draft(&session.account_id);
     }
+}
+
+fn apply_current_from(session: &mut ComposeSession, identity: &FromIdentity) {
+    session.draft.from = Some(composer_address_from_identity(identity));
 }
 
 /// Open a new / reply / forward session. Replaces any existing compose draft.
 pub fn open_compose(ctx: &mut AppContext, session: ComposeSession) {
-    if let Some(account_id) = ctx.selected_account.read().clone() {
-        persist_session(&account_id, &session);
-    }
+    persist_session(&session);
     ctx.compose_draft.set(Some(session));
 }
 
@@ -352,7 +355,7 @@ pub fn open_new_message(ctx: &mut AppContext) {
         if let Some(mut session) = draft_store::load_draft(&account.id) {
             let identity = identity_from_account(account.name.clone(), account.email.clone());
             session.account_id = account.id;
-            session.draft.from = Some(composer_address_from_identity(&identity));
+            apply_current_from(&mut session, &identity);
             ctx.compose_draft.set(Some(session));
             return;
         }
@@ -624,7 +627,6 @@ fn session_with_live_fields(
 }
 
 fn persist_live_draft(
-    account_id: &AccountId,
     compose_draft: Signal<Option<ComposeSession>>,
     to: Signal<Vec<ComposerAddress>>,
     to_draft: Signal<String>,
@@ -638,29 +640,21 @@ fn persist_live_draft(
     let Some(session) = compose_draft.peek().clone() else {
         return;
     };
-    persist_session(
-        account_id,
-        &session_with_live_fields(
-            &session,
-            &to.peek(),
-            &to_draft.peek(),
-            &cc.peek(),
-            &cc_draft.peek(),
-            &bcc.peek(),
-            &bcc_draft.peek(),
-            &subject.peek(),
-            &body.peek(),
-        ),
-    );
-}
-
-fn selected_account_id(selected_account: Signal<Option<AccountId>>) -> Option<AccountId> {
-    selected_account.peek().clone()
+    persist_session(&session_with_live_fields(
+        &session,
+        &to.peek(),
+        &to_draft.peek(),
+        &cc.peek(),
+        &cc_draft.peek(),
+        &bcc.peek(),
+        &bcc_draft.peek(),
+        &subject.peek(),
+        &body.peek(),
+    ));
 }
 
 fn close_keeping_draft(
     mut save_gen: Signal<u32>,
-    selected_account: Signal<Option<AccountId>>,
     mut compose_draft: Signal<Option<ComposeSession>>,
     to: Signal<Vec<ComposerAddress>>,
     to_draft: Signal<String>,
@@ -673,31 +667,24 @@ fn close_keeping_draft(
 ) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    if let Some(account_id) = selected_account_id(selected_account) {
-        persist_live_draft(
-            &account_id,
-            compose_draft,
-            to,
-            to_draft,
-            cc,
-            cc_draft,
-            bcc,
-            bcc_draft,
-            subject,
-            body,
-        );
-    }
+    persist_live_draft(
+        compose_draft,
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+    );
     compose_draft.set(None);
 }
 
-fn discard_draft(
-    mut save_gen: Signal<u32>,
-    selected_account: Signal<Option<AccountId>>,
-    mut compose_draft: Signal<Option<ComposeSession>>,
-) {
+fn discard_draft(mut save_gen: Signal<u32>, mut compose_draft: Signal<Option<ComposeSession>>) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    if let Some(account_id) = selected_account_id(selected_account) {
+    if let Some(account_id) = compose_draft.peek().as_ref().map(|s| s.account_id.clone()) {
         draft_store::clear_draft(&account_id);
     }
     compose_draft.set(None);
@@ -1255,7 +1242,6 @@ pub fn ComposeOverlay() -> Element {
             save_gen.set(generation);
             let draft_id = session.draft.id.as_str().to_string();
             let compose_draft = ctx.compose_draft;
-            let selected_account = ctx.selected_account;
             spawn(async move {
                 sleep_ms(DRAFT_SAVE_DEBOUNCE_MS).await;
                 if save_gen() != generation {
@@ -1264,11 +1250,7 @@ pub fn ComposeOverlay() -> Element {
                 if open_draft_id(compose_draft).as_deref() != Some(draft_id.as_str()) {
                     return;
                 }
-                let Some(account_id) = selected_account_id(selected_account) else {
-                    return;
-                };
                 persist_live_draft(
-                    &account_id,
                     compose_draft,
                     to,
                     to_draft,
@@ -1306,11 +1288,9 @@ pub fn ComposeOverlay() -> Element {
 
     let no_account = ctx.accounts.read().is_empty();
     let mut compose_draft = ctx.compose_draft;
-    let selected_account = ctx.selected_account;
     let close = move |_| {
         close_keeping_draft(
             save_gen,
-            selected_account,
             compose_draft,
             to,
             to_draft,
@@ -1323,7 +1303,7 @@ pub fn ComposeOverlay() -> Element {
         );
     };
     let discard = move |_| {
-        discard_draft(save_gen, selected_account, compose_draft);
+        discard_draft(save_gen, compose_draft);
     };
 
     rsx! {

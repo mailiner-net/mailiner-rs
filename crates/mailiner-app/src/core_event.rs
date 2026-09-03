@@ -3793,7 +3793,7 @@ async fn handle_send_message(
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
-    crate::draft_store::clear_draft(&account_id);
+    crate::draft_store::clear_draft_if(&account_id, &draft_id);
     if ctx
         .compose_draft
         .read()

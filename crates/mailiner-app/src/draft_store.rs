@@ -9,7 +9,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use mailiner_composer::model::attachment::{AttachmentData, AttachmentId, FileAttachment};
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument, DraftId};
-use mailiner_core::ids::AccountId;
+use mailiner_core::ids::{AccountId, MessageId};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "wasm32")]
@@ -132,6 +132,9 @@ pub struct PersistedComposeDraft {
     pub attachments: Vec<PersistedAttachment>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Source message to mark `\Answered` after a successful Reply / Reply All.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_source: Option<MessageId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -266,7 +269,8 @@ impl PersistedComposeDraft {
             account_id,
             title: session.title.clone(),
             draft_id: d.id.as_str().to_string(),
-            from: d.from.as_ref().map(PersistedAddress::from),
+            // From is account identity, not user-typed. Restore fills current identity.
+            from: None,
             to: d.to.iter().map(PersistedAddress::from).collect(),
             cc: d.cc.iter().map(PersistedAddress::from).collect(),
             bcc: d.bcc.iter().map(PersistedAddress::from).collect(),
@@ -279,14 +283,15 @@ impl PersistedComposeDraft {
             attachments: persistable_attachments(&d.attachments),
             created_at: d.created_at,
             updated_at: d.updated_at,
+            reply_source: session.reply_source.clone(),
         }
     }
 
     pub fn into_session(self) -> ComposeSession {
         ComposeSession {
-            account_id: self.account_id.clone(),
+            account_id: self.account_id,
             title: self.title,
-            reply_source: None,
+            reply_source: self.reply_source,
             draft: DraftDocument {
                 id: DraftId(self.draft_id),
                 from: self.from.as_ref().map(ComposerAddress::from),
@@ -330,19 +335,7 @@ fn load_blob(kv: &dyn StringKvStore) -> Result<Option<DraftsBlob>, AccountStoreE
 }
 
 fn save_blob(kv: &dyn StringKvStore, blob: &DraftsBlob) -> Result<(), AccountStoreError> {
-    match blob.encode() {
-        Ok(json) => kv.set_item(DRAFTS_LOCAL_STORAGE_KEY, &json),
-        Err(AccountStoreError::Other(_))
-            if blob.drafts.iter().any(|d| !d.attachments.is_empty()) =>
-        {
-            let mut stripped = blob.clone();
-            for draft in &mut stripped.drafts {
-                draft.attachments.clear();
-            }
-            kv.set_item(DRAFTS_LOCAL_STORAGE_KEY, &stripped.encode()?)
-        }
-        Err(e) => Err(e),
-    }
+    kv.set_item(DRAFTS_LOCAL_STORAGE_KEY, &blob.encode()?)
 }
 
 fn load_draft_in(
@@ -374,7 +367,24 @@ fn save_draft_in(
         account_id.clone(),
         session,
     ));
-    save_blob(kv, &blob)
+    match save_blob(kv, &blob) {
+        Ok(()) => Ok(()),
+        Err(AccountStoreError::Other(_)) => {
+            let Some(draft) = blob.drafts.iter_mut().find(|d| d.account_id == *account_id) else {
+                return Err(AccountStoreError::Other(
+                    "Draft is too large to keep in this browser.".into(),
+                ));
+            };
+            if draft.attachments.is_empty() {
+                return Err(AccountStoreError::Other(
+                    "Draft is too large to keep in this browser.".into(),
+                ));
+            }
+            draft.attachments.clear();
+            save_blob(kv, &blob)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn clear_draft_in(kv: &dyn StringKvStore, account_id: &AccountId) -> Result<(), AccountStoreError> {
@@ -425,6 +435,21 @@ pub fn clear_draft(account_id: &AccountId) {
     let _ = with_kv(|kv| clear_draft_in(kv, account_id));
 }
 
+/// Drop the local draft only if it is still `draft_id` (do not clobber a newer one).
+pub fn clear_draft_if(account_id: &AccountId, draft_id: &str) {
+    let _ = with_kv(|kv| {
+        let Some(mut blob) = load_blob(kv)? else {
+            return Ok(());
+        };
+        let same = blob.get(account_id).is_some_and(|d| d.draft_id == draft_id);
+        if same {
+            blob.remove(account_id);
+            save_blob(kv, &blob)?;
+        }
+        Ok(())
+    });
+}
+
 /// Drop drafts for accounts that are no longer known.
 pub fn retain_drafts(known: &HashSet<AccountId>) {
     let _ = with_kv(|kv| retain_drafts_in(kv, known));
@@ -456,6 +481,10 @@ mod tests {
     use mailiner_composer::identity::FromIdentity;
 
     fn session(subject: &str, body: &str) -> ComposeSession {
+        session_for(AccountId::new("acc"), subject, body)
+    }
+
+    fn session_for(account_id: AccountId, subject: &str, body: &str) -> ComposeSession {
         let id = FromIdentity::new("Me", "me@example.com");
         let mut draft = DraftDocument::new_empty(&id);
         draft.mode = BodyMode::Plain;
@@ -465,8 +494,10 @@ mod tests {
             .to
             .push(ComposerAddress::email_only("you@example.com"));
         ComposeSession {
+            account_id,
             title: "New message".into(),
             draft,
+            reply_source: None,
         }
     }
 
@@ -540,8 +571,10 @@ mod tests {
         let mut draft = DraftDocument::new_empty(&id);
         draft.mode = BodyMode::Plain;
         let empty = ComposeSession {
+            account_id: account.clone(),
             title: "New message".into(),
             draft,
+            reply_source: None,
         };
         assert!(!session_has_content(&empty));
         save_draft_in(&kv, &account, &session("Hi", "x")).unwrap();
@@ -683,6 +716,95 @@ mod tests {
         clear_draft_in(&kv, &AccountId::new("a")).unwrap();
         assert!(load_draft_in(&kv, &AccountId::new("a")).unwrap().is_none());
         assert!(load_draft_in(&kv, &AccountId::new("b")).unwrap().is_some());
+    }
+
+    #[test]
+    fn persisted_from_is_not_restored() {
+        let account = AccountId::new("acc");
+        let mut s = session("Hi", "x");
+        s.draft.from = Some(ComposerAddress {
+            name: Some("Old".into()),
+            email: "old@example.com".into(),
+        });
+        let persisted = PersistedComposeDraft::from_session(account, &s);
+        assert!(persisted.from.is_none());
+        assert!(persisted.into_session().draft.from.is_none());
+    }
+
+    #[test]
+    fn decode_ignores_legacy_from() {
+        let json = r#"{"schema_version":1,"drafts":[{"account_id":"acc","title":"New message","draft_id":"d1","from":{"name":"Old","email":"old@example.com"},"to":[{"email":"you@example.com"}],"subject":"Hi","mode":"plain","plain_body":"x","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}"#;
+        let restored = DraftsBlob::decode(json)
+            .unwrap()
+            .drafts
+            .remove(0)
+            .into_session();
+        assert!(restored.draft.from.is_none());
+        assert_eq!(restored.draft.subject, "Hi");
+    }
+
+    #[test]
+    fn clear_draft_if_leaves_newer_id() {
+        host_kv::reset();
+        let acc = AccountId::new("acc");
+        let first = session("A", "a");
+        let first_id = first.draft.id.as_str().to_string();
+        save_draft(&acc, &first);
+        save_draft(&acc, &session("B", "b"));
+        clear_draft_if(&acc, &first_id);
+        assert_eq!(load_draft(&acc).unwrap().draft.subject, "B");
+        let current = load_draft(&acc).unwrap().draft.id.as_str().to_string();
+        clear_draft_if(&acc, &current);
+        assert!(load_draft(&acc).is_none());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn oversize_strips_only_the_draft_being_written() {
+        let kv = MemoryKvStore::new();
+        let a = AccountId::new("a");
+        let b = AccountId::new("b");
+        let attach = |id: &str, n: usize| FileAttachment {
+            id: AttachmentId(id.into()),
+            filename: format!("{id}.bin"),
+            content_type: "application/octet-stream".into(),
+            size: n as u64,
+            data: AttachmentData::Bytes(vec![b'x'; n]),
+        };
+        // 256 + 256 + 238 KiB stays under the per-draft persist cap but two
+        // such drafts exceed the shared blob cap.
+        let fill = |s: &mut ComposeSession, prefix: &str| {
+            s.draft
+                .attachments
+                .push(attach(&format!("{prefix}-1"), 256 * 1024));
+            s.draft
+                .attachments
+                .push(attach(&format!("{prefix}-2"), 256 * 1024));
+            s.draft
+                .attachments
+                .push(attach(&format!("{prefix}-3"), 220 * 1024));
+        };
+        let mut sa = session_for(a.clone(), "A", "aa");
+        fill(&mut sa, "a");
+        save_draft_in(&kv, &a, &sa).unwrap();
+        assert_eq!(
+            load_draft_in(&kv, &a)
+                .unwrap()
+                .unwrap()
+                .draft
+                .attachments
+                .len(),
+            3
+        );
+
+        let mut sb = session_for(b.clone(), "B", "bb");
+        fill(&mut sb, "b");
+        save_draft_in(&kv, &b, &sb).unwrap();
+        let back_a = load_draft_in(&kv, &a).unwrap().unwrap();
+        let back_b = load_draft_in(&kv, &b).unwrap().unwrap();
+        assert_eq!(back_a.draft.attachments.len(), 3);
+        assert_eq!(back_b.draft.attachments.len(), 0);
+        assert_eq!(back_b.draft.subject, "B");
     }
 
     #[test]

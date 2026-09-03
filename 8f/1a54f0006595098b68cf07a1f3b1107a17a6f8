@@ -1,0 +1,19 @@
+crates/mailiner-app/src/components/account_form.rs
+  s_593b3ba13df453::t_b3479d39d6bce3 594,599,604
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8f1a54f0006595098b68cf07a1f3b1107a17a6f8",
+  "prompts": {},
+  "sessions": {
+    "s_593b3ba13df453": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0691a-fbfe-7460-848f-739d1ea3285a",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

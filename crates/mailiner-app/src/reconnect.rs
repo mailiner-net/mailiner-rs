@@ -42,7 +42,6 @@ pub fn is_transport_io(err: &std::io::Error) -> bool {
             | ErrorKind::BrokenPipe
             | ErrorKind::UnexpectedEof
             | ErrorKind::NotConnected
-            | ErrorKind::TimedOut
             | ErrorKind::ConnectionRefused
     ) || is_session_death_message(&err.to_string())
 }
@@ -66,8 +65,6 @@ pub fn is_session_death_message(msg: &str) -> bool {
         "network is unreachable",
         "i/o error",
         "io error",
-        "timed out",
-        "timeout",
     ];
     NEEDLES.iter().any(|n| lower.contains(n))
 }
@@ -105,12 +102,16 @@ mod tests {
             ErrorKind::ConnectionReset,
             ErrorKind::UnexpectedEof,
             ErrorKind::NotConnected,
-            ErrorKind::TimedOut,
             ErrorKind::ConnectionRefused,
         ] {
             let err = MailinerError::Io(std::io::Error::new(kind, "socket"));
             assert!(is_session_death(&err), "{kind:?} should be session death");
         }
+        let timed_out = MailinerError::Io(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "operation timed out",
+        ));
+        assert!(!is_session_death(&timed_out));
         let other = MailinerError::Io(std::io::Error::new(
             ErrorKind::InvalidData,
             "malformed frame",
@@ -143,6 +144,9 @@ mod tests {
         )));
         assert!(!is_session_death(&MailinerError::InvalidData(
             "bad envelope".into()
+        )));
+        assert!(!is_session_death(&MailinerError::Connector(
+            "FETCH timed out".into()
         )));
         assert!(!is_session_death(&MailinerError::PartialMove {
             message: "expunge failed".into(),

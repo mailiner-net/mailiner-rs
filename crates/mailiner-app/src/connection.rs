@@ -335,6 +335,39 @@ impl AccountConnectionManager {
         self.reconnect_attempts.remove(account_id);
     }
 
+    /// Invalidate pending auto-reconnect timers for every account except `keep`.
+    ///
+    /// Needed when switching accounts: a failed session may have no connector
+    /// left, so [`Self::disconnect_others`] would not bump its generation.
+    pub fn cancel_pending_reconnects(&mut self, keep: Option<&AccountId>, ctx: &mut AppContext) {
+        let ids: Vec<AccountId> = {
+            let states = ctx.connection_states.read();
+            states
+                .iter()
+                .filter_map(|(id, state)| {
+                    if keep.is_some_and(|k| k == id) {
+                        return None;
+                    }
+                    let pending = matches!(state, ConnectionState::Reconnecting { .. })
+                        || self.reconnect_attempts.contains_key(id);
+                    pending.then_some(id.clone())
+                })
+                .collect()
+        };
+        for id in ids {
+            self.bump_generation(&id);
+            self.reconnect_attempts.remove(&id);
+            let reconnecting = ctx
+                .connection_states
+                .read()
+                .get(&id)
+                .is_some_and(|s| matches!(s, ConnectionState::Reconnecting { .. }));
+            if reconnecting {
+                set_connection_state(ctx, &id, ConnectionState::Disconnected);
+            }
+        }
+    }
+
     pub fn bump_reconnect_attempts(&mut self, account_id: &AccountId) -> u32 {
         let entry = self
             .reconnect_attempts
@@ -387,6 +420,7 @@ impl AccountConnectionManager {
         for id in ids {
             self.disconnect_account(&id, ctx).await;
         }
+        self.cancel_pending_reconnects(keep, ctx);
     }
 
     /// Drop connector + cached config; best-effort logout.

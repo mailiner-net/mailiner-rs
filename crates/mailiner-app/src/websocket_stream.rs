@@ -276,6 +276,8 @@ impl Future for WsDeathWatch {
         match inner.ready_state {
             WsReadyState::Error | WsReadyState::Closed => Poll::Ready(()),
             WsReadyState::Connecting | WsReadyState::Open => {
+                // Replace same-task wakers: the loop recreates this future each event.
+                inner.close_wakers.retain(|w| !w.will_wake(cx.waker()));
                 inner.close_wakers.push(cx.waker().clone());
                 Poll::Pending
             }

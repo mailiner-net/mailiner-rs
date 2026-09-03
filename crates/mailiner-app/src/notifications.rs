@@ -8,14 +8,23 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use mailiner_core::MailboxRole;
+use mailiner_core::ids::AccountId;
 
 use crate::mailbox::{MailboxId, MailboxNode, find_mailbox_with_role};
 
 /// Document title with no unread badge.
 pub const APP_TITLE: &str = "Mailiner";
 
+/// Last live Inbox unread observed for one account this session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxUnreadBaseline {
+    pub account_id: AccountId,
+    pub mailbox_id: MailboxId,
+    pub unread: usize,
+}
+
 thread_local! {
-    static LAST_INBOX_UNREAD: RefCell<Option<usize>> = const { RefCell::new(None) };
+    static LAST_INBOX_UNREAD: RefCell<Option<InboxUnreadBaseline>> = const { RefCell::new(None) };
 }
 
 /// Browser Notification permission, plus “API missing”.
@@ -32,7 +41,7 @@ pub enum NotifyPermission {
 pub enum InboxCountEvent {
     /// IMAP `STATUS` / live folder counts. May notify after a baseline exists.
     Remote,
-    /// Cache hydrate, folder open, or a local read/unread change. Baseline only.
+    /// Folder open or a local read/unread change. Baseline only; never notify.
     Local,
 }
 
@@ -63,17 +72,26 @@ pub fn notification_body(added: usize) -> String {
 
 /// Update `last` and return how many new Inbox messages to announce, if any.
 ///
-/// The first sample only establishes a baseline (existing unread is not “new”).
-/// Local events never notify. Remote increases notify only when the count is
-/// also above the opened-folder watermark.
+/// The first sample for an account/Inbox pair only establishes a baseline
+/// (existing unread is not “new”). A different account or Inbox is a new
+/// baseline. Local events never notify. Remote increases notify only when
+/// the count is also above the opened-folder watermark.
 pub fn note_inbox_unread(
-    last: &mut Option<usize>,
+    last: &mut Option<InboxUnreadBaseline>,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
     current: usize,
     acknowledged: usize,
     event: InboxCountEvent,
 ) -> Option<usize> {
-    let prev = *last;
-    *last = Some(current);
+    let prev = last.as_ref().and_then(|b| {
+        (b.account_id == *account_id && b.mailbox_id == *mailbox_id).then_some(b.unread)
+    });
+    *last = Some(InboxUnreadBaseline {
+        account_id: account_id.clone(),
+        mailbox_id: mailbox_id.clone(),
+        unread: current,
+    });
     match (event, prev) {
         (_, None) => None,
         (InboxCountEvent::Local, _) => None,
@@ -84,19 +102,29 @@ pub fn note_inbox_unread(
     }
 }
 
-/// Clear the session baseline (account switch / mailbox tree tear-down).
+/// Clear the session baseline (mailbox tree tear-down).
 pub fn reset_inbox_unread_baseline() {
     LAST_INBOX_UNREAD.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// Observe Inbox unread against the session baseline.
 pub fn observe_inbox_unread(
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
     current: usize,
     acknowledged: usize,
     event: InboxCountEvent,
 ) -> Option<usize> {
-    LAST_INBOX_UNREAD
-        .with(|cell| note_inbox_unread(&mut cell.borrow_mut(), current, acknowledged, event))
+    LAST_INBOX_UNREAD.with(|cell| {
+        note_inbox_unread(
+            &mut cell.borrow_mut(),
+            account_id,
+            mailbox_id,
+            current,
+            acknowledged,
+            event,
+        )
+    })
 }
 
 /// Whether a desktop notification should be shown for new Inbox mail.
@@ -239,6 +267,28 @@ mod tests {
         }
     }
 
+    fn acc(id: &str) -> AccountId {
+        AccountId::new(id)
+    }
+
+    fn inbox() -> MailboxId {
+        MailboxId::from("INBOX".to_string())
+    }
+
+    fn note(
+        last: &mut Option<InboxUnreadBaseline>,
+        account: &str,
+        current: usize,
+        ack: usize,
+        event: InboxCountEvent,
+    ) -> Option<usize> {
+        note_inbox_unread(last, &acc(account), &inbox(), current, ack, event)
+    }
+
+    fn unread_of(last: &Option<InboxUnreadBaseline>) -> Option<usize> {
+        last.as_ref().map(|b| b.unread)
+    }
+
     #[test]
     fn tab_title_hides_zero() {
         assert_eq!(tab_title(0), "Mailiner");
@@ -255,66 +305,58 @@ mod tests {
     #[test]
     fn first_sample_is_baseline() {
         let mut last = None;
-        assert_eq!(
-            note_inbox_unread(&mut last, 4, 0, InboxCountEvent::Remote),
-            None
-        );
-        assert_eq!(last, Some(4));
+        assert_eq!(note(&mut last, "a", 4, 0, InboxCountEvent::Remote), None);
+        assert_eq!(unread_of(&last), Some(4));
     }
 
     #[test]
     fn remote_increase_above_ack_notifies() {
-        let mut last = Some(4);
-        assert_eq!(
-            note_inbox_unread(&mut last, 6, 4, InboxCountEvent::Remote),
-            Some(2)
-        );
-        assert_eq!(last, Some(6));
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 4, 4, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 6, 4, InboxCountEvent::Remote), Some(2));
+        assert_eq!(unread_of(&last), Some(6));
     }
 
     #[test]
     fn remote_increase_not_above_ack_is_silent() {
-        let mut last = Some(4);
-        assert_eq!(
-            note_inbox_unread(&mut last, 6, 6, InboxCountEvent::Remote),
-            None
-        );
-        assert_eq!(last, Some(6));
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 4, 4, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 6, 6, InboxCountEvent::Remote), None);
+        assert_eq!(unread_of(&last), Some(6));
     }
 
     #[test]
     fn remote_same_or_decrease_is_silent() {
-        let mut last = Some(5);
-        assert_eq!(
-            note_inbox_unread(&mut last, 5, 0, InboxCountEvent::Remote),
-            None
-        );
-        assert_eq!(
-            note_inbox_unread(&mut last, 2, 0, InboxCountEvent::Remote),
-            None
-        );
-        assert_eq!(last, Some(2));
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 5, 0, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 5, 0, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 2, 0, InboxCountEvent::Remote), None);
+        assert_eq!(unread_of(&last), Some(2));
     }
 
     #[test]
     fn local_events_never_notify() {
-        let mut last = Some(1);
-        assert_eq!(
-            note_inbox_unread(&mut last, 8, 0, InboxCountEvent::Local),
-            None
-        );
-        assert_eq!(last, Some(8));
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 1, 0, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 8, 0, InboxCountEvent::Local), None);
+        assert_eq!(unread_of(&last), Some(8));
     }
 
     #[test]
     fn decrease_then_increase_notifies_delta() {
-        let mut last = Some(5);
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 5, 5, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "a", 2, 2, InboxCountEvent::Local), None);
+        assert_eq!(note(&mut last, "a", 4, 2, InboxCountEvent::Remote), Some(2));
+    }
+
+    #[test]
+    fn other_account_is_new_baseline() {
+        let mut last = None;
+        assert_eq!(note(&mut last, "a", 4, 0, InboxCountEvent::Remote), None);
+        assert_eq!(note(&mut last, "b", 9, 0, InboxCountEvent::Remote), None);
         assert_eq!(
-            note_inbox_unread(&mut last, 2, 2, InboxCountEvent::Local),
-            None
-        );
-        assert_eq!(
-            note_inbox_unread(&mut last, 4, 2, InboxCountEvent::Remote),
+            note(&mut last, "b", 11, 0, InboxCountEvent::Remote),
             Some(2)
         );
     }
@@ -377,10 +419,21 @@ mod tests {
     #[test]
     fn observe_and_reset_session_baseline() {
         reset_inbox_unread_baseline();
-        assert_eq!(observe_inbox_unread(3, 0, InboxCountEvent::Remote), None);
-        assert_eq!(observe_inbox_unread(5, 3, InboxCountEvent::Remote), Some(2));
+        let a = acc("a");
+        let mb = inbox();
+        assert_eq!(
+            observe_inbox_unread(&a, &mb, 3, 0, InboxCountEvent::Remote),
+            None
+        );
+        assert_eq!(
+            observe_inbox_unread(&a, &mb, 5, 3, InboxCountEvent::Remote),
+            Some(2)
+        );
         reset_inbox_unread_baseline();
-        assert_eq!(observe_inbox_unread(5, 3, InboxCountEvent::Remote), None);
+        assert_eq!(
+            observe_inbox_unread(&a, &mb, 5, 3, InboxCountEvent::Remote),
+            None
+        );
         reset_inbox_unread_baseline();
     }
 }

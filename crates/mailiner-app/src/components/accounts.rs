@@ -555,11 +555,8 @@ fn NotificationsSettings() -> Element {
     let pref_on = notify_inbox();
     let perm = permission();
     let checked = pref_on && perm == crate::notifications::NotifyPermission::Granted;
-    let blocked = matches!(
-        perm,
-        crate::notifications::NotifyPermission::Denied
-            | crate::notifications::NotifyPermission::Unsupported
-    );
+    // Denied stays clickable so the user can retry after changing site settings.
+    let blocked = perm == crate::notifications::NotifyPermission::Unsupported;
 
     rsx! {
         fieldset {
@@ -582,6 +579,11 @@ fn NotificationsSettings() -> Element {
                             let want = evt.checked();
                             spawn(async move {
                                 if want {
+                                    // Re-read first: the user may have granted
+                                    // the site in browser settings while Denied.
+                                    permission.set(
+                                        crate::notifications::current_permission(),
+                                    );
                                     let next =
                                         crate::notifications::request_permission().await;
                                     permission.set(next);

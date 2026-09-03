@@ -1414,7 +1414,6 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
 pub(crate) fn apply_hydrated(ctx: &mut AppContext, hydrated: HydratedAccount) {
     ctx.mailbox_nodes.set(hydrated.nodes);
     ctx.mailbox_roots.set(hydrated.roots);
-    sync_inbox_unread(ctx, crate::notifications::InboxCountEvent::Local);
     if let Some(mailbox_id) = hydrated.selected_mailbox {
         ctx.selected_mailbox.set(Some(mailbox_id));
     }
@@ -2507,22 +2506,20 @@ fn observe_local_mailbox(ctx: &AppContext, mailbox_id: &MailboxId) {
 }
 
 fn sync_inbox_unread(ctx: &AppContext, event: crate::notifications::InboxCountEvent) {
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        return;
+    };
     let Some((inbox_id, unread)) = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read())
     else {
         return;
     };
-    let ack = ctx
-        .selected_account
-        .read()
-        .as_ref()
-        .map(|id| {
-            crate::ui_prefs::load_ack_unread(id)
-                .get(&inbox_id)
-                .copied()
-                .unwrap_or(0)
-        })
+    let ack = crate::ui_prefs::load_ack_unread(&account_id)
+        .get(&inbox_id)
+        .copied()
         .unwrap_or(0);
-    let Some(added) = crate::notifications::observe_inbox_unread(unread, ack, event) else {
+    let Some(added) =
+        crate::notifications::observe_inbox_unread(&account_id, &inbox_id, unread, ack, event)
+    else {
         return;
     };
     let viewing_inbox = ctx.selected_mailbox.read().as_ref() == Some(&inbox_id);

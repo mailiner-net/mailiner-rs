@@ -67,7 +67,7 @@ pub fn AttachmentsFooter() -> Element {
     };
     let any_busy = {
         let map = ctx.download_status.read();
-        any_download_in_progress(&map, rows.iter().map(|r| r.section.as_str()))
+        any_download_busy(&map, rows.iter().map(|r| r.section.as_str()))
     };
     let save_all_rows = rows.clone();
     let save_all_mailbox = mailbox_id.clone();
@@ -169,23 +169,17 @@ fn attachment_download_event(
 
 fn mark_pending_downloads(status: &mut HashMap<String, DownloadStatus>, rows: &[AttachmentRow]) {
     for row in rows {
-        status.insert(
-            row.section.clone(),
-            DownloadStatus::InProgress {
-                received: 0,
-                total: row.wire_size,
-            },
-        );
+        status.insert(row.section.clone(), DownloadStatus::Queued);
     }
 }
 
-fn any_download_in_progress<'a>(
+fn any_download_busy<'a>(
     status: &HashMap<String, DownloadStatus>,
     sections: impl IntoIterator<Item = &'a str>,
 ) -> bool {
     sections
         .into_iter()
-        .any(|section| matches!(status.get(section), Some(DownloadStatus::InProgress { .. })))
+        .any(|section| status.get(section).is_some_and(DownloadStatus::is_busy))
 }
 
 #[component]
@@ -218,7 +212,7 @@ fn AttachmentItem(
         row.content_type
     );
 
-    let busy = matches!(status, DownloadStatus::InProgress { .. });
+    let busy = status.is_busy();
     let progress_pct = match &status {
         DownloadStatus::InProgress {
             received,
@@ -228,7 +222,10 @@ fn AttachmentItem(
         DownloadStatus::Finished => 100.0,
         _ => 0.0,
     };
-    let show_progress = !matches!(status, DownloadStatus::Idle);
+    let show_progress = matches!(
+        status,
+        DownloadStatus::InProgress { .. } | DownloadStatus::Finished
+    );
     let err_msg = match &status {
         DownloadStatus::Error(e) => Some(e.clone()),
         _ => None,
@@ -263,6 +260,8 @@ fn AttachmentItem(
                     },
                     if matches!(status, DownloadStatus::InProgress { .. }) {
                         "Downloading…"
+                    } else if matches!(status, DownloadStatus::Queued) {
+                        "Waiting…"
                     } else if matches!(status, DownloadStatus::Finished) {
                         "Done"
                     } else {
@@ -348,11 +347,15 @@ mod tests {
         let mut status = HashMap::new();
         mark_pending_downloads(&mut status, &rows);
         status.insert("2".into(), DownloadStatus::Finished);
-        assert!(any_download_in_progress(&status, ["2", "3"]));
+        assert!(any_download_busy(&status, ["2", "3"]));
+        assert!(!matches!(
+            status.get("3"),
+            Some(DownloadStatus::InProgress { .. })
+        ));
     }
 
     #[test]
-    fn any_in_progress_only_for_listed_sections() {
+    fn any_busy_only_for_listed_sections() {
         let mut status = HashMap::new();
         status.insert(
             "2".into(),
@@ -361,11 +364,13 @@ mod tests {
                 total: Some(10),
             },
         );
-        assert!(any_download_in_progress(&status, ["2"]));
-        assert!(!any_download_in_progress(&status, ["3"]));
+        assert!(any_download_busy(&status, ["2"]));
+        assert!(!any_download_busy(&status, ["3"]));
+        status.insert("2".into(), DownloadStatus::Queued);
+        assert!(any_download_busy(&status, ["2"]));
         status.insert("2".into(), DownloadStatus::Finished);
-        assert!(!any_download_in_progress(&status, ["2"]));
+        assert!(!any_download_busy(&status, ["2"]));
         status.insert("2".into(), DownloadStatus::Error("boom".into()));
-        assert!(!any_download_in_progress(&status, ["2"]));
+        assert!(!any_download_busy(&status, ["2"]));
     }
 }

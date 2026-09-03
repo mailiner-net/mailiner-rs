@@ -63,11 +63,12 @@ pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[St
             }
             continue;
         }
-        // Keep only visible text bodies. Unreferenced images (even if they
-        // are not flagged as attachments) must not bypass the CID budget.
-        if !matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
-            part.content = MessageContent::Empty;
+        // Keep only the visible text body. Drop unreferenced images and
+        // hidden/attached text so they cannot bypass the CID budget.
+        if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
+            continue;
         }
+        part.content = MessageContent::Empty;
     }
 }
 
@@ -353,6 +354,19 @@ mod tests {
         img.is_attachment = false;
         let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
         let mut parts = vec![html, img];
+        retain_reply_cid_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn retain_drops_unreferenced_text_attachment() {
+        let mut notes = part(PartKind::TextPlain, "text/plain", "secret notes");
+        notes.is_attachment = true;
+        notes.is_hidden = false;
+        notes.id = mailiner_core::ids::MessagePartId::new("att");
+        let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
+        let mut parts = vec![html, notes];
         retain_reply_cid_payloads(&mut parts, &[]);
         assert!(matches!(parts[0].content, MessageContent::Text(_)));
         assert!(matches!(parts[1].content, MessageContent::Empty));

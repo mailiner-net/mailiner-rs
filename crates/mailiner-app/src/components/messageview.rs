@@ -14,7 +14,7 @@ use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
-use crate::formatter::{FormatOptions, MessageFormatter};
+use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
@@ -298,7 +298,7 @@ pub fn MessageView() -> Element {
 
                 if !prefer && !inlined.is_empty() {
                     // Cache both remote-policy variants so Allow does not
-                    // re-format. CID payloads stay on `loaded` for reply/forward.
+                    // re-format. Referenced CID payloads stay on `loaded`.
                     let allowed_html = if prevented && !allow {
                         MessageFormatter::new(FormatOptions {
                             allow_remote_resources: true,
@@ -318,6 +318,9 @@ pub fn MessageView() -> Element {
                 } else {
                     formatted_html.set(html);
                 }
+
+                drop(loaded);
+                apply_cid_payload_retention(&mut ctx, &message_id, &inlined);
             } else {
                 prevented_remote.set(false);
                 let fallback =
@@ -420,6 +423,25 @@ impl InlinedHtmlCache {
             None
         }
     }
+}
+
+fn apply_cid_payload_retention(
+    ctx: &mut AppContext,
+    message_id: &MessageId,
+    referenced: &[String],
+) {
+    let mut view = ctx.message_view.write();
+    let MessageViewState::Ready {
+        message_id: id,
+        loaded,
+    } = &mut *view
+    else {
+        return;
+    };
+    if id != message_id {
+        return;
+    }
+    retain_reply_cid_payloads(&mut Arc::make_mut(loaded).parts, referenced);
 }
 
 fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {

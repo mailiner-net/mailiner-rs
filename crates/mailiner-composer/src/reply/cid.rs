@@ -266,7 +266,9 @@ pub fn rehydrate_cids(
     // (cid token, Some(canonical cid src) = keep, None = drop img)
     let mut replacements: Vec<(String, Option<String>)> = Vec::new();
     let mut budget = caps::MAX_INLINES.saturating_sub(existing_inline_count);
-    let mut remaining_bytes = remaining_draft_bytes.saturating_sub(html.len() as u64);
+    // `remaining_draft_bytes` is the budget left for inline payloads after
+    // the caller reserved quote HTML/plain (and any existing attachments).
+    let mut remaining_bytes = remaining_draft_bytes;
 
     for token in refs {
         let bare = bare_content_id(&token);
@@ -553,8 +555,7 @@ mod tests {
         let png = [1u8, 2, 3, 4];
         let parts = vec![png_part("logo@x", &png)];
         let html = r#"<p>keep<img src="cid:logo@x"></p>"#;
-        let remaining = html.len() as u64 + 2;
-        let r = rehydrate_cids(html, &parts, 0, remaining);
+        let r = rehydrate_cids(html, &parts, 0, 2);
         assert!(r.images.is_empty());
         assert!(!r.html.contains("<img"), "{}", r.html);
         assert!(r.warnings.iter().any(|w| w.contains("draft size")));

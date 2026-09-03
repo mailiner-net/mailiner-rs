@@ -120,7 +120,17 @@ fn apply_html_quote(
     plain_override: Option<&str>,
 ) {
     let clean = crate::sanitize::sanitize_for_edit(html);
-    let remaining = caps::MAX_DRAFT_BYTES.saturating_sub(draft_payload_bytes(draft));
+    // Reserve the quote wrapper + plain alternative before admitting inlines so
+    // the finished draft cannot exceed MAX_DRAFT_BYTES.
+    let html_est = wrap_html_quote(attribution, &clean);
+    let plain_est = match plain_override {
+        Some(plain) => quote_plain(attribution, plain),
+        None => quote_plain(attribution, &crate::model::html_to_plain(&clean)),
+    };
+    let reserved = html_est.len() as u64 + plain_est.len() as u64;
+    let remaining = caps::MAX_DRAFT_BYTES
+        .saturating_sub(draft_payload_bytes(draft))
+        .saturating_sub(reserved);
     let rehydrated =
         crate::reply::cid::rehydrate_cids(&clean, parts, draft.inline_images.len(), remaining);
     draft.mode = BodyMode::Rich;

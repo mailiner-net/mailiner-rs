@@ -16,7 +16,7 @@ use crate::folder_name::{
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
     Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
-    MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
+    MessageListFilter, MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Hierarchy delimiter used by [`MockConnector`] folder create/rename.
@@ -48,11 +48,12 @@ where
     /// RFC 2087 `GETQUOTAROOT` for `folder_id`. `None` if the server has no QUOTA
     /// capability, no STORAGE resource, or no finite limit.
     async fn folder_quota(&self, folder_id: &FolderId) -> Result<Option<MailboxQuota>>;
-    /// SELECT the folder, build the sort index, and return the list length.
+    /// SELECT the folder, build the sort/filter index, and return the list length.
     async fn prepare_folder_list(
         &self,
         folder_id: &FolderId,
         sort: MessageSort,
+        filter: MessageListFilter,
     ) -> Result<FolderListState>;
 
     /// Fetch envelopes for a UI index range `[start, end)`.
@@ -379,6 +380,7 @@ where
         &self,
         _folder_id: &FolderId,
         sort: MessageSort,
+        _filter: MessageListFilter,
     ) -> Result<FolderListState> {
         Ok(FolderListState {
             total: 100,

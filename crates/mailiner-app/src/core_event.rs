@@ -15,7 +15,9 @@ use mailiner_composer::{AttachmentData, caps};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{EnvelopeFlag, FolderCounts, FolderId, MailboxRole, MessageSort};
+use mailiner_core::{
+    EnvelopeFlag, FolderCounts, FolderId, MailboxRole, MessageListFilter, MessageSort,
+};
 use mailiner_mime::decode_transfer_encoding;
 
 use crate::account::AccountId;
@@ -64,6 +66,8 @@ pub enum CoreEvent {
     JumpToMailbox(MailboxId),
     /// Rebuild the current folder's list in a new order.
     SetMessageSort(MessageSort),
+    /// Toggle Unread / Flagged / Attachment list filters (AND).
+    SetMessageListFilter(MessageListFilter),
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
         mailbox_id: MailboxId,
@@ -452,6 +456,9 @@ pub async fn core_loop(
             }
             CoreEvent::SetMessageSort(sort) => {
                 handle_set_message_sort(&manager, &mut ctx, sort).await;
+            }
+            CoreEvent::SetMessageListFilter(filter) => {
+                handle_set_message_list_filter(&manager, &mut ctx, filter).await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -1587,6 +1594,9 @@ async fn persist_selected_messages(
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         return;
     };
+    if ctx.message_list_filter.peek().imap_search_query().is_some() {
+        return;
+    }
     let sort = *ctx.message_sort.peek();
     let (total, unread, prefix) = {
         let list = ctx.messages.read();
@@ -1723,14 +1733,20 @@ async fn handle_select_mailbox(
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
         let sort = *ctx.message_sort.peek();
         let account = ctx.selected_account.read().clone();
-        let hydrated = match account {
-            Some(account_id) => manager
-                .cache()
-                .load_messages(&account_id, &mailbox_id, sort)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
+        // Cached prefixes are unfiltered; skip them when SEARCH is narrowing the folder.
+        let use_cache = ctx.message_list_filter.peek().imap_search_query().is_none();
+        let hydrated = if use_cache {
+            match account {
+                Some(account_id) => manager
+                    .cache()
+                    .load_messages(&account_id, &mailbox_id, sort)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            }
+        } else {
+            None
         };
         if let Some(cached) = hydrated {
             apply_cached_message_list(ctx, &cached);
@@ -1756,7 +1772,11 @@ async fn handle_select_mailbox(
 
     let folder_id = FolderId::new(mailbox_id.to_string());
     let requested = *ctx.message_sort.peek();
-    match connector.prepare_folder_list(&folder_id, requested).await {
+    let filter = *ctx.message_list_filter.peek();
+    match connector
+        .prepare_folder_list(&folder_id, requested, filter)
+        .await
+    {
         Ok(state) => {
             info!(
                 "Opened mailbox {} with {} messages (sort={:?})",
@@ -1845,6 +1865,26 @@ async fn handle_set_message_sort(
         return;
     };
     // Drop the previous sort's rows so we don't treat them as a cache hit.
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
+    handle_select_mailbox(manager, ctx, mailbox_id, true).await;
+}
+
+async fn handle_set_message_list_filter(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    filter: MessageListFilter,
+) {
+    let prev = *ctx.message_list_filter.peek();
+    crate::ui_prefs::save_message_list_filter(filter);
+    ctx.message_list_filter.set(filter);
+    if prev.imap_search_query() == filter.imap_search_query() {
+        return;
+    }
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        return;
+    };
+    // Drop the previous SEARCH result so we don't treat it as a cache hit.
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(true);
     handle_select_mailbox(manager, ctx, mailbox_id, true).await;

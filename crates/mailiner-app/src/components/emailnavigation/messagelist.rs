@@ -11,7 +11,9 @@ use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 use crate::message::Message;
-use crate::message_list_filter::{message_matches_text_filter, text_filter_is_active};
+use crate::message_list_filter::{
+    message_matches_filter, message_matches_text_filter, text_filter_is_active,
+};
 use crate::selection::drag_message_ids;
 use chrono::{DateTime, Utc};
 
@@ -37,16 +39,20 @@ pub fn MessageList() -> Element {
     let loading = *ctx.messages_loading.read();
     let total = ctx.messages.read().total_count();
     let density = *ctx.message_list_density.read();
+    let filter = *ctx.message_list_filter.read();
     let cached = ctx.messages.read().cached_count();
     let selected_n = ctx.selection.read().len();
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
-    let filtering = text_filter_is_active(&filter_query);
+    let filtering_text = text_filter_is_active(&filter_query);
+    let filtering = filtering_text || filter.has_attachment;
     let filtered_matches: Vec<Arc<Message>> = if filtering {
         ctx.messages
             .read()
             .iter()
-            .filter(|m| message_matches_text_filter(m, &filter_query))
+            .filter(|m| {
+                message_matches_text_filter(m, &filter_query) && message_matches_filter(m, filter)
+            })
             .cloned()
             .collect()
     } else {
@@ -199,10 +205,15 @@ pub fn MessageList() -> Element {
                         class: "message-list-empty",
                         "Loading…"
                     }
-                } else if total == 0 {
+                } else if total == 0 && filter.is_empty() && !filtering_text {
                     div {
                         class: "message-list-empty",
                         "No messages"
+                    }
+                } else if total == 0 && !filter.is_empty() && !filter.has_attachment {
+                    div {
+                        class: "message-list-empty",
+                        "No matching messages"
                     }
                 } else if no_loaded_matches {
                     div {
@@ -210,10 +221,10 @@ pub fn MessageList() -> Element {
                         "No matching loaded messages"
                     }
                 } else if filtering {
-                    // Remount when the query changes so a prior scroll offset
-                    // cannot sit below the new (shorter) list.
+                    // Remount when the query or attachment chip changes so a
+                    // prior scroll offset cannot sit below the new list.
                     VirtualScroll {
-                        key: "{filter_query}",
+                        key: "{filter_query}-{filter.has_attachment}",
                         items: filtered_items,
                         item_height: density.item_height(),
                         buffer_size: BUFFER_SIZE,

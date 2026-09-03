@@ -77,6 +77,51 @@ impl MessageSort {
     }
 }
 
+/// Quick list narrowing for the current folder. Active flags combine with AND.
+///
+/// `unread` / `flagged` map to IMAP `SEARCH UNSEEN` / `FLAGGED`. Attachment has
+/// no portable SEARCH key, so it is applied client-side on known envelopes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MessageListFilter {
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default)]
+    pub flagged: bool,
+    #[serde(default)]
+    pub has_attachment: bool,
+}
+
+impl MessageListFilter {
+    pub fn is_empty(self) -> bool {
+        !self.unread && !self.flagged && !self.has_attachment
+    }
+
+    /// `true` when every active flag is satisfied (AND). Inactive flags are ignored.
+    pub fn matches(self, is_read: bool, is_flagged: bool, has_attachments: bool) -> bool {
+        if self.unread && is_read {
+            return false;
+        }
+        if self.flagged && !is_flagged {
+            return false;
+        }
+        if self.has_attachment && !has_attachments {
+            return false;
+        }
+        true
+    }
+
+    /// IMAP `SEARCH` keys for criteria the server can evaluate (`None` = `ALL`).
+    pub fn imap_search_query(self) -> Option<&'static str> {
+        match (self.unread, self.flagged) {
+            (false, false) => None,
+            (true, false) => Some("UNSEEN"),
+            (false, true) => Some("FLAGGED"),
+            (true, true) => Some("UNSEEN FLAGGED"),
+        }
+    }
+}
+
 /// Result of preparing a folder for a paged list (after SELECT + optional SORT/SEARCH).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderListState {
@@ -463,7 +508,7 @@ pub struct PartChunk {
 mod tests {
     use super::{
         format_quota_bytes, EmailAddr, EmailAddress, Envelope, MailboxQuota, MailboxRole,
-        MessageSort,
+        MessageListFilter, MessageSort,
     };
 
     #[test]
@@ -585,5 +630,63 @@ mod tests {
             },
         ]);
         assert_eq!(addr.to_string(), "Alice <a@x.com>, Bob <b@y.com>");
+    }
+
+    #[test]
+    fn list_filter_empty_matches_everything() {
+        let f = MessageListFilter::default();
+        assert!(f.is_empty());
+        assert!(f.matches(true, false, false));
+        assert!(f.matches(false, true, true));
+        assert!(f.imap_search_query().is_none());
+    }
+
+    #[test]
+    fn list_filter_unread_is_unseen_only() {
+        let f = MessageListFilter {
+            unread: true,
+            ..MessageListFilter::default()
+        };
+        assert!(f.matches(false, false, false));
+        assert!(!f.matches(true, false, false));
+        assert!(f.matches(false, true, true));
+        assert_eq!(f.imap_search_query(), Some("UNSEEN"));
+    }
+
+    #[test]
+    fn list_filter_flagged_requires_flag() {
+        let f = MessageListFilter {
+            flagged: true,
+            ..MessageListFilter::default()
+        };
+        assert!(f.matches(true, true, false));
+        assert!(!f.matches(false, false, true));
+        assert_eq!(f.imap_search_query(), Some("FLAGGED"));
+    }
+
+    #[test]
+    fn list_filter_attachment_requires_attachment() {
+        let f = MessageListFilter {
+            has_attachment: true,
+            ..MessageListFilter::default()
+        };
+        assert!(f.matches(true, false, true));
+        assert!(!f.matches(false, true, false));
+        // No portable IMAP SEARCH key for attachments.
+        assert!(f.imap_search_query().is_none());
+    }
+
+    #[test]
+    fn list_filter_combinable_and() {
+        let f = MessageListFilter {
+            unread: true,
+            flagged: true,
+            has_attachment: true,
+        };
+        assert!(f.matches(false, true, true));
+        assert!(!f.matches(true, true, true));
+        assert!(!f.matches(false, false, true));
+        assert!(!f.matches(false, true, false));
+        assert_eq!(f.imap_search_query(), Some("UNSEEN FLAGGED"));
     }
 }

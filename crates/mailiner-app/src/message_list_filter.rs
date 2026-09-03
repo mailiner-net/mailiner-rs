@@ -1,7 +1,9 @@
-//! Client-side text filter over already-loaded folder envelopes.
+//! Client-side list-filter helpers.
 //!
-//! Complements full IMAP SEARCH (issue #27) and the Unread/Flagged/Attachment
-//! chips (issue #55). This only inspects the sparse list cache.
+//! Complements IMAP SEARCH (Unread/Flagged chips) and inspects the sparse
+//! list cache for text query and attachment (no portable IMAP SEARCH).
+
+use mailiner_core::MessageListFilter;
 
 use crate::message::{Message, MessageId};
 
@@ -34,6 +36,21 @@ where
     items
         .into_iter()
         .filter(|(_, m)| message_matches_text_filter(m, query))
+        .collect()
+}
+
+pub fn message_matches_filter(message: &Message, filter: MessageListFilter) -> bool {
+    filter.matches(message.is_read, message.is_flagged, message.has_attachments)
+}
+
+/// Items that satisfy `filter`, preserving the incoming order and indices.
+pub fn matching_messages<'a, I>(items: I, filter: MessageListFilter) -> Vec<(usize, &'a Message)>
+where
+    I: IntoIterator<Item = (usize, &'a Message)>,
+{
+    items
+        .into_iter()
+        .filter(|(_, m)| message_matches_filter(m, filter))
         .collect()
 }
 
@@ -102,9 +119,21 @@ fn filter_words(query: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use chrono::DateTime;
-    use mailiner_core::{AccountId, EmailAddr, EmailAddress, Envelope, FolderId};
+    use mailiner_core::{AccountId, EmailAddr, EmailAddress, Envelope, FolderId, MessageId};
 
     fn msg(uid: &str, subject: &str, from_name: &str, from_email: &str) -> Message {
+        msg_flags(uid, subject, from_name, from_email, false, false, false)
+    }
+
+    fn msg_flags(
+        uid: &str,
+        subject: &str,
+        from_name: &str,
+        from_email: &str,
+        is_read: bool,
+        is_flagged: bool,
+        has_attachments: bool,
+    ) -> Message {
         let now = DateTime::from_timestamp(0, 0).unwrap();
         let envelope = Envelope {
             id: MessageId::new(FolderId::new("INBOX"), uid),
@@ -123,13 +152,13 @@ mod tests {
             in_reply_to: None,
             references: vec![],
             date: now,
-            is_read: false,
+            is_read,
             is_answered: false,
             is_starred: false,
-            is_flagged: false,
+            is_flagged,
             is_draft: false,
             is_deleted: false,
-            has_attachments: false,
+            has_attachments,
             size: None,
         };
         Message::from(envelope)
@@ -222,5 +251,56 @@ mod tests {
         // Hidden anchor falls back to the first match.
         let from_hidden = matching_ids_in_filtered_range(&matching, 1, 2);
         assert_eq!(from_hidden, vec![msgs[0].id.clone(), msgs[2].id.clone()]);
+    }
+
+    #[test]
+    fn empty_filter_keeps_order() {
+        let msgs = [
+            msg_flags("0", "0", "A", "a@x", false, false, false),
+            msg_flags("1", "1", "B", "b@x", true, true, false),
+            msg_flags("3", "3", "C", "c@x", false, true, true),
+        ];
+        let items = msgs.iter().enumerate();
+        let got = matching_messages(items, MessageListFilter::default());
+        let ids: Vec<_> = got.iter().map(|(i, m)| (*i, m.subject.as_str())).collect();
+        assert_eq!(ids, vec![(0, "0"), (1, "1"), (2, "3")]);
+    }
+
+    #[test]
+    fn unread_and_attachment_and() {
+        let msgs = [
+            msg_flags("0", "0", "A", "a@x", false, false, false),
+            msg_flags("1", "1", "B", "b@x", true, true, false),
+            msg_flags("3", "3", "C", "c@x", false, true, true),
+            msg_flags("4", "4", "D", "d@x", true, false, true),
+        ];
+        let filter = MessageListFilter {
+            unread: true,
+            has_attachment: true,
+            ..MessageListFilter::default()
+        };
+        let got = matching_messages(msgs.iter().enumerate(), filter);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1.subject, "3");
+        assert!(!got[0].1.is_read);
+        assert!(got[0].1.has_attachments);
+    }
+
+    #[test]
+    fn flagged_only() {
+        let msgs = [
+            msg_flags("0", "0", "A", "a@x", false, false, false),
+            msg_flags("1", "1", "B", "b@x", true, true, false),
+            msg_flags("3", "3", "C", "c@x", false, true, true),
+        ];
+        let filter = MessageListFilter {
+            flagged: true,
+            ..MessageListFilter::default()
+        };
+        let subjects: Vec<_> = matching_messages(msgs.iter().enumerate(), filter)
+            .into_iter()
+            .map(|(_, m)| m.subject.as_str())
+            .collect();
+        assert_eq!(subjects, vec!["1", "3"]);
     }
 }

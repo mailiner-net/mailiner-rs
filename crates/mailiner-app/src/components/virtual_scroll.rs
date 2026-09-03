@@ -105,6 +105,11 @@ impl<T: Clone> SparseList<T> {
         self.items.iter().map(|(k, v)| (*k, v))
     }
 
+    /// Cached items in index order (skips holes).
+    pub fn iter_cached(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.items.iter().map(|(k, v)| (*k, v))
+    }
+
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.items.values_mut()
     }
@@ -756,6 +761,15 @@ mod tests {
         list.insert(5, "c");
         let gaps = list.missing_ranges(0, 10);
         assert_eq!(gaps, vec![2..5, 6..10]);
+    }
+
+    #[test]
+    fn iter_cached_skips_holes() {
+        let mut list = SparseList::new(5);
+        list.insert(0, "a");
+        list.insert(2, "c");
+        let got: Vec<_> = list.iter_cached().map(|(i, v)| (i, *v)).collect();
+        assert_eq!(got, vec![(0, "a"), (2, "c")]);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::account_store::WebLocalStorage;
 use crate::account_store::{AccountStoreError, StringKvStore};
 use crate::mailbox::MailboxId;
-use mailiner_core::MessageSort;
+use mailiner_core::{MessageListFilter, MessageSort};
 
 /// `localStorage` key for the message-list sort.
 pub const MESSAGE_SORT_KEY: &str = "mailiner.ui.messageSort";
@@ -385,6 +385,9 @@ fn domain_of_normalized(email: &str) -> Option<String> {
     normalize_domain(domain)
 }
 
+/// `localStorage` key for message-list quick filters.
+pub const MESSAGE_LIST_FILTER_KEY: &str = "mailiner.ui.messageListFilter";
+
 /// `localStorage` key for last-opened mailbox per account.
 pub const LAST_MAILBOX_KEY: &str = "mailiner.ui.lastMailbox.v1";
 /// Schema version for [`LastMailboxBlob`] (independent of the account store).
@@ -567,6 +570,17 @@ pub fn load_message_list_density() -> MessageListDensity {
             .get_item(MESSAGE_LIST_DENSITY_KEY)?
             .as_deref()
             .and_then(MessageListDensity::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn load_message_list_filter() -> MessageListFilter {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(MESSAGE_LIST_FILTER_KEY)?
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default())
     })
     .unwrap_or_default()
@@ -783,6 +797,14 @@ pub fn save_show_all_folders(show_all: bool) {
     let _ = with_kv(|kv| kv.set_item(SHOW_ALL_FOLDERS_KEY, if show_all { "1" } else { "0" }));
 }
 
+pub fn save_message_list_filter(filter: MessageListFilter) {
+    let _ = with_kv(|kv| {
+        let json = serde_json::to_string(&filter)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        kv.set_item(MESSAGE_LIST_FILTER_KEY, &json)
+    });
+}
+
 /// Drop last-mailbox rows for accounts that are no longer known.
 pub fn retain_last_mailboxes(known: &HashSet<AccountId>) {
     let _ = with_kv(|kv| {
@@ -995,6 +1017,22 @@ mod tests {
                 .expect("set unknown density");
         });
         assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn message_list_filter_roundtrip() {
+        host_kv::reset();
+        assert!(load_message_list_filter().is_empty());
+        let filter = MessageListFilter {
+            unread: true,
+            flagged: false,
+            has_attachment: true,
+        };
+        save_message_list_filter(filter);
+        assert_eq!(load_message_list_filter(), filter);
+        save_message_list_filter(MessageListFilter::default());
+        assert!(load_message_list_filter().is_empty());
         host_kv::reset();
     }
 

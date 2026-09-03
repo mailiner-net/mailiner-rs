@@ -411,6 +411,7 @@ pub fn AccountConnectionFields(
                 id: "{id_prefix}-email",
                 value: email.clone(),
                 oninput: {
+                    let previous_email = email.clone();
                     let imap_username = imap_username.clone();
                     let smtp_username = smtp_username.clone();
                     let smtp_host = smtp_host.clone();
@@ -424,7 +425,7 @@ pub fn AccountConnectionFields(
                             smtp_username: smtp_username.clone(),
                             smtp_use_tls: true,
                         };
-                        apply_email_change(&v, &mut next);
+                        apply_email_change(&previous_email, &v, &mut next);
                         set_email.call(v);
                         if next.imap_username != imap_username {
                             set_imap_username.call(next.imap_username);

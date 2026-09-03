@@ -135,28 +135,40 @@ pub fn apply_preset(preset: ProviderPreset, email: &str, fields: &mut PresetForm
     fields.smtp_host = servers.smtp_host.to_string();
     fields.smtp_port = servers.smtp_port.to_string();
     fields.smtp_use_tls = servers.smtp_use_tls;
-    fill_empty_usernames(email, fields);
+    fill_usernames_from_email(email, "", fields);
 }
 
-/// After the email field changes: fill empty usernames, and if SMTP is still
-/// a documented Microsoft host, switch consumer vs Microsoft 365.
-pub fn apply_email_change(email: &str, fields: &mut PresetFormFields) {
-    fill_empty_usernames(email, fields);
+/// After the email field changes: update auto-filled usernames, and if SMTP is
+/// still a documented Microsoft host, switch consumer vs Microsoft 365.
+///
+/// IMAP username is filled when empty or still equal to `previous_email`.
+/// SMTP username is only filled when an SMTP host is already set (optional
+/// SMTP must stay `None` if the section is unused).
+pub fn apply_email_change(previous_email: &str, email: &str, fields: &mut PresetFormFields) {
+    fill_usernames_from_email(email, previous_email, fields);
     if is_microsoft_smtp_host(&fields.smtp_host) {
         fields.smtp_host = outlook_smtp_host(email).to_string();
     }
 }
 
-fn fill_empty_usernames(email: &str, fields: &mut PresetFormFields) {
+fn fill_usernames_from_email(email: &str, previous_email: &str, fields: &mut PresetFormFields) {
     let Some(user) = username_from_email(email) else {
         return;
     };
-    if fields.imap_username.trim().is_empty() {
+    if should_update_username(&fields.imap_username, previous_email) {
         fields.imap_username = user.clone();
     }
-    if fields.smtp_username.trim().is_empty() {
+    if !fields.smtp_host.trim().is_empty()
+        && should_update_username(&fields.smtp_username, previous_email)
+    {
         fields.smtp_username = user;
     }
+}
+
+fn should_update_username(current: &str, previous_email: &str) -> bool {
+    let current = current.trim();
+    let previous_email = previous_email.trim();
+    current.is_empty() || (!previous_email.is_empty() && current == previous_email)
 }
 
 /// Which named preset matches the current host/port/TLS, or Custom.
@@ -205,20 +217,24 @@ fn is_outlook_consumer_email(email: &str) -> bool {
         return false;
     };
     let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    const SUFFIXES: &[&str] = &[
-        "outlook.com",
-        "outlook.co.uk",
-        "hotmail.com",
-        "hotmail.co.uk",
-        "hotmail.fr",
-        "hotmail.de",
-        "live.com",
-        "live.co.uk",
-        "msn.com",
-    ];
-    SUFFIXES
-        .iter()
-        .any(|s| domain == *s || domain.ends_with(&format!(".{s}")))
+    matches!(
+        consumer_sld(&domain),
+        Some("outlook" | "hotmail" | "live" | "msn")
+    )
+}
+
+/// Second-level label, or the label before `co.uk` / `com.br`-style public suffixes.
+fn consumer_sld(domain: &str) -> Option<&str> {
+    let mut labels = domain.split('.').rev();
+    let tld = labels.next()?;
+    let sld = labels.next()?;
+    if tld.is_empty() || sld.is_empty() {
+        return None;
+    }
+    if matches!(sld, "co" | "com" | "ac" | "org" | "ne" | "or") {
+        return labels.next().filter(|s| !s.is_empty());
+    }
+    Some(sld)
 }
 
 fn username_from_email(email: &str) -> Option<String> {
@@ -324,23 +340,61 @@ mod tests {
         assert!(fields.imap_username.is_empty());
         assert_eq!(fields.smtp_host, "smtp.office365.com");
 
-        apply_email_change("ada@outlook.com", &mut fields);
+        apply_email_change("", "ada@outlook.com", &mut fields);
         assert_eq!(fields.imap_username, "ada@outlook.com");
         assert_eq!(fields.smtp_username, "ada@outlook.com");
         assert_eq!(fields.smtp_host, "smtp-mail.outlook.com");
 
-        apply_email_change("ada@contoso.com", &mut fields);
-        assert_eq!(fields.imap_username, "ada@outlook.com");
+        apply_email_change("ada@outlook.com", "ada@contoso.com", &mut fields);
+        assert_eq!(fields.imap_username, "ada@contoso.com");
         assert_eq!(fields.smtp_host, "smtp.office365.com");
+    }
+
+    #[test]
+    fn email_change_updates_autofilled_partial_username() {
+        let mut fields = apply(ProviderPreset::Gmail, "");
+        apply_email_change("", "ada@g", &mut fields);
+        assert_eq!(fields.imap_username, "ada@g");
+        apply_email_change("ada@g", "ada@gmail.com", &mut fields);
+        assert_eq!(fields.imap_username, "ada@gmail.com");
+        assert_eq!(fields.smtp_username, "ada@gmail.com");
+
+        fields.imap_username = "keep-me".into();
+        apply_email_change("ada@gmail.com", "ada@other.com", &mut fields);
+        assert_eq!(fields.imap_username, "keep-me");
+    }
+
+    #[test]
+    fn email_change_does_not_fill_smtp_username_without_host() {
+        let mut fields = PresetFormFields::empty();
+        apply_email_change("", "ada@gmail.com", &mut fields);
+        assert_eq!(fields.imap_username, "ada@gmail.com");
+        assert!(fields.smtp_username.is_empty());
+        assert!(fields.smtp_host.is_empty());
     }
 
     #[test]
     fn email_change_does_not_overwrite_custom_smtp_host() {
         let mut fields = apply(ProviderPreset::Gmail, "");
         fields.smtp_host = "smtp.example.com".into();
-        apply_email_change("ada@gmail.com", &mut fields);
+        apply_email_change("", "ada@gmail.com", &mut fields);
         assert_eq!(fields.smtp_host, "smtp.example.com");
         assert_eq!(fields.imap_username, "ada@gmail.com");
+    }
+
+    #[test]
+    fn outlook_consumer_includes_cctld_aliases() {
+        for email in [
+            "ada@hotmail.es",
+            "ada@outlook.es",
+            "ada@live.nl",
+            "ada@msn.de",
+        ] {
+            let fields = apply(ProviderPreset::Outlook, email);
+            assert_eq!(fields.smtp_host, "smtp-mail.outlook.com", "email={email}");
+        }
+        let work = apply(ProviderPreset::Outlook, "ada@contoso.com");
+        assert_eq!(work.smtp_host, "smtp.office365.com");
     }
 
     #[test]

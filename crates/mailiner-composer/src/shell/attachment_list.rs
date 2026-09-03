@@ -36,6 +36,7 @@ pub fn guess_content_type(filename: &str) -> String {
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         "txt" => "text/plain",
         "html" | "htm" => "text/html",
@@ -199,9 +200,15 @@ fn escape_html_attr(s: &str) -> String {
 }
 
 /// True when `content_type` or `filename` looks like a paste/insert raster image.
+///
+/// An explicit non-generic MIME type wins (so `image/svg+xml` stays rejected
+/// even if the name ends in `.png`). Missing or `application/octet-stream`
+/// falls back to the filename extension.
 pub fn looks_like_inline_image(filename: &str, content_type: Option<&str>) -> bool {
-    if content_type.is_some_and(is_safe_image_content_type) {
-        return true;
+    if let Some(ct) = content_type.map(str::trim).filter(|s| !s.is_empty()) {
+        if !ct.eq_ignore_ascii_case("application/octet-stream") {
+            return is_safe_image_content_type(ct);
+        }
     }
     is_safe_image_content_type(&guess_content_type(filename))
 }
@@ -222,6 +229,7 @@ mod tests {
     fn guess_from_extension() {
         assert_eq!(guess_content_type("a.pdf"), "application/pdf");
         assert_eq!(guess_content_type("photo.JPG"), "image/jpeg");
+        assert_eq!(guess_content_type("shot.bmp"), "image/bmp");
         assert_eq!(guess_content_type(r"C:\tmp\notes.txt"), "text/plain");
         assert_eq!(guess_content_type("noext"), "application/octet-stream");
         assert_eq!(
@@ -321,8 +329,14 @@ mod tests {
     fn looks_like_inline_image_from_type_or_name() {
         assert!(looks_like_inline_image("x.bin", Some("image/png")));
         assert!(looks_like_inline_image("photo.JPG", None));
+        assert!(looks_like_inline_image("shot.bmp", None));
+        assert!(looks_like_inline_image(
+            "photo.png",
+            Some("application/octet-stream")
+        ));
         assert!(!looks_like_inline_image("notes.txt", Some("text/plain")));
         assert!(!looks_like_inline_image("icon.svg", Some("image/svg+xml")));
+        assert!(!looks_like_inline_image("photo.png", Some("image/svg+xml")));
     }
 
     #[test]

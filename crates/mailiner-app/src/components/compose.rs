@@ -384,14 +384,74 @@ fn draft_slot_counts(
         })
 }
 
-fn push_incoming(
+fn same_open_draft(compose_draft: Signal<Option<ComposeSession>>, draft_id: &str) -> bool {
+    open_draft_id(compose_draft).as_deref() == Some(draft_id)
+}
+
+fn kind_limits(kind: AttachKind) -> (u64, usize, fn() -> String) {
+    match kind {
+        AttachKind::File => (
+            caps::MAX_FILE_BYTES,
+            caps::MAX_ATTACHMENTS,
+            too_many_message,
+        ),
+        AttachKind::Inline => (
+            caps::MAX_INLINE_BYTES,
+            caps::MAX_INLINES,
+            too_many_inlines_message,
+        ),
+    }
+}
+
+enum AttachStep {
+    Continue,
+    Stop,
+}
+
+fn attach_one_bytes(
     compose_draft: Signal<Option<ComposeSession>>,
     draft_id: &str,
-    item: IncomingBytes,
+    mut item: IncomingBytes,
     body: Signal<String>,
     kind: AttachKind,
-) -> PushAttachment {
-    match kind {
+    inline_index: &mut usize,
+    first_err: &mut Option<String>,
+) -> AttachStep {
+    if !same_open_draft(compose_draft, draft_id) {
+        return AttachStep::Stop;
+    }
+    if kind == AttachKind::Inline {
+        item.filename = image_filename(&item.filename, &item.content_type, *inline_index);
+        *inline_index += 1;
+        if !looks_like_inline_image(&item.filename, Some(&item.content_type)) {
+            first_err.get_or_insert_with(|| not_an_image_message(&item.filename));
+            return AttachStep::Continue;
+        }
+    }
+    let size = item.bytes.len() as u64;
+    let (max_one, max_count, too_many) = kind_limits(kind);
+    if size > max_one {
+        first_err.get_or_insert_with(|| oversize_message(&item.filename));
+        return AttachStep::Continue;
+    }
+    let Some((file_count, inline_count, used)) =
+        draft_slot_counts(compose_draft, draft_id, body().len())
+    else {
+        return AttachStep::Stop;
+    };
+    let count = match kind {
+        AttachKind::File => file_count,
+        AttachKind::Inline => inline_count,
+    };
+    if count >= max_count {
+        first_err.get_or_insert_with(too_many);
+        return AttachStep::Stop;
+    }
+    if would_exceed_draft_cap(used, size) {
+        first_err.get_or_insert_with(oversize_draft_message);
+        return AttachStep::Continue;
+    }
+    let pushed = match kind {
         AttachKind::File => {
             let attachment = file_attachment(item.filename, item.content_type, item.bytes);
             push_attachment_on_draft(compose_draft, draft_id, attachment, body)
@@ -400,75 +460,18 @@ fn push_incoming(
             let image = inline_image(Some(item.filename), item.content_type, item.bytes);
             push_inline_on_draft(compose_draft, draft_id, image, body)
         }
-    }
-}
-
-async fn attach_incoming_bytes(
-    ctx: AppContext,
-    items: Vec<IncomingBytes>,
-    body: Signal<String>,
-    error: Signal<Option<String>>,
-    kind: AttachKind,
-) {
-    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
-        return;
     };
-    let mut first_err = None::<String>;
-    let mut inline_index = 0usize;
-    for mut item in items {
-        if kind == AttachKind::Inline {
-            item.filename = image_filename(&item.filename, &item.content_type, inline_index);
-            inline_index += 1;
-            if !looks_like_inline_image(&item.filename, Some(&item.content_type)) {
-                first_err.get_or_insert_with(|| not_an_image_message(&item.filename));
-                continue;
-            }
-        }
-        let size = item.bytes.len() as u64;
-        let max_one = match kind {
-            AttachKind::File => caps::MAX_FILE_BYTES,
-            AttachKind::Inline => caps::MAX_INLINE_BYTES,
-        };
-        if size > max_one {
-            first_err.get_or_insert_with(|| oversize_message(&item.filename));
-            continue;
-        }
-        let Some((file_count, inline_count, used)) =
-            draft_slot_counts(ctx.compose_draft, &draft_id, body().len())
-        else {
-            break;
-        };
-        let (count, too_many) = match kind {
-            AttachKind::File => (file_count, too_many_message as fn() -> String),
-            AttachKind::Inline => (inline_count, too_many_inlines_message as fn() -> String),
-        };
-        let max = match kind {
-            AttachKind::File => caps::MAX_ATTACHMENTS,
-            AttachKind::Inline => caps::MAX_INLINES,
-        };
-        if count >= max {
+    match pushed {
+        PushAttachment::Added => AttachStep::Continue,
+        PushAttachment::TooMany => {
             first_err.get_or_insert_with(too_many);
-            break;
+            AttachStep::Stop
         }
-        if would_exceed_draft_cap(used, size) {
+        PushAttachment::Stale => AttachStep::Stop,
+        PushAttachment::TooLarge => {
             first_err.get_or_insert_with(oversize_draft_message);
-            continue;
+            AttachStep::Continue
         }
-        match push_incoming(ctx.compose_draft, &draft_id, item, body, kind) {
-            PushAttachment::Added => {}
-            PushAttachment::TooMany => {
-                first_err.get_or_insert_with(too_many);
-                break;
-            }
-            PushAttachment::Stale => break,
-            PushAttachment::TooLarge => {
-                first_err.get_or_insert_with(oversize_draft_message);
-                continue;
-            }
-        }
-    }
-    if let Some(msg) = first_err {
-        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
     }
 }
 
@@ -479,15 +482,18 @@ async fn attach_selected_files(
     error: Signal<Option<String>>,
     kind: AttachKind,
 ) {
-    let mut items = Vec::new();
+    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
+        return;
+    };
     let mut first_err = None::<String>;
+    let mut inline_index = 0usize;
+    let (max_one, _, _) = kind_limits(kind);
     for file in files {
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
         let filename = file.name();
         let declared = file.size();
-        let max_one = match kind {
-            AttachKind::File => caps::MAX_FILE_BYTES,
-            AttachKind::Inline => caps::MAX_INLINE_BYTES,
-        };
         if declared > max_one {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
@@ -499,23 +505,34 @@ async fn attach_selected_files(
                 continue;
             }
         };
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
         if bytes.len() as u64 > max_one {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
         }
         let content_type = resolve_content_type(&filename, file.content_type().as_deref());
-        items.push(IncomingBytes {
-            filename,
-            content_type,
-            bytes: bytes.to_vec(),
-        });
-    }
-    if let Some(msg) = first_err {
-        if let Some(draft_id) = open_draft_id(ctx.compose_draft) {
-            set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+        match attach_one_bytes(
+            ctx.compose_draft,
+            &draft_id,
+            IncomingBytes {
+                filename,
+                content_type,
+                bytes: bytes.to_vec(),
+            },
+            body,
+            kind,
+            &mut inline_index,
+            &mut first_err,
+        ) {
+            AttachStep::Continue => {}
+            AttachStep::Stop => break,
         }
     }
-    attach_incoming_bytes(ctx, items, body, error, kind).await;
+    if let Some(msg) = first_err {
+        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+    }
 }
 
 fn clipboard_data_transfer(evt: &dioxus::html::ClipboardEvent) -> Option<web_sys::DataTransfer> {
@@ -592,9 +609,15 @@ async fn attach_web_images(
     body: Signal<String>,
     error: Signal<Option<String>>,
 ) {
-    let mut items = Vec::new();
+    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
+        return;
+    };
     let mut first_err = None::<String>;
+    let mut inline_index = 0usize;
     for file in files {
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
         let filename = file.name();
         let declared = file.size() as u64;
         if declared > caps::MAX_INLINE_BYTES {
@@ -608,6 +631,9 @@ async fn attach_web_images(
                 continue;
             }
         };
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
         if bytes.len() as u64 > caps::MAX_INLINE_BYTES {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
@@ -615,18 +641,26 @@ async fn attach_web_images(
         let reported = file.type_();
         let content_type =
             resolve_content_type(&filename, Some(reported.as_str()).filter(|s| !s.is_empty()));
-        items.push(IncomingBytes {
-            filename,
-            content_type,
-            bytes,
-        });
-    }
-    if let Some(msg) = first_err {
-        if let Some(draft_id) = open_draft_id(ctx.compose_draft) {
-            set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+        match attach_one_bytes(
+            ctx.compose_draft,
+            &draft_id,
+            IncomingBytes {
+                filename,
+                content_type,
+                bytes,
+            },
+            body,
+            AttachKind::Inline,
+            &mut inline_index,
+            &mut first_err,
+        ) {
+            AttachStep::Continue => {}
+            AttachStep::Stop => break,
         }
     }
-    attach_incoming_bytes(ctx, items, body, error, AttachKind::Inline).await;
+    if let Some(msg) = first_err {
+        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+    }
 }
 
 #[component]

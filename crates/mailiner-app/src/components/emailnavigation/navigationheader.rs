@@ -52,6 +52,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let current_density = *density.read();
     let supports_size_sender = *ctx.sort_supports_size_sender.read();
     let message_total = ctx.messages.read().total_count();
+    let quota = *ctx.account_quota.read();
 
     let current_mailbox = current_mailbox_id.as_ref().and_then(|id| mailboxes.get(id));
     let current_account = current_account_id.as_ref().and_then(|id| accounts.get(id));
@@ -82,6 +83,13 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         class: "pane-header-account-link",
                         title: "Manage accounts",
                         "{account.name}"
+                    }
+                    if let Some(quota) = quota {
+                        span {
+                            class: "pane-header-quota",
+                            title: "{quota.used_percent()}% used",
+                            "{quota.display()}"
+                        }
                     }
                 } else {
                     Link {

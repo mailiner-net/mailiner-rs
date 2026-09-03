@@ -36,6 +36,7 @@ pub fn AccountsSettingsPage() -> Element {
     let accounts = ctx.accounts;
     let selected = ctx.selected_account;
     let connection_states = ctx.connection_states;
+    let quota = *ctx.account_quota.read();
 
     let mut confirm_delete_id = use_signal(|| None::<AccountId>);
     let action_error = use_signal(|| None::<String>);
@@ -134,6 +135,11 @@ pub fn AccountsSettingsPage() -> Element {
                                         div {
                                             class: "accounts-list-conn bootstrap-muted",
                                             "{conn_label}"
+                                            if is_active {
+                                                if let Some(quota) = quota {
+                                                    " · {quota.display()}"
+                                                }
+                                            }
                                         }
                                     }
                                     div {

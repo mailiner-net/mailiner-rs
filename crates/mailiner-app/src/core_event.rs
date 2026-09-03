@@ -1181,6 +1181,12 @@ async fn list_folders_soft(
                 }
             }
 
+            let quota_folder = startup
+                .as_ref()
+                .map(|id| FolderId::new(id.to_string()))
+                .unwrap_or_else(|| FolderId::new("INBOX"));
+            fetch_quota_soft(manager, ctx, account_id, &quota_folder).await;
+
             restore_mailbox(manager, ctx, account_id).await;
 
             // Remaining folders. Skip the selected one so later STATUS cannot
@@ -1223,6 +1229,34 @@ async fn list_folders_soft(
     }
 }
 
+async fn fetch_quota_soft(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    folder_id: &FolderId,
+) {
+    if !selected_account_is(ctx, account_id) {
+        return;
+    }
+    let Some(connector) = manager.get(account_id) else {
+        ctx.account_quota.set(None);
+        return;
+    };
+    match connector.folder_quota(folder_id).await {
+        Ok(quota) => {
+            if selected_account_is(ctx, account_id) {
+                ctx.account_quota.set(quota);
+            }
+        }
+        Err(e) => {
+            warn!("folder_quota failed for {account_id}: {e}");
+            if selected_account_is(ctx, account_id) {
+                ctx.account_quota.set(None);
+            }
+        }
+    }
+}
+
 /// Open the last folder for this account, or Inbox / first root when none is saved.
 async fn restore_mailbox(
     manager: &AccountConnectionManager,
@@ -1250,6 +1284,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
+    ctx.account_quota.set(None);
 }
 
 /// Paint a [`HydratedAccount`] onto UI signals (cache hit, no IMAP).

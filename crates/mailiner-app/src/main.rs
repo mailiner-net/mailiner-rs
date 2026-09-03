@@ -293,6 +293,7 @@ fn App() -> Element {
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
     let sort_supports_size_sender = use_signal(|| false);
+    let account_quota = use_signal(|| None);
     let selection = use_signal(crate::selection::MessageSelection::default);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
     let download_status = use_signal(HashMap::new);
@@ -318,6 +319,7 @@ fn App() -> Element {
         message_sort,
         message_list_density,
         sort_supports_size_sender,
+        account_quota,
         selected_mailbox,
         selected_account,
         selection,

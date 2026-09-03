@@ -12,8 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MessageContent, MessagePart,
-    MessageSort, PartChunk, PartKind, TransferEncoding,
+    Account, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota,
+    MessageContent, MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).
@@ -37,6 +37,9 @@ where
         &self,
         folder_ids: &[FolderId],
     ) -> Result<HashMap<FolderId, FolderCounts>>;
+    /// RFC 2087 `GETQUOTAROOT` for `folder_id`. `None` if the server has no QUOTA
+    /// capability, no STORAGE resource, or no finite limit.
+    async fn folder_quota(&self, folder_id: &FolderId) -> Result<Option<MailboxQuota>>;
     /// SELECT the folder, build the sort index, and return the list length.
     async fn prepare_folder_list(
         &self,
@@ -323,6 +326,13 @@ where
             );
         }
         Ok(out)
+    }
+
+    async fn folder_quota(&self, _folder_id: &FolderId) -> Result<Option<MailboxQuota>> {
+        Ok(Some(MailboxQuota {
+            used_bytes: 12 * 1024 * 1024 * 1024 / 10,
+            limit_bytes: 15 * 1024 * 1024 * 1024,
+        }))
     }
 
     async fn prepare_folder_list(

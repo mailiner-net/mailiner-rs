@@ -246,7 +246,9 @@ fn has_boolean_hidden(attrs: &str) -> bool {
     let mut rest = lower.as_str();
     while let Some(pos) = rest.find("hidden") {
         let before = rest[..pos].chars().next_back();
-        if before.is_some_and(|c| c == '-' || c.is_ascii_alphanumeric()) {
+        // Only a standalone attribute token (`hidden` / `hidden="..."`), not
+        // `aria-hidden` or a URL path segment like `/hidden/`.
+        if !before.is_none_or(|c| c.is_ascii_whitespace()) {
             rest = &rest[pos + 6..];
             continue;
         }
@@ -285,7 +287,7 @@ fn replaced_element_is_visible(tag: &str, attrs: &str) -> bool {
                 _ => true,
             }
         }
-        "hr" | "picture" | "canvas" => true,
+        "hr" | "picture" | "canvas" | "video" | "audio" | "object" | "embed" | "iframe" => true,
         _ => !attr_value(attrs, "src")
             .unwrap_or_default()
             .trim()
@@ -545,5 +547,19 @@ mod tests {
             collapse_trailing_blockquotes(none).contains("<details"),
             "{none}"
         );
+    }
+
+    #[test]
+    fn html_video_without_src_after_blockquote_stays_open() {
+        let html = "<p>Thanks.</p><blockquote>old</blockquote><video poster=\"p.jpg\"></video>";
+        let out = collapse_trailing_blockquotes(html);
+        assert!(!out.contains("<details"), "{out}");
+    }
+
+    #[test]
+    fn html_img_url_containing_hidden_stays_open() {
+        let html = "<p>Thanks.</p><blockquote>old</blockquote><img src=\"https://cdn.example/hidden/sig.png\">";
+        let out = collapse_trailing_blockquotes(html);
+        assert!(!out.contains("<details"), "{out}");
     }
 }

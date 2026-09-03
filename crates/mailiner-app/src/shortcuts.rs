@@ -10,6 +10,7 @@ pub enum ShortcutId {
     Send,
     JumpToFolder,
     MoveToFolder,
+    CopyToFolder,
     NextMessage,
     PrevMessage,
     ExtendNextMessage,
@@ -121,6 +122,14 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: false,
         label: "M",
         description: "Move message to folder",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::CopyToFolder,
+        keys: &["c", "C"],
+        require_shift: true,
+        label: "Shift+C",
+        description: "Copy message to folder",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -261,7 +270,7 @@ mod tests {
         );
         assert_eq!(
             shortcut_for_key("C", true).map(|s| s.id),
-            Some(ShortcutId::Compose)
+            Some(ShortcutId::CopyToFolder)
         );
         assert_eq!(
             shortcut_for_key("r", false).map(|s| s.id),
@@ -313,6 +322,22 @@ mod tests {
         assert_eq!(
             shortcut_for_key("J", true).map(|s| s.id),
             Some(ShortcutId::JumpToFolder)
+        );
+    }
+
+    #[test]
+    fn shift_c_copies_plain_c_composes() {
+        assert_eq!(
+            shortcut_for_key("c", false).map(|s| s.id),
+            Some(ShortcutId::Compose)
+        );
+        assert_eq!(
+            shortcut_for_key("C", true).map(|s| s.id),
+            Some(ShortcutId::CopyToFolder)
+        );
+        assert_eq!(
+            shortcut_for_key("c", true).map(|s| s.id),
+            Some(ShortcutId::CopyToFolder)
         );
     }
 

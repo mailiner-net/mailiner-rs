@@ -1,4 +1,4 @@
-//! KMail-style folder jumper: **J** to go to a mailbox, **M** to move the current message.
+//! KMail-style folder jumper: **J** to go to a mailbox, **M** to move, **Shift+C** to copy.
 
 use std::rc::Rc;
 
@@ -69,7 +69,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
     let nodes = ctx.mailbox_nodes.read();
     let roots = ctx.mailbox_roots.read();
     let mut entries = collect_mailbox_entries(&roots, &nodes);
-    if mode == MailboxPickerMode::Move {
+    if matches!(mode, MailboxPickerMode::Move | MailboxPickerMode::Copy) {
         entries.retain(|e| current.as_ref() != Some(&e.id));
     }
     let start_hi = current
@@ -95,6 +95,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
     let title = match mode {
         MailboxPickerMode::Jump => "Go to folder",
         MailboxPickerMode::Move => "Move to folder",
+        MailboxPickerMode::Copy => "Copy to folder",
     };
 
     let accept_id = {
@@ -105,7 +106,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                 MailboxPickerMode::Jump => {
                     let _ = core.send(CoreEvent::JumpToMailbox(id));
                 }
-                MailboxPickerMode::Move => {
+                MailboxPickerMode::Move | MailboxPickerMode::Copy => {
                     let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
                         ctx.show_toast(ToastAction::error("No mailbox selected"));
                         picker.set(None);
@@ -117,11 +118,20 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                         picker.set(None);
                         return;
                     };
-                    let _ = core.send(CoreEvent::MoveMessages {
-                        mailbox_id,
-                        message_ids,
-                        dest_mailbox_id: id,
-                    });
+                    let event = if mode == MailboxPickerMode::Move {
+                        CoreEvent::MoveMessages {
+                            mailbox_id,
+                            message_ids,
+                            dest_mailbox_id: id,
+                        }
+                    } else {
+                        CoreEvent::CopyMessages {
+                            mailbox_id,
+                            message_ids,
+                            dest_mailbox_id: id,
+                        }
+                    };
+                    let _ = core.send(event);
                 }
             }
             picker.set(None);

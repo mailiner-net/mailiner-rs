@@ -15,11 +15,12 @@ use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
 
-/// KMail-style folder jumper: **J** goes to a mailbox, **M** moves the current message.
+/// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailboxPickerMode {
     Jump,
     Move,
+    Copy,
 }
 
 /// Viewer panel state driven by core_loop load pipeline.
@@ -82,7 +83,7 @@ pub struct AppContext {
     pub toast: Signal<Option<Toast>>,
     /// Open compose session (`None` = closed).
     pub compose_draft: Signal<Option<ComposeSession>>,
-    /// Folder jumper / move-to-folder dialog (`None` = closed).
+    /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
 }
 

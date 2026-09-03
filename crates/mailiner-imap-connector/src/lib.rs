@@ -1112,6 +1112,31 @@ where
         Ok(dest_uids)
     }
 
+    async fn copy_messages(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        dest_folder_id: &FolderId,
+    ) -> MailinerResult<Vec<MessageId>> {
+        if message_ids.is_empty() || folder_id == dest_folder_id {
+            return Ok(message_ids.to_vec());
+        }
+        let uids = uid_set(folder_id, message_ids)?;
+        let dest = quote_mailbox(dest_folder_id.as_str());
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+
+        // UID COPY only — originals stay, no `\Deleted`.
+        run_copyuid_command(session, dest_folder_id, &format!("UID COPY {uids} {dest}")).await
+    }
+
     async fn delete_messages(
         &self,
         folder_id: &FolderId,
@@ -1482,6 +1507,15 @@ mod tests {
         assert_eq!(quote_mailbox("Trash"), "\"Trash\"");
         assert_eq!(quote_mailbox("Deleted Items"), "\"Deleted Items\"");
         assert_eq!(quote_mailbox(r#"foo"bar"#), r#""foo\"bar""#);
+    }
+
+    #[test]
+    fn uid_copy_command_does_not_delete() {
+        let dest = quote_mailbox("Archive");
+        let cmd = format!("UID COPY 12,44 {dest}");
+        assert_eq!(cmd, r#"UID COPY 12,44 "Archive""#);
+        assert!(!cmd.contains("MOVE"));
+        assert!(!cmd.contains("Deleted"));
     }
 
     #[test]

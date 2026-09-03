@@ -74,6 +74,12 @@ pub enum CoreEvent {
         message_ids: Vec<MessageId>,
         dest_mailbox_id: MailboxId,
     },
+    /// Copy to another folder; source messages stay.
+    CopyMessages {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+        dest_mailbox_id: MailboxId,
+    },
     /// Move to the Trash special-use folder, or permanently delete when already there.
     MoveToTrash {
         mailbox_id: MailboxId,
@@ -323,6 +329,14 @@ pub async fn core_loop(
                 dest_mailbox_id,
             } => {
                 handle_move_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
+                    .await;
+            }
+            CoreEvent::CopyMessages {
+                mailbox_id,
+                message_ids,
+                dest_mailbox_id,
+            } => {
+                handle_copy_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
                     .await;
             }
             CoreEvent::MoveToTrash {
@@ -1605,6 +1619,13 @@ fn unread_in_removed(snapshots: &[RemovedMessage]) -> i32 {
     snapshots.iter().filter(|s| !s.message.is_read).count() as i32
 }
 
+fn unread_among(ctx: &AppContext, ids: &[MessageId]) -> i32 {
+    let list = ctx.messages.read();
+    ids.iter()
+        .filter(|id| list.find(|m| &m.id == *id).is_some_and(|m| !m.is_read))
+        .count() as i32
+}
+
 /// Remove `ids` from the current list. If the selected row is among them,
 /// returns its pre-removal index so the caller can select the next remaining row.
 fn take_messages_from_ui(
@@ -1837,6 +1858,60 @@ async fn handle_move_messages(
         Err(e) => {
             error!("Failed to move messages: {}", e);
             ctx.show_toast(ToastAction::error(format!("Could not move messages: {e}")));
+        }
+    }
+}
+
+async fn handle_copy_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+    dest_mailbox_id: MailboxId,
+) {
+    if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.show_toast(ToastAction::error("No account selected"));
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let dest_id = FolderId::new(dest_mailbox_id.to_string());
+    let core_ids = core_message_ids(&message_ids);
+    match connector
+        .copy_messages(&folder_id, &core_ids, &dest_id)
+        .await
+    {
+        Ok(_) => {
+            let unread_n = unread_among(ctx, &message_ids);
+            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&dest_mailbox_id) {
+                node.total_count = node.total_count.saturating_add(message_ids.len());
+            }
+            if unread_n != 0 {
+                bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
+            }
+            let dest_label = ctx
+                .mailbox_nodes
+                .read()
+                .get(&dest_mailbox_id)
+                .map(|n| n.title().to_string())
+                .unwrap_or_else(|| dest_mailbox_id.to_string());
+            ctx.show_toast(ToastAction::info(format!("Copied to {dest_label}")));
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
+        }
+        Err(e) => {
+            error!("Failed to copy messages: {}", e);
+            ctx.show_toast(ToastAction::error(format!("Could not copy messages: {e}")));
         }
     }
 }

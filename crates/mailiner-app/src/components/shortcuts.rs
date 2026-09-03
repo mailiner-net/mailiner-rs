@@ -82,6 +82,13 @@ fn run_shortcut(
             }
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
         }
+        ShortcutId::CopyToFolder => {
+            if ctx.selection.peek().is_empty() {
+                ctx.show_toast(ToastAction::info("Select a message first"));
+                return;
+            }
+            ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
+        }
         ShortcutId::NextMessage => {
             let _ = core.send(CoreEvent::SelectAdjacent {
                 delta: 1,

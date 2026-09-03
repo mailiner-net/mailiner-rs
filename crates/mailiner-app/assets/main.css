@@ -2643,6 +2643,17 @@ textarea.ui-input {
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
+
+                .message-snippet {
+                    color: var(--text-muted);
+                    font-size: var(--text-xs);
+                    line-height: 1.2;
+                    margin-top: 1px;
+                    font-weight: 400;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
             }
         }
 
@@ -2662,6 +2673,10 @@ textarea.ui-input {
                         margin-bottom: 0;
                     }
                 }
+            }
+
+            .message-snippet {
+                display: none;
             }
         }
 

@@ -212,6 +212,7 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
+            snippet: None,
         };
         Arc::new(envelope.into())
     }

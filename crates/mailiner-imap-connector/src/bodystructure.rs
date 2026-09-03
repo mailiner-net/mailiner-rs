@@ -96,6 +96,49 @@ pub fn structure_has_attachments(part: &BodyPart) -> bool {
     part.subparts.iter().any(structure_has_attachments)
 }
 
+/// First display text part for a list snippet. Prefers `text/plain` over HTML.
+pub struct PreviewTextPart<'a> {
+    pub section: String,
+    pub part: &'a BodyPart,
+}
+
+pub fn first_preview_text(root: &BodyPart) -> Option<PreviewTextPart<'_>> {
+    let mut plain = None;
+    let mut html = None;
+    walk_preview_text(root, &[], &mut plain, &mut html);
+    plain.or(html)
+}
+
+fn walk_preview_text<'a>(
+    part: &'a BodyPart,
+    path: &[String],
+    plain: &mut Option<PreviewTextPart<'a>>,
+    html: &mut Option<PreviewTextPart<'a>>,
+) {
+    if part.type_ == "multipart" {
+        for (i, sub) in part.subparts.iter().enumerate() {
+            let mut child = path.to_vec();
+            child.push((i + 1).to_string());
+            walk_preview_text(sub, &child, plain, html);
+        }
+        return;
+    }
+    if mailiner_mime::is_attachment(part) || part.type_ != "text" {
+        return;
+    }
+    let section = if path.is_empty() {
+        "TEXT".to_string()
+    } else {
+        path.join(".")
+    };
+    let target = PreviewTextPart { section, part };
+    match part.subtype.as_str() {
+        "plain" if plain.is_none() => *plain = Some(target),
+        "html" if html.is_none() => *html = Some(target),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +199,49 @@ mod tests {
         assert_eq!(bp.subtype, "mixed");
         assert_eq!(bp.subparts.len(), 1);
         assert_eq!(bp.subparts[0].subtype, "plain");
+    }
+
+    #[test]
+    fn preview_text_single_part_is_text() {
+        let bp = convert_body_structure(&text_plain_bs());
+        let preview = first_preview_text(&bp).expect("text part");
+        assert_eq!(preview.section, "TEXT");
+        assert_eq!(preview.part.subtype, "plain");
+    }
+
+    #[test]
+    fn preview_text_prefers_plain_over_html() {
+        let root = mailiner_core::mock_multipart_structure();
+        let preview = first_preview_text(&root).expect("plain part");
+        assert_eq!(preview.section, "1.1");
+        assert_eq!(preview.part.subtype, "plain");
+    }
+
+    #[test]
+    fn preview_text_skips_attachments() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "application".into(),
+                    subtype: "pdf".into(),
+                    disposition: Some(mailiner_core::ContentDisposition {
+                        type_: "ATTACHMENT".into(),
+                        attributes: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "html".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let preview = first_preview_text(&root).expect("html after attachment");
+        assert_eq!(preview.section, "2");
+        assert_eq!(preview.part.subtype, "html");
     }
 }

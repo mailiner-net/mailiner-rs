@@ -450,6 +450,12 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
                     } else {
                         "{message.subject}"
                     }
+                    if let Some(snippet) = message.snippet.as_deref().filter(|s| !s.is_empty()) {
+                        div {
+                            class: "message-snippet",
+                            "{snippet}"
+                        }
+                    }
                 }
             }
         }

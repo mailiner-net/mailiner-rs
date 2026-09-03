@@ -743,6 +743,7 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
+            snippet: None,
         }
     }
 
@@ -1138,6 +1139,37 @@ mod tests {
             kde.children.iter().any(|id| id.as_str() == "KDE.pim"),
             "cached nested child disappeared: {:?}",
             kde.children
+        );
+    }
+
+    #[test]
+    fn cached_envelope_snippet_roundtrips() {
+        let mut env = envelope("INBOX", "1", "s1");
+        env.snippet = Some("Hello preview line".into());
+        let list = CachedMessageList::new(
+            &MailboxId::from("INBOX".to_string()),
+            MessageSort::Arrival,
+            1,
+            None,
+            vec![env],
+        );
+        let ui = list.to_ui_prefix();
+        assert_eq!(ui.prefix[0].snippet.as_deref(), Some("Hello preview line"));
+
+        let mut blob = MailCacheBlob::empty();
+        blob.set_messages(&AccountId::new("a"), list);
+        let json = blob.encode().unwrap();
+        let mut back = MailCacheBlob::decode(&json).unwrap();
+        let got = back
+            .take_messages(
+                &AccountId::new("a"),
+                &MailboxId::from("INBOX".to_string()),
+                MessageSort::Arrival,
+            )
+            .unwrap();
+        assert_eq!(
+            got.envelopes[0].snippet.as_deref(),
+            Some("Hello preview line")
         );
     }
 

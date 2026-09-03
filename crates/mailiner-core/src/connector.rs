@@ -142,6 +142,17 @@ where
         sections: &[String],
     ) -> Result<HashMap<String, Vec<u8>>>;
 
+    /// Peek a short prefix of the first text part for each id.
+    ///
+    /// Uses `BODY.PEEK[section]<0.max_octets>` (never the whole part). Missing
+    /// map entries mean no preview (no text part, or the peek failed).
+    async fn fetch_text_prefixes(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        max_octets: usize,
+    ) -> Result<HashMap<MessageId, String>>;
+
     /// Stream a single part for attachment download.
     async fn stream_raw_part(
         &self,
@@ -199,6 +210,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_deleted: false,
             has_attachments: n.is_multiple_of(2),
             size: Some(1_000 + ((n * 37) % 97) as u64 * 100),
+            snippet: None,
         });
     }
     Ok(envelopes)
@@ -565,6 +577,23 @@ where
         Ok(map)
     }
 
+    async fn fetch_text_prefixes(
+        &self,
+        _folder_id: &FolderId,
+        message_ids: &[MessageId],
+        max_octets: usize,
+    ) -> Result<HashMap<MessageId, String>> {
+        let take = max_octets.max(1);
+        let mut map = HashMap::new();
+        for id in message_ids {
+            // First text part of [`mock_multipart_structure`] is section 1.1.
+            let raw = mock_section_bytes("1.1");
+            let text = String::from_utf8_lossy(&raw[..raw.len().min(take)]).into_owned();
+            map.insert(id.clone(), text);
+        }
+        Ok(map)
+    }
+
     async fn stream_raw_part(
         &self,
         _folder_id: &FolderId,
@@ -889,6 +918,59 @@ mod tests {
         let p = mock_text_part(MessageId::new(FolderId::new("inbox"), "1"), "p1", "hi");
         assert_eq!(p.section(), "TEXT");
         assert!(p.should_prefetch());
+    }
+
+    #[test]
+    fn mock_text_prefixes_are_first_plain_part() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+        #[derive(Debug)]
+        struct NoopStream;
+
+        impl AsyncRead for NoopStream {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                _: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for NoopStream {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let connector = MockConnector::new();
+        let folder = FolderId::new("inbox");
+        let ids = vec![
+            MessageId::new(folder.clone(), "1"),
+            MessageId::new(folder.clone(), "2"),
+        ];
+        let map = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_text_prefixes(
+            &connector, &folder, &ids, 16,
+        ))
+        .unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&ids[0]], "Hello plain text");
+        assert_eq!(map[&ids[1]], "Hello plain text");
     }
 
     #[test]

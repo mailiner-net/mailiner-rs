@@ -371,6 +371,9 @@ pub struct Envelope {
     /// RFC822.SIZE when the server sent it.
     #[serde(default)]
     pub size: Option<u64>,
+    /// Cached list-preview snippet (not IMAP ENVELOPE). Short cleaned text.
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 /// MIME Content-Transfer-Encoding.

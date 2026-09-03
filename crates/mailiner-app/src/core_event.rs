@@ -43,7 +43,7 @@ use crate::mail_cache::{
     hydrate_account,
 };
 use crate::mailbox::MailboxId;
-use crate::message::{MessageId, next_flag_value};
+use crate::message::{Message, MessageId, next_flag_value};
 use crate::message_list_filter::{
     adjacent_matching_index, matching_ids_in_filtered_range, matching_loaded_messages,
     text_filter_is_active,
@@ -57,6 +57,7 @@ use crate::reconnect::reconnect_backoff_ms;
 use crate::send::{ComposeSession, OutboxDisplay, SendPhase, SendState};
 use crate::smtp_inflight::{InFlightSmtp, SmtpInflight};
 use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test};
+use crate::snippet::{SNIPPET_FETCH_OCTETS, clean_snippet};
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
 
 pub enum CoreEvent {
@@ -1634,6 +1635,98 @@ async fn persist_selected_messages(
     }
 }
 
+/// Keep already-fetched snippets when a live envelope batch replaces a cache hit.
+fn messages_from_envelopes(
+    envelopes: Vec<mailiner_core::Envelope>,
+    existing: &SparseList<Arc<Message>>,
+) -> Vec<Arc<Message>> {
+    envelopes
+        .into_iter()
+        .map(|envelope| {
+            let mut msg = Message::from(envelope);
+            if msg.snippet.is_none()
+                && let Some(prev) = existing.find(|m| m.id == msg.id)
+                && let Some(snippet) = prev.snippet.clone()
+            {
+                msg.snippet = Some(snippet.clone());
+                msg.envelope.snippet = Some(snippet);
+            }
+            Arc::new(msg)
+        })
+        .collect()
+}
+
+fn apply_snippets(
+    ctx: &mut AppContext,
+    needed: &[MessageId],
+    raw: HashMap<mailiner_core::MessageId, String>,
+) {
+    let wanted: std::collections::HashSet<&MessageId> = needed.iter().collect();
+    for msg in ctx.messages.write().iter_mut() {
+        if !wanted.contains(&msg.id) || msg.snippet.is_some() {
+            continue;
+        }
+        let cleaned = raw
+            .get(&msg.id)
+            .map(|s| clean_snippet(s))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        let mut next = (**msg).clone();
+        next.snippet = Some(cleaned.clone());
+        next.envelope.snippet = Some(cleaned);
+        *msg = Arc::new(next);
+    }
+}
+
+/// Peek first-text-part prefixes for loaded rows that still lack a snippet.
+///
+/// List rows are already on screen; this must not run before the envelope batch
+/// is written. Failures leave `snippet` unset so a later page load can retry.
+async fn fetch_and_apply_snippets(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+) {
+    if ctx.selected_mailbox.read().as_ref() != Some(mailbox_id)
+        || !selected_account_is(ctx, account_id)
+    {
+        return;
+    }
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+    let needed: Vec<MessageId> = {
+        let list = ctx.messages.read();
+        (0..list.total_count())
+            .filter_map(|i| list.get(i))
+            .filter(|m| m.snippet.is_none())
+            .map(|m| m.id.clone())
+            .collect()
+    };
+    if needed.is_empty() {
+        return;
+    }
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    match connector
+        .fetch_text_prefixes(&folder_id, &needed, SNIPPET_FETCH_OCTETS)
+        .await
+    {
+        Ok(raw) => {
+            if ctx.selected_mailbox.read().as_ref() != Some(mailbox_id)
+                || !selected_account_is(ctx, account_id)
+            {
+                return;
+            }
+            apply_snippets(ctx, &needed, raw);
+            persist_selected_messages(manager.cache(), ctx, account_id).await;
+        }
+        Err(e) => {
+            warn!("snippet fetch failed for {}: {e}", mailbox_id.as_str());
+        }
+    }
+}
+
 fn contiguous_loaded_prefix_len<T: Clone>(list: &SparseList<T>) -> usize {
     let cap = list.total_count();
     let mut n = 0;
@@ -1827,12 +1920,13 @@ async fn handle_select_mailbox(
             match live {
                 Ok(envelopes) => {
                     let mut list = SparseList::new(state.total);
-                    let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
+                    let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
                     list.insert_batch(0, batch);
                     ctx.messages.set(list);
                     ctx.messages_loading.set(false);
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
+                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
                 }
                 Err(e) => {
                     error!(
@@ -1853,6 +1947,7 @@ async fn handle_select_mailbox(
                     if ctx.messages.read().cached_count() > 0 {
                         persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     }
+                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
                 }
             }
 
@@ -1974,12 +2069,13 @@ async fn handle_fetch_message_range(
                 return;
             }
             let prefix_before = contiguous_loaded_prefix_len(&ctx.messages.read());
-            let batch: Vec<_> = envelopes.into_iter().map(|e| Arc::new(e.into())).collect();
+            let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             ctx.messages.write().insert_batch(range.start, batch);
             // Only rewrite localStorage when the contiguous cached prefix grew.
             if contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before {
                 persist_selected_messages(manager.cache(), ctx, &account_id).await;
             }
+            fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
         }
         Err(e) => {
             error!(

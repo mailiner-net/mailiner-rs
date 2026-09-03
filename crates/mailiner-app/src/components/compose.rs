@@ -346,6 +346,7 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
             draft,
             reply_source: None,
             stashed_originals: Vec::new(),
+            account_id,
         },
     );
 }
@@ -417,6 +418,7 @@ pub fn open_reply_or_forward(
                     draft,
                     reply_source,
                     stashed_originals: Vec::new(),
+                    account_id,
                 },
             );
         }
@@ -1305,15 +1307,11 @@ pub fn ComposeOverlay() -> Element {
                     submitted_id.set(None);
                     attaching.set(false);
                     if has_pending_forward_fetch(session) {
-                        if let Some(account_id) = ctx.selected_account.read().clone() {
-                            forward_fetching.set(true);
-                            core.send(CoreEvent::FetchComposeAttachments {
-                                draft_id: id,
-                                account_id,
-                            });
-                        } else {
-                            forward_fetching.set(false);
-                        }
+                        forward_fetching.set(true);
+                        core.send(CoreEvent::FetchComposeAttachments {
+                            draft_id: id,
+                            account_id: session.account_id.clone(),
+                        });
                     } else {
                         forward_fetching.set(false);
                     }

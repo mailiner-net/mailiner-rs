@@ -3786,6 +3786,13 @@ struct PendingForwardFetch {
     encoding: TransferEncoding,
 }
 
+fn compose_session_matches(ctx: &AppContext, draft_id: &str, account_id: &AccountId) -> bool {
+    ctx.compose_draft
+        .read()
+        .as_ref()
+        .is_some_and(|s| s.draft.id.as_str() == draft_id && s.account_id == *account_id)
+}
+
 fn collect_pending_forward_fetches(
     ctx: &AppContext,
     draft_id: &str,
@@ -3919,11 +3926,10 @@ async fn handle_fetch_compose_attachments(
     if items.is_empty() {
         return;
     }
-
-    if ctx.selected_account.read().as_ref() != Some(&account_id) {
-        fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+    if !compose_session_matches(ctx, &draft_id, &account_id) {
         return;
     }
+
     let Some(connector) = manager.get(&account_id) else {
         fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
         return;
@@ -3948,8 +3954,7 @@ async fn handle_fetch_compose_attachments(
             Ok(map) => map,
             Err(e) => {
                 error!("forward attachment fetch failed: {e}");
-                if ctx.selected_account.read().as_ref() != Some(&account_id) {
-                    fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+                if !compose_session_matches(ctx, &draft_id, &account_id) {
                     return;
                 }
                 for item in &group {
@@ -3958,8 +3963,7 @@ async fn handle_fetch_compose_attachments(
                 continue;
             }
         };
-        if ctx.selected_account.read().as_ref() != Some(&account_id) {
-            fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+        if !compose_session_matches(ctx, &draft_id, &account_id) {
             return;
         }
         for item in group {

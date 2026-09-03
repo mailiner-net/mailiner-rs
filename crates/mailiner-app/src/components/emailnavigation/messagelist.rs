@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 
 use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
 use crate::components::icons::{Icon, IconKind};
-use crate::components::virtual_scroll::VirtualScroll;
+use crate::components::virtual_scroll::{SparseList, VirtualScroll};
 use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
@@ -42,12 +42,12 @@ pub fn MessageList() -> Element {
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
     let filtering = text_filter_is_active(&filter_query);
-    let filtered_matches: Vec<(usize, Arc<Message>)> = if filtering {
+    let filtered_matches: Vec<Arc<Message>> = if filtering {
         ctx.messages
             .read()
-            .iter_indexed()
-            .filter(|(_, m)| message_matches_text_filter(m, &filter_query))
-            .map(|(i, m)| (i, m.clone()))
+            .iter()
+            .filter(|m| message_matches_text_filter(m, &filter_query))
+            .cloned()
             .collect()
     } else {
         Vec::new()
@@ -60,11 +60,18 @@ pub fn MessageList() -> Element {
     };
     let no_loaded_matches = filtering && match_count == 0;
 
-    let on_need_range = move |range: Range<usize>| {
-        if filtering {
-            // Text filter is loaded-rows only; do not fetch by compacted indices.
-            return;
+    let mut filtered_items = use_signal(|| SparseList::<Arc<Message>>::new(0));
+    if filtering {
+        let mut next = SparseList::new(filtered_matches.len());
+        next.insert_batch(0, filtered_matches);
+        if *filtered_items.peek() != next {
+            filtered_items.set(next);
         }
+    } else if filtered_items.peek().total_count() != 0 {
+        filtered_items.set(SparseList::new(0));
+    }
+
+    let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
             let _ = core_tx.send(CoreEvent::FetchMessageRange { mailbox_id, range });
         }
@@ -75,14 +82,15 @@ pub fn MessageList() -> Element {
         rsx! { MessageListItem { index, message } }
     };
 
-    {
-        let focus = ctx.selection.read().focus().cloned();
-        use_effect(use_reactive!(|filtering, focus| {
-            if filtering && focus.is_some() {
-                scroll_focused_filtered_row();
-            }
-        }));
-    }
+    let render_filtered_item = move |args: (usize, Arc<Message>)| -> Element {
+        let message = args.1;
+        let index = ctx
+            .messages
+            .read()
+            .position(|m| m.id == message.id)
+            .unwrap_or(0);
+        rsx! { MessageListItem { index, message } }
+    };
 
     rsx! {
         section {
@@ -107,7 +115,7 @@ pub fn MessageList() -> Element {
                         spellcheck: false,
                         oninput: move |evt| list_text_filter.set(evt.value()),
                         onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key() == Key::Escape && text_filter_is_active(list_text_filter.peek().as_str()) {
+                            if evt.key() == Key::Escape && !list_text_filter.peek().is_empty() {
                                 evt.prevent_default();
                                 list_text_filter.set(String::new());
                             }
@@ -202,16 +210,17 @@ pub fn MessageList() -> Element {
                         "No matching loaded messages"
                     }
                 } else if filtering {
-                    div {
-                        class: "message-list-filtered",
-                        for (index, message) in filtered_matches {
-                            div {
-                                key: "{message.id}",
-                                class: "virtual-scroll-item",
-                                style: "height: {density.item_height()}px;",
-                                MessageListItem { index, message }
-                            }
-                        }
+                    VirtualScroll {
+                        items: filtered_items,
+                        item_height: density.item_height(),
+                        buffer_size: BUFFER_SIZE,
+                        debounce_ms: Some(100),
+                        max_cached: None,
+                        reveal_index: ctx.selection.read().focus().and_then(|id| {
+                            filtered_items.read().position(|m| m.id == *id)
+                        }),
+                        on_need_range: move |_: Range<usize>| {},
+                        render_item: render_filtered_item,
                     }
                 } else {
                     VirtualScroll {
@@ -403,20 +412,5 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
                 }
             }
         }
-    }
-}
-
-fn scroll_focused_filtered_row() {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-            return;
-        };
-        let Ok(Some(el)) =
-            doc.query_selector("#messagelist .message-list-filtered .message-list-item.focused")
-        else {
-            return;
-        };
-        el.scroll_into_view_with_bool(false);
     }
 }

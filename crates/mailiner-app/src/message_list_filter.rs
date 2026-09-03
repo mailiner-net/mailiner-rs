@@ -19,8 +19,8 @@ pub fn message_matches_text_filter(message: &Message, query: &str) -> bool {
     if words.is_empty() {
         return true;
     }
-    let subject = message.subject.to_ascii_lowercase();
-    let from = message.from.to_ascii_lowercase();
+    let subject = message.subject.to_lowercase();
+    let from = message.from.to_lowercase();
     words
         .iter()
         .all(|w| subject.contains(w.as_str()) || from.contains(w.as_str()))
@@ -93,7 +93,7 @@ pub fn matching_ids_in_filtered_range(
 fn filter_words(query: &str) -> Vec<String> {
     query
         .split_whitespace()
-        .map(|w| w.to_ascii_lowercase())
+        .map(|w| w.to_lowercase())
         .filter(|w| !w.is_empty())
         .collect()
 }
@@ -151,6 +151,16 @@ mod tests {
         assert!(message_matches_text_filter(&m, "ADA"));
         assert!(message_matches_text_filter(&m, "Example.COM"));
         assert!(!message_matches_text_filter(&m, "bob"));
+    }
+
+    #[test]
+    fn unicode_case_folding() {
+        let m = msg("1", "Überweisung", "Søren", "soren@test.io");
+        assert!(message_matches_text_filter(&m, "über"));
+        assert!(message_matches_text_filter(&m, "ÜBERWEISUNG"));
+        assert!(message_matches_text_filter(&m, "søren"));
+        assert!(message_matches_text_filter(&m, "SØREN"));
+        assert!(!message_matches_text_filter(&m, "uber"));
     }
 
     #[test]

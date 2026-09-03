@@ -38,7 +38,7 @@ use crate::mail_cache::{
 use crate::mailbox::MailboxId;
 use crate::message::{MessageId, next_flag_value};
 use crate::message_list_filter::{
-    adjacent_matching_index, matching_ids_in_filtered_range, message_matches_text_filter,
+    adjacent_matching_index, matching_ids_in_filtered_range, matching_loaded_messages,
     text_filter_is_active,
 };
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
@@ -1869,23 +1869,18 @@ async fn handle_select_adjacent_filtered(
     extend: bool,
     query: &str,
 ) {
-    let matching: Vec<(usize, MessageId)> = {
-        let list = ctx.messages.read();
-        list.iter_indexed()
-            .filter(|(_, m)| message_matches_text_filter(m, query))
-            .map(|(i, m)| (i, m.id.clone()))
-            .collect()
-    };
+    let matching = matching_source_ids(ctx, query);
     if matching.is_empty() {
         return;
     }
-    let current = ctx.selection.read().focus_at_index().or_else(|| {
-        ctx.selection
-            .read()
-            .focus()
-            .cloned()
-            .and_then(|id| matching.iter().find(|(_, mid)| *mid == id).map(|(i, _)| *i))
-    });
+    // Resolve the live focused id — `focus_at_index` can be stale after an
+    // unread-sort relocate, and that old slot may hold another match.
+    let current = ctx
+        .selection
+        .read()
+        .focus()
+        .cloned()
+        .and_then(|id| matching.iter().find(|(_, mid)| *mid == id).map(|(i, _)| *i));
     let indices: Vec<usize> = matching.iter().map(|(i, _)| *i).collect();
     let Some(index) = adjacent_matching_index(&indices, current, delta) else {
         return;
@@ -1924,13 +1919,7 @@ async fn handle_select_known(
     }
 
     let query = ctx.list_text_filter.peek().clone();
-    let rows: Vec<(MessageId, bool)> = {
-        let list = ctx.messages.read();
-        list.iter_indexed()
-            .filter(|(_, m)| message_matches_text_filter(m, &query))
-            .map(|(_, m)| (m.id.clone(), !m.is_read))
-            .collect()
-    };
+    let rows: Vec<(MessageId, bool)> = matching_source_unread(ctx, &query);
     if rows.is_empty() {
         return;
     }
@@ -2069,14 +2058,24 @@ async fn apply_index_range_selection(
     }
 }
 
+fn matching_source_ids(ctx: &AppContext, query: &str) -> Vec<(usize, MessageId)> {
+    let list = ctx.messages.read();
+    matching_loaded_messages(list.iter_indexed().map(|(i, m)| (i, m.as_ref())), query)
+        .into_iter()
+        .map(|(i, m)| (i, m.id.clone()))
+        .collect()
+}
+
+fn matching_source_unread(ctx: &AppContext, query: &str) -> Vec<(MessageId, bool)> {
+    let list = ctx.messages.read();
+    matching_loaded_messages(list.iter_indexed().map(|(i, m)| (i, m.as_ref())), query)
+        .into_iter()
+        .map(|(_, m)| (m.id.clone(), !m.is_read))
+        .collect()
+}
+
 fn apply_filtered_range_selection(ctx: &mut AppContext, end_index: usize, query: &str) {
-    let matching: Vec<(usize, MessageId)> = {
-        let list = ctx.messages.read();
-        list.iter_indexed()
-            .filter(|(_, m)| message_matches_text_filter(m, query))
-            .map(|(i, m)| (i, m.id.clone()))
-            .collect()
-    };
+    let matching = matching_source_ids(ctx, query);
     let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
     let ids = matching_ids_in_filtered_range(&matching, anchor, end_index);
     let focus = matching

@@ -27,7 +27,7 @@ use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
 };
-use crate::context::{AppContext, MessageHeadersState, MessageViewState};
+use crate::context::{AppContext, MessageHeadersState, MessageSourceState, MessageViewState};
 use crate::download::{
     DownloadStatus, EML_DOWNLOAD_KEY, MAX_DOWNLOAD_BYTES, StreamingBlobDownload,
 };
@@ -149,6 +149,12 @@ pub enum CoreEvent {
     CommitDismissed(DismissCommit),
     /// FETCH `BODY.PEEK[HEADER]` and open the headers dialog.
     FetchMessageHeaders {
+        mailbox_id: MailboxId,
+        message_id: MessageId,
+    },
+    /// FETCH `BODY.PEEK[]` and open the source dialog.
+    FetchMessageSource {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_id: MessageId,
     },
@@ -548,6 +554,14 @@ pub async fn core_loop(
                 message_id,
             } => {
                 handle_fetch_message_headers(&manager, &mut ctx, mailbox_id, message_id).await;
+            }
+            CoreEvent::FetchMessageSource {
+                account_id,
+                mailbox_id,
+                message_id,
+            } => {
+                handle_fetch_message_source(&manager, &mut ctx, account_id, mailbox_id, message_id)
+                    .await;
             }
             CoreEvent::DownloadAttachment {
                 account_id,
@@ -1377,6 +1391,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.message_view.set(MessageViewState::Empty);
     ctx.message_bodies.borrow_mut().clear();
     ctx.message_headers.set(MessageHeadersState::Closed);
+    ctx.message_source.set(MessageSourceState::Closed);
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
@@ -1591,6 +1606,7 @@ async fn handle_select_mailbox(
         ctx.selection.write().clear();
         ctx.message_view.set(MessageViewState::Empty);
         ctx.message_headers.set(MessageHeadersState::Closed);
+        ctx.message_source.set(MessageSourceState::Closed);
         ctx.download_status.set(HashMap::new());
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
         let sort = *ctx.message_sort.peek();
@@ -2231,6 +2247,7 @@ async fn handle_select_message(
     snapshot_selection_unread(ctx);
     ctx.download_status.set(HashMap::new());
     ctx.message_headers.set(MessageHeadersState::Closed);
+    ctx.message_source.set(MessageSourceState::Closed);
 
     let cached = ctx.message_bodies.borrow_mut().get(&message_id);
     if let Some(loaded) = cached {
@@ -2583,6 +2600,7 @@ fn take_messages_from_ui(
         ctx.selection.write().clear();
         ctx.message_view.set(MessageViewState::Empty);
         ctx.message_headers.set(MessageHeadersState::Closed);
+        ctx.message_source.set(MessageSourceState::Closed);
         ctx.download_status.set(HashMap::new());
     }
     let snapshots = taken
@@ -3245,6 +3263,7 @@ async fn handle_empty_trash(
             ctx.message_view.set(MessageViewState::Empty);
             ctx.message_bodies.borrow_mut().clear();
             ctx.message_headers.set(MessageHeadersState::Closed);
+            ctx.message_source.set(MessageSourceState::Closed);
             ctx.download_status.set(HashMap::new());
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
                 node.total_count = 0;
@@ -3438,6 +3457,58 @@ async fn handle_fetch_message_headers(
         Err(e) => {
             error!("Failed to fetch headers for {}: {}", message_id, e);
             ctx.message_headers.set(MessageHeadersState::Error {
+                message_id,
+                message: e.to_string(),
+            });
+        }
+    }
+}
+
+fn source_request_active(ctx: &AppContext, message_id: &MessageId) -> bool {
+    matches!(
+        &*ctx.message_source.read(),
+        MessageSourceState::Loading { message_id: id } if id == message_id
+    )
+}
+
+async fn handle_fetch_message_source(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_id: MessageId,
+) {
+    ctx.message_source.set(MessageSourceState::Loading {
+        message_id: message_id.clone(),
+    });
+
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.message_source.set(MessageSourceState::Error {
+            message_id,
+            message: "Not connected".into(),
+        });
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    info!("Fetching source for message {}", message_id);
+
+    let result = connector.fetch_raw_message(&folder_id, &message_id).await;
+
+    if !source_request_active(ctx, &message_id) {
+        return;
+    }
+
+    match result {
+        Ok(bytes) => {
+            ctx.message_source.set(MessageSourceState::Ready {
+                message_id,
+                text: crate::source::source_bytes_to_text(&bytes),
+            });
+        }
+        Err(e) => {
+            error!("Failed to fetch source for {}: {}", message_id, e);
+            ctx.message_source.set(MessageSourceState::Error {
                 message_id,
                 message: e.to_string(),
             });

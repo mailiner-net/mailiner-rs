@@ -11,7 +11,9 @@ use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::components::icons::{IconButton, IconKind};
-use crate::context::{AppContext, MailboxPickerMode, MessageHeadersState, MessageViewState};
+use crate::context::{
+    AppContext, MailboxPickerMode, MessageHeadersState, MessageSourceState, MessageViewState,
+};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
@@ -937,6 +939,41 @@ fn MessageHeader(
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
+                        title: "View raw message source",
+                        onclick: {
+                            let mailbox_id = mailbox_id.clone();
+                            let message_id = message.id.clone();
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let Some(account_id) = ctx.selected_account.read().clone() else {
+                                    return;
+                                };
+                                let already_open = matches!(
+                                    &*ctx.message_source.peek(),
+                                    MessageSourceState::Loading { message_id: id }
+                                        | MessageSourceState::Ready { message_id: id, .. }
+                                        if id == &message_id
+                                );
+                                if already_open {
+                                    return;
+                                }
+                                ctx.message_source.set(MessageSourceState::Loading {
+                                    message_id: message_id.clone(),
+                                });
+                                let _ = core_tx.send(CoreEvent::FetchMessageSource {
+                                    account_id,
+                                    mailbox_id,
+                                    message_id: message_id.clone(),
+                                });
+                            }
+                        },
+                        "View source"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
                         title: "Reply",
                         onclick: {
@@ -1386,6 +1423,142 @@ fn MessageHeadersDialog(state: MessageHeadersState) -> Element {
         }
     }
 }
+
+
+fn close_source_dialog(ctx: &mut AppContext) {
+    ctx.message_source.set(MessageSourceState::Closed);
+}
+
+fn copy_source_to_clipboard(ctx: &AppContext, text: &str) {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    {
+        use wasm_bindgen_futures::JsFuture;
+        let text = text.to_string();
+        let ctx = ctx.clone();
+        spawn(async move {
+            let Some(window) = web_sys::window() else {
+                ctx.show_toast(ToastAction::error("Could not copy source"));
+                return;
+            };
+            match JsFuture::from(window.navigator().clipboard().write_text(&text)).await {
+                Ok(_) => ctx.show_toast(ToastAction::info("Source copied")),
+                Err(_) => ctx.show_toast(ToastAction::error("Could not copy source")),
+            }
+        });
+    }
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    {
+        let _ = text;
+        ctx.show_toast(ToastAction::error("Could not copy source"));
+    }
+}
+
+#[component]
+pub fn MessageSourceHost() -> Element {
+    let ctx = use_context::<AppContext>();
+    let state = ctx.message_source.read().clone();
+    if matches!(state, MessageSourceState::Closed) {
+        return rsx! {};
+    }
+
+    rsx! {
+        MessageSourceDialog { state }
+    }
+}
+
+#[component]
+fn MessageSourceDialog(state: MessageSourceState) -> Element {
+    let ctx = use_context::<AppContext>();
+    let ready_text = match &state {
+        MessageSourceState::Ready { text, .. } => Some(text.clone()),
+        _ => None,
+    };
+
+    rsx! {
+        div {
+            class: "picker-backdrop source-backdrop",
+            onclick: {
+                let mut ctx = ctx.clone();
+                move |_| close_source_dialog(&mut ctx)
+            },
+            div {
+                class: "ui-dialog source-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Message source",
+                tabindex: "-1",
+                onclick: move |evt| evt.stop_propagation(),
+                onkeydown: {
+                    let mut ctx = ctx.clone();
+                    move |evt: KeyboardEvent| {
+                        if evt.key() == Key::Escape {
+                            evt.prevent_default();
+                            close_source_dialog(&mut ctx);
+                        }
+                    }
+                },
+                onmounted: move |evt| {
+                    let data = evt.data();
+                    spawn(async move {
+                        let _ = data.set_focus(true).await;
+                    });
+                },
+
+                div {
+                    class: "ui-dialog-head",
+                    h2 { class: "ui-dialog-title", "Message source" }
+                    IconButton {
+                        class: "flat ui-icon-btn",
+                        title: "Close",
+                        size: 20,
+                        icon: IconKind::XMark,
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| close_source_dialog(&mut ctx)
+                        },
+                    }
+                }
+
+                match &state {
+                    MessageSourceState::Loading { .. } => rsx! {
+                        p { class: "source-status", "Loading source…" }
+                    },
+                    MessageSourceState::Error { message, .. } => rsx! {
+                        p { class: "ui-alert-error", "Failed to load source: {message}" }
+                    },
+                    MessageSourceState::Ready { text, .. } => rsx! {
+                        pre { class: "source-pre", "{text}" }
+                    },
+                    MessageSourceState::Closed => rsx! {},
+                }
+
+                div {
+                    class: "ui-dialog-actions",
+                    if let Some(text) = ready_text {
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            title: "Copy source",
+                            onclick: {
+                                let ctx = ctx.clone();
+                                move |_| copy_source_to_clipboard(&ctx, &text)
+                            },
+                            "Copy"
+                        }
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| close_source_dialog(&mut ctx)
+                        },
+                        "Close"
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

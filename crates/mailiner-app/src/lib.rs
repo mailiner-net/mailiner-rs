@@ -22,6 +22,7 @@ pub mod selection;
 pub mod send;
 pub mod shortcuts;
 pub mod smtp_inflight;
+pub mod source;
 pub mod toast;
 pub mod ui_prefs;
 

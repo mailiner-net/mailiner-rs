@@ -1528,6 +1528,7 @@ where
             }
         }
 
+        // BODY.PEEK[] is the full RFC 822 message and does not set \Seen.
         // Partial BODY.PEEK[] so an oversized/stale SIZE cannot materialize the
         // whole literal before the cap is applied.
         let mut stream = self.stream_raw_part(folder_id, message_id, "").await?;

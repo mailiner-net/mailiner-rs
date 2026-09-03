@@ -32,6 +32,8 @@ use crate::websocket_stream::{WebSocketStream, WsDeathWatch};
 
 /// Overall connect budget: WS open + TLS + LOGIN (wall clock).
 pub const CONNECT_TIMEOUT_MS: u32 = 20_000;
+/// Best-effort IMAP LOGOUT budget so sign-out cannot hang the core loop.
+pub const DISCONNECT_TIMEOUT_MS: u32 = 3_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -437,15 +439,38 @@ impl AccountConnectionManager {
     }
 
     /// Drop every connector and cached config (passwords included).
+    ///
+    /// Configs are cleared **before** best-effort LOGOUT so a hung server cannot
+    /// keep secrets in the manager or block later core events.
     pub async fn disconnect_all(&mut self, ctx: &mut AppContext) {
         let ids = self.known_account_ids();
-        for id in ids {
-            self.disconnect_account(&id, ctx).await;
+        let mut connectors = Vec::new();
+        for id in &ids {
+            if let Some(connector) = self.connectors.remove(id) {
+                connectors.push((id.clone(), connector));
+            }
+            self.bump_generation(id);
         }
         self.connectors.clear();
         self.configs.clear();
         self.memory_only.clear();
         ctx.connection_states.write().clear();
+
+        for (id, connector) in connectors {
+            let logout = connector.disconnect();
+            let timeout = TimeoutFuture::new(DISCONNECT_TIMEOUT_MS);
+            futures_util::pin_mut!(logout);
+            futures_util::pin_mut!(timeout);
+            match select(logout, timeout).await {
+                Either::Left((Ok(()), _)) => {}
+                Either::Left((Err(e), _)) => {
+                    warn!("disconnect failed for {id}: {e}");
+                }
+                Either::Right((_, _)) => {
+                    warn!("disconnect timed out for {id} after {DISCONNECT_TIMEOUT_MS}ms");
+                }
+            }
+        }
     }
 
     /// Drop connector + cached config; best-effort logout.

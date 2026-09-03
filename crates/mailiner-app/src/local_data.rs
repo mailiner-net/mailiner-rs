@@ -12,12 +12,14 @@ use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
 use crate::ui_prefs::{ACK_UNREAD_KEY, LAST_MAILBOX_KEY, MESSAGE_SORT_KEY};
 
 /// Prefix of every Mailiner-owned `localStorage` key.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub const MAILINER_STORAGE_PREFIX: &str = "mailiner.";
 
 /// `format` field on [`AccountsExport`].
 pub const ACCOUNTS_EXPORT_FORMAT: &str = "mailiner.accounts.export";
 
 /// Keys Mailiner is known to write. Used as a fallback if enumeration misses one.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     ACCOUNTS_LOCAL_STORAGE_KEY,
     MAIL_CACHE_LOCAL_STORAGE_KEY,
@@ -80,11 +82,13 @@ pub fn accounts_export_filename(includes_secrets: bool, exported_at: DateTime<Ut
 }
 
 /// True when `key` is owned by Mailiner (`mailiner.` prefix).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn is_mailiner_storage_key(key: &str) -> bool {
     key.starts_with(MAILINER_STORAGE_PREFIX)
 }
 
 /// Filter an arbitrary key list down to Mailiner-owned keys (stable input order).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn mailiner_keys_to_clear<S: AsRef<str>>(keys: impl IntoIterator<Item = S>) -> Vec<String> {
     keys.into_iter()
         .map(|k| k.as_ref().to_string())
@@ -94,17 +98,30 @@ pub fn mailiner_keys_to_clear<S: AsRef<str>>(keys: impl IntoIterator<Item = S>) 
 
 /// Remove every Mailiner-owned key in `keys` via `remove`.
 ///
-/// Non-`mailiner.*` keys are ignored. Returns the number of keys passed to `remove`.
+/// Non-`mailiner.*` keys are ignored. Continues after an individual `remove`
+/// failure so one blocked key cannot leave the rest behind. Returns the number
+/// of successful removals, or the first error after attempting every key.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn remove_mailiner_keys(
     keys: &[String],
     mut remove: impl FnMut(&str) -> Result<(), AccountStoreError>,
 ) -> Result<usize, AccountStoreError> {
     let mut n = 0;
+    let mut first_err = None;
     for key in mailiner_keys_to_clear(keys.iter().map(String::as_str)) {
-        remove(&key)?;
-        n += 1;
+        match remove(&key) {
+            Ok(()) => n += 1,
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
     }
-    Ok(n)
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(n),
+    }
 }
 
 /// Delete every `mailiner.*` key in `window.localStorage` (no-op on host).
@@ -281,7 +298,13 @@ mod tests {
     #[test]
     fn remove_mailiner_keys_propagates_error() {
         let keys = vec!["mailiner.accounts.v1".into(), "mailiner.cache.v1".into()];
-        let err = remove_mailiner_keys(&keys, |_| Err(AccountStoreError::Unavailable)).unwrap_err();
+        let mut seen = Vec::new();
+        let err = remove_mailiner_keys(&keys, |k| {
+            seen.push(k.to_string());
+            Err(AccountStoreError::Unavailable)
+        })
+        .unwrap_err();
         assert_eq!(err, AccountStoreError::Unavailable);
+        assert_eq!(seen, keys);
     }
 }

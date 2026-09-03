@@ -406,12 +406,16 @@ impl AccountConfig {
     }
 
     /// Clear IMAP/SMTP passwords and the proxy token in place.
+    ///
+    /// Also strips a `token` query param and `userinfo` from `proxy.base_url`
+    /// so a public export cannot leak a credential that was baked into the URL.
     pub fn redact_secrets(&mut self) {
         self.imap.password.clear();
         if let Some(smtp) = self.smtp.as_mut() {
             smtp.password = None;
         }
         self.proxy.token.clear();
+        self.proxy.base_url = strip_embedded_proxy_secrets(&self.proxy.base_url);
     }
 
     /// Clone with IMAP/SMTP passwords and the proxy token removed.
@@ -438,6 +442,47 @@ impl AccountConfig {
         // Ensure proxy URL can be built (also validates scheme / remote host).
         self.proxy.websocket_url(&self.imap)?;
         Ok(())
+    }
+}
+
+/// Drop `userinfo` and a `token` query param from a proxy `base_url`.
+fn strip_embedded_proxy_secrets(url: &str) -> String {
+    let (without_frag, frag) = match url.split_once('#') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (url, None),
+    };
+    let (base, query) = match without_frag.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (without_frag, None),
+    };
+    let mut base = strip_url_userinfo(base);
+    if let Some(query) = query {
+        let kept: Vec<&str> = query
+            .split('&')
+            .filter(|pair| {
+                let key = pair.split('=').next().unwrap_or("");
+                !key.eq_ignore_ascii_case("token")
+            })
+            .collect();
+        if !kept.is_empty() {
+            base.push('?');
+            base.push_str(&kept.join("&"));
+        }
+    }
+    if let Some(frag) = frag {
+        base.push('#');
+        base.push_str(frag);
+    }
+    base
+}
+
+fn strip_url_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    match rest.split_once('@') {
+        Some((_, host)) => format!("{scheme}://{host}"),
+        None => url.to_string(),
     }
 }
 
@@ -989,6 +1034,24 @@ mod tests {
             "smtp password leaked: {json}"
         );
         assert!(!json.contains("testtoken"), "proxy token leaked: {json}");
+    }
+
+    #[test]
+    fn without_secrets_strips_token_baked_into_proxy_url() {
+        let mut config = sample_config();
+        config.proxy.base_url = "wss://user:pw@proxy.example/proxy?foo=1&token=leaked&bar=2".into();
+        let redacted = config.without_secrets();
+        assert_eq!(
+            redacted.proxy.base_url,
+            "wss://proxy.example/proxy?foo=1&bar=2"
+        );
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(!json.contains("leaked"), "url token leaked: {json}");
+        assert!(!json.contains("user:pw"), "userinfo leaked: {json}");
+        assert_eq!(
+            config.proxy.base_url,
+            "wss://user:pw@proxy.example/proxy?foo=1&token=leaked&bar=2"
+        );
     }
 
     #[test]

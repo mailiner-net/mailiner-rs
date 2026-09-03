@@ -20,7 +20,7 @@ use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::download::save_text_download;
-use crate::local_data::{AccountsExport, accounts_export_filename, clear_mailiner_local_storage};
+use crate::local_data::{AccountsExport, accounts_export_filename};
 
 /// Debounce for rapid account-switch clicks (ms).
 const SWITCH_DEBOUNCE_MS: u32 = 200;
@@ -405,51 +405,16 @@ fn DataActionConfirm(
                                 spawn(download_accounts_export(store_ctx, action_error, true));
                             }
                             DataConfirm::SignOut => {
+                                // Wipe runs in core_loop after the current IMAP/SMTP
+                                // handler finishes, so a late persist cannot recreate keys.
                                 let mut ctx = ctx.clone();
-                                spawn(async move {
-                                    let Some(store) = store_ctx() else {
-                                        action_error.set(Some(
-                                            "Account storage is not available.".into(),
-                                        ));
-                                        confirm_data.set(None);
-                                        return;
-                                    };
-                                    let store = store.0;
-                                    let ids: Vec<AccountId> = match store.list().await {
-                                        Ok(list) => list.into_iter().map(|c| c.id).collect(),
-                                        Err(e) => {
-                                            action_error.set(Some(format!(
-                                                "Failed to list accounts: {e}"
-                                            )));
-                                            confirm_data.set(None);
-                                            return;
-                                        }
-                                    };
-                                    for id in &ids {
-                                        if let Err(e) = store.delete(id).await {
-                                            action_error.set(Some(format!(
-                                                "Failed to delete account: {e}"
-                                            )));
-                                            confirm_data.set(None);
-                                            return;
-                                        }
-                                    }
-                                    if let Err(e) = store.set_active_id(None).await {
-                                        warn!("set_active_id(None) after sign-out failed: {e}");
-                                    }
-                                    if let Err(e) = clear_mailiner_local_storage() {
-                                        // Accounts are already gone from the store; still leave
-                                        // the session so leftover prefs cannot keep secrets in UI.
-                                        warn!("clear_mailiner_local_storage failed: {e}");
-                                    }
-                                    core_tx.send(CoreEvent::ClearLocalData);
-                                    ctx.reset_after_sign_out();
-                                    confirm_data.set(None);
-                                    action_error.set(None);
-                                    info!("Signed out → NeedsOnboarding");
-                                    bootstrap.set(AppBootstrapState::NeedsOnboarding);
-                                    nav.replace(Route::OnboardingView {});
-                                });
+                                core_tx.send(CoreEvent::ClearLocalData);
+                                ctx.reset_after_sign_out();
+                                confirm_data.set(None);
+                                action_error.set(None);
+                                info!("Signed out → NeedsOnboarding");
+                                bootstrap.set(AppBootstrapState::NeedsOnboarding);
+                                nav.replace(Route::OnboardingView {});
                             }
                         }
                     },

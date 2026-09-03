@@ -83,6 +83,12 @@ pub enum CoreEvent {
         message_ids: Vec<MessageId>,
         dest_mailbox_id: MailboxId,
     },
+    /// Move to the Archive special-use folder when one exists.
+    ArchiveMessages {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Move to the Trash special-use folder, or permanently delete when already there.
     MoveToTrash {
         mailbox_id: MailboxId,
@@ -347,8 +353,19 @@ pub async fn core_loop(
                 message_ids,
                 dest_mailbox_id,
             } => {
-                handle_move_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
-                    .await;
+                let Some(account_id) = ctx.selected_account.read().clone() else {
+                    ctx.show_toast(ToastAction::error("No account selected"));
+                    continue;
+                };
+                handle_move_messages(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    dest_mailbox_id,
+                )
+                .await;
             }
             CoreEvent::CopyMessages {
                 account_id,
@@ -365,6 +382,14 @@ pub async fn core_loop(
                     dest_mailbox_id,
                 )
                 .await;
+            }
+            CoreEvent::ArchiveMessages {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_archive_messages(&manager, &mut ctx, account_id, mailbox_id, message_ids)
+                    .await;
             }
             CoreEvent::MoveToTrash {
                 mailbox_id,
@@ -1135,6 +1160,66 @@ async fn invalidate_mailbox_messages(
     }
 }
 
+/// After a MOVE that finished on a different account/mailbox, keep folder totals
+/// and unread badges in sync without mutating the now-current UI list.
+async fn persist_stale_move_counts(
+    cache: &dyn MailCache,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    source: &MailboxId,
+    dest: &MailboxId,
+    moved: usize,
+    unread: i32,
+) {
+    if moved == 0 && unread == 0 {
+        return;
+    }
+    let dest_name = ctx.mailbox_nodes.read().get(dest).map(|n| n.name.clone());
+    // Gmail All Mail already contains every message; do not double-count dest.
+    let dest_is_all_mail = mailbox_is_all_mail(dest, dest_name.as_deref());
+    if selected_account_is(ctx, account_id) {
+        bump_mailbox_total(ctx, source, -(moved as i32));
+        if !dest_is_all_mail {
+            bump_mailbox_total(ctx, dest, moved as i32);
+        }
+        if unread != 0 {
+            bump_mailbox_unread(ctx, source, -unread, true);
+            if !dest_is_all_mail {
+                bump_mailbox_unread(ctx, dest, unread, false);
+            }
+        }
+        persist_folder_tree(cache, ctx, account_id).await;
+        return;
+    }
+    let Ok(Some(mut tree)) = cache.load_folders(account_id).await else {
+        return;
+    };
+    let moved = moved as u64;
+    let unread = unread.max(0) as u64;
+    if let Some(src) = tree.counts.get_mut(source.as_str()) {
+        src.total_messages = src.total_messages.saturating_sub(moved);
+        src.unread_messages = src.unread_messages.saturating_sub(unread);
+    }
+    if !dest_is_all_mail {
+        if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
+            dst.total_messages = dst.total_messages.saturating_add(moved);
+            dst.unread_messages = dst.unread_messages.saturating_add(unread);
+        }
+    }
+    if let Err(e) = cache.save_folders(account_id, &tree).await {
+        warn!("mail cache adjust folder totals failed: {e}");
+    }
+}
+
+fn bump_mailbox_total(ctx: &mut AppContext, mailbox_id: &MailboxId, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    if let Some(node) = ctx.mailbox_nodes.write().get_mut(mailbox_id) {
+        node.total_count = (node.total_count as i32 + delta).max(0) as usize;
+    }
+}
+
 async fn handle_select_mailbox(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -1675,6 +1760,18 @@ fn unread_among(ctx: &AppContext, ids: &[MessageId]) -> i32 {
         .count() as i32
 }
 
+fn mailbox_is_all_mail(id: &MailboxId, name: Option<&str>) -> bool {
+    if name.is_some_and(|n| n.eq_ignore_ascii_case("all mail")) {
+        return true;
+    }
+    // Gmail uses `/`. Do not treat `.` as hierarchy — `Reports.All Mail` is a name.
+    id.as_str()
+        .rsplit_once('/')
+        .map(|(_, leaf)| leaf)
+        .unwrap_or(id.as_str())
+        .eq_ignore_ascii_case("all mail")
+}
+
 /// Remove `ids` from the current list. If the selected row is among them,
 /// returns its pre-removal index so the caller can select the next remaining row.
 fn take_messages_from_ui(
@@ -1837,6 +1934,7 @@ async fn relocate_unread_sort_rows(
 async fn handle_move_messages(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: Vec<MessageId>,
     dest_mailbox_id: MailboxId,
@@ -1844,13 +1942,12 @@ async fn handle_move_messages(
     if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
         return;
     }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
@@ -1859,14 +1956,38 @@ async fn handle_move_messages(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let dest_id = FolderId::new(dest_mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
+    let unread_n = unread_among(ctx, &message_ids);
     match connector
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
     {
         Ok(dest_uids) => {
+            if !selected_account_is(ctx, &account_id)
+                || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+            {
+                let moved = dest_uids.len().max(message_ids.len());
+                persist_stale_move_counts(
+                    manager.cache(),
+                    ctx,
+                    &account_id,
+                    &mailbox_id,
+                    &dest_mailbox_id,
+                    moved,
+                    unread_n,
+                )
+                .await;
+                invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
+                invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
+                return;
+            }
             let (snapshots, removed_sel) = take_messages_from_ui(ctx, &message_ids);
             let unread_n = unread_in_removed(&snapshots);
-            if unread_n != 0 {
+            let dest_is_all_mail = ctx
+                .mailbox_nodes
+                .read()
+                .get(&dest_mailbox_id)
+                .is_some_and(|n| mailbox_is_all_mail(&dest_mailbox_id, Some(n.name.as_str())));
+            if unread_n != 0 && !dest_is_all_mail {
                 bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
             }
             let dest_label = ctx
@@ -1970,6 +2091,40 @@ async fn handle_copy_messages(
             }
         }
     }
+}
+
+async fn handle_archive_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
+    let Some(archive_id) = archive_id else {
+        ctx.show_toast(ToastAction::error(
+            "No Archive folder found on this account",
+        ));
+        return;
+    };
+    handle_move_messages(
+        manager,
+        ctx,
+        account_id,
+        mailbox_id,
+        message_ids,
+        archive_id,
+    )
+    .await;
 }
 
 async fn handle_move_to_trash(

@@ -81,6 +81,7 @@ pub struct FolderCounts {
 #[serde(rename_all = "snake_case")]
 pub enum MailboxRole {
     Inbox,
+    Archive,
     Drafts,
     Sent,
     Outbox,
@@ -90,15 +91,16 @@ pub enum MailboxRole {
 }
 
 impl MailboxRole {
-    /// Inbox first, then Drafts, Sent, Outbox, Trash, then everything else.
+    /// Inbox, Archive, Drafts, Sent, Outbox, Trash, then everything else.
     pub fn sort_rank(self) -> u8 {
         match self {
             Self::Inbox => 0,
-            Self::Drafts => 1,
-            Self::Sent => 2,
-            Self::Outbox => 3,
-            Self::Trash => 4,
-            Self::Other => 5,
+            Self::Archive => 1,
+            Self::Drafts => 2,
+            Self::Sent => 3,
+            Self::Outbox => 4,
+            Self::Trash => 5,
+            Self::Other => 6,
         }
     }
 
@@ -106,6 +108,7 @@ impl MailboxRole {
     pub fn label(self) -> Option<&'static str> {
         match self {
             Self::Inbox => Some("Inbox"),
+            Self::Archive => Some("Archive"),
             Self::Drafts => Some("Drafts"),
             Self::Sent => Some("Sent"),
             Self::Outbox => Some("Outbox"),
@@ -387,7 +390,14 @@ pub struct PartChunk {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmailAddr, EmailAddress, Envelope, MessageSort};
+    use super::{EmailAddr, EmailAddress, Envelope, MailboxRole, MessageSort};
+
+    #[test]
+    fn archive_role_ranks_after_inbox() {
+        assert!(MailboxRole::Inbox.sort_rank() < MailboxRole::Archive.sort_rank());
+        assert!(MailboxRole::Archive.sort_rank() < MailboxRole::Drafts.sort_rank());
+        assert_eq!(MailboxRole::Archive.label(), Some("Archive"));
+    }
 
     #[test]
     fn message_sort_key_roundtrip() {

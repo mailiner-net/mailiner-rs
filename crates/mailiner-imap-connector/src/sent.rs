@@ -51,13 +51,11 @@ where
                 no_select = true;
                 continue;
             }
+            NameAttribute::All | NameAttribute::Archive => MailboxRole::Archive,
             NameAttribute::Drafts => MailboxRole::Drafts,
             NameAttribute::Sent => MailboxRole::Sent,
             NameAttribute::Trash => MailboxRole::Trash,
-            NameAttribute::All
-            | NameAttribute::Archive
-            | NameAttribute::Flagged
-            | NameAttribute::Junk => MailboxRole::Other,
+            NameAttribute::Flagged | NameAttribute::Junk => MailboxRole::Other,
             NameAttribute::Extension(name) => match extension_role(name) {
                 MailboxRole::Other if !is_unmapped_special_use(name) => continue,
                 mapped => mapped,
@@ -82,6 +80,7 @@ where
 fn extension_role(name: &str) -> MailboxRole {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "inbox" => MailboxRole::Inbox,
+        "all" | "archive" => MailboxRole::Archive,
         "outbox" => MailboxRole::Outbox,
         _ => MailboxRole::Other,
     }
@@ -90,12 +89,15 @@ fn extension_role(name: &str) -> MailboxRole {
 fn is_unmapped_special_use(name: &str) -> bool {
     matches!(
         name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
-        "all" | "archive" | "flagged" | "junk"
+        "flagged" | "junk"
     )
 }
 
 /// Leaf names (ASCII lowercase) used when LIST has no special-use attribute.
 const ROLE_FROM_LEAF: &[(&str, MailboxRole)] = &[
+    ("archive", MailboxRole::Archive),
+    ("archives", MailboxRole::Archive),
+    ("all mail", MailboxRole::Archive),
     ("drafts", MailboxRole::Drafts),
     ("draft", MailboxRole::Drafts),
     ("draft messages", MailboxRole::Drafts),
@@ -371,6 +373,36 @@ mod tests {
     }
 
     #[test]
+    fn archive_from_name() {
+        assert_eq!(role_from_name("Archive", Some("/")), MailboxRole::Archive);
+        assert_eq!(role_from_name("Archives", Some("/")), MailboxRole::Archive);
+        assert_eq!(
+            role_from_name("INBOX.Archive", Some(".")),
+            MailboxRole::Archive
+        );
+        assert_eq!(
+            role_from_name("[Gmail]/All Mail", Some("/")),
+            MailboxRole::Archive
+        );
+    }
+
+    #[test]
+    fn archive_special_use_from_attrs() {
+        use async_imap::types::NameAttribute;
+        let (_, role) = special_use_from_attrs([NameAttribute::Archive].iter());
+        assert_eq!(role, Some(MailboxRole::Archive));
+        let (_, role) = special_use_from_attrs([NameAttribute::All].iter());
+        assert_eq!(role, Some(MailboxRole::Archive));
+        let (_, role) = special_use_from_attrs(
+            [NameAttribute::Extension(std::borrow::Cow::Borrowed(
+                "\\Archive",
+            ))]
+            .iter(),
+        );
+        assert_eq!(role, Some(MailboxRole::Archive));
+    }
+
+    #[test]
     fn special_use_beats_name() {
         let listed = mb("Archive", Some("/"), false, MailboxRole::Sent);
         assert_eq!(listed.role(), MailboxRole::Sent);
@@ -427,17 +459,12 @@ mod tests {
     fn unmapped_special_use_skips_name_heuristic() {
         use async_imap::types::NameAttribute;
         use std::borrow::Cow;
-        for attr in [
-            NameAttribute::Archive,
-            NameAttribute::Junk,
-            NameAttribute::All,
-            NameAttribute::Flagged,
-        ] {
+        for attr in [NameAttribute::Junk, NameAttribute::Flagged] {
             let (_, role) = special_use_from_attrs([attr].iter());
             assert_eq!(role, Some(MailboxRole::Other));
         }
         let (_, role) =
-            special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("\\Archive"))].iter());
+            special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("\\Junk"))].iter());
         assert_eq!(role, Some(MailboxRole::Other));
         let listed = mb_attr("Deleted Mail", Some("/"), false, Some(MailboxRole::Other));
         assert_eq!(listed.role(), MailboxRole::Other);

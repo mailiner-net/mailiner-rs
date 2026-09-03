@@ -1,0 +1,40 @@
+crates/mailiner-app/src/core_event.rs
+  s_21f8f88cb0d1df::t_0b6c4e928dd441 77-81,333-338,1855-1875
+crates/mailiner-app/src/components/emailnavigation/mailboxtreeview.rs
+  s_21f8f88cb0d1df::t_9857bb070c94c8 13
+crates/mailiner-app/src/components/messageview.rs
+  s_21f8f88cb0d1df::t_809c6b1ee5494f 372,374-376,550-572
+crates/mailiner-imap-connector/src/sent.rs
+  s_21f8f88cb0d1df::t_4a7dbd07c83889 55,74,86
+  s_21f8f88cb0d1df::t_a5f5e0b05e84b3 295-321
+crates/mailiner-app/src/mailbox.rs
+  s_21f8f88cb0d1df::t_a133ad589a2ec5 409-410
+  s_21f8f88cb0d1df::t_3fa4bea37f0197 70,424,433
+  s_21f8f88cb0d1df::t_e6270660466051 467-484
+crates/mailiner-app/src/components/shortcuts.rs
+  s_21f8f88cb0d1df::t_e52669a5d6829a 85-93
+crates/mailiner-app/src/shortcuts.rs
+  s_21f8f88cb0d1df::t_928d8a739c6eca 13,127-134,308-317
+crates/mailiner-core/src/models.rs
+  s_21f8f88cb0d1df::t_557437c2d90ce1 93,103,107-112,120,402-409
+crates/mailiner-app/src/components/icons.rs
+  s_21f8f88cb0d1df::t_53776c3c9f1f14 10,34-37
+crates/mailiner-app/src/components/mailbox_picker.rs
+  s_21f8f88cb0d1df::t_addb249e7a9af8 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9f23f0020b4325430a6ee6956d4d364582349d11",
+  "prompts": {},
+  "sessions": {
+    "s_21f8f88cb0d1df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0691a-fbe9-7673-87a8-a96f554fb56e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

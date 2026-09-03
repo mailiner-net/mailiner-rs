@@ -1,7 +1,7 @@
 //! Parse, commit, and remove helpers for chip-style recipient fields.
 
 use crate::model::draft::{is_valid_email_v1, ComposerAddress};
-use crate::model::recipients::emails_equal;
+use crate::model::recipients::{dedupe_addresses, emails_equal};
 
 /// Parse one typed token into a chip.
 ///
@@ -42,7 +42,7 @@ pub fn commit_input(
         (&tokens[..last], tokens[last].trim_start())
     };
 
-    let mut out = chips.to_vec();
+    let mut out = dedupe_addresses(chips.to_vec());
     for token in complete {
         if let Some(addr) = parse_recipient(token) {
             push_unique(&mut out, addr);
@@ -105,6 +105,9 @@ fn parse_angle_addr(raw: &str) -> Option<ComposerAddress> {
         return None;
     }
     let email = raw[open + 1..raw.len() - 1].trim();
+    if email.is_empty() {
+        return None;
+    }
     let name = unquote_display_name(&raw[..open]);
     Some(ComposerAddress {
         name,
@@ -245,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_empty_angle_mailbox_keeps_raw_token() {
+        let a = parse_recipient("<>").unwrap();
+        assert_eq!(a.email, "<>");
+        assert_eq!(a.name, None);
+        assert_eq!(chip_label(&a), "<>");
+        assert!(!chip_is_valid(&a));
+        let b = parse_recipient("< >").unwrap();
+        assert_eq!(b.email, "< >");
+        assert_eq!(chip_label(&b), "< >");
+    }
+
+    #[test]
     fn commit_live_leaves_tail() {
         let (chips, draft) = commit_input(&[], "ada@example.com, bob", false);
         assert_eq!(emails(&chips), ["ada@example.com"]);
@@ -281,6 +296,17 @@ mod tests {
         let existing = vec![ComposerAddress::email_only("Ada@Example.com")];
         let (chips, draft) = commit_input(&existing, "ada@example.com,, bob@example.com", true);
         assert_eq!(emails(&chips), ["Ada@Example.com", "bob@example.com"]);
+        assert_eq!(draft, "");
+    }
+
+    #[test]
+    fn commit_dedupes_existing_chips() {
+        let existing = vec![
+            ComposerAddress::email_only("a@b.com"),
+            ComposerAddress::email_only("A@b.com"),
+        ];
+        let (chips, draft) = commit_input(&existing, "", true);
+        assert_eq!(emails(&chips), ["a@b.com"]);
         assert_eq!(draft, "");
     }
 

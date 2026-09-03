@@ -43,6 +43,7 @@ mod reconnect;
 mod selection;
 mod send;
 mod shortcuts;
+mod smtp_inflight;
 mod smtp_session;
 mod toast;
 mod ui_prefs;

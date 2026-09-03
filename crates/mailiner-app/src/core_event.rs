@@ -47,9 +47,8 @@ use crate::outbox_store::{
 };
 use crate::reconnect::reconnect_backoff_ms;
 use crate::send::{OutboxDisplay, SendPhase, SendState};
-use crate::smtp_session::{
-    InFlightSmtp, SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test,
-};
+use crate::smtp_inflight::{InFlightSmtp, SmtpInflight};
+use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test};
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
 
 pub enum CoreEvent {
@@ -296,8 +295,7 @@ pub async fn core_loop(
     initial_bootstrap: InitialBootstrap,
 ) {
     let mut manager = AccountConnectionManager::new(store, cache);
-    let mut smtp_generation: u64 = 0;
-    let mut inflight: Option<InFlightSmtp> = None;
+    let mut inflight = SmtpInflight::new();
     let mut pending_event: Option<CoreEvent> = None;
     let mut pending_prefetch: Option<PrefetchJob> = None;
 
@@ -310,7 +308,6 @@ pub async fn core_loop(
             outbox.as_ref(),
             &smtp_tx,
             &mut inflight,
-            &mut smtp_generation,
         )
         .await;
         queue_adjacent_prefetch(&ctx, &mut pending_prefetch);
@@ -365,13 +362,7 @@ pub async fn core_loop(
                     .await;
             }
             CoreEvent::DisconnectAccount(account_id) => {
-                cancel_inflight_for(
-                    &mut inflight,
-                    &mut smtp_generation,
-                    &account_id,
-                    outbox.as_ref(),
-                )
-                .await;
+                inflight.cancel_for_account(&account_id);
                 manager.disconnect_account(&account_id, &mut ctx).await;
                 if ctx.selected_account.read().as_ref() == Some(&account_id) {
                     clear_mailbox_ui(&mut ctx);
@@ -388,24 +379,12 @@ pub async fn core_loop(
             }
             CoreEvent::AccountsChanged => {
                 handle_accounts_changed(&mut manager, &mut ctx).await;
-                purge_missing_accounts(
-                    &manager,
-                    outbox.as_ref(),
-                    &mut ctx,
-                    &mut inflight,
-                    &mut smtp_generation,
-                )
-                .await;
+                purge_missing_accounts(&manager, outbox.as_ref(), &mut ctx, &mut inflight).await;
             }
             CoreEvent::ClearLocalData => {
-                // Drop the SMTP slot now. A later SmtpFinished must not persist
+                // Drop every SMTP slot now. A later SmtpFinished must not persist
                 // (would recreate outbox/cache keys after the wipe).
-                if let Some(mut flight) = inflight.take()
-                    && let Some(tx) = flight.cancel_tx.take()
-                {
-                    let _ = tx.send(());
-                }
-                smtp_generation = smtp_generation.wrapping_add(1);
+                inflight.take_all();
                 handle_clear_local_data(&mut manager, &mut ctx, outbox.as_ref()).await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
@@ -608,7 +587,6 @@ pub async fn core_loop(
                     outbox.as_ref(),
                     &smtp_tx,
                     &mut inflight,
-                    &mut smtp_generation,
                     account_id,
                     request,
                     display,
@@ -619,15 +597,7 @@ pub async fn core_loop(
                 .await;
             }
             CoreEvent::TestSmtpConnection { request_id, config } => {
-                handle_test_smtp(
-                    &mut ctx,
-                    &smtp_tx,
-                    &mut inflight,
-                    &mut smtp_generation,
-                    request_id,
-                    config,
-                )
-                .await;
+                handle_test_smtp(&mut ctx, &smtp_tx, &mut inflight, request_id, config).await;
             }
             CoreEvent::SmtpFinished {
                 generation,
@@ -639,7 +609,6 @@ pub async fn core_loop(
                     outbox.as_ref(),
                     &smtp_tx,
                     &mut inflight,
-                    &mut smtp_generation,
                     generation,
                     outcome,
                 )
@@ -652,7 +621,6 @@ pub async fn core_loop(
                     outbox.as_ref(),
                     &smtp_tx,
                     &mut inflight,
-                    &mut smtp_generation,
                 )
                 .await;
             }
@@ -663,20 +631,12 @@ pub async fn core_loop(
                     outbox.as_ref(),
                     &smtp_tx,
                     &mut inflight,
-                    &mut smtp_generation,
                     id,
                 )
                 .await;
             }
             CoreEvent::DeleteOutboxItem { id } => {
-                if let Some(flight) = inflight.as_mut() {
-                    if flight.outbox_id.as_ref() == Some(&id) {
-                        if let Some(tx) = flight.cancel_tx.take() {
-                            let _ = tx.send(());
-                        }
-                        smtp_generation = smtp_generation.wrapping_add(1);
-                    }
-                }
+                inflight.cancel_by_outbox_id(&id);
                 let _ = outbox.delete(&id).await;
                 refresh_outbox_signal(outbox.as_ref(), &mut ctx).await;
             }
@@ -3647,33 +3607,11 @@ async fn recover_outbox(outbox: &dyn OutboxStore, ctx: &mut AppContext) {
     refresh_outbox_signal(outbox, ctx).await;
 }
 
-async fn cancel_inflight_for(
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
-    account_id: &AccountId,
-    _outbox: &dyn OutboxStore,
-) {
-    let Some(flight) = inflight.as_mut() else {
-        return;
-    };
-    if flight.account_id != *account_id {
-        return;
-    }
-    // Signal the task but keep the slot. SmtpFinished settles the row
-    // (delete on success, requeue on Cancelled) so DrainOutbox cannot
-    // start a second DATA for the same rfc822.
-    if let Some(tx) = flight.cancel_tx.take() {
-        let _ = tx.send(());
-    }
-    *smtp_generation = smtp_generation.wrapping_add(1);
-}
-
 async fn purge_missing_accounts(
     manager: &AccountConnectionManager,
     outbox: &dyn OutboxStore,
     ctx: &mut AppContext,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
 ) {
     let known: Vec<AccountId> = match manager.store().list().await {
         Ok(list) => list.into_iter().map(|c| c.id).collect(),
@@ -3682,13 +3620,7 @@ async fn purge_missing_accounts(
     if let Ok(items) = outbox.list().await {
         for item in items {
             if !known.iter().any(|id| *id == item.account_id) {
-                if inflight
-                    .as_ref()
-                    .map(|f| f.account_id == item.account_id)
-                    .unwrap_or(false)
-                {
-                    cancel_inflight_for(inflight, smtp_generation, &item.account_id, outbox).await;
-                }
+                inflight.cancel_for_account(&item.account_id);
                 let _ = outbox.delete_for_account(&item.account_id).await;
             }
         }
@@ -3696,18 +3628,12 @@ async fn purge_missing_accounts(
     refresh_outbox_signal(outbox, ctx).await;
 }
 
-fn bump_smtp_gen(smtp_generation: &mut u64) -> u64 {
-    *smtp_generation = smtp_generation.wrapping_add(1);
-    *smtp_generation
-}
-
 async fn handle_send_message(
     manager: &mut AccountConnectionManager,
     ctx: &mut AppContext,
     outbox: &dyn OutboxStore,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
@@ -3774,37 +3700,28 @@ async fn handle_send_message(
     {
         ctx.compose_draft.set(None);
     }
-    if inflight.is_some() {
+    if inflight.is_busy(&account_id) {
         ctx.send_status.set(Some(SendState::Idle));
         return;
     }
     item.attempts = 1;
     persist_sending(outbox, &mut item).await;
     refresh_outbox_signal(outbox, ctx).await;
-    start_send_item(
-        ctx,
-        smtp_tx,
-        inflight,
-        smtp_generation,
-        config,
-        item,
-        request,
-    );
+    start_send_item(ctx, smtp_tx, inflight, config, item, request);
 }
 
 fn start_send_item(
     ctx: &mut AppContext,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
     config: AccountConfig,
     item: OutboxItem,
     request: SubmitRequest,
 ) {
-    let generation = bump_smtp_gen(smtp_generation);
+    let generation = inflight.alloc_generation();
     let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel();
     let account_id = config.id.clone();
-    *inflight = Some(InFlightSmtp {
+    inflight.insert(InFlightSmtp {
         account_id: account_id.clone(),
         generation,
         cancel_tx: Some(cancel_tx),
@@ -3838,69 +3755,62 @@ async fn drain_outbox(
     ctx: &mut AppContext,
     outbox: &dyn OutboxStore,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
 ) {
-    if inflight.is_some() {
-        return;
-    }
-    let Some(mut item) = (match outbox.oldest_queued().await {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("oldest_queued failed: {e}");
+    // Fill one slot per idle account. Accounts already sending (or failed
+    // this pass) go into `blocked` so we cannot loop on the same Queued row.
+    let mut blocked: Vec<AccountId> = inflight.busy_account_ids().cloned().collect();
+    loop {
+        let Some(mut item) = (match outbox.oldest_queued_except(&blocked).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("oldest_queued failed: {e}");
+                return;
+            }
+        }) else {
             return;
-        }
-    }) else {
-        return;
-    };
-    let Some(config) = manager.resolve_config(&item.account_id).await else {
-        item.state = OutboxItemState::Failed;
-        item.last_error = Some("Account is no longer available.".into());
-        let _ = outbox.upsert(&item).await;
-        refresh_outbox_signal(outbox, ctx).await;
-        return;
-    };
-    if let Err(err) = preflight(&config) {
-        item.state = OutboxItemState::Failed;
-        item.last_error_kind = Some(err.kind);
-        item.last_error = Some(err.message);
-        let _ = outbox.upsert(&item).await;
-        refresh_outbox_signal(outbox, ctx).await;
-        return;
-    }
-    let request = match item.to_request() {
-        Ok(r) => r,
-        Err(e) => {
+        };
+        blocked.push(item.account_id.clone());
+        let Some(config) = manager.resolve_config(&item.account_id).await else {
             item.state = OutboxItemState::Failed;
-            item.last_error = Some(e.to_string());
+            item.last_error = Some("Account is no longer available.".into());
             let _ = outbox.upsert(&item).await;
             refresh_outbox_signal(outbox, ctx).await;
-            return;
+            continue;
+        };
+        if let Err(err) = preflight(&config) {
+            item.state = OutboxItemState::Failed;
+            item.last_error_kind = Some(err.kind);
+            item.last_error = Some(err.message);
+            let _ = outbox.upsert(&item).await;
+            refresh_outbox_signal(outbox, ctx).await;
+            continue;
         }
-    };
-    item.attempts = item.attempts.saturating_add(1);
-    persist_sending(outbox, &mut item).await;
-    refresh_outbox_signal(outbox, ctx).await;
-    start_send_item(
-        ctx,
-        smtp_tx,
-        inflight,
-        smtp_generation,
-        config,
-        item,
-        request,
-    );
+        let request = match item.to_request() {
+            Ok(r) => r,
+            Err(e) => {
+                item.state = OutboxItemState::Failed;
+                item.last_error = Some(e.to_string());
+                let _ = outbox.upsert(&item).await;
+                refresh_outbox_signal(outbox, ctx).await;
+                continue;
+            }
+        };
+        item.attempts = item.attempts.saturating_add(1);
+        persist_sending(outbox, &mut item).await;
+        refresh_outbox_signal(outbox, ctx).await;
+        start_send_item(ctx, smtp_tx, inflight, config, item, request);
+    }
 }
 
 async fn handle_test_smtp(
     ctx: &mut AppContext,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
     request_id: AccountId,
     config: AccountConfig,
 ) {
-    if inflight.is_some() {
+    if inflight.is_busy(&config.id) {
         ctx.set_smtp_test_status(
             request_id,
             SendState::Failed {
@@ -3924,16 +3834,6 @@ async fn handle_test_smtp(
         );
         return;
     }
-    let generation = bump_smtp_gen(smtp_generation);
-    let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel();
-    *inflight = Some(InFlightSmtp {
-        account_id: config.id.clone(),
-        generation,
-        cancel_tx: Some(cancel_tx),
-        outbox_id: None,
-        is_test: true,
-        reply_source: None,
-    });
     if !ctx.set_smtp_test_status(
         request_id.clone(),
         SendState::Sending {
@@ -3941,9 +3841,18 @@ async fn handle_test_smtp(
             phase: SendPhase::Connecting,
         },
     ) {
-        *inflight = None;
         return;
     }
+    let generation = inflight.alloc_generation();
+    let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel();
+    inflight.insert(InFlightSmtp {
+        account_id: config.id.clone(),
+        generation,
+        cancel_tx: Some(cancel_tx),
+        outbox_id: None,
+        is_test: true,
+        reply_source: None,
+    });
     spawn_test(config, request_id, generation, cancel_rx, smtp_tx.clone());
 }
 
@@ -3994,19 +3903,18 @@ async fn handle_smtp_finished(
     ctx: &mut AppContext,
     outbox: &dyn OutboxStore,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
     generation: u64,
     outcome: SmtpOutcome,
 ) {
-    if generation != *smtp_generation && inflight.is_none() {
-        // Sign-out already dropped the slot; do not persist. Ordinary
+    if inflight.is_empty() && !inflight.contains_generation(generation) {
+        // Sign-out already dropped the slots; do not persist. Ordinary
         // cancel (Disconnect / DeleteOutbox / purge) keeps the slot so
         // this handler can settle it below.
         return;
     }
-    let Some(flight) = inflight.take() else {
-        // Inflight was dropped (item deleted) but DATA may still have succeeded.
+    let Some(flight) = inflight.take_by_generation(generation) else {
+        // Slot already gone (item deleted) but DATA may still have succeeded.
         // Never leave that rfc822 queued for a second submit.
         if let SmtpOutcome::Send {
             outbox_id: Some(id),
@@ -4030,10 +3938,6 @@ async fn handle_smtp_finished(
         }
         return;
     };
-    if flight.generation != generation {
-        *inflight = Some(flight);
-        return;
-    }
     match outcome {
         SmtpOutcome::Send {
             result: Ok(receipt),
@@ -4112,7 +4016,7 @@ async fn handle_smtp_finished(
         }
     }
     refresh_outbox_signal(outbox, ctx).await;
-    drain_outbox(manager, ctx, outbox, smtp_tx, inflight, smtp_generation).await;
+    drain_outbox(manager, ctx, outbox, smtp_tx, inflight).await;
 }
 
 const ARCHIVE_SENT_WARN: &str = "Could not save a copy in Sent.";
@@ -4212,8 +4116,7 @@ async fn handle_retry_outbox(
     ctx: &mut AppContext,
     outbox: &dyn OutboxStore,
     smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut Option<InFlightSmtp>,
-    smtp_generation: &mut u64,
+    inflight: &mut SmtpInflight,
     id: crate::outbox_store::OutboxId,
 ) {
     let Ok(Some(mut item)) = outbox.get(&id).await else {
@@ -4226,7 +4129,7 @@ async fn handle_retry_outbox(
     item.updated_at = chrono::Utc::now();
     let _ = outbox.upsert(&item).await;
     refresh_outbox_signal(outbox, ctx).await;
-    drain_outbox(manager, ctx, outbox, smtp_tx, inflight, smtp_generation).await;
+    drain_outbox(manager, ctx, outbox, smtp_tx, inflight).await;
 }
 
 async fn recv_next_event(

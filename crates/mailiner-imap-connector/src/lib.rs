@@ -1351,8 +1351,6 @@ where
             parent_id: parent_id.cloned(),
             role,
             selectable: true,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         })
     }
 
@@ -1393,8 +1391,6 @@ where
             parent_id: parent,
             role,
             selectable: true,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         })
     }
 

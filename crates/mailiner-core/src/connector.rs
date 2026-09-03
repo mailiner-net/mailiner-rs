@@ -462,8 +462,6 @@ where
             parent_id: parent_id.cloned(),
             role: crate::MailboxRole::Other,
             selectable: true,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         })
     }
 
@@ -475,6 +473,11 @@ where
         }
         let full_name =
             rename_mailbox_path(folder_id.as_str(), new_name, Some(MOCK_FOLDER_DELIMITER))?;
+        if is_inbox_mailbox(&full_name) {
+            return Err(crate::MailinerError::InvalidData(
+                "Cannot rename a folder to Inbox".into(),
+            ));
+        }
         let (parent, leaf) = mailbox_parent_and_leaf(&full_name, Some(MOCK_FOLDER_DELIMITER));
         let parent = parent.map(FolderId::new);
         let leaf = leaf.to_string();
@@ -485,8 +488,6 @@ where
             parent_id: parent,
             role: crate::MailboxRole::Other,
             selectable: true,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         })
     }
 
@@ -662,6 +663,17 @@ mod tests {
             folder.parent_id.as_ref().map(|id| id.as_str()),
             Some("INBOX")
         );
+    }
+
+    #[test]
+    fn mock_rename_folder_refuses_inbox_target() {
+        let err = futures::executor::block_on(EmailConnector::<NoopStream>::rename_folder(
+            &mock(),
+            &FolderId::new("Archive"),
+            "INBOX",
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("Inbox"));
     }
 
     #[test]

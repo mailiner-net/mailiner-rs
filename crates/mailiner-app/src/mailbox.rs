@@ -188,9 +188,11 @@ pub fn can_empty_trash(node: &MailboxNode) -> bool {
     node.selectable && node.role == MailboxRole::Trash
 }
 
-/// Inbox cannot be renamed or deleted (IMAP `INBOX` is special).
+/// Selectable non-INBOX mailboxes can be renamed or deleted.
+///
+/// Gate on the mailbox id, not the leaf-name Inbox role — `INBOX.Inbox` is not special.
 pub fn can_manage_folder(node: &MailboxNode) -> bool {
-    node.role != MailboxRole::Inbox && !is_inbox_mailbox(node.id.as_str())
+    node.selectable && !is_inbox_mailbox(node.id.as_str())
 }
 
 /// New id for `selected` after `old` was renamed to `new`.
@@ -876,10 +878,25 @@ mod tests {
         assert!(!can_manage_folder(&inbox));
         let named = MailboxNode::from(folder("inbox", "inbox", None, MailboxRole::Other));
         assert!(!can_manage_folder(&named));
+        let nested_inbox = MailboxNode::from(folder(
+            "KDE.Inbox",
+            "Inbox",
+            Some("KDE"),
+            MailboxRole::Inbox,
+        ));
+        assert!(can_manage_folder(&nested_inbox));
         let work = MailboxNode::from(folder("Work", "Work", None, MailboxRole::Other));
         assert!(can_manage_folder(&work));
         let sent = MailboxNode::from(folder("Sent", "Sent", None, MailboxRole::Sent));
         assert!(can_manage_folder(&sent));
+        let stub = MailboxNode::from(folder_sel(
+            "[Gmail]",
+            "[Gmail]",
+            None,
+            MailboxRole::Other,
+            false,
+        ));
+        assert!(!can_manage_folder(&stub));
     }
 
     #[test]

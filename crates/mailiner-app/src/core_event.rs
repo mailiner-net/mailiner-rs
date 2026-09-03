@@ -3456,7 +3456,9 @@ async fn handle_rename_folder(
             }) {
                 crate::ui_prefs::save_last_mailbox(&account_id, &next);
             }
-            invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
+            for id in crate::mailbox::mailbox_subtree_deepest_first(&mailbox_id, &nodes) {
+                invalidate_mailbox_messages(manager.cache(), &account_id, &id).await;
+            }
             list_folders_soft(manager, ctx, &account_id).await;
             ctx.show_toast(ToastAction::info(format!(
                 "Renamed folder to {}",
@@ -3495,7 +3497,11 @@ async fn handle_delete_folder(
 
     let selected = ctx.selected_mailbox.read().clone();
     let nodes = ctx.mailbox_nodes.read().clone();
-    let to_delete = crate::mailbox::mailbox_subtree_deepest_first(&mailbox_id, &nodes);
+    let to_delete: Vec<MailboxId> =
+        crate::mailbox::mailbox_subtree_deepest_first(&mailbox_id, &nodes)
+            .into_iter()
+            .filter(|id| nodes.get(id).is_some_and(crate::mailbox::can_manage_folder))
+            .collect();
     let selected_hit = selected.as_ref().is_some_and(|sel| {
         to_delete.iter().any(|id| id == sel)
             || crate::mailbox::mailbox_is_ancestor(&mailbox_id, sel, &nodes)

@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::AppBootstrapState;
 use crate::account::AccountId;
 use crate::account_config::DEFAULT_SMTP_PORT;
+use crate::account_config::SmtpTlsMode;
 use crate::account_config::dev_form_prefill;
 use crate::components::account_form::{
     AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
@@ -47,7 +48,7 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_port = use_signal(|| DEFAULT_SMTP_PORT.to_string());
     let mut smtp_username = use_signal(String::new);
     let mut smtp_password = use_signal(String::new);
-    let mut smtp_use_tls = use_signal(|| true);
+    let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -171,7 +172,7 @@ pub fn OnboardingForm() -> Element {
             &smtp_port(),
             &smtp_username(),
             &smtp_password(),
-            smtp_use_tls(),
+            smtp_tls_mode(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -215,7 +216,7 @@ pub fn OnboardingForm() -> Element {
                 &smtp_port(),
                 &smtp_username(),
                 &smtp_password(),
-                smtp_use_tls(),
+                smtp_tls_mode(),
                 Utc::now(),
             ),
             phase,
@@ -246,7 +247,7 @@ pub fn OnboardingForm() -> Element {
             &smtp_port(),
             &smtp_username(),
             &smtp_password(),
-            smtp_use_tls(),
+            smtp_tls_mode(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -316,12 +317,12 @@ pub fn OnboardingForm() -> Element {
                         smtp_port: smtp_port(),
                         smtp_username: smtp_username(),
                         smtp_password: smtp_password(),
-                        smtp_use_tls: smtp_use_tls(),
+                        smtp_tls_mode: smtp_tls_mode(),
                         set_smtp_host: move |v| smtp_host.set(v),
                         set_smtp_port: move |v| smtp_port.set(v),
                         set_smtp_username: move |v| smtp_username.set(v),
                         set_smtp_password: move |v| smtp_password.set(v),
-                        set_smtp_use_tls: move |v| smtp_use_tls.set(v),
+                        set_smtp_tls_mode: move |v| smtp_tls_mode.set(v),
                         busy: busy,
                     }
 

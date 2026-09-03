@@ -226,7 +226,8 @@ button.flat {
     color: #333;
 }
 
-.onboarding-field input {
+.onboarding-field input,
+.onboarding-field select {
     font: inherit;
     font-size: 0.95rem;
     padding: 0.45rem 0.6rem;
@@ -238,13 +239,15 @@ button.flat {
     width: 100%;
 }
 
-.onboarding-field input:focus {
+.onboarding-field input:focus,
+.onboarding-field select:focus {
     outline: 2px solid color-mix(in srgb, var(--item-accent) 45%, transparent);
     outline-offset: 1px;
     border-color: var(--item-accent);
 }
 
-.onboarding-field input:disabled {
+.onboarding-field input:disabled,
+.onboarding-field select:disabled {
     opacity: 0.65;
     background: #f0f0f0;
 }

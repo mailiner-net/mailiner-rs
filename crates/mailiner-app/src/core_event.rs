@@ -2306,7 +2306,15 @@ async fn handle_select_message(
 
     let cached = ctx.message_bodies.borrow_mut().get(&message_id);
     if let Some(loaded) = cached {
+        let Some(account_id) = ctx.selected_account.read().clone() else {
+            ctx.message_view.set(MessageViewState::Error {
+                message_id: message_id.clone(),
+                message: "No account selected".into(),
+            });
+            return;
+        };
         ctx.message_view.set(MessageViewState::Ready {
+            account_id,
             message_id: message_id.clone(),
             loaded,
         });
@@ -2355,10 +2363,13 @@ async fn handle_select_message(
             ctx.message_bodies
                 .borrow_mut()
                 .insert(message_id.clone(), loaded.clone());
-            if ctx.selection.read().focus() != Some(&message_id) {
+            if ctx.selection.read().focus() != Some(&message_id)
+                || !selected_account_is(ctx, &account_id)
+            {
                 return;
             }
             ctx.message_view.set(MessageViewState::Ready {
+                account_id: account_id.clone(),
                 message_id: message_id.clone(),
                 loaded,
             });
@@ -3802,6 +3813,14 @@ fn attachment_request_still_current(
     selected_account_is(ctx, account_id)
         && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
         && ctx.selection.read().focus() == Some(message_id)
+        && matches!(
+            &*ctx.message_view.read(),
+            MessageViewState::Ready {
+                account_id: view_account,
+                message_id: view_message,
+                ..
+            } if view_account == account_id && view_message == message_id
+        )
 }
 
 async fn stream_attachment_blob(

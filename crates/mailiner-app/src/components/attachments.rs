@@ -32,9 +32,17 @@ pub fn AttachmentsFooter() -> Element {
     let view = ctx.message_view.read().clone();
     let mailbox = ctx.selected_mailbox.read().clone();
 
-    let account = ctx.selected_account.read().clone();
-    let prepared = match (view, mailbox, account) {
-        (MessageViewState::Ready { message_id, loaded }, Some(mailbox_id), Some(account_id)) => {
+    let selected_account = ctx.selected_account.read().clone();
+    let prepared = match (view, mailbox, selected_account) {
+        (
+            MessageViewState::Ready {
+                account_id,
+                message_id,
+                loaded,
+            },
+            Some(mailbox_id),
+            Some(selected),
+        ) if account_id == selected => {
             let rows: Vec<AttachmentRow> = loaded
                 .parts
                 .iter()
@@ -225,7 +233,6 @@ fn AttachmentItem(
         size_to_human(row.size),
         row.content_type
     );
-
 
     let progress_pct = match &status {
         DownloadStatus::InProgress {

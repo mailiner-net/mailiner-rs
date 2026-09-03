@@ -469,6 +469,7 @@ pub(crate) fn ready_loaded(
         MessageViewState::Ready {
             message_id: loaded_id,
             loaded,
+            ..
         } if loaded_id == message_id => Some(loaded.clone()),
         _ => None,
     }

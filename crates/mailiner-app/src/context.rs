@@ -35,6 +35,7 @@ pub enum MessageViewState {
         message_id: MessageId,
     },
     Ready {
+        account_id: AccountId,
         message_id: MessageId,
         loaded: Arc<LoadedMessage>,
     },

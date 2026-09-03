@@ -1,0 +1,27 @@
+crates/mailiner-app/Dioxus.toml
+  s_f63a4a304801ac::t_31b6273dcd4512 18-20
+crates/mailiner-app/src/main.rs
+  s_f63a4a304801ac::t_b6ae233d6ad29f 104-107
+README.md
+  s_f63a4a304801ac::t_e7bc4bbb9f5e14 45-50,64-67
+.github/workflows/build-test.yml
+  s_f63a4a304801ac::t_3eb92f28636626 147-149,169-170
+  s_f63a4a304801ac::t_6934472cc802b1 150
+  s_f63a4a304801ac::t_15d325c0ec86e7 151-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9c7d803f7b944966bec8c4b38f8ca3a85562b123",
+  "prompts": {},
+  "sessions": {
+    "s_f63a4a304801ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06959-62f5-7110-9742-dabbaa3f0a14",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

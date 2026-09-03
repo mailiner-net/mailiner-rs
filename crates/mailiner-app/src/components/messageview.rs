@@ -13,6 +13,7 @@ use crate::components::icons::{IconButton, IconKind};
 use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
+use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, drop_inlined_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
@@ -90,6 +91,11 @@ fn mount_shadow_html(host_id: &str, html: &str) {
             let _ = shadow.append_child(&reset);
         }
         let _ = shadow.append_child(&adopted);
+        // After the document so email CSS cannot hide the quote toggle.
+        if let Ok(quote) = document.create_element("style") {
+            quote.set_text_content(Some(QUOTE_TOGGLE_CSS));
+            let _ = shadow.append_child(&quote);
+        }
     }
     #[cfg(not(feature = "web"))]
     {

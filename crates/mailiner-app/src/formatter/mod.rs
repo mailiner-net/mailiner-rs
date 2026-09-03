@@ -2,6 +2,7 @@
 
 mod html;
 mod plain;
+pub(crate) mod quote;
 mod sanitize;
 
 use mailiner_core::models::{MessageContent, MessagePart, PartKind};

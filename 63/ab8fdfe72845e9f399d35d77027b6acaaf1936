@@ -1,0 +1,63 @@
+crates/mailiner-app/src/core_event.rs
+  s_b6bfcdd322daf1::t_bf98fd842ef200 2098-2101
+  s_b6bfcdd322daf1::t_f15b1bcfcc938e 2105-2108
+  s_b6bfcdd322daf1::t_c60e7f12e45d22 2039-2096,2102-2104,2109-2166
+  s_b6bfcdd322daf1::t_7e951a0f895a52 92-108,363-381
+  s_b6bfcdd322daf1::t_0016694de58aa3 2097
+crates/mailiner-core/src/connector.rs
+  s_b6bfcdd322daf1::t_a1401070ca6fb6 397-399
+  s_b6bfcdd322daf1::t_ad02a911dc6786 542,550,553-558,564-567,572-573,575-577,583-589,592-605,608-612,615-620
+  s_b6bfcdd322daf1::t_ebc9a531498467 402,406,424-425,429-430
+  s_b6bfcdd322daf1::t_189536a119908c 518-531,533,535-541,543-547,549,551-552,559-563,568-571,578-582,590-591,606-607,613-614,625-626
+  s_b6bfcdd322daf1::t_6a9d83859ec8cb 13-15,22-23
+  s_b6bfcdd322daf1::t_d9599962c09802 95-108,385-396,400-401,403-405,407-423,426-428,431-443
+crates/mailiner-core/src/lib.rs
+  s_b6bfcdd322daf1::t_2b31418956d742 4,14-17
+crates/mailiner-app/src/components/emailnavigation/navigationheader.rs
+  s_b6bfcdd322daf1::t_71c18379af0005 6-7
+  s_b6bfcdd322daf1::t_d5f396fae99a8c 144-172
+crates/mailiner-app/src/components/emailnavigation/mailboxtreeview.rs
+  s_b6bfcdd322daf1::t_148969e384ca56 203-217,225-246,248-254,256-267,269-270,274-275,277-280,282-292,294-300,302-309
+  s_b6bfcdd322daf1::t_0af283da981379 196
+  s_b6bfcdd322daf1::t_ba95e07e60f4d3 144,150-151
+  s_b6bfcdd322daf1::t_e0fd82ddadb63e 80,84-89,97,145-149,152-154
+  s_b6bfcdd322daf1::t_9d36ff05f46b6c 72,114-117,120
+  s_b6bfcdd322daf1::t_15174df385177a 8-10,12-55
+  s_b6bfcdd322daf1::t_9c72feee8f9f7f 11
+  s_b6bfcdd322daf1::t_07afbebf07584b 218-224,247,255,268,271-273,276,281,293,301
+crates/mailiner-core/src/folder_name.rs
+  s_b6bfcdd322daf1::t_64d31c3dda71d9 70-72
+  s_b6bfcdd322daf1::t_aaef11a72ca8f5 35-37
+  s_b6bfcdd322daf1::t_5660cef2b0fca8 1-34,38-69,73-84,86-222
+crates/mailiner-app/assets/main.css
+  s_b6bfcdd322daf1::t_da6a86b65aac18 674-699,1458-1493
+crates/mailiner-app/src/mailbox.rs
+  s_b6bfcdd322daf1::t_b24a6b6d05ec04 3,206
+  s_b6bfcdd322daf1::t_07899b9a2374eb 183-199,591-597,599-632
+  s_b6bfcdd322daf1::t_9e1206b0703dd7 178-182,200-205,207-218,581-590,633-649
+crates/mailiner-core/src/error.rs
+  s_b6bfcdd322daf1::t_008ba4a70da1d9 3,33-34
+crates/mailiner-imap-connector/src/lib.rs
+  s_b6bfcdd322daf1::t_f81bb4e94b5b0f 30-32,155-197
+  s_b6bfcdd322daf1::t_8fb457311f52e1 1235-1261,1264,1266,1268,1270-1302,1306,1308,1312-1337
+  s_b6bfcdd322daf1::t_d56bc8ebbd81ef 1262-1263,1265,1267,1269,1303-1305,1307,1309-1311
+  s_b6bfcdd322daf1::t_1202ef36aef6fd 1667-1673,1676-1677
+  s_b6bfcdd322daf1::t_d781642255af07 1674-1675
+  s_b6bfcdd322daf1::t_33f54e490326f6 676-705
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "63ab8fdfe72845e9f399d35d77027b6acaaf1936",
+  "prompts": {},
+  "sessions": {
+    "s_b6bfcdd322daf1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06949-a614-72d2-9d5e-b153c714deb0",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

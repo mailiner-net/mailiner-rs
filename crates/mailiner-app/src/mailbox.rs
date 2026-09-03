@@ -51,8 +51,20 @@ impl MailboxNode {
     }
 }
 
+/// Upgrade pre-Archive cache rows whose leaf name is an archive folder.
+fn inferred_mailbox_role(name: &str, role: MailboxRole) -> MailboxRole {
+    if role != MailboxRole::Other {
+        return role;
+    }
+    match name.to_ascii_lowercase().as_str() {
+        "archive" | "archives" | "all mail" => MailboxRole::Archive,
+        _ => role,
+    }
+}
+
 impl From<Folder> for MailboxNode {
     fn from(folder: Folder) -> Self {
+        let role = inferred_mailbox_role(&folder.name, folder.role);
         Self {
             id: folder.id.into(),
             name: folder.name,
@@ -61,7 +73,7 @@ impl From<Folder> for MailboxNode {
             unread_count: 0,
             total_count: 0,
             has_new: false,
-            role: folder.role,
+            role,
             selectable: folder.selectable,
         }
     }
@@ -76,7 +88,7 @@ pub fn build_mailbox_tree(
 
     for folder in folders {
         let mailbox_id: MailboxId = folder.id.clone().into();
-        let role = folder.role;
+        let role = inferred_mailbox_role(&folder.name, folder.role);
         mboxes
             .entry(mailbox_id.clone())
             .and_modify(|node| {
@@ -186,26 +198,37 @@ pub fn find_mailbox_with_role(
         .map(|(id, _)| id.clone())
 }
 
-/// Archive target: prefer a folder named Archive/Archives, else any `\Archive`/`\All`.
+/// Archive target: Archive/Archives, then All Mail, then any other Archive-role folder.
+///
+/// Also matches pre-Archive cache rows still tagged `Other`. Ties use mailbox id order.
 pub fn find_archive_mailbox(nodes: &HashMap<MailboxId, MailboxNode>) -> Option<MailboxId> {
-    let mut named = None;
-    let mut any = None;
+    let mut exact = Vec::new();
+    let mut all_mail = Vec::new();
+    let mut other = Vec::new();
     for (id, node) in nodes {
-        if !node.selectable || node.role != MailboxRole::Archive {
+        if !node.selectable {
             continue;
         }
         let leaf = node.name.to_ascii_lowercase();
-        if leaf == "archive" || leaf == "archives" {
-            return Some(id.clone());
-        }
-        if any.is_none() {
-            any = Some(id.clone());
-        }
-        if named.is_none() && leaf != "all mail" {
-            named = Some(id.clone());
+        let archive_role = node.role == MailboxRole::Archive;
+        match leaf.as_str() {
+            "archive" | "archives" if archive_role || node.role == MailboxRole::Other => {
+                exact.push(id.clone());
+            }
+            "all mail" if archive_role || node.role == MailboxRole::Other => {
+                all_mail.push(id.clone());
+            }
+            _ if archive_role => other.push(id.clone()),
+            _ => {}
         }
     }
-    named.or(any)
+    fn first_sorted(ids: &mut [MailboxId]) -> Option<MailboxId> {
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        ids.first().cloned()
+    }
+    first_sorted(&mut exact)
+        .or_else(|| first_sorted(&mut all_mail))
+        .or_else(|| first_sorted(&mut other))
 }
 
 /// Mailbox to open after a folder list: saved id if it still exists, else Inbox, else first root.
@@ -539,6 +562,60 @@ mod tests {
             folder("Archive", "Archive", None, MailboxRole::Archive),
         ]);
         assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
+    }
+
+    #[test]
+    fn find_archive_accepts_other_role_named_archive() {
+        let mut nodes = HashMap::new();
+        let id = MailboxId::from("Archive".to_string());
+        nodes.insert(
+            id.clone(),
+            MailboxNode {
+                id: id.clone(),
+                name: "Archive".into(),
+                parent: None,
+                children: vec![],
+                unread_count: 0,
+                total_count: 0,
+                has_new: false,
+                role: MailboxRole::Other,
+                selectable: true,
+            },
+        );
+        assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
+    }
+
+    #[test]
+    fn find_archive_reads_pre_archive_cache_names() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Archive", "Archive", None, MailboxRole::Other),
+        ]);
+        assert_eq!(
+            nodes
+                .get(&MailboxId::from("Archive".to_string()))
+                .unwrap()
+                .role,
+            MailboxRole::Archive
+        );
+        assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
+    }
+
+    #[test]
+    fn find_archive_prefers_all_mail_over_other_archive_names() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("2023 Archive", "2023 Archive", None, MailboxRole::Archive),
+            folder(
+                "[Gmail]/All Mail",
+                "All Mail",
+                Some("[Gmail]"),
+                MailboxRole::Archive,
+            ),
+        ]);
+        assert_eq!(
+            find_archive_mailbox(&nodes).unwrap().to_string(),
+            "[Gmail]/All Mail"
+        );
     }
 
     #[test]

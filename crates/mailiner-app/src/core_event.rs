@@ -343,8 +343,19 @@ pub async fn core_loop(
                 message_ids,
                 dest_mailbox_id,
             } => {
-                handle_move_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
-                    .await;
+                let Some(account_id) = ctx.selected_account.read().clone() else {
+                    ctx.show_toast(ToastAction::error("No account selected"));
+                    continue;
+                };
+                handle_move_messages(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    dest_mailbox_id,
+                )
+                .await;
             }
             CoreEvent::CopyMessages {
                 account_id,
@@ -1829,6 +1840,7 @@ async fn relocate_unread_sort_rows(
 async fn handle_move_messages(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: Vec<MessageId>,
     dest_mailbox_id: MailboxId,
@@ -1836,13 +1848,12 @@ async fn handle_move_messages(
     if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
         return;
     }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
@@ -1856,6 +1867,13 @@ async fn handle_move_messages(
         .await
     {
         Ok(dest_uids) => {
+            if !selected_account_is(ctx, &account_id)
+                || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+            {
+                invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
+                invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
+                return;
+            }
             let (snapshots, removed_sel) = take_messages_from_ui(ctx, &message_ids);
             let unread_n = unread_in_removed(&snapshots);
             if unread_n != 0 {
@@ -1987,7 +2005,15 @@ async fn handle_archive_messages(
         ));
         return;
     };
-    handle_move_messages(manager, ctx, mailbox_id, message_ids, archive_id).await;
+    handle_move_messages(
+        manager,
+        ctx,
+        account_id,
+        mailbox_id,
+        message_ids,
+        archive_id,
+    )
+    .await;
 }
 
 async fn handle_move_to_trash(

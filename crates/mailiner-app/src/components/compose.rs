@@ -137,13 +137,22 @@ fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
         return String::new();
     }
     if let Some((bare, quoted)) = split_trailing_quoted(before) {
+        let mut name_prefix = String::new();
         for part in bare.split(',') {
-            let part = part.trim();
-            if !part.is_empty() {
-                out.push(ComposerAddress::email_only(part));
+            if name_prefix.is_empty() && looks_like_email(part) {
+                out.push(ComposerAddress::email_only(part.trim()));
+            } else if name_prefix.is_empty() {
+                name_prefix = part.to_string();
+            } else {
+                name_prefix.push(',');
+                name_prefix.push_str(part);
             }
         }
-        return quoted;
+        let name_prefix = name_prefix.trim();
+        if name_prefix.is_empty() {
+            return quoted;
+        }
+        return format!("{name_prefix} {quoted}");
     }
     let parts: Vec<&str> = before.split(',').collect();
     let mut name_from = parts.len().saturating_sub(1);
@@ -1044,6 +1053,11 @@ mod tests {
         assert_eq!(mixed[1].email, "alice@work.com");
 
         assert_eq!(parse_address_list(&join_address_list(&unquoted)), unquoted);
+
+        let nickname = parse_address_list(r#"John "Johnny" <john@example.com>"#);
+        assert_eq!(nickname.len(), 1);
+        assert_eq!(nickname[0].name.as_deref(), Some("John Johnny"));
+        assert_eq!(nickname[0].email, "john@example.com");
     }
 
     #[test]

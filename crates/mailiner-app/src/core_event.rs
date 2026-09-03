@@ -1152,12 +1152,19 @@ async fn persist_stale_move_counts(
     if moved == 0 && unread == 0 {
         return;
     }
+    let dest_name = ctx.mailbox_nodes.read().get(dest).map(|n| n.name.clone());
+    // Gmail All Mail already contains every message; do not double-count dest.
+    let dest_is_all_mail = mailbox_is_all_mail(dest, dest_name.as_deref());
     if selected_account_is(ctx, account_id) {
         bump_mailbox_total(ctx, source, -(moved as i32));
-        bump_mailbox_total(ctx, dest, moved as i32);
+        if !dest_is_all_mail {
+            bump_mailbox_total(ctx, dest, moved as i32);
+        }
         if unread != 0 {
             bump_mailbox_unread(ctx, source, -unread, true);
-            bump_mailbox_unread(ctx, dest, unread, false);
+            if !dest_is_all_mail {
+                bump_mailbox_unread(ctx, dest, unread, false);
+            }
         }
         persist_folder_tree(cache, ctx, account_id).await;
         return;
@@ -1171,9 +1178,11 @@ async fn persist_stale_move_counts(
         src.total_messages = src.total_messages.saturating_sub(moved);
         src.unread_messages = src.unread_messages.saturating_sub(unread);
     }
-    if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
-        dst.total_messages = dst.total_messages.saturating_add(moved);
-        dst.unread_messages = dst.unread_messages.saturating_add(unread);
+    if !dest_is_all_mail {
+        if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
+            dst.total_messages = dst.total_messages.saturating_add(moved);
+            dst.unread_messages = dst.unread_messages.saturating_add(unread);
+        }
     }
     if let Err(e) = cache.save_folders(account_id, &tree).await {
         warn!("mail cache adjust folder totals failed: {e}");
@@ -1729,6 +1738,16 @@ fn unread_among(ctx: &AppContext, ids: &[MessageId]) -> i32 {
         .count() as i32
 }
 
+fn mailbox_is_all_mail(id: &MailboxId, name: Option<&str>) -> bool {
+    if name.is_some_and(|n| n.eq_ignore_ascii_case("all mail")) {
+        return true;
+    }
+    id.as_str()
+        .rsplit(['/', '.'])
+        .next()
+        .is_some_and(|leaf| leaf.eq_ignore_ascii_case("all mail"))
+}
+
 /// Remove `ids` from the current list. If the selected row is among them,
 /// returns its pre-removal index so the caller can select the next remaining row.
 fn take_messages_from_ui(
@@ -1939,7 +1958,12 @@ async fn handle_move_messages(
             }
             let (snapshots, removed_sel) = take_messages_from_ui(ctx, &message_ids);
             let unread_n = unread_in_removed(&snapshots);
-            if unread_n != 0 {
+            let dest_is_all_mail = ctx
+                .mailbox_nodes
+                .read()
+                .get(&dest_mailbox_id)
+                .is_some_and(|n| mailbox_is_all_mail(&dest_mailbox_id, Some(n.name.as_str())));
+            if unread_n != 0 && !dest_is_all_mail {
                 bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
             }
             let dest_label = ctx

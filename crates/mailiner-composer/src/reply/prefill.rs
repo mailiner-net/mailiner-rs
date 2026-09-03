@@ -144,6 +144,17 @@ fn apply_html_quote(
     draft.prefill_warnings.extend(rehydrated.warnings);
 }
 
+/// Drop the rich quote and its CID inlines when the caller will send plain text.
+///
+/// `build_draft` still attaches inlines for a rich export path. The v1 compose
+/// overlay forces [`BodyMode::Plain`] and must call this so send does not emit
+/// unused `multipart/related` parts.
+pub fn discard_rich_quote(draft: &mut DraftDocument) {
+    draft.mode = BodyMode::Plain;
+    draft.html_body.clear();
+    draft.inline_images.clear();
+}
+
 fn wrap_html_quote(attribution: &str, sanitized_body: &str) -> String {
     let attr_esc = html_escape_text(attribution);
     // Strip untrusted classes/markers from the quote body so original mail cannot
@@ -574,5 +585,23 @@ mod tests {
         assert!(s.contains("multipart/related"), "{s}");
         assert!(s.contains("Content-ID: <logo@x>"), "{s}");
         assert!(s.contains("cid:logo@x"), "{s}");
+    }
+
+    #[test]
+    fn discard_rich_quote_clears_inlines() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let png = [1u8, 2, 3];
+        let loaded = loaded_html_with_parts(
+            r#"<p>Hi <img src="cid:logo@x"></p>"#,
+            vec![cid_png("logo@x", &png)],
+        );
+        let mut d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert!(!d.inline_images.is_empty());
+        assert!(!d.html_body.is_empty());
+        discard_rich_quote(&mut d);
+        assert_eq!(d.mode, BodyMode::Plain);
+        assert!(d.html_body.is_empty());
+        assert!(d.inline_images.is_empty());
     }
 }

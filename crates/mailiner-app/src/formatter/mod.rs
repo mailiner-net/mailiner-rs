@@ -63,7 +63,9 @@ pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[St
             }
             continue;
         }
-        if !part.is_display_part() {
+        // Keep only visible text bodies. Unreferenced images (even if they
+        // are not flagged as attachments) must not bypass the CID budget.
+        if !matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
             part.content = MessageContent::Empty;
         }
     }
@@ -342,6 +344,18 @@ mod tests {
         let mut parts = vec![png_part("img", "<logo@x>", &too_big)];
         retain_reply_cid_payloads(&mut parts, &["img".into()]);
         assert!(matches!(parts[0].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn retain_drops_unreferenced_visible_image() {
+        let mut img = png_part("img", "<logo@x>", b"\x89PNG");
+        img.is_hidden = false;
+        img.is_attachment = false;
+        let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
+        let mut parts = vec![html, img];
+        retain_reply_cid_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Empty));
     }
 
     #[test]

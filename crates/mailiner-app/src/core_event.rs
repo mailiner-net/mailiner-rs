@@ -2646,7 +2646,7 @@ async fn handle_move_messages(
                     &mailbox_id,
                     &dest_mailbox_id,
                     moved,
-                    unread_n,
+                    unread_n as i32,
                 )
                 .await;
                 invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
@@ -2822,15 +2822,7 @@ async fn handle_move_to_junk(
         ctx.show_toast(ToastAction::error("No Junk folder found on this account"));
         return;
     };
-    handle_move_messages(
-        manager,
-        ctx,
-        account_id,
-        mailbox_id,
-        message_ids,
-        junk_id,
-    )
-    .await;
+    handle_move_messages(manager, ctx, account_id, mailbox_id, message_ids, junk_id).await;
 }
 
 async fn handle_move_to_trash(

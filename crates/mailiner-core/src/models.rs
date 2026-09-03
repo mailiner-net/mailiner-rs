@@ -95,6 +95,52 @@ pub struct FolderCounts {
     pub unread_messages: u64,
 }
 
+/// RFC 2087 `STORAGE` quota (bytes). Hidden when the server has no QUOTA / no limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxQuota {
+    pub used_bytes: u64,
+    pub limit_bytes: u64,
+}
+
+impl MailboxQuota {
+    /// e.g. `1.2 GB of 15 GB`.
+    pub fn display(self) -> String {
+        format!(
+            "{} of {}",
+            format_quota_bytes(self.used_bytes),
+            format_quota_bytes(self.limit_bytes)
+        )
+    }
+
+    pub fn used_percent(self) -> u64 {
+        if self.limit_bytes == 0 {
+            return 0;
+        }
+        // Round half up so 1.2/15 shows as 8%, not 7%.
+        let numerator = u128::from(self.used_bytes) * 100 + u128::from(self.limit_bytes) / 2;
+        (numerator / u128::from(self.limit_bytes)).min(u128::from(u64::MAX)) as u64
+    }
+}
+
+/// 1024-based units labeled KB/MB/GB (mailbox-quota convention).
+pub fn format_quota_bytes(bytes: u64) -> String {
+    const UNIT: f64 = 1024.0;
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut idx = 0usize;
+    while value >= UNIT && idx + 1 < units.len() {
+        value /= UNIT;
+        idx += 1;
+    }
+    if idx == 0 {
+        format!("{bytes} B")
+    } else if (value - value.round()).abs() < 0.05 {
+        format!("{:.0} {}", value, units[idx])
+    } else {
+        format!("{:.1} {}", value, units[idx])
+    }
+}
+
 /// Well-known mailbox role (RFC 6154 special-use, else name heuristics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -409,13 +455,43 @@ pub struct PartChunk {
 
 #[cfg(test)]
 mod tests {
-    use super::{EmailAddr, EmailAddress, Envelope, MailboxRole, MessageSort};
+    use super::{
+        format_quota_bytes, EmailAddr, EmailAddress, Envelope, MailboxQuota, MailboxRole,
+        MessageSort,
+    };
 
     #[test]
     fn archive_role_ranks_after_inbox() {
         assert!(MailboxRole::Inbox.sort_rank() < MailboxRole::Archive.sort_rank());
         assert!(MailboxRole::Archive.sort_rank() < MailboxRole::Drafts.sort_rank());
         assert_eq!(MailboxRole::Archive.label(), Some("Archive"));
+    }
+
+    #[test]
+    fn quota_display_matches_issue_example() {
+        let quota = MailboxQuota {
+            used_bytes: 12 * 1024 * 1024 * 1024 / 10,
+            limit_bytes: 15 * 1024 * 1024 * 1024,
+        };
+        assert_eq!(quota.display(), "1.2 GB of 15 GB");
+        assert_eq!(quota.used_percent(), 8);
+        assert_eq!(
+            MailboxQuota {
+                used_bytes: u64::MAX / 2,
+                limit_bytes: u64::MAX,
+            }
+            .used_percent(),
+            50
+        );
+    }
+
+    #[test]
+    fn quota_bytes_units() {
+        assert_eq!(format_quota_bytes(0), "0 B");
+        assert_eq!(format_quota_bytes(500), "500 B");
+        assert_eq!(format_quota_bytes(10 * 1024), "10 KB");
+        assert_eq!(format_quota_bytes(512 * 1024), "512 KB");
+        assert_eq!(format_quota_bytes(1024 * 1024), "1 MB");
     }
 
     #[test]

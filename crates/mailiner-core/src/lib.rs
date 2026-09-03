@@ -14,7 +14,7 @@ pub use error::{MailinerError, Result};
 pub use ids::{AccountId, EmptyMessageId, FolderId, MessageId, MessagePartId};
 pub use models::{
     EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group,
-    LoadedMessage, MailboxRole, MessageContent, MessagePart, MessageSort, PartChunk, PartKind,
-    TransferEncoding,
+    LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessagePart, MessageSort, PartChunk,
+    PartKind, TransferEncoding,
 };
 pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};

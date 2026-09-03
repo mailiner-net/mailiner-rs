@@ -1,4 +1,5 @@
 mod bodystructure;
+mod quota;
 mod section_path;
 mod sent;
 mod sort;
@@ -28,8 +29,8 @@ use tracing::info;
 
 use mailiner_core::{
     AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
-    FolderCounts, FolderId, FolderListState, Group, MailinerError, MessageId, MessageSort,
-    PartChunk, PartStream, Result as MailinerResult,
+    FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
+    MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;
 
@@ -100,6 +101,8 @@ where
     structure_cache: Mutex<HashMap<(FolderId, MessageId), BodyPart>>,
     /// RFC 5256 SORT advertised after LOGIN.
     has_sort: AtomicBool,
+    /// RFC 2087 QUOTA advertised after LOGIN.
+    has_quota: AtomicBool,
     /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
 }
@@ -128,6 +131,7 @@ where
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             structure_cache: Mutex::new(HashMap::new()),
             has_sort: AtomicBool::new(false),
+            has_quota: AtomicBool::new(false),
             list_index: Mutex::new(None),
         }
     }
@@ -457,16 +461,23 @@ where
     const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
-    async fn probe_sort(session: &mut Session<TlsStream<S>>, flag: &AtomicBool) {
+    async fn probe_capabilities(
+        session: &mut Session<TlsStream<S>>,
+        has_sort: &AtomicBool,
+        has_quota: &AtomicBool,
+    ) {
         match session.capabilities().await {
             Ok(caps) => {
-                let has = caps.has_str("SORT");
-                flag.store(has, Ordering::Relaxed);
-                info!("IMAP SORT capability: {has}");
+                let sort = caps.has_str("SORT");
+                let quota = caps.has_str("QUOTA");
+                has_sort.store(sort, Ordering::Relaxed);
+                has_quota.store(quota, Ordering::Relaxed);
+                info!("IMAP capabilities: SORT={sort} QUOTA={quota}");
             }
             Err(e) => {
-                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT");
-                flag.store(false, Ordering::Relaxed);
+                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA");
+                has_sort.store(false, Ordering::Relaxed);
+                has_quota.store(false, Ordering::Relaxed);
             }
         }
     }
@@ -842,7 +853,7 @@ where
                     ImapError::Authentication(format!("Failed to login: {}", e))
                 })?);
                 if let ImapSession::Authenticated(session) = &mut *imap {
-                    Self::probe_sort(session, &self.has_sort).await;
+                    Self::probe_capabilities(session, &self.has_sort, &self.has_quota).await;
                 }
             } else {
                 return Err(MailinerError::Connector(
@@ -895,6 +906,23 @@ where
             }
         }
         Ok(out)
+    }
+
+    async fn folder_quota(&self, folder_id: &FolderId) -> MailinerResult<Option<MailboxQuota>> {
+        if !self.has_quota.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+        match session.get_quota_root(folder_id.as_str()).await {
+            Ok((_roots, quotas)) => Ok(quota::storage_quota(&quotas)),
+            Err(e) => {
+                tracing::debug!("GETQUOTAROOT {} failed: {e}", folder_id.as_str());
+                Ok(None)
+            }
+        }
     }
 
     async fn prepare_folder_list(

@@ -63,6 +63,8 @@ pub struct AppContext {
     pub message_list_density: Signal<MessageListDensity>,
     /// Server advertised RFC 5256 `SORT` (Size / Sender; Date uses it when present).
     pub sort_supports_size_sender: Signal<bool>,
+    /// STORAGE quota for the selected account (`None` if the server has no QUOTA).
+    pub account_quota: Signal<Option<mailiner_core::MailboxQuota>>,
 
     pub selected_mailbox: Signal<Option<MailboxId>>,
     pub selected_account: Signal<Option<AccountId>>,

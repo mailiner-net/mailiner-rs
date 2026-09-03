@@ -1265,6 +1265,35 @@ async fn list_folders_soft(
     }
 }
 
+async fn fetch_quota_soft(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    folder_id: &FolderId,
+) {
+    if !selected_account_is(ctx, account_id)
+        || ctx.selected_mailbox.read().as_ref().map(|id| id.as_str()) != Some(folder_id.as_str())
+    {
+        return;
+    }
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+    match connector.folder_quota(folder_id).await {
+        Ok(quota) => {
+            if selected_account_is(ctx, account_id)
+                && ctx.selected_mailbox.read().as_ref().map(|id| id.as_str())
+                    == Some(folder_id.as_str())
+            {
+                ctx.account_quota.set(quota);
+            }
+        }
+        Err(e) => {
+            warn!("folder_quota failed for {account_id}: {e}");
+        }
+    }
+}
+
 /// Open the last folder for this account, or Inbox / first root when none is saved.
 async fn restore_mailbox(
     manager: &AccountConnectionManager,
@@ -1292,6 +1321,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
+    ctx.account_quota.set(None);
 }
 
 /// Paint a [`HydratedAccount`] onto UI signals (cache hit, no IMAP).
@@ -1608,6 +1638,7 @@ async fn handle_select_mailbox(
             ctx.messages_loading.set(false);
         }
     }
+    fetch_quota_soft(manager, ctx, &account_id, &folder_id).await;
 }
 
 async fn handle_set_message_sort(

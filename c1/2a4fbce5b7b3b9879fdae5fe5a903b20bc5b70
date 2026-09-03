@@ -1,0 +1,19 @@
+crates/mailiner-imap-connector/src/lib.rs
+  s_b03c4dddb62e6c::t_b948536e5294a1 30-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c12a4fbce5b7b3b9879fdae5fe5a903b20bc5b70",
+  "prompts": {},
+  "sessions": {
+    "s_b03c4dddb62e6c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0698a-8f4d-7db1-bcf3-df3fd6eeafa5",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+crates/mailiner-app/src/headers.rs
+  s_6487f51608bade::t_7b17d79f443071 1-69,79
+  s_6487f51608bade::t_83a491516589ec 70-78
+crates/mailiner-core/src/connector.rs
+  s_6487f51608bade::t_b74c1cb26b673e 504-556
+  s_6487f51608bade::t_8551dbc05bb854 207-217,227
+crates/mailiner-app/src/context.rs
+  s_6487f51608bade::t_b7cfbbd5648c6d 43
+  s_6487f51608bade::t_eced5725b138c4 42,44-59,87-88
+crates/mailiner-app/src/components.rs
+  s_6487f51608bade::t_65d0f8321eec42 22
+crates/mailiner-app/assets/main.css
+  s_6487f51608bade::t_1415bcbdafe8b3 1490-1518
+crates/mailiner-app/src/lib.rs
+  s_6487f51608bade::t_0cee7381539d25 7
+crates/mailiner-app/src/core_event.rs
+  s_6487f51608bade::t_6ab5b47959203a 24,96-100,357-361
+  s_6487f51608bade::t_fa6f7e7cfd98da 2163,2165
+  s_6487f51608bade::t_2fcee3b689e806 1107,1661
+  s_6487f51608bade::t_133dca33353a6f 959
+  s_6487f51608bade::t_b4a802ccf0f5e3 1999
+  s_6487f51608bade::t_97a1a6e0c13f5a 1444
+  s_6487f51608bade::t_6162f0d1e7ade7 2126-2162,2164,2166-2196
+crates/mailiner-app/src/components/messageview.rs
+  s_6487f51608bade::t_69eca2ecc94540 716,725-728,736-742,760-763,795-798
+  s_6487f51608bade::t_45420eaf093886 427-435,438,442-455
+  s_6487f51608bade::t_d861888e52df56 436-437,439-441
+  s_6487f51608bade::t_5bce47343d27ac 4,13,18,21,673-715,717-724,729-735,743-759,764-794,799-804
+crates/mailiner-app/src/main.rs
+  s_6487f51608bade::t_96546a0c8d2a62 14-15,31,295,317,465
+crates/mailiner-core/src/lib.rs
+  s_6487f51608bade::t_1a1d2f41dd2dc0 11
+crates/mailiner-app/Cargo.toml
+  s_6487f51608bade::t_5b3d1158b00dbd 49,62
+crates/mailiner-imap-connector/src/section_path.rs
+  s_6487f51608bade::t_4f2be163caf285 87-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "99937ca5ed2eebf359849f8f5edc6215a4ebc737",
+  "prompts": {},
+  "sessions": {
+    "s_6487f51608bade": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06910-cb65-7af3-86b8-9af1c7518ef5",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

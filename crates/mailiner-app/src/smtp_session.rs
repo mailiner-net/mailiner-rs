@@ -19,6 +19,7 @@ use crate::connection::CONNECT_TIMEOUT_MS;
 use crate::core_event::CoreEvent;
 use crate::outbox_store::OutboxId;
 use crate::websocket_stream::WebSocketStream;
+use mailiner_core::MessageId;
 
 /// DATA / full-send budget (connect + AUTH + DATA).
 pub const SEND_TIMEOUT_MS: u32 = 90_000;
@@ -55,6 +56,8 @@ pub struct InFlightSmtp {
     pub cancel_tx: Option<oneshot::Sender<()>>,
     pub outbox_id: Option<OutboxId>,
     pub is_test: bool,
+    /// Source message to mark `\Answered` if the outbox row cannot be re-read.
+    pub reply_source: Option<MessageId>,
 }
 
 pub fn preflight(config: &AccountConfig) -> Result<(), ClassifiedSendError> {

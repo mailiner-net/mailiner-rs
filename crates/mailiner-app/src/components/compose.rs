@@ -68,6 +68,7 @@ pub fn open_new_message(ctx: &mut AppContext) {
     open_compose(
         ctx,
         ComposeSession {
+            account_id,
             title: "New message".into(),
             draft,
             reply_source: None,
@@ -104,6 +105,7 @@ pub fn open_reply_or_forward(
             open_compose(
                 ctx,
                 ComposeSession {
+                    account_id,
                     title: title.into(),
                     draft,
                     reply_source,
@@ -141,6 +143,12 @@ fn submit_compose(
     };
     let identity = FromIdentity::new(account.name.clone(), account.email.clone());
     let (mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
+        Some(session) if session.account_id != account_id => {
+            error.set(Some(
+                "This draft belongs to another account. Switch back to send it.".into(),
+            ));
+            return;
+        }
         Some(session) => (session.draft.clone(), session.reply_source.clone()),
         None => (DraftDocument::new_empty(&identity), None),
     };

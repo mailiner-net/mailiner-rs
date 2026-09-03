@@ -9,6 +9,8 @@ use crate::account::AccountId;
 /// Open compose session (owned by [`crate::context::AppContext::compose_draft`]).
 #[derive(Clone, Debug)]
 pub struct ComposeSession {
+    /// Account this draft was opened for. Send is rejected if selection changes.
+    pub account_id: AccountId,
     /// Dialog title (`New message`, `Reply`, `Forward`).
     pub title: String,
     /// Prefill document.

@@ -2441,6 +2441,7 @@ fn start_send_item(
         cancel_tx: Some(cancel_tx),
         outbox_id: Some(item.id.clone()),
         is_test: false,
+        reply_source: item.reply_source.clone(),
     });
     ctx.send_status.set(Some(SendState::Sending {
         account_id,
@@ -2562,6 +2563,7 @@ async fn handle_test_smtp(
         cancel_tx: Some(cancel_tx),
         outbox_id: None,
         is_test: true,
+        reply_source: None,
     });
     if !ctx.set_smtp_test_status(
         request_id.clone(),
@@ -2622,11 +2624,14 @@ async fn handle_smtp_finished(
         } => {
             let (rfc822, reply_source) = if let Some(id) = &flight.outbox_id {
                 match outbox.get(id).await {
-                    Ok(Some(item)) => (item.rfc822_for_mailbox().ok(), item.reply_source),
-                    _ => (None, None),
+                    Ok(Some(item)) => (
+                        item.rfc822_for_mailbox().ok(),
+                        item.reply_source.or(flight.reply_source.clone()),
+                    ),
+                    _ => (None, flight.reply_source.clone()),
                 }
             } else {
-                (None, None)
+                (None, flight.reply_source.clone())
             };
             if let Some(id) = flight.outbox_id {
                 let _ = outbox.delete(&id).await;

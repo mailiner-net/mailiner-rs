@@ -1900,9 +1900,9 @@ async fn handle_copy_messages(
         .await
     {
         Ok(_) => {
-            let still_here = selected_account_is(ctx, &account_id)
-                && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id);
-            if still_here {
+            let same_account = selected_account_is(ctx, &account_id);
+            let same_mailbox = ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id);
+            if same_account && same_mailbox {
                 let unread_n = unread_among(ctx, &message_ids);
                 if let Some(node) = ctx.mailbox_nodes.write().get_mut(&dest_mailbox_id) {
                     node.total_count = node.total_count.saturating_add(message_ids.len());
@@ -1912,21 +1912,22 @@ async fn handle_copy_messages(
                 }
                 persist_folder_tree(manager.cache(), ctx, &account_id).await;
             }
-            let dest_label = if still_here {
-                ctx.mailbox_nodes
+            if same_account {
+                let dest_label = ctx
+                    .mailbox_nodes
                     .read()
                     .get(&dest_mailbox_id)
                     .map(|n| n.title().to_string())
-                    .unwrap_or_else(|| dest_mailbox_id.to_string())
-            } else {
-                dest_mailbox_id.to_string()
-            };
-            ctx.show_toast(ToastAction::info(format!("Copied to {dest_label}")));
+                    .unwrap_or_else(|| dest_mailbox_id.to_string());
+                ctx.show_toast(ToastAction::info(format!("Copied to {dest_label}")));
+            }
             invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
         }
         Err(e) => {
             error!("Failed to copy messages: {}", e);
-            ctx.show_toast(ToastAction::error(format!("Could not copy messages: {e}")));
+            if selected_account_is(ctx, &account_id) {
+                ctx.show_toast(ToastAction::error(format!("Could not copy messages: {e}")));
+            }
         }
     }
 }

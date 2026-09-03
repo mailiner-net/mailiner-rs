@@ -8,6 +8,7 @@ use futures_channel::mpsc::UnboundedSender;
 use futures_channel::oneshot;
 use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
+use mailiner_core::MessageId;
 use mailiner_core::submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
 use mailiner_smtp_connector::{SmtpConnector, SmtpError};
 
@@ -19,7 +20,6 @@ use crate::connection::CONNECT_TIMEOUT_MS;
 use crate::core_event::CoreEvent;
 use crate::outbox_store::OutboxId;
 use crate::websocket_stream::WebSocketStream;
-use mailiner_core::MessageId;
 
 /// DATA / full-send budget (connect + AUTH + DATA).
 pub const SEND_TIMEOUT_MS: u32 = 90_000;

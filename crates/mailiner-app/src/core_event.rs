@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
-use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
+use futures_channel::mpsc::{
+    TryRecvError, UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender,
+};
 use futures_util::StreamExt;
 use futures_util::future::{Either, select, select_all};
 use gloo_timers::future::TimeoutFuture;
@@ -35,7 +37,7 @@ use crate::mail_cache::{
 };
 use crate::mailbox::MailboxId;
 use crate::message::{MessageId, next_flag_value};
-use crate::message_loader::load_message;
+use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
 };
@@ -249,6 +251,14 @@ pub enum CoreEvent {
     },
 }
 
+/// Background BODY.PEEK of list neighbors after the focused message is Ready.
+struct PrefetchJob {
+    around: MessageId,
+    mailbox_id: MailboxId,
+    account_id: AccountId,
+    remaining: Vec<MessageId>,
+}
+
 /// Cold-start prelude for [`core_loop`]: skip connect, or run bootstrap with an active id.
 ///
 /// Prefer this over `Option<Option<AccountId>>` so call sites are not ambiguous.
@@ -282,6 +292,8 @@ pub async fn core_loop(
     let mut manager = AccountConnectionManager::new(store, cache);
     let mut smtp_generation: u64 = 0;
     let mut inflight: Option<InFlightSmtp> = None;
+    let mut pending_event: Option<CoreEvent> = None;
+    let mut pending_prefetch: Option<PrefetchJob> = None;
 
     if let InitialBootstrap::Run { active } = initial_bootstrap {
         handle_bootstrap(&mut manager, &mut ctx, active).await;
@@ -295,11 +307,32 @@ pub async fn core_loop(
             &mut smtp_generation,
         )
         .await;
+        queue_adjacent_prefetch(&ctx, &mut pending_prefetch);
     }
 
     loop {
+        if pending_event.is_none() {
+            match core_rx.try_recv() {
+                Ok(ev) => pending_event = Some(ev),
+                Err(TryRecvError::Closed) => break,
+                Err(TryRecvError::Empty) => match smtp_rx.try_recv() {
+                    Ok(ev) => pending_event = Some(ev),
+                    Err(TryRecvError::Closed | TryRecvError::Empty) => {}
+                },
+            }
+        }
+
+        if pending_event.is_none() && run_one_prefetch(&manager, &ctx, &mut pending_prefetch).await
+        {
+            continue;
+        }
+
         let watches = manager.death_watches();
-        let Some(event) = recv_next_event(&mut core_rx, &mut smtp_rx, watches).await else {
+        let Some(event) = (if let Some(ev) = pending_event.take() {
+            Some(ev)
+        } else {
+            recv_next_event(&mut core_rx, &mut smtp_rx, watches).await
+        }) else {
             break;
         };
         match event {
@@ -655,6 +688,7 @@ pub async fn core_loop(
         for id in manager.take_session_deaths() {
             handle_session_dropped(&mut manager, &mut ctx, &smtp_tx, id).await;
         }
+        queue_adjacent_prefetch(&ctx, &mut pending_prefetch);
     }
 }
 
@@ -1355,6 +1389,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.messages_loading.set(false);
     ctx.selection.write().clear();
     ctx.message_view.set(MessageViewState::Empty);
+    ctx.message_bodies.borrow_mut().clear();
     ctx.download_status.set(HashMap::new());
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
@@ -2018,6 +2053,99 @@ async fn select_after_removed_row(
     select_list_index(manager, ctx, index, true).await;
 }
 
+fn neighbor_ids(ctx: &AppContext, focus: &MessageId) -> Vec<MessageId> {
+    let list = ctx.messages.read();
+    let Some(index) = list.position(|m| m.id == *focus) else {
+        return Vec::new();
+    };
+    adjacent_neighbor_indices(index, list.total_count())
+        .into_iter()
+        .flatten()
+        .filter_map(|i| list.get(i).map(|m| m.id.clone()))
+        .collect()
+}
+
+fn prefetch_job_stale(ctx: &AppContext, job: &PrefetchJob) -> bool {
+    ctx.selection.read().focus() != Some(&job.around)
+        || ctx.selected_mailbox.read().as_ref() != Some(&job.mailbox_id)
+        || ctx.selected_account.read().as_ref() != Some(&job.account_id)
+}
+
+fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) {
+    let MessageViewState::Ready { message_id, .. } = &*ctx.message_view.read() else {
+        *pending = None;
+        return;
+    };
+    if pending
+        .as_ref()
+        .is_some_and(|job| &job.around == message_id && !prefetch_job_stale(ctx, job))
+    {
+        return;
+    }
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        *pending = None;
+        return;
+    };
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        *pending = None;
+        return;
+    };
+    let remaining: Vec<MessageId> = neighbor_ids(ctx, message_id)
+        .into_iter()
+        .filter(|id| !ctx.message_bodies.borrow().contains(id))
+        .collect();
+    if remaining.is_empty() {
+        *pending = None;
+        return;
+    }
+    *pending = Some(PrefetchJob {
+        around: message_id.clone(),
+        mailbox_id,
+        account_id,
+        remaining,
+    });
+}
+
+/// Load one neighbor via BODY.PEEK. Does not update the viewer or `\Seen`.
+///
+/// Returns `true` when the caller should loop (work done or skipped) instead of
+/// waiting for the next UI event.
+async fn run_one_prefetch(
+    manager: &AccountConnectionManager,
+    ctx: &AppContext,
+    pending: &mut Option<PrefetchJob>,
+) -> bool {
+    let Some(job) = pending.as_mut() else {
+        return false;
+    };
+    if prefetch_job_stale(ctx, job) {
+        *pending = None;
+        return false;
+    }
+    if job.remaining.is_empty() {
+        *pending = None;
+        return false;
+    }
+    let id = job.remaining.remove(0);
+    if ctx.message_bodies.borrow().contains(&id) {
+        return true;
+    }
+    let Some(connector) = manager.get(&job.account_id) else {
+        *pending = None;
+        return false;
+    };
+    let folder_id = FolderId::new(job.mailbox_id.to_string());
+    match load_message(connector, &folder_id, &id).await {
+        Ok(loaded) => {
+            ctx.message_bodies.borrow_mut().insert(id, Arc::new(loaded));
+        }
+        Err(e) => {
+            warn!("prefetch {id} failed: {e}");
+        }
+    }
+    true
+}
+
 async fn handle_select_message(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -2033,6 +2161,17 @@ async fn handle_select_message(
     }
     snapshot_selection_unread(ctx);
     ctx.download_status.set(HashMap::new());
+
+    let cached = ctx.message_bodies.borrow_mut().get(&message_id);
+    if let Some(loaded) = cached {
+        ctx.message_view.set(MessageViewState::Ready {
+            message_id: message_id.clone(),
+            loaded,
+        });
+        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
+        return;
+    }
+
     ctx.message_view.set(MessageViewState::Loading {
         message_id: message_id.clone(),
     });
@@ -2069,47 +2208,18 @@ async fn handle_select_message(
 
     match load_message(connector, &folder_id, &message_id).await {
         Ok(loaded) => {
+            let loaded = Arc::new(loaded);
+            ctx.message_bodies
+                .borrow_mut()
+                .insert(message_id.clone(), loaded.clone());
             if ctx.selection.read().focus() != Some(&message_id) {
                 return;
             }
             ctx.message_view.set(MessageViewState::Ready {
                 message_id: message_id.clone(),
-                loaded: Arc::new(loaded),
+                loaded,
             });
-            let was_unread = ctx
-                .messages
-                .read()
-                .find(|m| m.id == message_id)
-                .is_some_and(|m| !m.is_read);
-            let is_multi = ctx.selection.read().is_multi();
-            if was_unread && crate::selection::should_auto_mark_read(auto_mark_read, is_multi) {
-                apply_read_flag(ctx, std::slice::from_ref(&message_id), true);
-                if let Err(e) = connector
-                    .update_envelope_flags(
-                        &folder_id,
-                        std::slice::from_ref(&message_id),
-                        &[(EnvelopeFlag::Read, true)],
-                    )
-                    .await
-                {
-                    warn!("Auto-mark as read failed for {}: {}", message_id, e);
-                    note_selected_imap_error(manager, ctx, &e);
-                    apply_read_flag(ctx, std::slice::from_ref(&message_id), false);
-                } else {
-                    relocate_unread_sort_rows(
-                        connector,
-                        ctx,
-                        std::slice::from_ref(&message_id),
-                        true,
-                    )
-                    .await;
-                    let account_id = ctx.selected_account.read().clone();
-                    if let Some(account_id) = account_id {
-                        persist_selected_messages(manager.cache(), ctx, &account_id).await;
-                        persist_folder_tree(manager.cache(), ctx, &account_id).await;
-                    }
-                }
-            }
+            maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
         }
         Err(e) => {
             if ctx.selection.read().focus() != Some(&message_id) {
@@ -2143,6 +2253,50 @@ fn unread_in_ids(ctx: &AppContext, ids: &[MessageId]) -> usize {
         .filter(|id| list.find(|m| m.id == **id).is_some_and(|m| !m.is_read))
         .count();
     from_sel.max(from_list)
+}
+
+async fn maybe_auto_mark_read(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_id: &MessageId,
+    auto_mark_read: bool,
+) {
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        return;
+    };
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        return;
+    };
+    let was_unread = ctx
+        .messages
+        .read()
+        .find(|m| m.id == *message_id)
+        .is_some_and(|m| !m.is_read);
+    let is_multi = ctx.selection.read().is_multi();
+    if !was_unread || !crate::selection::should_auto_mark_read(auto_mark_read, is_multi) {
+        return;
+    }
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    apply_read_flag(ctx, std::slice::from_ref(message_id), true);
+    if let Err(e) = connector
+        .update_envelope_flags(
+            &folder_id,
+            std::slice::from_ref(message_id),
+            &[(EnvelopeFlag::Read, true)],
+        )
+        .await
+    {
+        warn!("Auto-mark as read failed for {}: {}", message_id, e);
+        note_selected_imap_error(manager, ctx, &e);
+        apply_read_flag(ctx, std::slice::from_ref(message_id), false);
+    } else {
+        relocate_unread_sort_rows(connector, ctx, std::slice::from_ref(message_id), true).await;
+        persist_selected_messages(manager.cache(), ctx, &account_id).await;
+        persist_folder_tree(manager.cache(), ctx, &account_id).await;
+    }
 }
 
 fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
@@ -2303,6 +2457,7 @@ fn take_messages_from_ui(
         }
     }
     ctx.selection.write().remove_ids(&idset);
+    ctx.message_bodies.borrow_mut().remove_many(ids);
     if selected_removed_index.is_some() {
         ctx.selection.write().clear();
         ctx.message_view.set(MessageViewState::Empty);
@@ -2966,6 +3121,7 @@ async fn handle_empty_trash(
             ctx.messages.set(SparseList::new(0));
             ctx.selection.write().clear();
             ctx.message_view.set(MessageViewState::Empty);
+            ctx.message_bodies.borrow_mut().clear();
             ctx.download_status.set(HashMap::new());
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
                 node.total_count = 0;

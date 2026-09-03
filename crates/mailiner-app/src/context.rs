@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use dioxus::prelude::*;
@@ -10,6 +12,7 @@ use crate::connection::ConnectionState;
 use crate::download::DownloadStatus;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
+use crate::message_loader::LoadedMessageCache;
 use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
@@ -72,6 +75,9 @@ pub struct AppContext {
     pub selection: Signal<MessageSelection>,
     /// Body viewer state (load / format inputs).
     pub message_view: Signal<MessageViewState>,
+    /// Session-only decoded bodies (current + adjacent prefetch). Not a Signal:
+    /// UI must not re-render on LRU inserts.
+    pub message_bodies: Rc<RefCell<LoadedMessageCache>>,
     /// Per-section attachment download progress (section path → status).
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
     /// Per-account connection lifecycle (no secrets).

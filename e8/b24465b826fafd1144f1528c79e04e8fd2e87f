@@ -1,0 +1,20 @@
+crates/mailiner-app/src/formatter/quote.rs
+  s_630206927fd386::t_afe33b9e8c3646 249-251
+  s_630206927fd386::t_e4336c94e02073 551-564
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e8b24465b826fafd1144f1528c79e04e8fd2e87f",
+  "prompts": {},
+  "sessions": {
+    "s_630206927fd386": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06975-8daf-7252-982d-1a2f8284370e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

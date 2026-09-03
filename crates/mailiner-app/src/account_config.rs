@@ -169,6 +169,12 @@ pub struct SmtpSettings {
     pub tls_mode: SmtpTlsMode,
     /// Dual-written for schema-1 readers. Always derived from [`Self::tls_mode`].
     pub use_tls: bool,
+    /// Override proxy dial host (defaults to [`Self::host`]). TLS SNI stays `host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_host: Option<String>,
+    /// Override proxy dial port (defaults to [`Self::port`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_port: Option<u16>,
 }
 
 impl SmtpSettings {
@@ -187,7 +193,23 @@ impl SmtpSettings {
             password,
             tls_mode,
             use_tls: tls_mode.uses_tls(),
+            remote_host: None,
+            remote_port: None,
         }
+    }
+
+    /// Host the proxy should dial. TLS SNI / EHLO stay on [`Self::host`].
+    pub fn dial_host(&self) -> &str {
+        self.remote_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .unwrap_or(self.host.as_str())
+    }
+
+    /// Port the proxy should dial. Defaults to [`Self::port`].
+    pub fn dial_port(&self) -> u16 {
+        self.remote_port.unwrap_or(self.port)
     }
 }
 
@@ -206,19 +228,23 @@ impl<'de> Deserialize<'de> for SmtpSettings {
             /// public field — missing key must stay distinguishable.
             tls_mode: Option<SmtpTlsMode>,
             use_tls: Option<bool>,
+            #[serde(default)]
+            remote_host: Option<String>,
+            #[serde(default)]
+            remote_port: Option<u16>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let tls_mode = match raw.tls_mode {
             Some(mode) => mode,
             None => tls_mode_from_legacy(raw.use_tls.unwrap_or(true), raw.port),
         };
-        Ok(SmtpSettings::new(
-            raw.host,
-            raw.port,
-            raw.username,
-            raw.password,
-            tls_mode,
-        ))
+        let mut smtp = SmtpSettings::new(raw.host, raw.port, raw.username, raw.password, tls_mode);
+        smtp.remote_host = raw
+            .remote_host
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty());
+        smtp.remote_port = raw.remote_port;
+        Ok(smtp)
     }
 }
 
@@ -231,6 +257,8 @@ impl fmt::Debug for SmtpSettings {
             .field("password", &self.password.as_ref().map(|_| "***"))
             .field("tls_mode", &self.tls_mode)
             .field("use_tls", &self.use_tls)
+            .field("remote_host", &self.remote_host)
+            .field("remote_port", &self.remote_port)
             .finish()
     }
 }
@@ -282,8 +310,8 @@ impl ProxySettings {
 
     /// Build a proxy WebSocket URL for an arbitrary `remote=host:port`.
     ///
-    /// SMTP must call this with `smtp.host` / `smtp.port` — never IMAP
-    /// `remote_host` / `remote_port` overrides.
+    /// SMTP must call this with the SMTP dial target ([`SmtpSettings::dial_host`]
+    /// / [`SmtpSettings::dial_port`]) — never IMAP `remote_host` / `remote_port`.
     pub fn websocket_url_for(
         &self,
         remote_host: &str,
@@ -325,6 +353,14 @@ impl ProxySettings {
 
         let sep = if base.contains('?') { '&' } else { '?' };
         Ok(format!("{base}{sep}token={encoded_token}&remote={remote}"))
+    }
+
+    /// SMTP proxy URL. Dial uses `smtp.remote_*` when set; TLS SNI stays `smtp.host`.
+    pub fn websocket_url_for_smtp(
+        &self,
+        smtp: &SmtpSettings,
+    ) -> Result<String, AccountConfigError> {
+        self.websocket_url_for(smtp.dial_host(), smtp.dial_port())
     }
 
     /// True when `base_url` is `ws://` (case-insensitive) and the host is not loopback.
@@ -377,10 +413,11 @@ impl AccountConfig {
         if self.imap.host.trim().is_empty() {
             return Err(AccountConfigError::EmptyHost);
         }
-        if let Some(ref smtp) = self.smtp
-            && smtp.host.trim().is_empty()
-        {
-            return Err(AccountConfigError::EmptyHost);
+        if let Some(ref smtp) = self.smtp {
+            if smtp.host.trim().is_empty() {
+                return Err(AccountConfigError::EmptyHost);
+            }
+            self.proxy.websocket_url_for_smtp(smtp)?;
         }
         // Ensure proxy URL can be built (also validates scheme / remote host).
         self.proxy.websocket_url(&self.imap)?;
@@ -1013,6 +1050,95 @@ mod tests {
         let url = proxy.websocket_url_for("smtp.example.com", 465).unwrap();
         assert!(url.contains("remote=smtp.example.com:465"), "{url}");
         assert!(!url.contains("imap-override"));
+    }
+
+    fn sample_smtp() -> SmtpSettings {
+        SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user@example.com".into(),
+            None,
+            SmtpTlsMode::Implicit,
+        )
+    }
+
+    #[test]
+    fn smtp_dial_defaults_to_host_port() {
+        let smtp = sample_smtp();
+        assert_eq!(smtp.dial_host(), "smtp.example.com");
+        assert_eq!(smtp.dial_port(), 465);
+        let url = sample_proxy().websocket_url_for_smtp(&smtp).unwrap();
+        assert!(url.contains("remote=smtp.example.com:465"), "{url}");
+    }
+
+    #[test]
+    fn smtp_dial_uses_remote_override() {
+        let mut smtp = sample_smtp();
+        smtp.remote_host = Some("smtp-backend.internal".into());
+        smtp.remote_port = Some(2525);
+        assert_eq!(smtp.dial_host(), "smtp-backend.internal");
+        assert_eq!(smtp.dial_port(), 2525);
+        assert_eq!(smtp.host, "smtp.example.com");
+        assert_eq!(smtp.port, 465);
+
+        let mut proxy = sample_proxy();
+        proxy.remote_host = Some("imap-override.example".into());
+        proxy.remote_port = Some(993);
+        let url = proxy.websocket_url_for_smtp(&smtp).unwrap();
+        assert!(url.contains("remote=smtp-backend.internal:2525"), "{url}");
+        assert!(!url.contains("smtp.example.com"));
+        assert!(!url.contains("imap-override"));
+    }
+
+    #[test]
+    fn smtp_dial_blank_remote_host_falls_back() {
+        let mut smtp = sample_smtp();
+        smtp.remote_host = Some("   ".into());
+        smtp.remote_port = Some(587);
+        assert_eq!(smtp.dial_host(), "smtp.example.com");
+        assert_eq!(smtp.dial_port(), 587);
+    }
+
+    #[test]
+    fn smtp_serde_missing_remote_is_none() {
+        let json = r#"{
+            "host": "smtp.example.com",
+            "port": 465,
+            "username": "u",
+            "password": null,
+            "use_tls": true
+        }"#;
+        let smtp: SmtpSettings = serde_json::from_str(json).unwrap();
+        assert!(smtp.remote_host.is_none());
+        assert!(smtp.remote_port.is_none());
+        let out = serde_json::to_string(&smtp).unwrap();
+        assert!(!out.contains("remote_host"), "{out}");
+        assert!(!out.contains("remote_port"), "{out}");
+    }
+
+    #[test]
+    fn smtp_serde_roundtrip_remote_override() {
+        let mut smtp = sample_smtp();
+        smtp.remote_host = Some("smtp-dial.example".into());
+        smtp.remote_port = Some(2525);
+        let json = serde_json::to_string(&smtp).unwrap();
+        assert!(
+            json.contains("\"remote_host\":\"smtp-dial.example\""),
+            "{json}"
+        );
+        assert!(json.contains("\"remote_port\":2525"), "{json}");
+        let back: SmtpSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, smtp);
+    }
+
+    #[test]
+    fn ehlo_domain_uses_smtp_host_not_remote() {
+        let mut config = sample_config();
+        config.email = "user@localhost".into();
+        let mut smtp = sample_smtp();
+        smtp.remote_host = Some("127.0.0.1".into());
+        config.smtp = Some(smtp);
+        assert_eq!(ehlo_domain(&config), "smtp.example.com");
     }
 
     #[test]

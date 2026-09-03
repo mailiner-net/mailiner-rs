@@ -380,6 +380,8 @@ pub fn AccountNewPage() -> Element {
     let mut smtp_username = use_signal(String::new);
     let mut smtp_password = use_signal(String::new);
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
+    let mut smtp_remote_host = use_signal(String::new);
+    let mut smtp_remote_port = use_signal(String::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -497,6 +499,8 @@ pub fn AccountNewPage() -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -538,6 +542,8 @@ pub fn AccountNewPage() -> Element {
                 &smtp_username(),
                 &smtp_password(),
                 smtp_tls_mode(),
+                &smtp_remote_host(),
+                &smtp_remote_port(),
                 Utc::now(),
             ),
             phase,
@@ -569,6 +575,8 @@ pub fn AccountNewPage() -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -614,6 +622,8 @@ pub fn AccountNewPage() -> Element {
                         proxy_token: proxy_token(),
                         remote_host: remote_host(),
                         remote_port: remote_port(),
+                        smtp_remote_host: smtp_remote_host(),
+                        smtp_remote_port: smtp_remote_port(),
                         set_display_name: move |v| display_name.set(v),
                         set_email: move |v| email.set(v),
                         set_imap_host: move |v| imap_host.set(v),
@@ -624,6 +634,8 @@ pub fn AccountNewPage() -> Element {
                         set_proxy_token: move |v| proxy_token.set(v),
                         set_remote_host: move |v| remote_host.set(v),
                         set_remote_port: move |v| remote_port.set(v),
+                        set_smtp_remote_host: move |v| smtp_remote_host.set(v),
+                        set_smtp_remote_port: move |v| smtp_remote_port.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
                     }
@@ -722,6 +734,8 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut smtp_username = use_signal(String::new);
     let mut smtp_password = use_signal(String::new);
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
+    let mut smtp_remote_host = use_signal(String::new);
+    let mut smtp_remote_port = use_signal(String::new);
     let mut open_smtp = use_signal(|| false);
 
     let mut phase = use_signal(|| FormPhase::Idle);
@@ -769,6 +783,9 @@ pub fn AccountEditPage(id: String) -> Element {
                         smtp_username.set(smtp.username.clone());
                         smtp_password.set(smtp.password.clone().unwrap_or_default());
                         smtp_tls_mode.set(smtp.tls_mode);
+                        smtp_remote_host.set(smtp.remote_host.clone().unwrap_or_default());
+                        smtp_remote_port
+                            .set(smtp.remote_port.map(|p| p.to_string()).unwrap_or_default());
                         open_smtp.set(true);
                     } else {
                         smtp_host.set(String::new());
@@ -776,6 +793,8 @@ pub fn AccountEditPage(id: String) -> Element {
                         smtp_username.set(String::new());
                         smtp_password.set(String::new());
                         smtp_tls_mode.set(SmtpTlsMode::Implicit);
+                        smtp_remote_host.set(String::new());
+                        smtp_remote_port.set(String::new());
                         open_smtp.set(false);
                     }
                     original.set(Some(cfg));
@@ -954,7 +973,9 @@ pub fn AccountEditPage(id: String) -> Element {
     let open_advanced = {
         let rh = remote_host();
         let rp = remote_port();
-        !rh.is_empty() || !rp.is_empty()
+        let srh = smtp_remote_host();
+        let srp = smtp_remote_port();
+        !rh.is_empty() || !rp.is_empty() || !srh.is_empty() || !srp.is_empty()
     };
 
     let on_test = move |_| {
@@ -982,6 +1003,8 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             orig.created_at,
         ) {
             Ok(config) => {
@@ -1026,6 +1049,8 @@ pub fn AccountEditPage(id: String) -> Element {
                 &smtp_username(),
                 &smtp_password(),
                 smtp_tls_mode(),
+                &smtp_remote_host(),
+                &smtp_remote_port(),
                 orig.created_at,
             ),
             phase,
@@ -1060,6 +1085,8 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             orig.created_at,
         ) {
             Ok(c) => c,
@@ -1148,6 +1175,8 @@ pub fn AccountEditPage(id: String) -> Element {
                         proxy_token: proxy_token(),
                         remote_host: remote_host(),
                         remote_port: remote_port(),
+                        smtp_remote_host: smtp_remote_host(),
+                        smtp_remote_port: smtp_remote_port(),
                         set_display_name: move |v| display_name.set(v),
                         set_email: move |v| email.set(v),
                         set_imap_host: move |v| imap_host.set(v),
@@ -1158,6 +1187,8 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_proxy_token: move |v| proxy_token.set(v),
                         set_remote_host: move |v| remote_host.set(v),
                         set_remote_port: move |v| remote_port.set(v),
+                        set_smtp_remote_host: move |v| smtp_remote_host.set(v),
+                        set_smtp_remote_port: move |v| smtp_remote_port.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
                     }

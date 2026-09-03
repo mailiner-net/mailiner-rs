@@ -49,6 +49,8 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_username = use_signal(String::new);
     let mut smtp_password = use_signal(String::new);
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
+    let mut smtp_remote_host = use_signal(String::new);
+    let mut smtp_remote_port = use_signal(String::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -173,6 +175,8 @@ pub fn OnboardingForm() -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -217,6 +221,8 @@ pub fn OnboardingForm() -> Element {
                 &smtp_username(),
                 &smtp_password(),
                 smtp_tls_mode(),
+                &smtp_remote_host(),
+                &smtp_remote_port(),
                 Utc::now(),
             ),
             phase,
@@ -248,6 +254,8 @@ pub fn OnboardingForm() -> Element {
             &smtp_username(),
             &smtp_password(),
             smtp_tls_mode(),
+            &smtp_remote_host(),
+            &smtp_remote_port(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -297,6 +305,8 @@ pub fn OnboardingForm() -> Element {
                         proxy_token: proxy_token(),
                         remote_host: remote_host(),
                         remote_port: remote_port(),
+                        smtp_remote_host: smtp_remote_host(),
+                        smtp_remote_port: smtp_remote_port(),
                         set_display_name: move |v| display_name.set(v),
                         set_email: move |v| email.set(v),
                         set_imap_host: move |v| imap_host.set(v),
@@ -307,6 +317,8 @@ pub fn OnboardingForm() -> Element {
                         set_proxy_token: move |v| proxy_token.set(v),
                         set_remote_host: move |v| remote_host.set(v),
                         set_remote_port: move |v| remote_port.set(v),
+                        set_smtp_remote_host: move |v| smtp_remote_host.set(v),
+                        set_smtp_remote_port: move |v| smtp_remote_port.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
                     }

@@ -127,10 +127,10 @@ pub fn open_print_document(html: &str, on_error: impl FnOnce(PrintError) + 'stat
 }
 
 #[cfg(feature = "web")]
-fn take_print_error(
-    on_error: &std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(PrintError)>>>>,
-    err: PrintError,
-) {
+type PrintErrorCb = std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(PrintError)>>>>;
+
+#[cfg(feature = "web")]
+fn take_print_error(on_error: &PrintErrorCb, err: PrintError) {
     if let Some(cb) = on_error.take() {
         cb(err);
     }
@@ -143,9 +143,6 @@ fn html_document_inner(html: &str) -> &str {
         .and_then(|s| s.strip_suffix("</html>"))
         .unwrap_or(s)
 }
-
-#[cfg(feature = "web")]
-type PrintErrorCb = std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(PrintError)>>>>;
 
 #[cfg(feature = "web")]
 fn remove_node(node: &web_sys::Node) {

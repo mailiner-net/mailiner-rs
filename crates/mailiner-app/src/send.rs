@@ -21,8 +21,6 @@ pub struct ComposeSession {
     pub reply_source: Option<MessageId>,
     /// Original forwarded files removed via the include toggle.
     pub stashed_originals: Vec<FileAttachment>,
-    /// Account that opened this draft; fetch/send stay bound to it.
-    pub account_id: AccountId,
 }
 
 /// Choose which stored account a compose session should send from.

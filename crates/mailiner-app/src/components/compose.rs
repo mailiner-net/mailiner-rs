@@ -346,7 +346,6 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
             draft,
             reply_source: None,
             stashed_originals: Vec::new(),
-            account_id,
         },
     );
 }
@@ -418,7 +417,6 @@ pub fn open_reply_or_forward(
                     draft,
                     reply_source,
                     stashed_originals: Vec::new(),
-                    account_id,
                 },
             );
         }

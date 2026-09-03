@@ -4004,6 +4004,7 @@ fn apply_fetched_attachment_missing(ctx: &mut AppContext, draft_id: &str, attach
             .push("Could not load some original attachments.".into());
     }
     session.draft.touch();
+}
 
 async fn refresh_outbox_signal(outbox: &dyn OutboxStore, ctx: &mut AppContext) {
     match outbox.list().await {

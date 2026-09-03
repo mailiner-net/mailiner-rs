@@ -5,6 +5,7 @@ use mailiner_core::models::{MessageContent, MessagePart};
 use regex::Regex;
 use std::sync::OnceLock;
 
+use super::quote::collapse_trailing_blockquotes;
 use super::sanitize::sanitize_css;
 use super::{FormatOptions, FormatResult, text_content};
 
@@ -96,7 +97,7 @@ pub fn format_html(
             .into_owned();
     }
 
-    let cleaned = ammonia_clean(&body, opts.allow_remote_resources);
+    let cleaned = collapse_trailing_blockquotes(&ammonia_clean(&body, opts.allow_remote_resources));
 
     Some(FormatResult {
         html: cleaned,
@@ -380,5 +381,36 @@ mod tests {
         let lower = r.html.to_ascii_lowercase();
         assert!(lower.contains("body {") || lower.contains("body{"), "{r:?}");
         assert!(!lower.contains(":host"), "{r:?}");
+    }
+
+    #[test]
+    fn wraps_trailing_blockquote_after_sanitize() {
+        let html = html_part(
+            "<p>Thanks.</p><blockquote><p>Hello<script>alert(1)</script></p></blockquote>",
+        );
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(r.html.contains("<details class=\"mlnr-quote\">"), "{r:?}");
+        assert!(r.html.contains("Show quoted text"), "{r:?}");
+        assert!(r.html.contains("Thanks."), "{r:?}");
+        assert!(r.html.contains("<blockquote>"), "{r:?}");
+        assert!(!r.html.to_ascii_lowercase().contains("<script"), "{r:?}");
+        assert!(!r.html.to_ascii_lowercase().contains("alert"), "{r:?}");
+    }
+
+    #[test]
+    fn does_not_wrap_blockquote_when_it_is_the_whole_body() {
+        let html = html_part("<blockquote><p>Forwarded</p></blockquote>");
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(!r.html.contains("<details"), "{r:?}");
+        assert!(r.html.contains("Forwarded"), "{r:?}");
+    }
+
+    #[test]
+    fn does_not_wrap_when_image_follows_blockquote() {
+        let html = html_part(
+            r#"<blockquote><p>old</p></blockquote><p><img src="data:image/png;base64,aaaa"></p>"#,
+        );
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(!r.html.contains("<details"), "{r:?}");
     }
 }

@@ -144,6 +144,30 @@ jobs:
           test -f "$PUBLIC_DIR/index.html"
           # SPA fallback for Dioxus client-side routing on Cloudflare Pages
           printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
+          # Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/main.rs.
+          # Cloudflare Pages custom headers:
+          # https://developers.cloudflare.com/pages/configuration/headers/
+          python3 -c 'import pathlib, re, sys
+          src = pathlib.Path("crates/mailiner-app/src/main.rs").read_text()
+          match = re.search(r"const CONTENT_SECURITY_POLICY:\s*&str\s*=\s*\"(.*?)\";", src, re.S)
+          if not match:
+              sys.exit("CONTENT_SECURITY_POLICY not found in main.rs")
+          policy = match.group(1).replace("\\\n", "")
+          if "\\" in policy or "\n" in policy:
+              sys.exit("unexpected CONTENT_SECURITY_POLICY escaping: %r" % (policy,))
+          if "default-src '\''self'\''" not in policy:
+              sys.exit("unexpected CONTENT_SECURITY_POLICY: %r" % (policy,))
+          headers = pathlib.Path("target/dx/mailiner-app/release/web/public/_headers")
+          headers.write_text(
+              "# Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/main.rs\n"
+              "/*\n"
+              "  Content-Security-Policy: %s\n" % (policy,)
+          )
+          print("Wrote", headers, "CSP:")
+          print(policy)
+          '
+          test -f "$PUBLIC_DIR/_redirects"
+          test -f "$PUBLIC_DIR/_headers"
           echo "Build tree:"
           find "$PUBLIC_DIR" -type f | head -50
 

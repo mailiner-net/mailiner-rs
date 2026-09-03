@@ -42,10 +42,12 @@ remote references that could reveal details about the user to the sender.
 ### Content-Security-Policy (baseline)
 
 The app ships a baseline CSP via a document `<meta>` tag (see `mailiner-app`
-`CONTENT_SECURITY_POLICY`). The meta tag is injected after WASM/`App` mounts, so
-the **initial** HTML/script/WASM load is not constrained by it. Prefer the same
-policy as an **HTTP response header** at deploy time for first-paint coverage
-(and note that `dx serve` HMR may inject scripts after mount).
+`CONTENT_SECURITY_POLICY`) so local `dx serve` is covered after mount. The meta
+tag is injected after WASM/`App` mounts, so the **initial** HTML/script/WASM
+load is not constrained by it. Cloudflare Pages deploy writes the same policy
+as a `Content-Security-Policy` HTTP header (`_headers` in the built public dir,
+next to the SPA `_redirects`) for first-paint coverage. `dx serve` does not
+send the header; HMR may also inject scripts after mount.
 
 | Directive | Policy | Why |
 |-----------|--------|-----|
@@ -59,10 +61,10 @@ policy as an **HTTP response header** at deploy time for first-paint coverage
 
 **Tradeoffs:** CSP is primarily XSS hardening for secrets stored in the origin.
 It does **not** pin proxy destinations or remote image hosts — privacy for mail
-images is enforced in the formatter (block by default; Allow opts in). When
-deploying, send an equivalent CSP HTTP header; keep `connect-src` open enough
-for user proxies, `img-src` open for intentional remote images, and retain
-`wasm-unsafe-eval` + `style-src 'unsafe-inline'` for the Dioxus runtime.
+images is enforced in the formatter (block by default; Allow opts in). Deploy
+sends this same baseline as an HTTP header — do not tighten `connect-src` or
+`img-src`, and retain `wasm-unsafe-eval` + `style-src 'unsafe-inline'` for the
+Dioxus runtime.
 
 ## Running Mailiner locally
 

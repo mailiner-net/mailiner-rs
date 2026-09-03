@@ -102,9 +102,10 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 ///   Schemes stay open so self-hosted proxies work; IMAP traffic is still
 ///   TLS-wrapped client-side. This mitigates script XSS, not proxy diversity.
 /// - Meta tag is injected after WASM/`App` mounts, so the initial document +
-///   script load are not covered. Prefer an equivalent **HTTP CSP header** at
-///   deploy time for first-paint coverage (and note HMR/`dx serve` may inject
-///   scripts after mount).
+///   script load are not covered under `dx serve`. Cloudflare Pages deploy
+///   sends this same policy as an **HTTP CSP header** (`_headers` in the built
+///   public dir) for first-paint coverage. HMR/`dx serve` may inject scripts
+///   after mount and does not send the header.
 const CONTENT_SECURITY_POLICY: &str = "\
 default-src 'self'; \
 script-src 'self' 'wasm-unsafe-eval'; \

@@ -1616,6 +1616,48 @@ textarea.ui-input {
             background-color: var(--sidebar);
         }
 
+        .message-list-selection {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            padding: 4px var(--margin);
+            border-bottom: 1px solid var(--sidebar-border);
+            background-color: var(--sidebar);
+            font-weight: 400;
+        }
+
+        .message-list-select-action {
+            flex: 0 0 auto;
+            font: inherit;
+            font-size: var(--text-xs);
+            font-weight: 500;
+            color: var(--foreground);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 2px 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .message-list-select-action:hover:not(:disabled) {
+            background: var(--item-hover-background);
+        }
+
+        .message-list-select-action:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        .message-list-selected-count {
+            margin-left: auto;
+            font-size: var(--text-xs);
+            font-weight: 500;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
         .message-list-body {
             flex: 1;
             min-height: 0;

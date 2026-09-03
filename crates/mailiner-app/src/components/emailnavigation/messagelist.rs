@@ -33,6 +33,9 @@ pub fn MessageList() -> Element {
     let loading = *ctx.messages_loading.read();
     let total = ctx.messages.read().total_count();
     let density = *ctx.message_list_density.read();
+    let cached = ctx.messages.read().cached_count();
+    let selected_n = ctx.selection.read().len();
+    let has_known = cached > 0;
 
     let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
@@ -153,6 +156,49 @@ pub fn MessageList() -> Element {
 
             NavigationHeader {
                 mode: Mode::MessageList,
+            }
+
+            if selected_mailbox.is_some() && !loading && total > 0 {
+                div {
+                    class: "message-list-selection",
+                    button {
+                        r#type: "button",
+                        class: "message-list-select-action",
+                        title: "Select all loaded messages (Ctrl+A)",
+                        disabled: !has_known,
+                        onclick: move |_| {
+                            let _ = core_tx.send(CoreEvent::SelectAllKnown);
+                        },
+                        "Select all"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "message-list-select-action",
+                        title: "Select unread loaded messages",
+                        disabled: !has_known,
+                        onclick: move |_| {
+                            let _ = core_tx.send(CoreEvent::SelectUnreadKnown);
+                        },
+                        "Unread"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "message-list-select-action",
+                        title: "Invert selection among loaded messages",
+                        disabled: !has_known,
+                        onclick: move |_| {
+                            let _ = core_tx.send(CoreEvent::InvertSelection);
+                        },
+                        "Invert"
+                    }
+                    if selected_n > 0 {
+                        span {
+                            class: "message-list-selected-count",
+                            aria_live: "polite",
+                            "{selected_n} selected"
+                        }
+                    }
+                }
             }
 
             div {

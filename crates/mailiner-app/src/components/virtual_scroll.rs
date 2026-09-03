@@ -96,6 +96,15 @@ impl<T: Clone> SparseList<T> {
         self.items.len()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.values()
+    }
+
+    /// Cached rows in index order (holes are skipped).
+    pub fn iter_indexed(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.items.iter().map(|(k, v)| (*k, v))
+    }
+
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.items.values_mut()
     }
@@ -698,6 +707,13 @@ mod tests {
         assert_eq!(list.cached_count(), 2);
         assert_eq!(list.total_count(), 60_000);
         assert!(!list.has_item(1));
+        assert_eq!(list.iter().copied().collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            list.iter_indexed()
+                .map(|(i, v)| (i, *v))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (59_999, 2)]
+        );
     }
 
     #[test]

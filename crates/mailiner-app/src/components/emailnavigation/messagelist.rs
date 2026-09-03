@@ -60,6 +60,8 @@ pub fn MessageList() -> Element {
         Vec::new()
     };
     let match_count = filtered_matches.len();
+    let scanning_attachments =
+        filter.has_attachment && !fully_loaded && total > 0 && match_count == 0 && !loading;
     let has_known = if filtering {
         match_count > 0
     } else {
@@ -77,6 +79,29 @@ pub fn MessageList() -> Element {
     } else if filtered_items.peek().total_count() != 0 {
         filtered_items.set(SparseList::new(0));
     }
+
+    use_effect(move || {
+        if !scanning_attachments {
+            return;
+        }
+        let total = ctx.messages.read().total_count();
+        let Some(range) = ctx
+            .messages
+            .read()
+            .missing_ranges(0, total)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        let end = (range.start + 50).min(range.end);
+        if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
+            let _ = core_tx.send(CoreEvent::FetchMessageRange {
+                mailbox_id,
+                range: range.start..end,
+            });
+        }
+    });
 
     let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
@@ -215,6 +240,11 @@ pub fn MessageList() -> Element {
                     div {
                         class: "message-list-empty",
                         "No matching messages"
+                    }
+                } else if scanning_attachments {
+                    div {
+                        class: "message-list-empty",
+                        "Loading…"
                     }
                 } else if no_loaded_matches {
                     div {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2042,6 +2042,14 @@ async fn handle_select_adjacent(
     };
     if !filter.is_empty() {
         loop {
+            if ctx.messages.read().get(index).is_none() {
+                let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+                    return;
+                };
+                let start = index.saturating_sub(5);
+                let end = (index + 15).min(total);
+                handle_fetch_message_range(manager, ctx, mailbox_id, start..end).await;
+            }
             let matches = ctx
                 .messages
                 .read()
@@ -2912,6 +2920,22 @@ async fn handle_mark_read(
         return;
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
+    if filter_dropped_read_rows(ctx, is_read) {
+        let focus = ctx.selection.read().focus().cloned();
+        let gone = focus
+            .as_ref()
+            .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
+        if gone {
+            let idx = ctx.selection.read().focus_at_index();
+            ctx.selection.write().clear();
+            ctx.message_view.set(MessageViewState::Empty);
+            ctx.download_status.set(HashMap::new());
+            select_after_removed_row(manager, ctx, idx).await;
+        } else {
+            let gone: HashSet<_> = message_ids.iter().cloned().collect();
+            ctx.selection.write().remove_ids(&gone);
+        }
+    }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
     persist_folder_tree(manager.cache(), ctx, &account_id).await;
 }
@@ -3059,6 +3083,10 @@ fn apply_toggleable_flag(ctx: &mut AppContext, ids: &[MessageId], flag: Envelope
         set_message_flag(&mut next, flag, value);
         *msg = Arc::new(next);
     }
+}
+
+fn filter_dropped_read_rows(ctx: &AppContext, now_read: bool) -> bool {
+    now_read && ctx.message_list_filter.peek().unread
 }
 
 /// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.

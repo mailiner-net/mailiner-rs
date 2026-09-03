@@ -204,6 +204,12 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
     Ok(envelopes)
 }
 
+fn mock_folder_totals(folder_id: &FolderId) -> (u64, u64) {
+    let all = mock_envelopes(folder_id, 0..100).unwrap_or_default();
+    let unread = all.iter().filter(|e| !e.is_read).count() as u64;
+    (all.len() as u64, unread)
+}
+
 /// Realistic multipart fixture used by MockConnector and UI development.
 pub fn mock_multipart_structure() -> BodyPart {
     BodyPart {
@@ -358,15 +364,11 @@ where
     ) -> Result<HashMap<FolderId, FolderCounts>> {
         let mut out = HashMap::new();
         for id in folder_ids {
-            let unread = if id.as_str().eq_ignore_ascii_case("inbox") {
-                3
-            } else {
-                0
-            };
+            let (total, unread) = mock_folder_totals(id);
             out.insert(
                 id.clone(),
                 FolderCounts {
-                    total_messages: 100,
+                    total_messages: total,
                     unread_messages: unread,
                 },
             );
@@ -389,15 +391,20 @@ where
     ) -> Result<FolderListState> {
         *self.list_filter.lock().expect("mock filter") = filter;
         let all = mock_envelopes(folder_id, 0..100)?;
-        let folder_unread = all.iter().filter(|e| !e.is_read).count();
+        let (_, folder_unread) = mock_folder_totals(folder_id);
+        // Attachment is client-side only (no IMAP SEARCH key).
+        let server = MessageListFilter {
+            has_attachment: false,
+            ..filter
+        };
         let total = all
             .iter()
-            .filter(|e| filter.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
             .count();
         Ok(FolderListState {
             total,
             folder_total: all.len(),
-            unread: Some(folder_unread),
+            unread: Some(folder_unread as usize),
             sort,
             supports_size_sender: false,
         })
@@ -410,9 +417,13 @@ where
     ) -> Result<Vec<Envelope>> {
         let filter = *self.list_filter.lock().expect("mock filter");
         let all = mock_envelopes(folder_id, 0..100)?;
+        let server = MessageListFilter {
+            has_attachment: false,
+            ..filter
+        };
         let filtered: Vec<_> = all
             .into_iter()
-            .filter(|e| filter.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
             .collect();
         let end = range.end.min(filtered.len());
         let start = range.start.min(end);

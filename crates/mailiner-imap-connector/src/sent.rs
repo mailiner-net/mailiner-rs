@@ -423,21 +423,21 @@ mod tests {
     fn junk_special_use_from_attrs() {
         use async_imap::types::NameAttribute;
         let (_, role) = special_use_from_attrs([NameAttribute::Junk].iter());
-        assert_eq!(role, MailboxRole::Junk);
+        assert_eq!(role, Some(MailboxRole::Junk));
         let (_, role) = special_use_from_attrs(
             [NameAttribute::Extension(std::borrow::Cow::Borrowed(
                 "\\Junk",
             ))]
             .iter(),
         );
-        assert_eq!(role, MailboxRole::Junk);
+        assert_eq!(role, Some(MailboxRole::Junk));
         let (_, role) = special_use_from_attrs(
             [NameAttribute::Extension(std::borrow::Cow::Borrowed(
                 "\\Spam",
             ))]
             .iter(),
         );
-        assert_eq!(role, MailboxRole::Junk);
+        assert_eq!(role, Some(MailboxRole::Junk));
     }
 
     #[test]
@@ -497,12 +497,7 @@ mod tests {
     fn unmapped_special_use_skips_name_heuristic() {
         use async_imap::types::NameAttribute;
         use std::borrow::Cow;
-        for attr in [NameAttribute::Junk, NameAttribute::Flagged] {
-            let (_, role) = special_use_from_attrs([attr].iter());
-            assert_eq!(role, Some(MailboxRole::Other));
-        }
-        let (_, role) =
-            special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("\\Junk"))].iter());
+        let (_, role) = special_use_from_attrs([NameAttribute::Flagged].iter());
         assert_eq!(role, Some(MailboxRole::Other));
         let listed = mb_attr("Deleted Mail", Some("/"), false, Some(MailboxRole::Other));
         assert_eq!(listed.role(), MailboxRole::Other);

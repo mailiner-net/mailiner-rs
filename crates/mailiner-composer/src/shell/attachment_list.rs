@@ -112,6 +112,7 @@ pub fn file_attachment(
         content_type: content_type.into(),
         size,
         data: AttachmentData::Bytes(data),
+        source: None,
     }
 }
 
@@ -294,6 +295,7 @@ mod tests {
             content_type: "application/octet-stream".into(),
             size: 999,
             data: AttachmentData::Bytes(vec![1, 2, 3]),
+            source: None,
         });
         d.attachments.push(FileAttachment {
             id: AttachmentId::new(),
@@ -301,6 +303,7 @@ mod tests {
             content_type: "application/octet-stream".into(),
             size: 1000,
             data: AttachmentData::Pending,
+            source: None,
         });
         assert_eq!(draft_payload_bytes(&d), 3);
     }

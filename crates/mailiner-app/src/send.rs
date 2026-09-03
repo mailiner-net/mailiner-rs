@@ -2,6 +2,7 @@
 
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument};
+use mailiner_composer::FileAttachment;
 use mailiner_core::MessageId;
 use mailiner_core::submit::SendErrorKind;
 
@@ -18,6 +19,8 @@ pub struct ComposeSession {
     pub draft: DraftDocument,
     /// Source message to mark `\Answered` after a successful Reply / Reply All.
     pub reply_source: Option<MessageId>,
+    /// Original forwarded files removed via the include toggle.
+    pub stashed_originals: Vec<FileAttachment>,
 }
 
 /// Choose which stored account a compose session should send from.
@@ -232,6 +235,7 @@ mod tests {
             draft: DraftDocument::new_empty(&identity),
             account_id: id("old"),
             reply_source: None,
+            stashed_originals: Vec::new(),
         };
         set_session_from_account(&mut session, id("new"), "New", "new@example.com");
         assert_eq!(session.account_id.as_str(), "new");
@@ -261,6 +265,7 @@ mod tests {
             draft: DraftDocument::new_empty(&identity),
             account_id: id("old"),
             reply_source: None,
+            stashed_originals: Vec::new(),
         };
         set_session_from_account(&mut session, id("new"), "", "new@example.com");
         let from = session.draft.from.expect("from");

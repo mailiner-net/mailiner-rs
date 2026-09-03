@@ -11,10 +11,12 @@ use futures_channel::mpsc::{
 use futures_util::StreamExt;
 use futures_util::future::{Either, select, select_all};
 use gloo_timers::future::TimeoutFuture;
+use mailiner_composer::{AttachmentData, caps};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
 use mailiner_core::{EnvelopeFlag, FolderCounts, FolderId, MailboxRole, MessageSort};
+use mailiner_mime::decode_transfer_encoding;
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -47,7 +49,7 @@ use crate::outbox_store::{
     pick_oldest_queued,
 };
 use crate::reconnect::reconnect_backoff_ms;
-use crate::send::{OutboxDisplay, SendPhase, SendState};
+use crate::send::{ComposeSession, OutboxDisplay, SendPhase, SendState};
 use crate::smtp_inflight::{InFlightSmtp, SmtpInflight};
 use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test};
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
@@ -177,6 +179,10 @@ pub enum CoreEvent {
         message_id: MessageId,
         filename: String,
         size_hint: Option<u64>,
+    },
+    /// Fetch pending forwarded file bytes into the open compose draft.
+    FetchComposeAttachments {
+        draft_id: String,
     },
 
     /// Select account for UI + ensure connector + list folders.
@@ -602,6 +608,9 @@ pub async fn core_loop(
                     &manager, &mut ctx, account_id, mailbox_id, message_id, filename, size_hint,
                 )
                 .await;
+            }
+            CoreEvent::FetchComposeAttachments { draft_id } => {
+                handle_fetch_compose_attachments(&manager, &mut ctx, draft_id).await;
             }
             CoreEvent::SendMessage {
                 account_id,
@@ -3765,6 +3774,219 @@ async fn handle_save_message_eml(
         .write()
         .insert(EML_DOWNLOAD_KEY.into(), DownloadStatus::Finished);
 }
+
+struct PendingForwardFetch {
+    attachment_id: String,
+    message_id: MessageId,
+    section: String,
+    encoding: TransferEncoding,
+}
+
+fn collect_pending_forward_fetches(
+    ctx: &AppContext,
+    draft_id: &str,
+) -> Option<Vec<PendingForwardFetch>> {
+    let slot = ctx.compose_draft.read();
+    let session = slot.as_ref()?;
+    if session.draft.id.as_str() != draft_id {
+        return None;
+    }
+    Some(
+        session
+            .draft
+            .attachments
+            .iter()
+            .chain(session.stashed_originals.iter())
+            .filter_map(|a| {
+                if !matches!(a.data, AttachmentData::Pending) {
+                    return None;
+                }
+                let src = a.source.as_ref()?;
+                Some(PendingForwardFetch {
+                    attachment_id: a.id.0.clone(),
+                    message_id: src.message_id.clone(),
+                    section: src.section.clone(),
+                    encoding: src.encoding,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn remove_forward_attachment(session: &mut ComposeSession, attachment_id: &str) {
+    session
+        .draft
+        .attachments
+        .retain(|a| a.id.0 != attachment_id);
+    session
+        .stashed_originals
+        .retain(|a| a.id.0 != attachment_id);
+}
+
+fn fail_forward_fetches(ctx: &mut AppContext, draft_id: &str, message: &str) {
+    let mut slot = ctx.compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return;
+    }
+    let ids: Vec<String> = session
+        .draft
+        .attachments
+        .iter()
+        .chain(session.stashed_originals.iter())
+        .filter(|a| matches!(a.data, AttachmentData::Pending) && a.source.is_some())
+        .map(|a| a.id.0.clone())
+        .collect();
+    for id in ids {
+        remove_forward_attachment(session, &id);
+    }
+    session.draft.prefill_warnings.push(message.to_string());
+    session.draft.touch();
+}
+
+fn apply_fetched_attachment(
+    ctx: &mut AppContext,
+    draft_id: &str,
+    attachment_id: &str,
+    bytes: Vec<u8>,
+) {
+    use mailiner_composer::shell::attachment_list::{draft_payload_bytes, would_exceed_draft_cap};
+
+    let mut slot = ctx.compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return;
+    }
+    let sz = bytes.len() as u64;
+    if sz > caps::MAX_FILE_BYTES {
+        remove_forward_attachment(session, attachment_id);
+        session.draft.prefill_warnings.push(format!(
+            "Skipped an original attachment: larger than {} MiB.",
+            caps::MAX_FILE_BYTES / (1024 * 1024)
+        ));
+        session.draft.touch();
+        return;
+    }
+    let on_draft = session
+        .draft
+        .attachments
+        .iter()
+        .any(|a| a.id.0 == attachment_id);
+    if on_draft && would_exceed_draft_cap(draft_payload_bytes(&session.draft), sz) {
+        remove_forward_attachment(session, attachment_id);
+        session
+            .draft
+            .prefill_warnings
+            .push("Skipped an original attachment: draft size limit.".into());
+        session.draft.touch();
+        return;
+    }
+    let att = session
+        .draft
+        .attachments
+        .iter_mut()
+        .find(|a| a.id.0 == attachment_id)
+        .or_else(|| {
+            session
+                .stashed_originals
+                .iter_mut()
+                .find(|a| a.id.0 == attachment_id)
+        });
+    if let Some(att) = att {
+        att.size = sz;
+        att.data = AttachmentData::Bytes(bytes);
+        session.draft.touch();
+    }
+}
+
+async fn handle_fetch_compose_attachments(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    draft_id: String,
+) {
+    let Some(items) = collect_pending_forward_fetches(ctx, &draft_id) else {
+        return;
+    };
+    if items.is_empty() {
+        return;
+    }
+
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+        return;
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+        return;
+    };
+
+    let mut by_msg: HashMap<MessageId, Vec<PendingForwardFetch>> = HashMap::new();
+    for item in items {
+        by_msg
+            .entry(item.message_id.clone())
+            .or_default()
+            .push(item);
+    }
+
+    for (mid, group) in by_msg {
+        let mut sections: Vec<String> = group.iter().map(|g| g.section.clone()).collect();
+        sections.sort();
+        sections.dedup();
+        let raw = match connector
+            .fetch_raw_parts(mid.folder_id(), &mid, &sections)
+            .await
+        {
+            Ok(map) => map,
+            Err(e) => {
+                error!("forward attachment fetch failed: {e}");
+                for item in &group {
+                    apply_fetched_attachment_missing(ctx, &draft_id, &item.attachment_id);
+                }
+                continue;
+            }
+        };
+        for item in group {
+            match raw.get(&item.section) {
+                Some(wire) => match decode_transfer_encoding(wire, item.encoding.as_str()) {
+                    Ok(bytes) => {
+                        apply_fetched_attachment(ctx, &draft_id, &item.attachment_id, bytes)
+                    }
+                    Err(e) => {
+                        error!("forward attachment decode failed: {e}");
+                        apply_fetched_attachment_missing(ctx, &draft_id, &item.attachment_id);
+                    }
+                },
+                None => apply_fetched_attachment_missing(ctx, &draft_id, &item.attachment_id),
+            }
+        }
+    }
+}
+
+fn apply_fetched_attachment_missing(ctx: &mut AppContext, draft_id: &str, attachment_id: &str) {
+    let mut slot = ctx.compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return;
+    }
+    remove_forward_attachment(session, attachment_id);
+    if !session
+        .draft
+        .prefill_warnings
+        .iter()
+        .any(|w| w.contains("Could not load"))
+    {
+        session
+            .draft
+            .prefill_warnings
+            .push("Could not load some original attachments.".into());
+    }
+    session.draft.touch();
 
 async fn refresh_outbox_signal(outbox: &dyn OutboxStore, ctx: &mut AppContext) {
     match outbox.list().await {

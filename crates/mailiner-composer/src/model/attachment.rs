@@ -43,6 +43,17 @@ pub enum AttachmentData {
     Pending,
 }
 
+/// Where a forwarded file can still be fetched from the original message.
+#[derive(Debug, Clone)]
+pub struct AttachmentSource {
+    /// Original message (folder + UID).
+    pub message_id: mailiner_core::MessageId,
+    /// IMAP BODY section path (e.g. `2`).
+    pub section: String,
+    /// Transfer encoding of the on-wire part.
+    pub encoding: mailiner_core::TransferEncoding,
+}
+
 /// Non-inline file attachment.
 #[derive(Debug, Clone)]
 pub struct FileAttachment {
@@ -56,6 +67,8 @@ pub struct FileAttachment {
     pub size: u64,
     /// Payload.
     pub data: AttachmentData,
+    /// Set for files copied from a forwarded message (used to fetch Pending bytes).
+    pub source: Option<AttachmentSource>,
 }
 
 /// Inline image referenced from HTML.

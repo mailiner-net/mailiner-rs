@@ -311,6 +311,7 @@ impl PersistedComposeDraft {
                 created_at: self.created_at,
                 updated_at: self.updated_at,
             },
+            stashed_originals: Vec::new(),
         }
     }
 }
@@ -498,6 +499,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            stashed_originals: Vec::new(),
         }
     }
 
@@ -575,6 +577,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            stashed_originals: Vec::new(),
         };
         assert!(!session_has_content(&empty));
         save_draft_in(&kv, &account, &session("Hi", "x")).unwrap();

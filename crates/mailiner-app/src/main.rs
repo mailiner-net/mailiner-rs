@@ -310,6 +310,7 @@ fn App() -> Element {
         crate::ui_prefs::apply_theme(pref);
         pref
     });
+    let sign_out_epoch = use_signal(|| 0u64);
 
     let ctx = AppContext {
         accounts,
@@ -334,6 +335,7 @@ fn App() -> Element {
         toast,
         compose_draft,
         mailbox_picker,
+        sign_out_epoch,
     };
     let ctx_clone = ctx.clone();
 

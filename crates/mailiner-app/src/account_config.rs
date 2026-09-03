@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use mailiner_core::ids::AccountId;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -461,7 +461,10 @@ fn strip_embedded_proxy_secrets(url: &str) -> String {
             .split('&')
             .filter(|pair| {
                 let key = pair.split('=').next().unwrap_or("");
-                !key.eq_ignore_ascii_case("token")
+                !percent_decode_str(key)
+                    .decode_utf8()
+                    .map(|key| key.eq_ignore_ascii_case("token"))
+                    .unwrap_or(false)
             })
             .collect();
         if !kept.is_empty() {
@@ -480,8 +483,12 @@ fn strip_url_userinfo(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_string();
     };
-    match rest.split_once('@') {
-        Some((_, host)) => format!("{scheme}://{host}"),
+    let authority_end = rest
+        .find(|ch| matches!(ch, '/' | '?' | '#'))
+        .unwrap_or(rest.len());
+    let (authority, suffix) = rest.split_at(authority_end);
+    match authority.rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://{host}{suffix}"),
         None => url.to_string(),
     }
 }
@@ -1051,6 +1058,27 @@ mod tests {
         assert_eq!(
             config.proxy.base_url,
             "wss://user:pw@proxy.example/proxy?foo=1&token=leaked&bar=2"
+        );
+    }
+
+    #[test]
+    fn without_secrets_strips_percent_encoded_token_query_key() {
+        let mut config = sample_config();
+        config.proxy.base_url = "wss://proxy.example/proxy?%74oken=leaked&foo=1".into();
+        let redacted = config.without_secrets();
+        assert_eq!(redacted.proxy.base_url, "wss://proxy.example/proxy?foo=1");
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(!json.contains("leaked"), "encoded token leaked: {json}");
+    }
+
+    #[test]
+    fn without_secrets_keeps_at_sign_in_proxy_path() {
+        let mut config = sample_config();
+        config.proxy.base_url = "wss://proxy.example/u@v/proxy?foo=1".into();
+        let redacted = config.without_secrets();
+        assert_eq!(
+            redacted.proxy.base_url,
+            "wss://proxy.example/u@v/proxy?foo=1"
         );
     }
 

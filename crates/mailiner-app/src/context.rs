@@ -90,6 +90,8 @@ pub struct AppContext {
     pub compose_draft: Signal<Option<ComposeSession>>,
     /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
+    /// Bumped after `ClearLocalData` finishes so the UI can leave the session.
+    pub sign_out_epoch: Signal<u64>,
 }
 
 impl AppContext {

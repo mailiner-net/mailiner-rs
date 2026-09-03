@@ -362,6 +362,24 @@ fn DataActionConfirm(
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let nav = use_navigator();
+    let mut wait_for_epoch = use_signal(|| None::<u64>);
+    let epoch = ctx.sign_out_epoch;
+    use_effect(move || {
+        let current = epoch();
+        let Some(started) = wait_for_epoch() else {
+            return;
+        };
+        if current == started {
+            return;
+        }
+        wait_for_epoch.set(None);
+        confirm_data.set(None);
+        action_error.set(None);
+        info!("Signed out → NeedsOnboarding");
+        bootstrap.set(AppBootstrapState::NeedsOnboarding);
+        nav.replace(Route::OnboardingView {});
+    });
+    let wiping = wait_for_epoch().is_some();
 
     let (body, confirm_label, danger) = match kind {
         DataConfirm::FullBackup => (
@@ -388,6 +406,7 @@ fn DataActionConfirm(
                 button {
                     r#type: "button",
                     class: "onboarding-btn onboarding-btn-secondary",
+                    disabled: wiping,
                     onclick: move |_| confirm_data.set(None),
                     "Cancel"
                 }
@@ -398,6 +417,7 @@ fn DataActionConfirm(
                     } else {
                         "onboarding-btn onboarding-btn-primary"
                     },
+                    disabled: wiping,
                     onclick: move |_| {
                         match kind {
                             DataConfirm::FullBackup => {
@@ -406,19 +426,14 @@ fn DataActionConfirm(
                             }
                             DataConfirm::SignOut => {
                                 // Wipe runs in core_loop after the current IMAP/SMTP
-                                // handler finishes, so a late persist cannot recreate keys.
-                                let mut ctx = ctx.clone();
+                                // handler finishes. Navigate only after that ack so a
+                                // reload cannot keep credentials on disk.
+                                wait_for_epoch.set(Some(*ctx.sign_out_epoch.peek()));
                                 core_tx.send(CoreEvent::ClearLocalData);
-                                ctx.reset_after_sign_out();
-                                confirm_data.set(None);
-                                action_error.set(None);
-                                info!("Signed out → NeedsOnboarding");
-                                bootstrap.set(AppBootstrapState::NeedsOnboarding);
-                                nav.replace(Route::OnboardingView {});
                             }
                         }
                     },
-                    "{confirm_label}"
+                    if wiping { "Deleting…" } else { "{confirm_label}" }
                 }
             }
         }

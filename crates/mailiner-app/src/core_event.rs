@@ -3588,6 +3588,8 @@ async fn handle_clear_local_data(
             message: format!("Some local Mailiner data could not be removed: {e}"),
         });
     }
+    let next_epoch = ctx.sign_out_epoch.peek().wrapping_add(1);
+    ctx.sign_out_epoch.set(next_epoch);
 }
 
 async fn handle_smtp_finished(
@@ -3600,9 +3602,10 @@ async fn handle_smtp_finished(
     generation: u64,
     outcome: SmtpOutcome,
 ) {
-    if generation != *smtp_generation {
-        // Stale after cancel / sign-out: do not persist and do not restore
-        // a slot that ClearLocalData already dropped.
+    if generation != *smtp_generation && inflight.is_none() {
+        // Sign-out already dropped the slot; do not persist. Ordinary
+        // cancel (Disconnect / DeleteOutbox / purge) keeps the slot so
+        // this handler can settle it below.
         return;
     }
     let Some(flight) = inflight.take() else {

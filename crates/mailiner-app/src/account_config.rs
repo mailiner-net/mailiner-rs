@@ -405,6 +405,22 @@ impl AccountConfig {
         }
     }
 
+    /// Clear IMAP/SMTP passwords and the proxy token in place.
+    pub fn redact_secrets(&mut self) {
+        self.imap.password.clear();
+        if let Some(smtp) = self.smtp.as_mut() {
+            smtp.password = None;
+        }
+        self.proxy.token.clear();
+    }
+
+    /// Clone with IMAP/SMTP passwords and the proxy token removed.
+    pub fn without_secrets(&self) -> Self {
+        let mut out = self.clone();
+        out.redact_secrets();
+        out
+    }
+
     /// Validate required fields that would break connect / URL building.
     ///
     /// PR1 checks hosts + proxy URL only. Fuller form validation (email, username,
@@ -931,6 +947,48 @@ mod tests {
         assert_eq!(ui.name, "Work");
         assert_eq!(ui.email, "user@example.com");
         assert_eq!(ui.host, config.imap.host);
+    }
+
+    #[test]
+    fn without_secrets_redacts_passwords_and_token() {
+        let mut config = sample_config();
+        config.smtp = Some(SmtpSettings::new(
+            "smtp.example.com".into(),
+            465,
+            "user@example.com".into(),
+            Some("smtp-secret".into()),
+            SmtpTlsMode::Implicit,
+        ));
+        let redacted = config.without_secrets();
+        assert!(redacted.imap.password.is_empty());
+        assert!(redacted.smtp.as_ref().unwrap().password.is_none());
+        assert!(redacted.proxy.token.is_empty());
+
+        // Non-secret connection fields stay put.
+        assert_eq!(redacted.display_name, "Work");
+        assert_eq!(redacted.email, "user@example.com");
+        assert_eq!(redacted.imap.host, "imap.example.com");
+        assert_eq!(redacted.imap.port, 993);
+        assert_eq!(redacted.imap.username, "user@example.com");
+        assert_eq!(redacted.smtp.as_ref().unwrap().host, "smtp.example.com");
+        assert_eq!(redacted.smtp.as_ref().unwrap().port, 465);
+        assert_eq!(redacted.smtp.as_ref().unwrap().username, "user@example.com");
+        assert_eq!(redacted.proxy.base_url, "ws://localhost:9400/proxy");
+
+        // Source is unchanged; serialized redacted JSON must not contain secrets.
+        assert_eq!(config.imap.password, "s3cret");
+        assert_eq!(
+            config.smtp.as_ref().and_then(|s| s.password.as_deref()),
+            Some("smtp-secret")
+        );
+        assert_eq!(config.proxy.token, "testtoken");
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(!json.contains("s3cret"), "imap password leaked: {json}");
+        assert!(
+            !json.contains("smtp-secret"),
+            "smtp password leaked: {json}"
+        );
+        assert!(!json.contains("testtoken"), "proxy token leaked: {json}");
     }
 
     #[test]

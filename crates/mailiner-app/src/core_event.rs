@@ -202,6 +202,9 @@ pub enum CoreEvent {
     /// UI mutated store (edit/delete). Manager drops deleted connectors; does not auto-connect.
     AccountsChanged,
 
+    /// Sign-out: drop every connector and cached config (secrets).
+    ClearLocalData,
+
     SendMessage {
         account_id: AccountId,
         request: SubmitRequest,
@@ -348,6 +351,20 @@ pub async fn core_loop(
                     &mut smtp_generation,
                 )
                 .await;
+            }
+            CoreEvent::ClearLocalData => {
+                let mut ids = manager.known_account_ids();
+                if let Some(flight) = inflight.as_ref() {
+                    ids.push(flight.account_id.clone());
+                }
+                ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+                ids.dedup();
+                for id in &ids {
+                    cancel_inflight_for(&mut inflight, &mut smtp_generation, id, outbox.as_ref())
+                        .await;
+                }
+                manager.disconnect_all(&mut ctx).await;
+                ctx.reset_after_sign_out();
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;

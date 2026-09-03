@@ -19,6 +19,8 @@ use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::download::save_text_download;
+use crate::local_data::{AccountsExport, accounts_export_filename, clear_mailiner_local_storage};
 
 /// Debounce for rapid account-switch clicks (ms).
 const SWITCH_DEBOUNCE_MS: u32 = 200;
@@ -39,7 +41,8 @@ pub fn AccountsSettingsPage() -> Element {
     let quota = *ctx.account_quota.read();
 
     let mut confirm_delete_id = use_signal(|| None::<AccountId>);
-    let action_error = use_signal(|| None::<String>);
+    let mut confirm_data = use_signal(|| None::<DataConfirm>);
+    let mut action_error = use_signal(|| None::<String>);
     let pending_switch = use_signal(|| None::<AccountId>);
     let switch_gen = use_signal(|| 0u64);
 
@@ -236,6 +239,55 @@ pub fn AccountsSettingsPage() -> Element {
                      last-write-wins."
                 }
 
+                section {
+                    class: "accounts-data onboarding-section",
+                    h2 { class: "accounts-data-title", "Data" }
+                    p {
+                        class: "bootstrap-muted",
+                        "Export connection settings, or remove everything Mailiner stored in \
+                         this browser. Mail on the server is not affected."
+                    }
+                    div {
+                        class: "accounts-data-actions",
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                spawn(download_accounts_export(store_ctx, action_error, false));
+                            },
+                            "Export accounts"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                confirm_data.set(Some(DataConfirm::FullBackup));
+                            },
+                            "Export full backup…"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-btn-danger",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                confirm_data.set(Some(DataConfirm::SignOut));
+                            },
+                            "Sign out / delete local data…"
+                        }
+                    }
+                    if let Some(kind) = confirm_data() {
+                        DataActionConfirm {
+                            kind,
+                            confirm_data,
+                            action_error,
+                            bootstrap,
+                            store_ctx,
+                        }
+                    }
+                }
+
                 nav {
                     class: "bootstrap-nav accounts-nav",
                     Link {
@@ -248,6 +300,160 @@ pub fn AccountsSettingsPage() -> Element {
                         class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
                         "Back to mail"
                     }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DataConfirm {
+    FullBackup,
+    SignOut,
+}
+
+async fn download_accounts_export(
+    store_ctx: Signal<Option<AccountStoreContext>>,
+    mut action_error: Signal<Option<String>>,
+    includes_secrets: bool,
+) {
+    let Some(store) = store_ctx() else {
+        action_error.set(Some("Account storage is not available.".into()));
+        return;
+    };
+    let configs = match store.0.list().await {
+        Ok(list) => list,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to read accounts: {e}")));
+            return;
+        }
+    };
+    let active = match store.0.get_active_id().await {
+        Ok(id) => id,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to read active account: {e}")));
+            return;
+        }
+    };
+    let export = AccountsExport::new(configs, active, includes_secrets, Utc::now());
+    let json = match export.to_pretty_json() {
+        Ok(s) => s,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to encode export: {e}")));
+            return;
+        }
+    };
+    let name = accounts_export_filename(includes_secrets, export.exported_at);
+    if let Err(e) = save_text_download(&name, "application/json", &json) {
+        action_error.set(Some(format!("Failed to download export: {e}")));
+        return;
+    }
+    action_error.set(None);
+}
+
+#[component]
+fn DataActionConfirm(
+    kind: DataConfirm,
+    mut confirm_data: Signal<Option<DataConfirm>>,
+    mut action_error: Signal<Option<String>>,
+    mut bootstrap: Signal<AppBootstrapState>,
+    store_ctx: Signal<Option<AccountStoreContext>>,
+) -> Element {
+    let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let nav = use_navigator();
+
+    let (body, confirm_label, danger) = match kind {
+        DataConfirm::FullBackup => (
+            "This file contains IMAP/SMTP passwords and proxy tokens. Anyone with the file can \
+             access your mail. Continue?",
+            "Download backup",
+            false,
+        ),
+        DataConfirm::SignOut => (
+            "Delete all Mailiner data stored in this browser? This removes accounts, passwords, \
+             cached mail, the outbox, and preferences. Mail on the server is not affected.",
+            "Delete local data",
+            true,
+        ),
+    };
+
+    rsx! {
+        div {
+            class: "accounts-confirm",
+            role: "alertdialog",
+            p { "{body}" }
+            div {
+                class: "onboarding-actions",
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary",
+                    onclick: move |_| confirm_data.set(None),
+                    "Cancel"
+                }
+                button {
+                    r#type: "button",
+                    class: if danger {
+                        "onboarding-btn onboarding-btn-primary accounts-btn-danger-solid"
+                    } else {
+                        "onboarding-btn onboarding-btn-primary"
+                    },
+                    onclick: move |_| {
+                        match kind {
+                            DataConfirm::FullBackup => {
+                                confirm_data.set(None);
+                                spawn(download_accounts_export(store_ctx, action_error, true));
+                            }
+                            DataConfirm::SignOut => {
+                                let mut ctx = ctx.clone();
+                                spawn(async move {
+                                    let Some(store) = store_ctx() else {
+                                        action_error.set(Some(
+                                            "Account storage is not available.".into(),
+                                        ));
+                                        confirm_data.set(None);
+                                        return;
+                                    };
+                                    let store = store.0;
+                                    let ids: Vec<AccountId> = match store.list().await {
+                                        Ok(list) => list.into_iter().map(|c| c.id).collect(),
+                                        Err(e) => {
+                                            action_error.set(Some(format!(
+                                                "Failed to list accounts: {e}"
+                                            )));
+                                            confirm_data.set(None);
+                                            return;
+                                        }
+                                    };
+                                    for id in &ids {
+                                        if let Err(e) = store.delete(id).await {
+                                            action_error.set(Some(format!(
+                                                "Failed to delete account: {e}"
+                                            )));
+                                            confirm_data.set(None);
+                                            return;
+                                        }
+                                    }
+                                    if let Err(e) = store.set_active_id(None).await {
+                                        warn!("set_active_id(None) after sign-out failed: {e}");
+                                    }
+                                    if let Err(e) = clear_mailiner_local_storage() {
+                                        // Accounts are already gone from the store; still leave
+                                        // the session so leftover prefs cannot keep secrets in UI.
+                                        warn!("clear_mailiner_local_storage failed: {e}");
+                                    }
+                                    core_tx.send(CoreEvent::ClearLocalData);
+                                    ctx.reset_after_sign_out();
+                                    confirm_data.set(None);
+                                    action_error.set(None);
+                                    info!("Signed out → NeedsOnboarding");
+                                    bootstrap.set(AppBootstrapState::NeedsOnboarding);
+                                    nav.replace(Route::OnboardingView {});
+                                });
+                            }
+                        }
+                    },
+                    "{confirm_label}"
                 }
             }
         }

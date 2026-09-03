@@ -428,6 +428,26 @@ impl AccountConnectionManager {
         self.cancel_pending_reconnects(keep, ctx);
     }
 
+    /// Account ids with a connector or a cached config (including memory-only).
+    pub fn known_account_ids(&self) -> Vec<AccountId> {
+        let mut ids: HashSet<AccountId> = self.connectors.keys().cloned().collect();
+        ids.extend(self.configs.keys().cloned());
+        ids.extend(self.memory_only.iter().cloned());
+        ids.into_iter().collect()
+    }
+
+    /// Drop every connector and cached config (passwords included).
+    pub async fn disconnect_all(&mut self, ctx: &mut AppContext) {
+        let ids = self.known_account_ids();
+        for id in ids {
+            self.disconnect_account(&id, ctx).await;
+        }
+        self.connectors.clear();
+        self.configs.clear();
+        self.memory_only.clear();
+        ctx.connection_states.write().clear();
+    }
+
     /// Drop connector + cached config; best-effort logout.
     pub async fn disconnect_account(&mut self, account_id: &AccountId, ctx: &mut AppContext) {
         if let Some(connector) = self.connectors.remove(account_id)

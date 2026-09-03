@@ -29,6 +29,7 @@ mod core_event;
 mod download;
 mod formatter;
 mod layout;
+mod local_data;
 mod mail_cache;
 mod mailbox;
 mod message;

@@ -74,14 +74,20 @@ pub enum MessageSourceState {
     #[default]
     Closed,
     Loading {
+        account_id: AccountId,
         message_id: MessageId,
+        request_id: u64,
     },
     Ready {
+        account_id: AccountId,
         message_id: MessageId,
+        request_id: u64,
         text: String,
     },
     Error {
+        account_id: AccountId,
         message_id: MessageId,
+        request_id: u64,
         message: String,
     },
 }

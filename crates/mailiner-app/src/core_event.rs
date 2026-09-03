@@ -157,6 +157,7 @@ pub enum CoreEvent {
         account_id: AccountId,
         mailbox_id: MailboxId,
         message_id: MessageId,
+        request_id: u64,
     },
     /// Stream a single attachment part and save to disk (browser download).
     DownloadAttachment {
@@ -559,9 +560,12 @@ pub async fn core_loop(
                 account_id,
                 mailbox_id,
                 message_id,
+                request_id,
             } => {
-                handle_fetch_message_source(&manager, &mut ctx, account_id, mailbox_id, message_id)
-                    .await;
+                handle_fetch_message_source(
+                    &manager, &mut ctx, account_id, mailbox_id, message_id, request_id,
+                )
+                .await;
             }
             CoreEvent::DownloadAttachment {
                 account_id,
@@ -3464,10 +3468,22 @@ async fn handle_fetch_message_headers(
     }
 }
 
-fn source_request_active(ctx: &AppContext, message_id: &MessageId) -> bool {
+fn source_request_active(
+    ctx: &AppContext,
+    account_id: &AccountId,
+    message_id: &MessageId,
+    request_id: u64,
+) -> bool {
+    if ctx.selected_account.read().as_ref() != Some(account_id) {
+        return false;
+    }
     matches!(
         &*ctx.message_source.read(),
-        MessageSourceState::Loading { message_id: id } if id == message_id
+        MessageSourceState::Loading {
+            account_id: a,
+            message_id: m,
+            request_id: r,
+        } if a == account_id && m == message_id && *r == request_id
     )
 }
 
@@ -3477,16 +3493,21 @@ async fn handle_fetch_message_source(
     account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
+    request_id: u64,
 ) {
-    ctx.message_source.set(MessageSourceState::Loading {
-        message_id: message_id.clone(),
-    });
+    if !source_request_active(ctx, &account_id, &message_id, request_id) {
+        return;
+    }
 
     let Some(connector) = manager.get(&account_id) else {
-        ctx.message_source.set(MessageSourceState::Error {
-            message_id,
-            message: "Not connected".into(),
-        });
+        if source_request_active(ctx, &account_id, &message_id, request_id) {
+            ctx.message_source.set(MessageSourceState::Error {
+                account_id,
+                message_id,
+                request_id,
+                message: "Not connected".into(),
+            });
+        }
         return;
     };
 
@@ -3495,21 +3516,25 @@ async fn handle_fetch_message_source(
 
     let result = connector.fetch_raw_message(&folder_id, &message_id).await;
 
-    if !source_request_active(ctx, &message_id) {
+    if !source_request_active(ctx, &account_id, &message_id, request_id) {
         return;
     }
 
     match result {
         Ok(bytes) => {
             ctx.message_source.set(MessageSourceState::Ready {
+                account_id,
                 message_id,
+                request_id,
                 text: crate::source::source_bytes_to_text(&bytes),
             });
         }
         Err(e) => {
             error!("Failed to fetch source for {}: {}", message_id, e);
             ctx.message_source.set(MessageSourceState::Error {
+                account_id,
                 message_id,
+                request_id,
                 message: e.to_string(),
             });
         }

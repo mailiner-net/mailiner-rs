@@ -953,20 +953,24 @@ fn MessageHeader(
                                 };
                                 let already_open = matches!(
                                     &*ctx.message_source.peek(),
-                                    MessageSourceState::Loading { message_id: id }
+                                    MessageSourceState::Loading { message_id: id, .. }
                                         | MessageSourceState::Ready { message_id: id, .. }
                                         if id == &message_id
                                 );
                                 if already_open {
                                     return;
                                 }
+                                let request_id = next_source_request_id();
                                 ctx.message_source.set(MessageSourceState::Loading {
+                                    account_id: account_id.clone(),
                                     message_id: message_id.clone(),
+                                    request_id,
                                 });
                                 let _ = core_tx.send(CoreEvent::FetchMessageSource {
                                     account_id,
                                     mailbox_id,
                                     message_id: message_id.clone(),
+                                    request_id,
                                 });
                             }
                         },
@@ -1424,6 +1428,11 @@ fn MessageHeadersDialog(state: MessageHeadersState) -> Element {
     }
 }
 
+fn next_source_request_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    SEQ.fetch_add(1, Ordering::Relaxed)
+}
 
 fn close_source_dialog(ctx: &mut AppContext) {
     ctx.message_source.set(MessageSourceState::Closed);

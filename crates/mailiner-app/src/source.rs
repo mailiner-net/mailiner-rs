@@ -2,14 +2,38 @@
 
 /// Decode raw message octets for display as preformatted text.
 ///
-/// Valid UTF-8 is kept as-is. Anything else is mapped byte-for-byte (Latin-1)
-/// so every octet stays visible. CRLF / lone CR become `\n` for `<pre>`.
+/// Valid UTF-8 spans are kept as-is. Only invalid octets are mapped
+/// byte-for-byte (Latin-1) so every octet stays visible. CRLF / lone CR
+/// become `\n` for `<pre>`.
 pub fn source_bytes_to_text(bytes: &[u8]) -> String {
-    let raw = match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
-    };
-    normalize_source_newlines(&raw)
+    normalize_source_newlines(&decode_source_bytes(bytes))
+}
+
+fn decode_source_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(s) => {
+                out.push_str(s);
+                break;
+            }
+            Err(err) => {
+                let valid = err.valid_up_to();
+                if valid > 0 {
+                    let (good, tail) = rest.split_at(valid);
+                    out.push_str(std::str::from_utf8(good).unwrap_or(""));
+                    rest = tail;
+                    if rest.is_empty() {
+                        break;
+                    }
+                }
+                out.push(rest[0] as char);
+                rest = &rest[1..];
+            }
+        }
+    }
+    out
 }
 
 fn normalize_source_newlines(raw: &str) -> String {
@@ -61,6 +85,13 @@ mod tests {
         // 0xE9 is "é" in Latin-1 and invalid as a standalone UTF-8 sequence.
         let raw = b"Subject: caf\xE9\r\n\r\nbody\r\n";
         assert_eq!(source_bytes_to_text(raw), "Subject: café\n\nbody\n");
+    }
+
+    #[test]
+    fn mixed_utf8_and_invalid_keeps_valid_spans() {
+        // UTF-8 "é" (C3 A9) must stay "é"; lone 0xFF is Latin-1 ÿ.
+        let raw = b"caf\xc3\xa9\xffok";
+        assert_eq!(source_bytes_to_text(raw), "caféÿok");
     }
 
     #[test]

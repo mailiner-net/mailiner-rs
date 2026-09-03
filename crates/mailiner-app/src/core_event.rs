@@ -31,7 +31,7 @@ use crate::mail_cache::{
     hydrate_account,
 };
 use crate::mailbox::MailboxId;
-use crate::message::MessageId;
+use crate::message::{MessageId, next_flag_value};
 use crate::message_loader::load_message;
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
@@ -78,6 +78,18 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
         is_read: bool,
+    },
+    /// Toggle `\Starred` (custom) on the given messages.
+    ToggleStar {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
+    /// Toggle `\Flagged` on the given messages.
+    ToggleFlag {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
     },
     MoveMessages {
         mailbox_id: MailboxId,
@@ -372,6 +384,36 @@ pub async fn core_loop(
                 is_read,
             } => {
                 handle_mark_read(&manager, &mut ctx, mailbox_id, message_ids, is_read).await;
+            }
+            CoreEvent::ToggleStar {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_toggle_flag(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    EnvelopeFlag::Starred,
+                )
+                .await;
+            }
+            CoreEvent::ToggleFlag {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_toggle_flag(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    EnvelopeFlag::Flagged,
+                )
+                .await;
             }
             CoreEvent::MoveMessages {
                 mailbox_id,
@@ -2181,6 +2223,151 @@ async fn handle_mark_read(
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
     persist_folder_tree(manager.cache(), ctx, &account_id).await;
+}
+
+async fn handle_toggle_flag(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+    flag: EnvelopeFlag,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if message_ids
+        .iter()
+        .any(|id| id.folder_id().as_str() != mailbox_id.as_str())
+    {
+        return;
+    }
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let snapshot = snapshot_flag_values(ctx, &message_ids, flag);
+    let value = next_flag_value(snapshot.iter().map(|(_, on)| *on));
+    apply_toggleable_flag(ctx, &message_ids, flag, value);
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_ids = core_message_ids(&message_ids);
+    let result = connector
+        .update_envelope_flags(&folder_id, &core_ids, &[(flag, value)])
+        .await;
+
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
+        if let Err(e) = result {
+            error!("Failed to update {flag:?} flag after session change: {e}");
+            ctx.show_toast(ToastAction::error(format!(
+                "Could not update {}: {e}",
+                flag_label(flag)
+            )));
+        }
+        return;
+    }
+    if let Err(e) = result {
+        error!("Failed to update {flag:?} flag: {e}");
+        restore_flag_values(ctx, &snapshot, flag);
+        ctx.show_toast(ToastAction::error(format!(
+            "Could not update {}: {e}",
+            flag_label(flag)
+        )));
+        return;
+    }
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+}
+
+fn same_mail_session(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) -> bool {
+    selected_account_is(ctx, account_id) && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
+}
+
+fn flag_label(flag: EnvelopeFlag) -> &'static str {
+    match flag {
+        EnvelopeFlag::Starred => "star",
+        EnvelopeFlag::Flagged => "flag",
+        _ => "flag",
+    }
+}
+
+fn message_has_flag(msg: &crate::message::Message, flag: EnvelopeFlag) -> bool {
+    match flag {
+        EnvelopeFlag::Starred => msg.is_starred,
+        EnvelopeFlag::Flagged => msg.is_flagged,
+        EnvelopeFlag::Read => msg.is_read,
+        EnvelopeFlag::Answered => msg.is_answered,
+        EnvelopeFlag::Draft => msg.envelope.is_draft,
+        EnvelopeFlag::Deleted => msg.envelope.is_deleted,
+    }
+}
+
+fn set_message_flag(msg: &mut crate::message::Message, flag: EnvelopeFlag, value: bool) {
+    match flag {
+        EnvelopeFlag::Starred => {
+            msg.is_starred = value;
+            msg.envelope.is_starred = value;
+        }
+        EnvelopeFlag::Flagged => {
+            msg.is_flagged = value;
+            msg.envelope.is_flagged = value;
+        }
+        EnvelopeFlag::Read => {
+            msg.is_read = value;
+            msg.envelope.is_read = value;
+        }
+        EnvelopeFlag::Answered => {
+            msg.is_answered = value;
+            msg.envelope.is_answered = value;
+        }
+        EnvelopeFlag::Draft => msg.envelope.is_draft = value,
+        EnvelopeFlag::Deleted => msg.envelope.is_deleted = value,
+    }
+}
+
+fn snapshot_flag_values(
+    ctx: &AppContext,
+    ids: &[MessageId],
+    flag: EnvelopeFlag,
+) -> Vec<(MessageId, bool)> {
+    let list = ctx.messages.read();
+    ids.iter()
+        .filter_map(|id| {
+            list.find(|m| m.id == *id)
+                .map(|m| (id.clone(), message_has_flag(m, flag)))
+        })
+        .collect()
+}
+
+fn restore_flag_values(ctx: &mut AppContext, snapshot: &[(MessageId, bool)], flag: EnvelopeFlag) {
+    let wanted: std::collections::HashMap<&MessageId, bool> =
+        snapshot.iter().map(|(id, on)| (id, *on)).collect();
+    for msg in ctx.messages.write().iter_mut() {
+        let Some(&value) = wanted.get(&msg.id) else {
+            continue;
+        };
+        if message_has_flag(msg, flag) == value {
+            continue;
+        }
+        let mut next = (**msg).clone();
+        set_message_flag(&mut next, flag, value);
+        *msg = Arc::new(next);
+    }
+}
+
+fn apply_toggleable_flag(ctx: &mut AppContext, ids: &[MessageId], flag: EnvelopeFlag, value: bool) {
+    let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
+    for msg in ctx.messages.write().iter_mut() {
+        if !idset.contains(&msg.id) || message_has_flag(msg, flag) == value {
+            continue;
+        }
+        let mut next = (**msg).clone();
+        set_message_flag(&mut next, flag, value);
+        *msg = Arc::new(next);
+    }
 }
 
 /// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.

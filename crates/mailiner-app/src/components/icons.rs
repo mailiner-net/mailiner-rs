@@ -125,6 +125,7 @@ pub fn IconButton(
     #[props(default = 20)] size: u32,
     #[props(default)] class: Option<String>,
     #[props(default)] title: Option<String>,
+    #[props(default)] aria_pressed: Option<bool>,
     onclick: EventHandler<MouseEvent>,
 ) -> Element {
     rsx! {
@@ -132,6 +133,7 @@ pub fn IconButton(
             class: class.unwrap_or_default(),
             title: title.unwrap_or_default(),
             r#type: "button",
+            aria_pressed: aria_pressed.map(|pressed| if pressed { "true" } else { "false" }),
             onclick: move |evt| onclick.call(evt),
             Icon { icon, size }
         }

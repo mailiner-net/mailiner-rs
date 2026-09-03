@@ -103,9 +103,31 @@ pub(crate) fn preview_mailbox(value: &str) -> &str {
     value
 }
 
+/// Next star/flag value: enable unless every known target is already on.
+///
+/// An empty iterator (no loaded rows) defaults to enabling.
+pub(crate) fn next_flag_value(known: impl IntoIterator<Item = bool>) -> bool {
+    let mut any = false;
+    let mut all_on = true;
+    for on in known {
+        any = true;
+        all_on &= on;
+    }
+    !any || !all_on
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_flag_value_enables_unless_all_on() {
+        assert!(next_flag_value([false]));
+        assert!(!next_flag_value([true]));
+        assert!(next_flag_value([true, false]));
+        assert!(!next_flag_value([true, true]));
+        assert!(next_flag_value(std::iter::empty()));
+    }
 
     #[test]
     fn preview_strips_angle_addr() {

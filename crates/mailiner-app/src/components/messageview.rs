@@ -9,6 +9,7 @@ use mailiner_core::MailboxRole;
 use mailiner_core::models::{MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
+use crate::components::icons::{IconButton, IconKind};
 use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
@@ -509,6 +510,7 @@ fn MessageHeader(
     let show_plain_toggle = loaded
         .as_ref()
         .is_some_and(|loaded| has_html_and_plain(&loaded.parts));
+    let account_id = ctx.selected_account.read().clone();
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()
@@ -553,6 +555,34 @@ fn MessageHeader(
         ctx.download_status.read().get(EML_DOWNLOAD_KEY),
         Some(DownloadStatus::InProgress { .. })
     );
+    let all_selected_starred = {
+        let list = ctx.messages.read();
+        !selected_ids.is_empty()
+            && selected_ids.iter().all(|id| {
+                list.find(|m| m.id == *id)
+                    .map(|m| m.is_starred)
+                    .unwrap_or(message.is_starred)
+            })
+    };
+    let all_selected_flagged = {
+        let list = ctx.messages.read();
+        !selected_ids.is_empty()
+            && selected_ids.iter().all(|id| {
+                list.find(|m| m.id == *id)
+                    .map(|m| m.is_flagged)
+                    .unwrap_or(message.is_flagged)
+            })
+    };
+    let is_starred = if selected_n > 1 {
+        all_selected_starred
+    } else {
+        message.is_starred
+    };
+    let is_flagged = if selected_n > 1 {
+        all_selected_flagged
+    } else {
+        message.is_flagged
+    };
 
     rsx! {
         header {
@@ -570,6 +600,68 @@ fn MessageHeader(
                 }
                 div {
                     class: "message-view-actions",
+                    IconButton {
+                        class: if is_starred {
+                            "ui-btn ui-btn-secondary message-star-btn is-on"
+                        } else {
+                            "ui-btn ui-btn-secondary message-star-btn"
+                        },
+                        title: if is_starred { "Unstar" } else { "Star" },
+                        size: 16,
+                        icon: IconKind::Star,
+                        aria_pressed: Some(is_starred),
+                        onclick: {
+                            let account_id = account_id.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
+                            move |_| {
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
+                                    return;
+                                };
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::ToggleStar {
+                                    account_id,
+                                    mailbox_id,
+                                    message_ids: ids.clone(),
+                                });
+                            }
+                        },
+                    }
+                    IconButton {
+                        class: if is_flagged {
+                            "ui-btn ui-btn-secondary message-flag-btn is-on"
+                        } else {
+                            "ui-btn ui-btn-secondary message-flag-btn"
+                        },
+                        title: if is_flagged { "Unflag" } else { "Flag" },
+                        size: 16,
+                        icon: IconKind::Flag,
+                        aria_pressed: Some(is_flagged),
+                        onclick: {
+                            let account_id = account_id.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
+                            move |_| {
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
+                                    return;
+                                };
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                    account_id,
+                                    mailbox_id,
+                                    message_ids: ids.clone(),
+                                });
+                            }
+                        },
+                    }
                     if show_plain_toggle {
                         button {
                             class: "ui-btn ui-btn-secondary",

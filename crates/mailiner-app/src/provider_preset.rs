@@ -152,16 +152,26 @@ pub fn apply_email_change(previous_email: &str, email: &str, fields: &mut Preset
 }
 
 fn fill_usernames_from_email(email: &str, previous_email: &str, fields: &mut PresetFormFields) {
-    let Some(user) = username_from_email(email) else {
-        return;
-    };
-    if should_update_username(&fields.imap_username, previous_email) {
-        fields.imap_username = user.clone();
-    }
-    if !fields.smtp_host.trim().is_empty()
-        && should_update_username(&fields.smtp_username, previous_email)
-    {
-        fields.smtp_username = user;
+    match username_from_email(email) {
+        Some(user) => {
+            if should_update_username(&fields.imap_username, previous_email) {
+                fields.imap_username = user.clone();
+            }
+            if !fields.smtp_host.trim().is_empty()
+                && should_update_username(&fields.smtp_username, previous_email)
+            {
+                fields.smtp_username = user;
+            }
+        }
+        None => {
+            // Email cleared/incomplete: drop autofill so the next address can replace it.
+            if should_update_username(&fields.imap_username, previous_email) {
+                fields.imap_username.clear();
+            }
+            if should_update_username(&fields.smtp_username, previous_email) {
+                fields.smtp_username.clear();
+            }
+        }
     }
 }
 
@@ -217,25 +227,51 @@ fn is_outlook_consumer_email(email: &str) -> bool {
         return false;
     };
     let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    matches!(
-        consumer_sld(&domain),
-        Some("outlook" | "hotmail" | "live" | "msn")
-    )
+    CONSUMER_MICROSOFT_SUFFIXES
+        .iter()
+        .any(|suffix| domain_has_suffix(&domain, suffix))
 }
 
-/// Second-level label, or the label before `co.uk` / `com.br`-style public suffixes.
-fn consumer_sld(domain: &str) -> Option<&str> {
-    let mut labels = domain.split('.').rev();
-    let tld = labels.next()?;
-    let sld = labels.next()?;
-    if tld.is_empty() || sld.is_empty() {
-        return None;
-    }
-    if matches!(sld, "co" | "com" | "ac" | "org" | "ne" | "or") {
-        return labels.next().filter(|s| !s.is_empty());
-    }
-    Some(sld)
+fn domain_has_suffix(domain: &str, suffix: &str) -> bool {
+    domain == suffix
+        || domain
+            .strip_suffix(suffix)
+            .is_some_and(|rest| rest.ends_with('.'))
 }
+
+/// Documented Outlook.com / Hotmail / Live / MSN consumer suffixes.
+/// `outlook.net` and other generic TLDs are not on this list.
+const CONSUMER_MICROSOFT_SUFFIXES: &[&str] = &[
+    "outlook.com",
+    "outlook.co.uk",
+    "outlook.com.au",
+    "outlook.com.br",
+    "outlook.com.ar",
+    "outlook.de",
+    "outlook.es",
+    "outlook.fr",
+    "outlook.it",
+    "outlook.jp",
+    "hotmail.com",
+    "hotmail.co.uk",
+    "hotmail.fr",
+    "hotmail.de",
+    "hotmail.es",
+    "hotmail.it",
+    "hotmail.nl",
+    "hotmail.co.jp",
+    "hotmail.com.ar",
+    "hotmail.com.au",
+    "hotmail.com.br",
+    "live.com",
+    "live.co.uk",
+    "live.fr",
+    "live.de",
+    "live.nl",
+    "live.ca",
+    "live.com.au",
+    "msn.com",
+];
 
 fn username_from_email(email: &str) -> Option<String> {
     let email = email.trim();
@@ -388,13 +424,25 @@ mod tests {
             "ada@hotmail.es",
             "ada@outlook.es",
             "ada@live.nl",
-            "ada@msn.de",
+            "ada@msn.com",
         ] {
             let fields = apply(ProviderPreset::Outlook, email);
             assert_eq!(fields.smtp_host, "smtp-mail.outlook.com", "email={email}");
         }
         let work = apply(ProviderPreset::Outlook, "ada@contoso.com");
         assert_eq!(work.smtp_host, "smtp.office365.com");
+        let not_consumer = apply(ProviderPreset::Outlook, "ada@outlook.net");
+        assert_eq!(not_consumer.smtp_host, "smtp.office365.com");
+    }
+
+    #[test]
+    fn email_change_clears_autofill_when_address_is_replaced() {
+        let mut fields = apply(ProviderPreset::Gmail, "ada@gmail.com");
+        apply_email_change("ada@gmail.com", "", &mut fields);
+        assert!(fields.imap_username.is_empty());
+        apply_email_change("", "bob@gmail.com", &mut fields);
+        assert_eq!(fields.imap_username, "bob@gmail.com");
+        assert_eq!(fields.smtp_username, "bob@gmail.com");
     }
 
     #[test]

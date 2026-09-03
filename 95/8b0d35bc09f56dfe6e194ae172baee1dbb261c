@@ -1,0 +1,27 @@
+crates/mailiner-app/src/websocket_stream.rs
+  s_7b632d5313c1f9::t_04ec5369e97af0 279-280
+crates/mailiner-app/src/core_event.rs
+  s_7b632d5313c1f9::t_e4d845aa8e9d2a 672-674
+  s_7b632d5313c1f9::t_ce07b1cd3bd37b 554,556-558,691
+crates/mailiner-app/src/connection.rs
+  s_7b632d5313c1f9::t_04784854acd1a8 338-370,423
+crates/mailiner-app/src/reconnect.rs
+  s_7b632d5313c1f9::t_e448a57caca2d9 148-150
+  s_7b632d5313c1f9::t_a286e2cc4ebdc5 110-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "958b0d35bc09f56dfe6e194ae172baee1dbb261c",
+  "prompts": {},
+  "sessions": {
+    "s_7b632d5313c1f9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06949-a5fb-7693-9d6b-70e763ca31e0",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -95,6 +95,7 @@ pub enum CoreEvent {
     CommitDismissed(DismissCommit),
     /// Stream a single attachment part and save to disk (browser download).
     DownloadAttachment {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_id: MessageId,
         section: String,
@@ -350,6 +351,7 @@ pub async fn core_loop(
                 handle_commit_dismissed(&manager, &mut ctx, commit).await;
             }
             CoreEvent::DownloadAttachment {
+                account_id,
                 mailbox_id,
                 message_id,
                 section,
@@ -361,6 +363,7 @@ pub async fn core_loop(
                 handle_download_attachment(
                     &manager,
                     &mut ctx,
+                    account_id,
                     mailbox_id,
                     message_id,
                     section,
@@ -2110,6 +2113,7 @@ async fn handle_commit_dismissed(
 async fn handle_download_attachment(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
     section: String,
@@ -2118,8 +2122,8 @@ async fn handle_download_attachment(
     encoding: TransferEncoding,
     size_hint: Option<u64>,
 ) {
-    // Ignore if user navigated away.
-    if ctx.selection.read().focus() != Some(&message_id) {
+    // Ignore if user navigated away or switched accounts (queued Save all).
+    if ctx.selection.read().focus() != Some(&message_id) || !selected_account_is(ctx, &account_id) {
         return;
     }
     if size_hint.is_some_and(|s| s as usize > MAX_DOWNLOAD_BYTES) {
@@ -2133,12 +2137,6 @@ async fn handle_download_attachment(
         return;
     }
 
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.download_status
-            .write()
-            .insert(section, DownloadStatus::Error("No account selected".into()));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.download_status
             .write()

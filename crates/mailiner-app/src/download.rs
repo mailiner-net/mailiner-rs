@@ -9,6 +9,8 @@ pub const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq)]
 pub enum DownloadStatus {
     Idle,
+    /// Enqueued by Save all; IMAP fetch has not started.
+    Queued,
     InProgress {
         /// Transfer-encoded octets received so far (matches BODYSTRUCTURE size).
         received: u64,
@@ -16,6 +18,12 @@ pub enum DownloadStatus {
     },
     Finished,
     Error(String),
+}
+
+impl DownloadStatus {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Queued | Self::InProgress { .. })
+    }
 }
 
 impl Default for DownloadStatus {

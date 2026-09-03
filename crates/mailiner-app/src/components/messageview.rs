@@ -75,10 +75,16 @@ fn mount_shadow_html(host_id: &str, html: &str) {
         // UA `body { margin: 8px }` and `cursor: auto` (I-beam over text) make
         // the pointer appear to jump when crossing the header → body edge,
         // especially on Linux cursor themes with off-center hotspots.
+        //
+        // Reading pane: inherit color-scheme from chrome (dark host + UA
+        // defaults). Do not invert HTML mail — images and brand colors stay.
+        // Plain text (`.mlnr-plain`) uses inherited foreground.
         if let Ok(reset) = document.create_element("style") {
             reset.set_text_content(Some(
-                ":host { display: block; }\n\
-                 html, body { margin: 0; cursor: default; overflow: visible; }\n",
+                ":host { display: block; color-scheme: inherit; background: transparent; color: inherit; }\n\
+                 html, body { margin: 0; cursor: default; overflow: visible; color-scheme: inherit; background: transparent; }\n\
+                 .mlnr-plain, .mlnr-empty-body { color: inherit; background: transparent; }\n\
+                 .mlnr-plain a { color: var(--item-accent); }\n",
             ));
             let _ = shadow.append_child(&reset);
         }

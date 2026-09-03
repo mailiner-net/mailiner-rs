@@ -12,6 +12,7 @@ mod outbox;
 mod recipient_field;
 mod shortcuts;
 mod split;
+mod theme;
 mod toast;
 pub mod virtual_scroll;
 

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 use mailiner_core::MessageSort;
 
 use super::super::icons::{Icon, IconKind};
+use super::super::theme::ThemeSelect;
 
 use crate::Route;
 use crate::context::AppContext;
@@ -162,6 +163,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if props.mode == Mode::MailboxTreeView {
+                ThemeSelect { class: "theme-select pane-header-theme", }
                 Link {
                     to: Route::AccountsSettingsView {},
                     class: "pane-header-settings",

@@ -76,6 +76,56 @@ impl MessageListDensity {
     }
 }
 
+/// `localStorage` key for the color-theme override (`system` | `light` | `dark`).
+pub const THEME_KEY: &str = "mailiner.ui.theme";
+
+/// Color theme preference. `System` follows `prefers-color-scheme`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemePref {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePref {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "system" => Some(Self::System),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    /// `data-theme` on `<html>`. `None` leaves the attribute unset (OS default).
+    pub fn data_theme(self) -> Option<&'static str> {
+        match self {
+            Self::System => None,
+            Self::Light => Some("light"),
+            Self::Dark => Some("dark"),
+        }
+    }
+}
+
 /// `localStorage` key for last-opened mailbox per account.
 pub const LAST_MAILBOX_KEY: &str = "mailiner.ui.lastMailbox.v1";
 /// Schema version for [`LastMailboxBlob`] (independent of the account store).
@@ -262,6 +312,47 @@ pub fn load_message_list_density() -> MessageListDensity {
 
 pub fn save_message_list_density(density: MessageListDensity) {
     let _ = with_kv(|kv| kv.set_item(MESSAGE_LIST_DENSITY_KEY, density.as_key()));
+}
+
+pub fn load_theme() -> ThemePref {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(THEME_KEY)?
+            .as_deref()
+            .and_then(ThemePref::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_theme(theme: ThemePref) {
+    let _ = with_kv(|kv| kv.set_item(THEME_KEY, theme.as_key()));
+}
+
+/// Set or clear `data-theme` on `<html>` so CSS tokens follow the pref.
+pub fn apply_theme(pref: ThemePref) {
+    let value = pref.data_theme();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        else {
+            return;
+        };
+        match value {
+            Some(theme) => {
+                let _ = el.set_attribute("data-theme", theme);
+            }
+            None => {
+                let _ = el.remove_attribute("data-theme");
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = value;
+    }
 }
 
 /// Drop last-mailbox rows for accounts that are no longer known.
@@ -462,6 +553,42 @@ mod tests {
                 .expect("set unknown density");
         });
         assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn theme_pref_keys_roundtrip() {
+        for pref in ThemePref::ALL {
+            assert_eq!(ThemePref::from_key(pref.as_key()), Some(pref));
+        }
+        assert_eq!(ThemePref::from_key("nope"), None);
+        assert_eq!(ThemePref::from_key(""), None);
+        assert_eq!(ThemePref::default(), ThemePref::System);
+        assert_eq!(ThemePref::System.data_theme(), None);
+        assert_eq!(ThemePref::Light.data_theme(), Some("light"));
+        assert_eq!(ThemePref::Dark.data_theme(), Some("dark"));
+    }
+
+    #[test]
+    fn theme_pref_load_save_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_theme(), ThemePref::System);
+        save_theme(ThemePref::Dark);
+        assert_eq!(load_theme(), ThemePref::Dark);
+        save_theme(ThemePref::Light);
+        assert_eq!(load_theme(), ThemePref::Light);
+        save_theme(ThemePref::System);
+        assert_eq!(load_theme(), ThemePref::System);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn theme_pref_unknown_falls_back_to_system() {
+        host_kv::reset();
+        host_kv::with(|kv| {
+            kv.set_item(THEME_KEY, "rainbow").expect("set");
+        });
+        assert_eq!(load_theme(), ThemePref::System);
         host_kv::reset();
     }
 

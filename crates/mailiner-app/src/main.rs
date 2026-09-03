@@ -303,6 +303,11 @@ fn App() -> Element {
     let toast = use_signal(|| None);
     let compose_draft = use_signal(|| None);
     let mailbox_picker = use_signal(|| None);
+    let theme = use_signal(|| {
+        let pref = crate::ui_prefs::load_theme();
+        crate::ui_prefs::apply_theme(pref);
+        pref
+    });
 
     let ctx = AppContext {
         accounts,
@@ -332,6 +337,7 @@ fn App() -> Element {
     use_context_provider(|| ctx);
     use_context_provider(|| bootstrap_state);
     use_context_provider(|| store_ctx);
+    use_context_provider(|| theme);
 
     // Open BrowserAccountStore once; pass clone into core_loop; provide via context.
     // core_loop stays idle until bootstrap resolves, then runs initial Bootstrap if Ready.

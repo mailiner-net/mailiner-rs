@@ -164,10 +164,140 @@ fn re_html_tag() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").unwrap())
 }
 
-fn re_visible_replaced() -> &'static Regex {
+fn re_replaced_open() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?is)<(img|hr|picture|video|audio|canvas|object|embed|iframe)\b").unwrap()
+        Regex::new(r#"(?is)<(img|hr|picture|video|audio|canvas|object|embed|iframe)\b([^>]*?)/?>"#)
+            .unwrap()
+    })
+}
+
+fn attr_value<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
+    let lower = attrs.to_ascii_lowercase();
+    let needle = name.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    let mut offset = 0;
+    while let Some(pos) = rest.find(&needle) {
+        let at = offset + pos;
+        let before_ok = at == 0
+            || attrs
+                .as_bytes()
+                .get(at - 1)
+                .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'/'));
+        let after = at + needle.len();
+        if before_ok {
+            let tail = attrs[after..].trim_start();
+            if let Some(eq) = tail.strip_prefix('=') {
+                let eq = eq.trim_start();
+                return Some(quoted_or_token(eq));
+            }
+        }
+        offset = at + needle.len();
+        rest = &lower[offset..];
+    }
+    None
+}
+
+fn quoted_or_token(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    match bytes.first() {
+        Some(q @ (b'"' | b'\'')) => s[1..]
+            .find(*q as char)
+            .map(|end| &s[1..1 + end])
+            .unwrap_or(&s[1..]),
+        _ => s
+            .split(|c: char| c.is_ascii_whitespace() || c == '/')
+            .next()
+            .unwrap_or(""),
+    }
+}
+
+fn parse_px(raw: Option<&str>) -> Option<u32> {
+    let raw = raw?;
+    let digits: String = raw
+        .trim()
+        .trim_end_matches("px")
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+fn style_decl_hidden(style: &str) -> bool {
+    let lower = style.to_ascii_lowercase();
+    for decl in lower.split(';') {
+        let decl = decl.trim();
+        if let Some(rest) = decl.strip_prefix("display:") {
+            if rest.trim().starts_with("none") {
+                return true;
+            }
+        } else if let Some(rest) = decl.strip_prefix("visibility:")
+            && (rest.trim().starts_with("hidden") || rest.trim().starts_with("collapse"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_boolean_hidden(attrs: &str) -> bool {
+    let lower = attrs.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(pos) = rest.find("hidden") {
+        let before = rest[..pos].chars().next_back();
+        if before.is_some_and(|c| c == '-' || c.is_ascii_alphanumeric()) {
+            rest = &rest[pos + 6..];
+            continue;
+        }
+        let after = rest[pos + 6..].chars().next();
+        if after.is_none_or(|c| c.is_ascii_whitespace() || matches!(c, '=' | '/')) {
+            return true;
+        }
+        rest = &rest[pos + 6..];
+    }
+    false
+}
+
+fn replaced_element_is_visible(tag: &str, attrs: &str) -> bool {
+    if has_boolean_hidden(attrs) {
+        return false;
+    }
+    if attr_value(attrs, "style")
+        .as_deref()
+        .is_some_and(style_decl_hidden)
+    {
+        return false;
+    }
+    let tag = tag.to_ascii_lowercase();
+    match tag.as_str() {
+        "img" => {
+            let src = attr_value(attrs, "src").unwrap_or_default();
+            let srcset = attr_value(attrs, "srcset").unwrap_or_default();
+            if src.trim().is_empty() && srcset.trim().is_empty() {
+                return false;
+            }
+            match (
+                parse_px(attr_value(attrs, "width")),
+                parse_px(attr_value(attrs, "height")),
+            ) {
+                (Some(w), Some(h)) if w <= 1 && h <= 1 => false,
+                _ => true,
+            }
+        }
+        "hr" | "picture" | "canvas" => true,
+        _ => !attr_value(attrs, "src")
+            .unwrap_or_default()
+            .trim()
+            .is_empty(),
+    }
+}
+
+fn has_visible_replaced(html: &str) -> bool {
+    re_replaced_open().captures_iter(html).any(|caps| {
+        let tag = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        replaced_element_is_visible(tag, attrs)
     })
 }
 
@@ -231,7 +361,7 @@ fn trailing_blockquote_range(html: &str, quotes: &[(usize, usize)]) -> Option<(u
 
 fn is_insignificant_html(html: &str) -> bool {
     let without_styles = re_style_block().replace_all(html, "");
-    if re_visible_replaced().is_match(&without_styles) {
+    if has_visible_replaced(&without_styles) {
         return false;
     }
     let no_tags = re_html_tag().replace_all(&without_styles, "");
@@ -387,5 +517,33 @@ mod tests {
         let out = collapse_trailing_blockquotes(html);
         assert!(!out.contains("<details"), "{out}");
         assert!(out.contains("<img"), "{out}");
+    }
+
+    #[test]
+    fn html_stripped_tracking_img_after_blockquote_is_collapsed() {
+        let html = "<p>Thanks.</p><blockquote>old</blockquote><img>";
+        let out = collapse_trailing_blockquotes(html);
+        assert!(out.contains("<details class=\"mlnr-quote\">"), "{out}");
+        assert!(out.contains("<img>"), "{out}");
+    }
+
+    #[test]
+    fn html_hidden_or_1px_img_after_blockquote_is_collapsed() {
+        let hidden =
+            "<p>Thanks.</p><blockquote>old</blockquote><img src=\"https://t/p.gif\" hidden>";
+        assert!(
+            collapse_trailing_blockquotes(hidden).contains("<details"),
+            "{hidden}"
+        );
+        let pixel = "<p>Thanks.</p><blockquote>old</blockquote><img src=\"https://t/p.gif\" width=\"1\" height=\"1\">";
+        assert!(
+            collapse_trailing_blockquotes(pixel).contains("<details"),
+            "{pixel}"
+        );
+        let none = r#"<p>Thanks.</p><blockquote>old</blockquote><img src="https://t/p.gif" style="display:none">"#;
+        assert!(
+            collapse_trailing_blockquotes(none).contains("<details"),
+            "{none}"
+        );
     }
 }

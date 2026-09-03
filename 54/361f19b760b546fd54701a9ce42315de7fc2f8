@@ -1,0 +1,19 @@
+crates/mailiner-app/src/components/messageview.rs
+  s_fc7039aec438af::t_f83114235e4377 239-241,426,437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "54361f19b760b546fd54701a9ce42315de7fc2f8",
+  "prompts": {},
+  "sessions": {
+    "s_fc7039aec438af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06997-7296-7ee2-ba01-939e5243be7e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

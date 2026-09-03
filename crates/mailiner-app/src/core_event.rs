@@ -2273,6 +2273,12 @@ fn restore_snapshots(
     {
         let unread_n = unread_in_removed(&snapshots);
         let mut list = ctx.messages.write();
+        {
+            let mut selection = ctx.selection.write();
+            for snap in &snapshots {
+                selection.note_inserted_at(snap.index);
+            }
+        }
         for snap in snapshots {
             list.insert_at(snap.index, snap.message);
         }

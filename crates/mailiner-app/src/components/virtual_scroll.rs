@@ -376,12 +376,15 @@ pub fn next_unread_index(
 /// Exclusive start index for an unread scan (`next_unread_index`).
 ///
 /// `stored` is the focus index from when the row was selected; `live` is where
-/// that message is now. Unread-first auto-mark relocates the row into the read
-/// section and slides the next unread into `stored`, so a forward scan must
-/// include that slot (`stored - 1`). Backward scans still use `stored`.
+/// that message is now. Unread-first auto-mark relocates the row *down* into
+/// the read section (`live > stored`) and slides the next unread into
+/// `stored`, so a forward scan must include that slot (`stored - 1`).
+/// Marking unread moves the row *up* (`live < stored`); scan from `live` so
+/// N/P do not skip or re-select around the vacated lower slot.
 pub fn unread_scan_from(stored: Option<usize>, live: Option<usize>, delta: i32) -> Option<usize> {
     match (stored, live) {
-        (Some(stored), Some(live)) if live != stored && delta > 0 => stored.checked_sub(1),
+        (Some(stored), Some(live)) if live > stored && delta > 0 => stored.checked_sub(1),
+        (Some(stored), Some(live)) if live < stored => Some(live),
         (Some(stored), _) => Some(stored),
         (_, live) => live,
     }
@@ -966,6 +969,9 @@ mod tests {
         assert_eq!(unread_scan_from(Some(2), Some(2), 1), Some(2));
         assert_eq!(unread_scan_from(None, Some(3), 1), Some(3));
         assert_eq!(unread_scan_from(None, None, 1), None);
+        // Mark-unread moves the row up: scan from live, not the vacated slot.
+        assert_eq!(unread_scan_from(Some(5), Some(2), 1), Some(2));
+        assert_eq!(unread_scan_from(Some(5), Some(2), -1), Some(2));
     }
 
     #[test]

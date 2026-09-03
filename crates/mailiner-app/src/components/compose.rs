@@ -5,6 +5,7 @@ use dioxus::prelude::*;
 
 use super::icons::{Icon, IconButton, IconKind};
 
+use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
@@ -513,6 +514,7 @@ pub fn ComposeOverlay() -> Element {
                             input {
                                 class: "ui-input",
                                 r#type: "email",
+                                spellcheck: spellcheck_attr(SpellcheckField::Address),
                                 value: to(),
                                 disabled: sending,
                                 placeholder: "name@example.com",
@@ -535,6 +537,7 @@ pub fn ComposeOverlay() -> Element {
                             input {
                                 class: "ui-input",
                                 r#type: "email",
+                                spellcheck: spellcheck_attr(SpellcheckField::Address),
                                 value: cc(),
                                 disabled: sending,
                                 placeholder: "name@example.com",
@@ -547,6 +550,7 @@ pub fn ComposeOverlay() -> Element {
                             input {
                                 class: "ui-input",
                                 r#type: "email",
+                                spellcheck: spellcheck_attr(SpellcheckField::Address),
                                 value: bcc(),
                                 disabled: sending,
                                 placeholder: "name@example.com",
@@ -559,6 +563,7 @@ pub fn ComposeOverlay() -> Element {
                         span { "Subject" }
                         input {
                             class: "ui-input",
+                            spellcheck: spellcheck_attr(SpellcheckField::Subject),
                             value: subject(),
                             disabled: sending,
                             oninput: move |e| subject.set(e.value()),
@@ -569,6 +574,7 @@ pub fn ComposeOverlay() -> Element {
                         span { "Message" }
                         textarea {
                             class: "ui-input",
+                            spellcheck: spellcheck_attr(SpellcheckField::Body),
                             value: body(),
                             disabled: sending,
                             rows: 10,

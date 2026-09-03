@@ -47,6 +47,7 @@ where
     /// Fetch envelopes for a UI index range `[start, end)`.
     ///
     /// Indices follow the last [`Self::prepare_folder_list`] sort (default: newest-first arrival).
+    /// Date order is IMAP `SORT DATE` when advertised; otherwise arrival/UID.
     async fn list_envelopes_range(
         &self,
         folder_id: &FolderId,

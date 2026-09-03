@@ -497,6 +497,7 @@ where
         let mut unread = None;
         let uids = match sort {
             MessageSort::Arrival => Some(Self::search_arrival_uids(session).await?),
+            MessageSort::Date => Some(Self::search_date_uids(session, has_sort).await?),
             MessageSort::Unread => {
                 if has_sort {
                     let unseen = sort::uid_sort(session, "REVERSE DATE", "UNSEEN").await?;
@@ -523,7 +524,7 @@ where
                 match sort::uid_sort(session, criteria, query).await {
                     Ok(uids) => Some(uids),
                     Err(e) => {
-                        tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Date");
+                        tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Arrival");
                         let unread = Self::search_unseen_count(session).await;
                         let uids = Self::search_arrival_uids(session).await.ok();
                         let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
@@ -571,6 +572,30 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("UID SEARCH ALL: {e}")))?;
         Ok(sort::arrival_uid_order(set))
+    }
+
+    /// RFC 5322 Date header via `UID SORT REVERSE DATE` when `SORT` is advertised.
+    ///
+    /// Fallback without `SORT` (or if the command fails): arrival/UID order.
+    /// The fetched page is not re-sorted — virtualized indices must stay stable
+    /// for the whole mailbox, not just the current window.
+    async fn search_date_uids(
+        session: &mut Session<TlsStream<S>>,
+        has_sort: bool,
+    ) -> Result<Vec<u32>, ImapError> {
+        if has_sort {
+            let (criteria, query) =
+                sort::sort_command(MessageSort::Date).expect("Date has SORT criteria");
+            match sort::uid_sort(session, criteria, query).await {
+                Ok(uids) => return Ok(uids),
+                Err(e) => {
+                    tracing::warn!(
+                        "UID SORT {criteria} failed ({e}); falling back to arrival/UID order"
+                    );
+                }
+            }
+        }
+        Self::search_arrival_uids(session).await
     }
 }
 

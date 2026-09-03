@@ -61,7 +61,7 @@ pub struct AppContext {
     pub message_sort: Signal<mailiner_core::MessageSort>,
     /// Virtualized message-list row density.
     pub message_list_density: Signal<MessageListDensity>,
-    /// Server advertised RFC 5256 `SORT` (Size / Sender).
+    /// Server advertised RFC 5256 `SORT` (Size / Sender; Date uses it when present).
     pub sort_supports_size_sender: Signal<bool>,
 
     pub selected_mailbox: Signal<Option<MailboxId>>,

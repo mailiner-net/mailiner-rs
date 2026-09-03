@@ -1,4 +1,4 @@
-//! Folder list order: IMAP `SORT` / `SEARCH`, plus a sequence fallback for date.
+//! Folder list order: IMAP `SORT` / `SEARCH`, plus arrival/UID fallback for Date.
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -10,7 +10,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::ImapError;
 
-/// Requested sort, or Date when Size/Sender need `SORT` the server does not have.
+/// Requested sort, or Arrival when Size/Sender need `SORT` the server does not have.
+///
+/// [`MessageSort::Date`] stays Date: without `SORT` the index is still built, using
+/// arrival/UID order (see [`arrival_uid_order`]).
 pub fn apply_sort_or_fallback(requested: MessageSort, has_sort: bool) -> MessageSort {
     if requested.needs_sort_capability() && !has_sort {
         MessageSort::Arrival
@@ -19,7 +22,7 @@ pub fn apply_sort_or_fallback(requested: MessageSort, has_sort: bool) -> Message
     }
 }
 
-/// Newest-first arrival (descending UID). Used for Date when `SORT` is not applied.
+/// Newest-first arrival (descending UID). Fallback for Date when `SORT` is missing.
 pub fn arrival_uid_order(uids: HashSet<u32>) -> Vec<u32> {
     let mut uids: Vec<u32> = uids.into_iter().collect();
     uids.sort_unstable_by(|a, b| b.cmp(a));
@@ -72,9 +75,13 @@ fn insert_uid_desc(uids: &mut Vec<u32>, uid: u32, range: std::ops::Range<usize>)
     pos
 }
 
-/// IMAP SORT criteria + search key for a sort that needs the SORT extension.
+/// IMAP SORT criteria + search key when the SORT extension can be used.
+///
+/// Date is included so callers can issue `SORT DATE` when advertised; without
+/// `SORT` they must use [`arrival_uid_order`] instead (not a client page sort).
 pub fn sort_command(sort: MessageSort) -> Option<(&'static str, &'static str)> {
     match sort {
+        MessageSort::Date => Some(("REVERSE DATE", "ALL")),
         MessageSort::Size => Some(("REVERSE SIZE", "ALL")),
         MessageSort::Sender => Some(("FROM", "ALL")),
         MessageSort::Arrival | MessageSort::Unread => None,
@@ -146,6 +153,14 @@ mod tests {
             apply_sort_or_fallback(MessageSort::Arrival, false),
             MessageSort::Arrival
         );
+        assert_eq!(
+            apply_sort_or_fallback(MessageSort::Date, false),
+            MessageSort::Date
+        );
+        assert_eq!(
+            apply_sort_or_fallback(MessageSort::Date, true),
+            MessageSort::Date
+        );
     }
 
     #[test]
@@ -197,9 +212,13 @@ mod tests {
     }
 
     #[test]
-    fn sort_command_only_for_size_sender() {
+    fn sort_command_for_date_size_sender() {
         assert!(sort_command(MessageSort::Arrival).is_none());
         assert!(sort_command(MessageSort::Unread).is_none());
+        assert_eq!(
+            sort_command(MessageSort::Date),
+            Some(("REVERSE DATE", "ALL"))
+        );
         assert_eq!(
             sort_command(MessageSort::Size),
             Some(("REVERSE SIZE", "ALL"))

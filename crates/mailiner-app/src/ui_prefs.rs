@@ -423,6 +423,8 @@ mod tests {
         assert_eq!(load_message_sort(), MessageSort::Unread);
         save_message_sort(MessageSort::Sender);
         assert_eq!(load_message_sort(), MessageSort::Sender);
+        save_message_sort(MessageSort::Date);
+        assert_eq!(load_message_sort(), MessageSort::Date);
         host_kv::reset();
     }
 

@@ -9,10 +9,20 @@ use crate::ids::{AccountId, FolderId, MessageId, MessagePartId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageSort {
-    /// Arrival order, newest first (no IMAP `SORT DATE`; not the Date header).
+    /// Arrival order, newest first (UID descending; not the Date header).
+    ///
+    /// Persisted `"date"` still loads as Arrival (pre-rename pref / cache).
     #[default]
     #[serde(alias = "date")]
     Arrival,
+    /// RFC 5322 Date header, newest first.
+    ///
+    /// Uses IMAP `SORT DATE` (RFC 5256) when the server advertises `SORT`.
+    /// Without `SORT`, the index is arrival/UID order — same as [`Self::Arrival`].
+    /// The current page is not re-sorted client-side (that would only order the
+    /// fetched window, not the mailbox).
+    #[serde(rename = "date_header")]
+    Date,
     /// Unseen first, then seen; each group newest first.
     Unread,
     /// Largest `RFC822.SIZE` first. Requires IMAP `SORT`.
@@ -22,11 +32,18 @@ pub enum MessageSort {
 }
 
 impl MessageSort {
-    pub const ALL: [Self; 4] = [Self::Arrival, Self::Unread, Self::Size, Self::Sender];
+    pub const ALL: [Self; 5] = [
+        Self::Arrival,
+        Self::Date,
+        Self::Unread,
+        Self::Size,
+        Self::Sender,
+    ];
 
     pub fn as_key(self) -> &'static str {
         match self {
             Self::Arrival => "arrival",
+            Self::Date => "date_header",
             Self::Unread => "unread",
             Self::Size => "size",
             Self::Sender => "sender",
@@ -36,6 +53,7 @@ impl MessageSort {
     pub fn from_key(key: &str) -> Option<Self> {
         match key {
             "arrival" | "date" => Some(Self::Arrival),
+            "date_header" => Some(Self::Date),
             "unread" => Some(Self::Unread),
             "size" => Some(Self::Size),
             "sender" => Some(Self::Sender),
@@ -46,13 +64,14 @@ impl MessageSort {
     pub fn label(self) -> &'static str {
         match self {
             Self::Arrival => "Arrival",
+            Self::Date => "Date",
             Self::Unread => "Unread first",
             Self::Size => "Size",
             Self::Sender => "Sender",
         }
     }
 
-    /// Size and Sender need RFC 5256 `SORT`.
+    /// Size and Sender need RFC 5256 `SORT`. Date uses it when present, else arrival.
     pub fn needs_sort_capability(self) -> bool {
         matches!(self, Self::Size | Self::Sender)
     }
@@ -398,7 +417,14 @@ mod tests {
         assert!(MessageSort::Size.needs_sort_capability());
         assert!(MessageSort::Sender.needs_sort_capability());
         assert!(!MessageSort::Arrival.needs_sort_capability());
+        assert!(!MessageSort::Date.needs_sort_capability());
         assert_eq!(MessageSort::from_key("date"), Some(MessageSort::Arrival));
+        assert_eq!(
+            MessageSort::from_key("date_header"),
+            Some(MessageSort::Date)
+        );
+        assert_eq!(MessageSort::Date.as_key(), "date_header");
+        assert_eq!(MessageSort::Date.label(), "Date");
         assert!(!MessageSort::Unread.needs_sort_capability());
     }
 
@@ -425,6 +451,26 @@ mod tests {
         }"#;
         let env: Envelope = serde_json::from_str(json).expect("legacy envelope");
         assert!(!env.is_answered);
+    }
+
+    #[test]
+    fn message_sort_serde_keeps_date_alias_as_arrival() {
+        assert_eq!(
+            serde_json::from_str::<MessageSort>("\"date\"").unwrap(),
+            MessageSort::Arrival
+        );
+        assert_eq!(
+            serde_json::from_str::<MessageSort>("\"date_header\"").unwrap(),
+            MessageSort::Date
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageSort::Date).unwrap(),
+            "\"date_header\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageSort::Arrival).unwrap(),
+            "\"arrival\""
+        );
     }
 
     #[test]

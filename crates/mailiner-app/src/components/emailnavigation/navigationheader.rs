@@ -128,7 +128,9 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             value: "{option.as_key()}",
                             selected: option == sort,
                             disabled: option.needs_sort_capability() && !supports_size_sender,
-                            title: if option.needs_sort_capability() && !supports_size_sender {
+                            title: if option == MessageSort::Date && !supports_size_sender {
+                                "IMAP SORT unavailable; using arrival order (not the Date header)"
+                            } else if option.needs_sort_capability() && !supports_size_sender {
                                 "This server does not support IMAP SORT"
                             } else {
                                 ""

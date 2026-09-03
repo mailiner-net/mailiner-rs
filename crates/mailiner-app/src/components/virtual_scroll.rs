@@ -507,9 +507,9 @@ where
 
             if let Some(debounce_ms) = props.debounce_ms {
                 sleep_ms(debounce_ms).await;
-                if *scroll_generation.peek() != generation {
-                    return;
-                }
+            }
+            if *scroll_generation.peek() != generation {
+                return;
             }
 
             let items = props.items.peek().clone();

@@ -1,5 +1,7 @@
 //! Attachments bar and per-item download UI.
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use mailiner_core::models::TransferEncoding;
 
@@ -23,6 +25,7 @@ struct AttachmentRow {
 #[component]
 pub fn AttachmentsFooter() -> Element {
     let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
     let view = ctx.message_view.read().clone();
     let mailbox = ctx.selected_mailbox.read().clone();
 
@@ -60,6 +63,13 @@ pub fn AttachmentsFooter() -> Element {
     } else {
         format!("{count} attachments")
     };
+    let any_busy = {
+        let map = ctx.download_status.read();
+        any_download_in_progress(&map, rows.iter().map(|r| r.section.as_str()))
+    };
+    let save_all_rows = rows.clone();
+    let save_all_mailbox = mailbox_id.clone();
+    let save_all_message = message_id.clone();
 
     rsx! {
         footer {
@@ -68,7 +78,34 @@ pub fn AttachmentsFooter() -> Element {
                 class: "message-attachments-details",
                 summary {
                     class: "message-attachments-summary",
-                    "{summary}"
+                    span { "{summary}" }
+                    if count > 1 {
+                        button {
+                            class: "attachment-download-btn",
+                            r#type: "button",
+                            disabled: any_busy,
+                            title: "Download every attachment",
+                            aria_label: "Save all attachments",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                evt.prevent_default();
+                                // Core loop is serial; queued events run one IMAP fetch at a time.
+                                // A failure leaves later items queued so remaining files still save.
+                                for event in save_all_events(
+                                    &save_all_mailbox,
+                                    &save_all_message,
+                                    &save_all_rows,
+                                ) {
+                                    let _ = core_tx.send(event);
+                                }
+                            },
+                            if any_busy {
+                                "Saving…"
+                            } else {
+                                "Save all"
+                            }
+                        }
+                    }
                 }
                 ul {
                     class: "message-attachments-list",
@@ -84,6 +121,41 @@ pub fn AttachmentsFooter() -> Element {
             }
         }
     }
+}
+
+fn save_all_events(
+    mailbox_id: &MailboxId,
+    message_id: &MessageId,
+    rows: &[AttachmentRow],
+) -> Vec<CoreEvent> {
+    rows.iter()
+        .map(|row| attachment_download_event(mailbox_id, message_id, row))
+        .collect()
+}
+
+fn attachment_download_event(
+    mailbox_id: &MailboxId,
+    message_id: &MessageId,
+    row: &AttachmentRow,
+) -> CoreEvent {
+    CoreEvent::DownloadAttachment {
+        mailbox_id: mailbox_id.clone(),
+        message_id: message_id.clone(),
+        section: row.section.clone(),
+        filename: row.filename.clone(),
+        content_type: row.content_type.clone(),
+        encoding: row.encoding,
+        size_hint: row.wire_size,
+    }
+}
+
+fn any_download_in_progress<'a>(
+    status: &HashMap<String, DownloadStatus>,
+    sections: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    sections
+        .into_iter()
+        .any(|section| matches!(status.get(section), Some(DownloadStatus::InProgress { .. })))
 }
 
 #[component]
@@ -127,11 +199,7 @@ fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentR
         _ => None,
     };
 
-    let section_for_click = row.section.clone();
-    let filename = row.filename.clone();
-    let content_type = row.content_type.clone();
-    let encoding = row.encoding;
-    let size_hint = row.wire_size;
+    let row_for_click = row.clone();
 
     rsx! {
         li {
@@ -151,15 +219,11 @@ fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentR
                     class: "attachment-download-btn",
                     disabled: busy,
                     onclick: move |_| {
-                        let _ = core_tx.send(CoreEvent::DownloadAttachment {
-                            mailbox_id: mailbox_id.clone(),
-                            message_id: message_id.clone(),
-                            section: section_for_click.clone(),
-                            filename: filename.clone(),
-                            content_type: content_type.clone(),
-                            encoding,
-                            size_hint,
-                        });
+                        let _ = core_tx.send(attachment_download_event(
+                            &mailbox_id,
+                            &message_id,
+                            &row_for_click,
+                        ));
                     },
                     if matches!(status, DownloadStatus::InProgress { .. }) {
                         "Downloading…"
@@ -181,5 +245,73 @@ fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentR
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mailiner_core::FolderId;
+
+    fn row(section: &str, filename: &str) -> AttachmentRow {
+        AttachmentRow {
+            section: section.into(),
+            filename: filename.into(),
+            content_type: "application/pdf".into(),
+            size: 12,
+            wire_size: Some(16),
+            encoding: TransferEncoding::Base64,
+            description: None,
+        }
+    }
+
+    fn ids() -> (MailboxId, MessageId) {
+        let mailbox = MailboxId::from("INBOX".to_string());
+        let message = MessageId::new(FolderId::new("INBOX"), "42");
+        (mailbox, message)
+    }
+
+    #[test]
+    fn save_all_queues_one_event_per_row_in_order() {
+        let (mailbox, message) = ids();
+        let rows = vec![row("2", "a.pdf"), row("3", "b.txt")];
+        let events = save_all_events(&mailbox, &message, &rows);
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            CoreEvent::DownloadAttachment {
+                section, filename, ..
+            } => {
+                assert_eq!(section, "2");
+                assert_eq!(filename, "a.pdf");
+            }
+            _ => panic!("expected DownloadAttachment"),
+        }
+        match &events[1] {
+            CoreEvent::DownloadAttachment {
+                section, filename, ..
+            } => {
+                assert_eq!(section, "3");
+                assert_eq!(filename, "b.txt");
+            }
+            _ => panic!("expected DownloadAttachment"),
+        }
+    }
+
+    #[test]
+    fn any_in_progress_only_for_listed_sections() {
+        let mut status = HashMap::new();
+        status.insert(
+            "2".into(),
+            DownloadStatus::InProgress {
+                received: 1,
+                total: Some(10),
+            },
+        );
+        assert!(any_download_in_progress(&status, ["2"]));
+        assert!(!any_download_in_progress(&status, ["3"]));
+        status.insert("2".into(), DownloadStatus::Finished);
+        assert!(!any_download_in_progress(&status, ["2"]));
+        status.insert("2".into(), DownloadStatus::Error("boom".into()));
+        assert!(!any_download_in_progress(&status, ["2"]));
     }
 }

@@ -257,6 +257,8 @@ struct PrefetchJob {
     mailbox_id: MailboxId,
     account_id: AccountId,
     remaining: Vec<MessageId>,
+    /// Adjacent ids when the job was queued. Relocate/move/delete changes this.
+    neighbors: Vec<MessageId>,
 }
 
 /// Cold-start prelude for [`core_loop`]: skip connect, or run bootstrap with an active id.
@@ -2069,6 +2071,7 @@ fn prefetch_job_stale(ctx: &AppContext, job: &PrefetchJob) -> bool {
     ctx.selection.read().focus() != Some(&job.around)
         || ctx.selected_mailbox.read().as_ref() != Some(&job.mailbox_id)
         || ctx.selected_account.read().as_ref() != Some(&job.account_id)
+        || neighbor_ids(ctx, &job.around) != job.neighbors
 }
 
 fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) {
@@ -2090,9 +2093,11 @@ fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) 
         *pending = None;
         return;
     };
-    let remaining: Vec<MessageId> = neighbor_ids(ctx, message_id)
-        .into_iter()
-        .filter(|id| !ctx.message_bodies.borrow().contains(id))
+    let neighbors = neighbor_ids(ctx, message_id);
+    let remaining: Vec<MessageId> = neighbors
+        .iter()
+        .filter(|id| !ctx.message_bodies.borrow().contains(*id))
+        .cloned()
         .collect();
     if remaining.is_empty() {
         *pending = None;
@@ -2103,6 +2108,7 @@ fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) 
         mailbox_id,
         account_id,
         remaining,
+        neighbors,
     });
 }
 

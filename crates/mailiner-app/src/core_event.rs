@@ -7,7 +7,8 @@ use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use futures_channel::mpsc::{UnboundedReceiver as SmtpUnboundedReceiver, UnboundedSender};
 use futures_util::StreamExt;
-use futures_util::future::{Either, select};
+use futures_util::future::{Either, select, select_all};
+use gloo_timers::future::TimeoutFuture;
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
@@ -35,6 +36,7 @@ use crate::message_loader::load_message;
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
 };
+use crate::reconnect::reconnect_backoff_ms;
 use crate::send::{OutboxDisplay, SendPhase, SendState};
 use crate::smtp_session::{
     InFlightSmtp, SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test,
@@ -165,6 +167,17 @@ pub enum CoreEvent {
         account_id: AccountId,
     },
 
+    /// WebSocket closed or IMAP I/O failed on a live session.
+    SessionDropped {
+        account_id: AccountId,
+    },
+
+    /// Timer-fired auto-reconnect (generation must still match).
+    AutoReconnect {
+        account_id: AccountId,
+        generation: u64,
+    },
+
     DisconnectAccount(AccountId),
 
     /// UI mutated store (edit/delete). Manager drops deleted connectors; does not auto-connect.
@@ -257,22 +270,9 @@ pub async fn core_loop(
     }
 
     loop {
-        let event = {
-            let ui = core_rx.next();
-            let smtp = smtp_rx.next();
-            futures_util::pin_mut!(ui);
-            futures_util::pin_mut!(smtp);
-            match select(ui, smtp).await {
-                Either::Left((Some(ev), _)) | Either::Right((Some(ev), _)) => ev,
-                Either::Left((None, _)) => break,
-                Either::Right((None, _)) => {
-                    // smtp_tx dropped — keep draining UI events
-                    match core_rx.next().await {
-                        Some(ev) => ev,
-                        None => break,
-                    }
-                }
-            }
+        let watches = manager.death_watches();
+        let Some(event) = recv_next_event(&mut core_rx, &mut smtp_rx, watches).await else {
+            break;
         };
         match event {
             CoreEvent::Bootstrap { active } => {
@@ -285,7 +285,17 @@ pub async fn core_loop(
                 handle_select_account(&mut manager, &mut ctx, account_id).await;
             }
             CoreEvent::Reconnect { account_id } => {
-                handle_reconnect(&mut manager, &mut ctx, account_id).await;
+                handle_reconnect(&mut manager, &mut ctx, &smtp_tx, account_id).await;
+            }
+            CoreEvent::SessionDropped { account_id } => {
+                handle_session_dropped(&mut manager, &mut ctx, &smtp_tx, account_id).await;
+            }
+            CoreEvent::AutoReconnect {
+                account_id,
+                generation,
+            } => {
+                handle_auto_reconnect(&mut manager, &mut ctx, &smtp_tx, account_id, generation)
+                    .await;
             }
             CoreEvent::DisconnectAccount(account_id) => {
                 cancel_inflight_for(
@@ -562,6 +572,10 @@ pub async fn core_loop(
                 handle_mark_answered(&manager, &mut ctx, account_id, message_id).await;
             }
         }
+
+        for id in manager.take_session_deaths() {
+            handle_session_dropped(&mut manager, &mut ctx, &smtp_tx, id).await;
+        }
     }
 }
 
@@ -641,6 +655,8 @@ async fn handle_select_account(
     account_id: AccountId,
 ) {
     ctx.selected_account.set(Some(account_id.clone()));
+    // UI may already have written `selected_account` before this event.
+    manager.cancel_pending_reconnects(Some(&account_id), ctx);
     // Drop the previous account's selection / body before hydrate so a
     // cache hit cannot leave the old message view painted over the new tree.
     clear_mailbox_ui(ctx);
@@ -679,8 +695,11 @@ async fn handle_select_account(
 async fn handle_reconnect(
     manager: &mut AccountConnectionManager,
     ctx: &mut AppContext,
+    event_tx: &UnboundedSender<CoreEvent>,
     account_id: AccountId,
 ) {
+    // Manual Retry resets backoff and cancels any pending auto-reconnect.
+    manager.reset_reconnect_attempts(&account_id);
     // Snapshot config **before** disconnect: `disconnect_account` drops the
     // manager cache (including memory-only configs). Store-backed accounts can
     // re-resolve after disconnect; memory-only ones cannot.
@@ -707,21 +726,199 @@ async fn handle_reconnect(
         manager.cache_config(config.clone());
     }
 
-    match manager
-        .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
-        .await
-    {
-        Ok(()) => {
-            if ctx.selected_account.read().as_ref() == Some(&account_id) {
-                list_folders_soft(manager, ctx, &account_id).await;
-            }
-        }
+    match reconnect_and_restore(manager, ctx, &config).await {
+        Ok(()) => {}
         Err(e) => {
             error!(
                 "Reconnect failed for {}: {} ({:?})",
                 account_id, e.message, e.kind
             );
+            if e.retryable && e.kind != ConnectErrorKind::Cancelled {
+                manager.bump_reconnect_attempts(&account_id);
+                start_auto_reconnect(manager, ctx, event_tx, account_id).await;
+            }
         }
+    }
+}
+
+async fn handle_session_dropped(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    event_tx: &UnboundedSender<CoreEvent>,
+    account_id: AccountId,
+) {
+    let busy = ctx
+        .connection_states
+        .read()
+        .get(&account_id)
+        .is_some_and(|s| {
+            matches!(
+                s,
+                ConnectionState::Connecting
+                    | ConnectionState::Authenticating
+                    | ConnectionState::Reconnecting { .. }
+            )
+        });
+    if busy {
+        // Don't bump generation (would cancel an in-flight connect / timer).
+        manager.remove_ws_watch(&account_id);
+        return;
+    }
+    let is_ready = ctx
+        .connection_states
+        .read()
+        .get(&account_id)
+        .is_some_and(|s| matches!(s, ConnectionState::Ready));
+    if !is_ready {
+        manager.remove_ws_watch(&account_id);
+        return;
+    }
+
+    warn!("IMAP session dropped for {account_id}");
+    manager.drop_dead_connector(&account_id);
+    if ctx.selected_account.read().as_ref() != Some(&account_id) {
+        set_connection_state(ctx, &account_id, ConnectionState::Disconnected);
+        return;
+    }
+    start_auto_reconnect(manager, ctx, event_tx, account_id).await;
+}
+
+async fn handle_auto_reconnect(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    event_tx: &UnboundedSender<CoreEvent>,
+    account_id: AccountId,
+    generation: u64,
+) {
+    if manager.current_generation(&account_id) != generation {
+        return;
+    }
+    if ctx.selected_account.read().as_ref() != Some(&account_id) {
+        return;
+    }
+
+    let Some(config) = manager.resolve_config(&account_id).await else {
+        error!("AutoReconnect: unknown account {}", account_id);
+        set_connection_state(
+            ctx,
+            &account_id,
+            ConnectionState::Error {
+                message: "Account configuration not found.".into(),
+                kind: ConnectErrorKind::Internal,
+                retryable: false,
+            },
+        );
+        return;
+    };
+
+    info!(
+        "Auto-reconnect attempt {} for {}",
+        manager.reconnect_attempts(&account_id).saturating_add(1),
+        account_id
+    );
+
+    match reconnect_and_restore(manager, ctx, &config).await {
+        Ok(()) => {
+            manager.reset_reconnect_attempts(&account_id);
+        }
+        Err(e) => {
+            error!(
+                "Auto-reconnect failed for {}: {} ({:?})",
+                account_id, e.message, e.kind
+            );
+            if e.kind == ConnectErrorKind::Cancelled {
+                return;
+            }
+            if e.kind == ConnectErrorKind::Auth || !e.retryable {
+                manager.reset_reconnect_attempts(&account_id);
+                return;
+            }
+            manager.bump_reconnect_attempts(&account_id);
+            start_auto_reconnect(manager, ctx, event_tx, account_id).await;
+        }
+    }
+}
+
+async fn start_auto_reconnect(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    event_tx: &UnboundedSender<CoreEvent>,
+    account_id: AccountId,
+) {
+    let failed = manager.reconnect_attempts(&account_id);
+    let Some(delay_ms) = reconnect_backoff_ms(failed) else {
+        manager.reset_reconnect_attempts(&account_id);
+        set_connection_state(
+            ctx,
+            &account_id,
+            ConnectionState::Error {
+                message: "Lost connection to the mail server. Automatic reconnect gave up.".into(),
+                kind: ConnectErrorKind::NetworkOrProxy,
+                retryable: true,
+            },
+        );
+        return;
+    };
+
+    set_connection_state(
+        ctx,
+        &account_id,
+        ConnectionState::Reconnecting {
+            failed_attempts: failed,
+            delay_ms,
+        },
+    );
+
+    let generation = manager.current_generation(&account_id);
+    schedule_auto_reconnect(event_tx.clone(), account_id, generation, delay_ms);
+}
+
+fn schedule_auto_reconnect(
+    event_tx: UnboundedSender<CoreEvent>,
+    account_id: AccountId,
+    generation: u64,
+    delay_ms: u32,
+) {
+    spawn_reconnect_timer(async move {
+        TimeoutFuture::new(delay_ms).await;
+        let _ = event_tx.unbounded_send(CoreEvent::AutoReconnect {
+            account_id,
+            generation,
+        });
+    });
+}
+
+fn spawn_reconnect_timer(fut: impl std::future::Future<Output = ()> + 'static) {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(fut);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Host cargo-check cannot run WASM timers.
+        drop(fut);
+    }
+}
+
+async fn reconnect_and_restore(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    config: &crate::account_config::AccountConfig,
+) -> Result<(), crate::connection::ConnectError> {
+    manager
+        .ensure_connected(config, ctx, EnsureConnectedMode::Switch)
+        .await?;
+    if ctx.selected_account.read().as_ref() == Some(&config.id) {
+        list_folders_soft(manager, ctx, &config.id).await;
+    }
+    Ok(())
+}
+
+fn note_selected_imap_error(
+    manager: &AccountConnectionManager,
+    ctx: &AppContext,
+    err: &mailiner_core::MailinerError,
+) {
+    if let Some(id) = ctx.selected_account.read().as_ref() {
+        manager.note_imap_error(id, err);
     }
 }
 
@@ -1008,6 +1205,7 @@ async fn list_folders_soft(
                     Ok(_) => {}
                     Err(e) => {
                         warn!("folder_counts {} failed: {}", id, e);
+                        manager.note_imap_error(account_id, &e);
                     }
                 }
             }
@@ -1015,6 +1213,7 @@ async fn list_folders_soft(
         }
         Err(e) => {
             error!("Failed to list folders for {}: {}", account_id, e);
+            manager.note_imap_error(account_id, &e);
             // Keep a cached tree if we already painted one.
             if ctx.mailbox_roots.read().is_empty() {
                 ctx.mailbox_nodes.set(HashMap::new());
@@ -1335,6 +1534,7 @@ async fn handle_select_mailbox(
                         mailbox_id.as_str(),
                         e
                     );
+                    note_selected_imap_error(manager, ctx, &e);
                     ctx.messages_loading.set(false);
                     {
                         let mut list = ctx.messages.write();
@@ -1362,6 +1562,7 @@ async fn handle_select_mailbox(
         }
         Err(e) => {
             error!("Failed to open mailbox: {}", e);
+            note_selected_imap_error(manager, ctx, &e);
             ctx.messages_loading.set(false);
         }
     }
@@ -1446,6 +1647,7 @@ async fn handle_fetch_message_range(
                 "Failed to fetch message range {}..{}: {}",
                 range.start, range.end, e
             );
+            note_selected_imap_error(manager, ctx, &e);
         }
     }
 }
@@ -1710,6 +1912,7 @@ async fn handle_select_message(
                     .await
                 {
                     warn!("Auto-mark as read failed for {}: {}", message_id, e);
+                    note_selected_imap_error(manager, ctx, &e);
                     apply_read_flag(ctx, std::slice::from_ref(&message_id), false);
                 } else {
                     relocate_unread_sort_rows(
@@ -1732,6 +1935,7 @@ async fn handle_select_message(
                 return;
             }
             error!("Failed to load message {}: {}", message_id, e);
+            note_selected_imap_error(manager, ctx, &e);
             ctx.message_view.set(MessageViewState::Error {
                 message_id,
                 message: e.to_string(),
@@ -1967,6 +2171,7 @@ async fn handle_mark_read(
         .await
     {
         error!("Failed to update read flag: {}", e);
+        note_selected_imap_error(manager, ctx, &e);
         apply_read_flag(ctx, &message_ids, !is_read);
         ctx.show_toast(ToastAction::error(format!(
             "Could not update read state: {e}"
@@ -2101,6 +2306,7 @@ async fn handle_move_messages(
         }
         Err(e) => {
             error!("Failed to move messages: {}", e);
+            note_selected_imap_error(manager, ctx, &e);
             ctx.show_toast(ToastAction::error(format!("Could not move messages: {e}")));
         }
     }
@@ -2282,6 +2488,7 @@ async fn handle_move_to_trash(
         }
         Err(e) => {
             error!("Failed to move to trash: {}", e);
+            note_selected_imap_error(manager, ctx, &e);
             ctx.show_toast(ToastAction::error(format!("Could not move to Trash: {e}")));
         }
     }
@@ -2354,6 +2561,7 @@ async fn handle_empty_trash(
         }
         Err(e) => {
             error!("Failed to empty trash: {}", e);
+            manager.note_imap_error(&account_id, &e);
             ctx.show_toast(ToastAction::error(format!("Could not empty Trash: {e}")));
         }
     }
@@ -2435,6 +2643,7 @@ async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, u
                 }
                 Err(e) => {
                     error!("Failed to undo move: {}", e);
+                    manager.note_imap_error(&account_id, &e);
                     ctx.show_toast(ToastAction::error(format!("Could not undo: {e}")));
                 }
             }
@@ -2460,6 +2669,7 @@ async fn handle_commit_dismissed(
             let core_ids = core_message_ids(&message_ids);
             if let Err(e) = connector.delete_messages(&folder_id, &core_ids).await {
                 error!("Failed to permanently delete: {}", e);
+                manager.note_imap_error(&account_id, &e);
                 ctx.show_toast(ToastAction::error(format!("Could not delete: {e}")));
             }
         }
@@ -2523,6 +2733,7 @@ async fn handle_download_attachment(
         Ok(s) => s,
         Err(e) => {
             error!("stream_raw_part failed: {}", e);
+            note_selected_imap_error(manager, ctx, &e);
             ctx.download_status
                 .write()
                 .insert(section, DownloadStatus::Error(e.to_string()));
@@ -2561,6 +2772,7 @@ async fn handle_download_attachment(
             }
             Err(e) => {
                 error!("download chunk error: {}", e);
+                note_selected_imap_error(manager, ctx, &e);
                 ctx.download_status
                     .write()
                     .insert(section.clone(), DownloadStatus::Error(e.to_string()));
@@ -3157,12 +3369,14 @@ async fn handle_archive_sent(
         }
         Err(e) => {
             warn!("ArchiveSent: LIST failed for {account_id}: {e}");
+            manager.note_imap_error_msg(&account_id, &e.to_string());
             ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
             return;
         }
     };
     if let Err(e) = connector.append_rfc822_seen(&sent, &rfc822).await {
         warn!("ArchiveSent: APPEND failed for {account_id} → {sent}: {e}");
+        manager.note_imap_error_msg(&account_id, &e.to_string());
         ctx.show_toast(ToastAction::error(ARCHIVE_SENT_WARN));
         return;
     }
@@ -3245,4 +3459,42 @@ async fn handle_retry_outbox(
     let _ = outbox.upsert(&item).await;
     refresh_outbox_signal(outbox, ctx).await;
     drain_outbox(manager, ctx, outbox, smtp_tx, inflight, smtp_generation).await;
+}
+
+async fn recv_next_event(
+    core_rx: &mut UnboundedReceiver<CoreEvent>,
+    smtp_rx: &mut SmtpUnboundedReceiver<CoreEvent>,
+    watches: Vec<(AccountId, crate::websocket_stream::WsDeathWatch)>,
+) -> Option<CoreEvent> {
+    if watches.is_empty() {
+        return recv_ui_or_smtp(core_rx, smtp_rx).await;
+    }
+
+    let ids: Vec<AccountId> = watches.iter().map(|(id, _)| id.clone()).collect();
+    let futs: Vec<_> = watches.into_iter().map(|(_, w)| w).collect();
+    let deaths = select_all(futs);
+    let ui_or_smtp = recv_ui_or_smtp(core_rx, smtp_rx);
+    futures_util::pin_mut!(deaths);
+    futures_util::pin_mut!(ui_or_smtp);
+    match select(ui_or_smtp, deaths).await {
+        Either::Left((ev, _)) => ev,
+        Either::Right(((_, idx, _), _)) => Some(CoreEvent::SessionDropped {
+            account_id: ids[idx].clone(),
+        }),
+    }
+}
+
+async fn recv_ui_or_smtp(
+    core_rx: &mut UnboundedReceiver<CoreEvent>,
+    smtp_rx: &mut SmtpUnboundedReceiver<CoreEvent>,
+) -> Option<CoreEvent> {
+    let ui = core_rx.next();
+    let smtp = smtp_rx.next();
+    futures_util::pin_mut!(ui);
+    futures_util::pin_mut!(smtp);
+    match select(ui, smtp).await {
+        Either::Left((Some(ev), _)) | Either::Right((Some(ev), _)) => Some(ev),
+        Either::Left((None, _)) => None,
+        Either::Right((None, _)) => core_rx.next().await,
+    }
 }

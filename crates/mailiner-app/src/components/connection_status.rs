@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 use crate::connection::{ConnectErrorKind, ConnectionState};
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::reconnect::MAX_AUTO_RECONNECT_ATTEMPTS;
 
 /// Polished connection status strip for the selected account.
 ///
@@ -157,6 +158,28 @@ impl StatusView {
                 tooltip: "IMAP session ready".into(),
                 show_retry: false,
             },
+            ConnectionState::Reconnecting {
+                failed_attempts,
+                delay_ms,
+            } => {
+                let detail = if *delay_ms >= 1_000 {
+                    Some(format!("Retrying in {}s", delay_ms / 1_000))
+                } else {
+                    None
+                };
+                Self {
+                    banner_class: "connection-banner connection-banner-info",
+                    dot_class: "connection-banner-dot connection-banner-dot-info connection-banner-dot-pulse",
+                    label: "Reconnecting…".into(),
+                    tooltip: format!(
+                        "IMAP session dropped; automatic reconnect (attempt {} of {})",
+                        failed_attempts.saturating_add(1),
+                        MAX_AUTO_RECONNECT_ATTEMPTS
+                    ),
+                    detail,
+                    show_retry: true,
+                }
+            }
             ConnectionState::Error {
                 message,
                 kind,

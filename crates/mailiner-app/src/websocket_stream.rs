@@ -28,6 +28,7 @@ pub struct WebSocketStreamInner {
     read_wakers: Vec<Waker>,
     write_waiters: Vec<Waker>,
     open_wakers: Vec<Waker>,
+    close_wakers: Vec<Waker>,
 }
 
 impl WebSocketStreamInner {
@@ -51,6 +52,7 @@ impl WebSocketStreamInner {
             read_wakers: Vec::new(),
             write_waiters: Vec::new(),
             open_wakers: Vec::new(),
+            close_wakers: Vec::new(),
         })
     }
 
@@ -62,6 +64,9 @@ impl WebSocketStreamInner {
             waker.wake();
         }
         for waker in self.open_wakers.drain(..) {
+            waker.wake();
+        }
+        for waker in self.close_wakers.drain(..) {
             waker.wake();
         }
     }
@@ -220,6 +225,13 @@ impl WebSocketStream {
         }
     }
 
+    /// Cloneable watcher that completes when the socket errors or closes.
+    pub fn death_watch(&self) -> WsDeathWatch {
+        WsDeathWatch {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
     /// Close the socket and clear JS event handlers (idempotent).
     fn shutdown_socket(&mut self) {
         let mut inner = self.inner.lock().expect("Failed to lock web socket");
@@ -247,6 +259,29 @@ impl Drop for WebSocketStream {
         // Ensure timeout/cancel paths close the browser WebSocket and drop JS callbacks
         // rather than relying on GC of half-open proxy connections.
         self.shutdown_socket();
+    }
+}
+
+/// Completes when the WebSocket reaches `Error` or `Closed`.
+#[derive(Clone)]
+pub struct WsDeathWatch {
+    inner: Arc<Mutex<WebSocketStreamInner>>,
+}
+
+impl Future for WsDeathWatch {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock().expect("Failed to lock web socket");
+        match inner.ready_state {
+            WsReadyState::Error | WsReadyState::Closed => Poll::Ready(()),
+            WsReadyState::Connecting | WsReadyState::Open => {
+                // Replace same-task wakers: the loop recreates this future each event.
+                inner.close_wakers.retain(|w| !w.will_wake(cx.waker()));
+                inner.close_wakers.push(cx.waker().clone());
+                Poll::Pending
+            }
+        }
     }
 }
 

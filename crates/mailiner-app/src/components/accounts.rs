@@ -233,6 +233,7 @@ fn connection_label(state: &ConnectionState) -> String {
         ConnectionState::Connecting => "Connecting…".into(),
         ConnectionState::Authenticating => "Signing in…".into(),
         ConnectionState::Ready => "Connected".into(),
+        ConnectionState::Reconnecting { .. } => "Reconnecting…".into(),
         ConnectionState::Disconnected => "Disconnected".into(),
         ConnectionState::Error { message, .. } => format!("Error: {message}"),
     }

@@ -160,9 +160,8 @@ impl MessageSelection {
         } else {
             None
         };
-        if keep_focus.is_none() {
-            self.anchor_index = None;
-        }
+        // Fresh range origin at the surviving focus, not a pre-bulk Shift anchor.
+        self.anchor_index = keep_focus_at;
         self.ids = set;
         self.focus = keep_focus.or_else(|| ordered.first().cloned());
         self.focus_at_index = keep_focus_at;
@@ -264,6 +263,17 @@ mod tests {
     }
 
     #[test]
+    fn select_all_resets_stale_range_anchor_to_focus() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.set_range([id("a"), id("b")], id("b"), Some(1));
+        assert_eq!(s.anchor_index(), Some(0));
+        s.select_all([id("a"), id("b"), id("c")]);
+        assert_eq!(s.focus(), Some(&id("b")));
+        assert_eq!(s.anchor_index(), Some(1));
+    }
+
+    #[test]
     fn select_all_moves_focus_when_unknown() {
         let mut s = MessageSelection::default();
         s.replace(id("z"), Some(9));
@@ -306,6 +316,7 @@ mod tests {
         s.select_unread([id("b"), id("c")]);
         assert_eq!(s.focus(), Some(&id("b")));
         assert_eq!(s.focus_at_index(), Some(1));
+        assert_eq!(s.anchor_index(), Some(1));
     }
 
     #[test]

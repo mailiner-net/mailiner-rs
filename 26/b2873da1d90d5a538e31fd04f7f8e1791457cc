@@ -1,0 +1,21 @@
+crates/mailiner-composer/src/reply/prefill.rs
+  s_2561ef531b21ae::t_fcd52e08bcfb95 525-548
+crates/mailiner-composer/src/reply/signature.rs
+  s_2561ef531b21ae::t_42d24d3eec46c7 3,25-26,28-35,73,76-77,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "26b2873da1d90d5a538e31fd04f7f8e1791457cc",
+  "prompts": {},
+  "sessions": {
+    "s_2561ef531b21ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06928-e8a3-7021-bf35-8abf0d05eb72",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

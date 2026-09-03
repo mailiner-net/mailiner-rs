@@ -929,10 +929,20 @@ mod tests {
         smtp_port: &str,
         smtp_tls_mode: SmtpTlsMode,
     ) -> Result<AccountConfig, String> {
-        form_config_with_remotes(smtp_host, smtp_port, smtp_tls_mode, "", "")
+        form_config_with_remotes(
+            imap_port,
+            imap_tls_mode,
+            smtp_host,
+            smtp_port,
+            smtp_tls_mode,
+            "",
+            "",
+        )
     }
 
     fn form_config_with_remotes(
+        imap_port: &str,
+        imap_tls_mode: ImapTlsMode,
         smtp_host: &str,
         smtp_port: &str,
         smtp_tls_mode: SmtpTlsMode,
@@ -970,6 +980,8 @@ mod tests {
         smtp_remote_port: &str,
     ) -> Result<AccountConfig, String> {
         form_config_with_remotes(
+            "993",
+            ImapTlsMode::Implicit,
             smtp_host,
             "465",
             SmtpTlsMode::Implicit,

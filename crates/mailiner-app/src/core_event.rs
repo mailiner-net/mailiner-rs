@@ -3373,7 +3373,6 @@ async fn handle_commit_dismissed(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 const HEADER_SECTION: &str = "HEADER";
 
 fn headers_request_active(ctx: &AppContext, message_id: &MessageId) -> bool {
@@ -3445,6 +3444,7 @@ async fn handle_fetch_message_headers(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_download_attachment(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,

@@ -4,6 +4,7 @@ use dioxus::html::Key;
 use dioxus::prelude::*;
 
 use super::icons::{Icon, IconButton, IconKind};
+use super::recipient_field::RecipientField;
 
 use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
 use mailiner_composer::identity::FromIdentity;
@@ -11,6 +12,7 @@ use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
     draft_payload_bytes, file_attachment, human_size, resolve_content_type, would_exceed_draft_cap,
 };
+use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
 };
@@ -19,35 +21,41 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::send::{ComposeSession, OutboxDisplay, SendState};
 
-fn join_address_emails(addrs: &[ComposerAddress]) -> String {
-    addrs
-        .iter()
-        .map(|a| a.email.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+#[derive(Clone, Copy)]
+struct RecipientList {
+    chips: Signal<Vec<ComposerAddress>>,
+    draft: Signal<String>,
 }
 
-fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
-    raw.split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(ComposerAddress::email_only)
-        .collect()
+impl RecipientList {
+    fn apply(&mut self, addrs: &[ComposerAddress]) {
+        self.chips.set(addrs.to_vec());
+        self.draft.set(String::new());
+    }
+
+    fn take_committed(mut self) -> Vec<ComposerAddress> {
+        let (next, leftover) = commit_input(&self.chips.read(), &self.draft.read(), true);
+        self.chips.set(next.clone());
+        self.draft.set(leftover);
+        next
+    }
 }
 
-fn apply_draft_fields(
-    draft: &DraftDocument,
-    to: &mut Signal<String>,
-    cc: &mut Signal<String>,
-    bcc: &mut Signal<String>,
-    subject: &mut Signal<String>,
-    body: &mut Signal<String>,
-) {
-    to.set(join_address_emails(&draft.to));
-    cc.set(join_address_emails(&draft.cc));
-    bcc.set(join_address_emails(&draft.bcc));
-    subject.set(draft.subject.clone());
-    body.set(draft.plain_body.clone());
+#[derive(Clone, Copy)]
+struct ComposeForm {
+    to: RecipientList,
+    cc: RecipientList,
+    bcc: RecipientList,
+    subject: Signal<String>,
+    body: Signal<String>,
+}
+
+fn apply_draft_fields(draft: &DraftDocument, form: &mut ComposeForm) {
+    form.to.apply(&draft.to);
+    form.cc.apply(&draft.cc);
+    form.bcc.apply(&draft.bcc);
+    form.subject.set(draft.subject.clone());
+    form.body.set(draft.plain_body.clone());
 }
 
 /// Open a new / reply / forward session. Replaces any existing compose draft.
@@ -120,11 +128,7 @@ pub fn open_reply_or_forward(
 fn submit_compose(
     ctx: &AppContext,
     core: &Coroutine<CoreEvent>,
-    to: Signal<String>,
-    cc: Signal<String>,
-    bcc: Signal<String>,
-    subject: Signal<String>,
-    body: Signal<String>,
+    form: ComposeForm,
     mut error: Signal<Option<String>>,
     mut submitting: Signal<bool>,
     mut submitted_id: Signal<Option<String>>,
@@ -155,11 +159,11 @@ fn submit_compose(
     };
     draft.mode = BodyMode::Plain;
     draft.html_body.clear();
-    draft.plain_body = body();
-    draft.subject = subject();
-    draft.to = parse_address_list(&to());
-    draft.cc = parse_address_list(&cc());
-    draft.bcc = parse_address_list(&bcc());
+    draft.plain_body = form.body.peek().clone();
+    draft.subject = form.subject.peek().clone();
+    draft.to = form.to.take_committed();
+    draft.cc = form.cc.take_committed();
+    draft.bcc = form.bcc.take_committed();
     match prepare_submit(&draft, &identity) {
         Ok(prepared) => {
             let display = OutboxDisplay {
@@ -353,9 +357,12 @@ async fn attach_selected_files(
 pub fn ComposeOverlay() -> Element {
     let ctx = use_context::<AppContext>();
     let core = use_coroutine_handle::<CoreEvent>();
-    let mut to = use_signal(String::new);
-    let mut cc = use_signal(String::new);
-    let mut bcc = use_signal(String::new);
+    let to = use_signal(Vec::<ComposerAddress>::new);
+    let to_draft = use_signal(String::new);
+    let cc = use_signal(Vec::<ComposerAddress>::new);
+    let cc_draft = use_signal(String::new);
+    let bcc = use_signal(Vec::<ComposerAddress>::new);
+    let bcc_draft = use_signal(String::new);
     let mut subject = use_signal(String::new);
     let mut body = use_signal(String::new);
     let mut show_cc_bcc = use_signal(|| false);
@@ -368,6 +375,22 @@ pub fn ComposeOverlay() -> Element {
     let mut attaching = use_signal(|| false);
     let mut attach_gen = use_signal(|| 0u32);
     let mut attach_input_gen = use_signal(|| 0u32);
+    let mut form = ComposeForm {
+        to: RecipientList {
+            chips: to,
+            draft: to_draft,
+        },
+        cc: RecipientList {
+            chips: cc,
+            draft: cc_draft,
+        },
+        bcc: RecipientList {
+            chips: bcc,
+            draft: bcc_draft,
+        },
+        subject,
+        body,
+    };
 
     let (open, title, attachments) = {
         let slot = ctx.compose_draft.read();
@@ -400,14 +423,7 @@ pub fn ComposeOverlay() -> Element {
                 let id = session.draft.id.as_str().to_string();
                 if last_draft_id() != Some(id.clone()) {
                     last_draft_id.set(Some(id));
-                    apply_draft_fields(
-                        &session.draft,
-                        &mut to,
-                        &mut cc,
-                        &mut bcc,
-                        &mut subject,
-                        &mut body,
-                    );
+                    apply_draft_fields(&session.draft, &mut form);
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
@@ -493,11 +509,7 @@ pub fn ComposeOverlay() -> Element {
                                 submit_compose(
                                     &ctx,
                                     &core,
-                                    to,
-                                    cc,
-                                    bcc,
-                                    subject,
-                                    body,
+                                    form,
                                     error,
                                     submitting,
                                     submitted_id,
@@ -522,14 +534,11 @@ pub fn ComposeOverlay() -> Element {
                         label {
                             class: "ui-field",
                             span { "To" }
-                            input {
-                                class: "ui-input",
-                                r#type: "email",
-                                spellcheck: spellcheck_attr(SpellcheckField::Address),
-                                value: to(),
+                            RecipientField {
+                                label: "To",
+                                chips: to,
+                                draft: to_draft,
                                 disabled: sending,
-                                placeholder: "name@example.com",
-                                oninput: move |e| to.set(e.value()),
                             }
                         }
                         button {
@@ -545,27 +554,21 @@ pub fn ComposeOverlay() -> Element {
                         label {
                             class: "ui-field",
                             span { "Cc" }
-                            input {
-                                class: "ui-input",
-                                r#type: "email",
-                                spellcheck: spellcheck_attr(SpellcheckField::Address),
-                                value: cc(),
+                            RecipientField {
+                                label: "Cc",
+                                chips: cc,
+                                draft: cc_draft,
                                 disabled: sending,
-                                placeholder: "name@example.com",
-                                oninput: move |e| cc.set(e.value()),
                             }
                         }
                         label {
                             class: "ui-field",
                             span { "Bcc" }
-                            input {
-                                class: "ui-input",
-                                r#type: "email",
-                                spellcheck: spellcheck_attr(SpellcheckField::Address),
-                                value: bcc(),
+                            RecipientField {
+                                label: "Bcc",
+                                chips: bcc,
+                                draft: bcc_draft,
                                 disabled: sending,
-                                placeholder: "name@example.com",
-                                oninput: move |e| bcc.set(e.value()),
                             }
                         }
                     }
@@ -693,11 +696,7 @@ pub fn ComposeOverlay() -> Element {
                                     submit_compose(
                                         &ctx,
                                         &core,
-                                        to,
-                                        cc,
-                                        bcc,
-                                        subject,
-                                        body,
+                                        form,
                                         error,
                                         submitting,
                                         submitted_id,

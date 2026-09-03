@@ -1,0 +1,27 @@
+crates/mailiner-composer/src/editor/rich.rs
+  s_780a7560a2292c::t_607c2fa346ff93 1-3
+crates/mailiner-composer/src/editor/mod.rs
+  s_780a7560a2292c::t_d965662659bf68 8-49
+crates/mailiner-composer/src/editor/plain.rs
+  s_780a7560a2292c::t_f54a28ae59eec4 1-3
+crates/mailiner-app/src/components/compose.rs
+  s_780a7560a2292c::t_169aa126ae7a7b 517,540,553,566,577
+crates/mailiner-composer/src/editor/mount.rs
+  s_780a7560a2292c::t_92e68e54d8dec7 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d745c4dcb5c3fb1304f402159cf013d24881b774",
+  "prompts": {},
+  "sessions": {
+    "s_780a7560a2292c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0690f-d2bc-7611-92f1-e01aed296a72",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

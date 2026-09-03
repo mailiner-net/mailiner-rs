@@ -137,9 +137,13 @@ fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
         return String::new();
     }
     if let Some((bare, quoted)) = split_trailing_quoted(before) {
+        // Only a comma (not whitespace) separates a sibling mailbox from this name.
+        // `alice@example.com "Alice"` is one display name; `bob@example.com, "Alice"`
+        // is a sibling plus a quoted name.
+        let has_sibling_comma = find_unquoted(before, ',').is_some();
         let mut name_prefix = String::new();
         for part in bare.split(',') {
-            if name_prefix.is_empty() && looks_like_email(part) {
+            if name_prefix.is_empty() && has_sibling_comma && looks_like_email(part) {
                 out.push(ComposerAddress::email_only(part.trim()));
             } else if name_prefix.is_empty() {
                 name_prefix = part.to_string();
@@ -1058,6 +1062,15 @@ mod tests {
         assert_eq!(nickname.len(), 1);
         assert_eq!(nickname[0].name.as_deref(), Some("John Johnny"));
         assert_eq!(nickname[0].email, "john@example.com");
+
+        // Email-like display name + quoted nickname is one mailbox, not two.
+        let email_nickname = parse_address_list(r#"alice@example.com "Alice" <alice@work.com>"#);
+        assert_eq!(email_nickname.len(), 1);
+        assert_eq!(
+            email_nickname[0].name.as_deref(),
+            Some("alice@example.com Alice")
+        );
+        assert_eq!(email_nickname[0].email, "alice@work.com");
     }
 
     #[test]

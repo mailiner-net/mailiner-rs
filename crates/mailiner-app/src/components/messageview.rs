@@ -499,6 +499,8 @@ fn print_loaded_message(ctx: &AppContext, message: &Message, body_html: &str) {
             ctx.show_toast(ToastAction::error("Could not open print preview."));
         }
     });
+}
+
 /// One mailbox shown in the viewer header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeaderAddress {

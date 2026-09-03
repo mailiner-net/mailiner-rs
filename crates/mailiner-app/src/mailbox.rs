@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use mailiner_core::{Folder, FolderCounts, FolderId, MailboxRole};
 
@@ -297,6 +297,31 @@ pub fn filter_mailbox_entries<'a>(
     }
     scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     scored.into_iter().map(|(_, _, e)| e).collect()
+}
+
+/// Sidebar-tree IDs to keep for `query`: picker matches plus their ancestors.
+///
+/// `None` when `query` is empty (show the full tree).
+pub fn mailbox_tree_filter_ids(
+    roots: &[MailboxId],
+    nodes: &HashMap<MailboxId, MailboxNode>,
+    query: &str,
+) -> Option<HashSet<MailboxId>> {
+    if query.split_whitespace().next().is_none() {
+        return None;
+    }
+    let entries = collect_mailbox_entries(roots, nodes);
+    let mut visible = HashSet::new();
+    for entry in filter_mailbox_entries(&entries, query) {
+        let mut current = Some(entry.id.clone());
+        while let Some(id) = current {
+            if !visible.insert(id.clone()) {
+                break;
+            }
+            current = nodes.get(&id).and_then(|n| n.parent.clone());
+        }
+    }
+    Some(visible)
 }
 
 fn mailbox_match_rank(entry: &MailboxEntry, words: &[String]) -> Option<u8> {
@@ -658,6 +683,64 @@ mod tests {
         assert_eq!(multi.len(), 1);
         assert_eq!(multi[0].path, "KDE / pim");
         assert!(filter_mailbox_entries(&entries, "nope").is_empty());
+    }
+
+    fn tree_ids(set: &HashSet<MailboxId>) -> Vec<&str> {
+        let mut ids: Vec<&str> = set.iter().map(|id| id.as_str()).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn tree_filter_empty_is_none() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        assert!(mailbox_tree_filter_ids(&roots, &nodes, "").is_none());
+        assert!(mailbox_tree_filter_ids(&roots, &nodes, "  \t").is_none());
+    }
+
+    #[test]
+    fn tree_filter_keeps_match_and_ancestors() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("KDE", "KDE", None, MailboxRole::Other),
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+            folder(
+                "KDE.pim.inbox",
+                "inbox",
+                Some("KDE.pim"),
+                MailboxRole::Other,
+            ),
+            folder("Trash", "Trash", None, MailboxRole::Trash),
+        ]);
+        let visible = mailbox_tree_filter_ids(&roots, &nodes, "inbox").unwrap();
+        assert_eq!(tree_ids(&visible), ["KDE", "KDE.pim", "KDE.pim.inbox"]);
+        assert!(!visible.contains(&MailboxId::from("Trash".to_string())));
+    }
+
+    #[test]
+    fn tree_filter_includes_unselectable_ancestor() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sel("[Gmail]", "[Gmail]", None, MailboxRole::Other, false),
+            folder(
+                "[Gmail]/Sent Mail",
+                "Sent Mail",
+                Some("[Gmail]"),
+                MailboxRole::Sent,
+            ),
+        ]);
+        let visible = mailbox_tree_filter_ids(&roots, &nodes, "sent").unwrap();
+        assert_eq!(tree_ids(&visible), ["[Gmail]", "[Gmail]/Sent Mail"]);
+    }
+
+    #[test]
+    fn tree_filter_unknown_is_empty() {
+        let (roots, nodes) =
+            build_mailbox_tree(vec![folder("INBOX", "INBOX", None, MailboxRole::Inbox)]);
+        let visible = mailbox_tree_filter_ids(&roots, &nodes, "nope").unwrap();
+        assert!(visible.is_empty());
     }
 
     #[test]

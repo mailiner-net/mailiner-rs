@@ -1430,6 +1430,23 @@ textarea.ui-input {
     color: var(--item-accent);
 }
 
+.mailbox-tree-filter {
+    flex-shrink: 0;
+    padding: 0 var(--margin) var(--space-2);
+}
+
+.mailbox-tree-filter .ui-input {
+    font-size: var(--text-sm);
+    padding: 0.3rem 0.5rem;
+}
+
+.mailbox-tree-empty {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    padding: var(--space-4) var(--margin);
+    margin: 0;
+}
+
 .message-avatar {
     flex: 0 0 var(--message-avatar-size);
     width: var(--message-avatar-size);

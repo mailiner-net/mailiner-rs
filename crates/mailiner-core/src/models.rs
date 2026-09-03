@@ -117,10 +117,8 @@ impl MailboxQuota {
             return 0;
         }
         // Round half up so 1.2/15 shows as 8%, not 7%.
-        self.used_bytes
-            .saturating_mul(100)
-            .saturating_add(self.limit_bytes / 2)
-            / self.limit_bytes
+        let numerator = u128::from(self.used_bytes) * 100 + u128::from(self.limit_bytes) / 2;
+        (numerator / u128::from(self.limit_bytes)).min(u128::from(u64::MAX)) as u64
     }
 }
 
@@ -477,6 +475,14 @@ mod tests {
         };
         assert_eq!(quota.display(), "1.2 GB of 15 GB");
         assert_eq!(quota.used_percent(), 8);
+        assert_eq!(
+            MailboxQuota {
+                used_bytes: u64::MAX / 2,
+                limit_bytes: u64::MAX,
+            }
+            .used_percent(),
+            50
+        );
     }
 
     #[test]

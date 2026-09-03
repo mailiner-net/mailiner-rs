@@ -1181,12 +1181,6 @@ async fn list_folders_soft(
                 }
             }
 
-            let quota_folder = startup
-                .as_ref()
-                .map(|id| FolderId::new(id.to_string()))
-                .unwrap_or_else(|| FolderId::new("INBOX"));
-            fetch_quota_soft(manager, ctx, account_id, &quota_folder).await;
-
             restore_mailbox(manager, ctx, account_id).await;
 
             // Remaining folders. Skip the selected one so later STATUS cannot
@@ -1235,24 +1229,25 @@ async fn fetch_quota_soft(
     account_id: &AccountId,
     folder_id: &FolderId,
 ) {
-    if !selected_account_is(ctx, account_id) {
+    if !selected_account_is(ctx, account_id)
+        || ctx.selected_mailbox.read().as_ref().map(|id| id.as_str()) != Some(folder_id.as_str())
+    {
         return;
     }
     let Some(connector) = manager.get(account_id) else {
-        ctx.account_quota.set(None);
         return;
     };
     match connector.folder_quota(folder_id).await {
         Ok(quota) => {
-            if selected_account_is(ctx, account_id) {
+            if selected_account_is(ctx, account_id)
+                && ctx.selected_mailbox.read().as_ref().map(|id| id.as_str())
+                    == Some(folder_id.as_str())
+            {
                 ctx.account_quota.set(quota);
             }
         }
         Err(e) => {
             warn!("folder_quota failed for {account_id}: {e}");
-            if selected_account_is(ctx, account_id) {
-                ctx.account_quota.set(None);
-            }
         }
     }
 }
@@ -1601,6 +1596,7 @@ async fn handle_select_mailbox(
             ctx.messages_loading.set(false);
         }
     }
+    fetch_quota_soft(manager, ctx, &account_id, &folder_id).await;
 }
 
 async fn handle_set_message_sort(

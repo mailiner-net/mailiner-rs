@@ -72,9 +72,9 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 class: "pane-header-title",
                 if props.mode == Mode::MessageList {
                     if let Some(mailbox) = current_mailbox {
-                        "{mailbox.title()}"
+                        span { "{mailbox.title()}" }
                     } else {
-                        "Messages"
+                        span { "Messages" }
                     }
                 } else if let Some(account) = current_account {
                     // Account name → settings list (switch / manage accounts).

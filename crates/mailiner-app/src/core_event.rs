@@ -81,11 +81,13 @@ pub enum CoreEvent {
     },
     /// Toggle `\Starred` (custom) on the given messages.
     ToggleStar {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
     /// Toggle `\Flagged` on the given messages.
     ToggleFlag {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
@@ -384,12 +386,14 @@ pub async fn core_loop(
                 handle_mark_read(&manager, &mut ctx, mailbox_id, message_ids, is_read).await;
             }
             CoreEvent::ToggleStar {
+                account_id,
                 mailbox_id,
                 message_ids,
             } => {
                 handle_toggle_flag(
                     &manager,
                     &mut ctx,
+                    account_id,
                     mailbox_id,
                     message_ids,
                     EnvelopeFlag::Starred,
@@ -397,12 +401,14 @@ pub async fn core_loop(
                 .await;
             }
             CoreEvent::ToggleFlag {
+                account_id,
                 mailbox_id,
                 message_ids,
             } => {
                 handle_toggle_flag(
                     &manager,
                     &mut ctx,
+                    account_id,
                     mailbox_id,
                     message_ids,
                     EnvelopeFlag::Flagged,
@@ -2222,6 +2228,7 @@ async fn handle_mark_read(
 async fn handle_toggle_flag(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: Vec<MessageId>,
     flag: EnvelopeFlag,
@@ -2229,48 +2236,62 @@ async fn handle_toggle_flag(
     if message_ids.is_empty() {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if message_ids
+        .iter()
+        .any(|id| id.folder_id().as_str() != mailbox_id.as_str())
+    {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
         return;
-    };
+    }
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
     };
 
-    let known: Vec<bool> = {
-        let list = ctx.messages.read();
-        message_ids
-            .iter()
-            .filter_map(|id| {
-                list.find(|m| m.id == *id)
-                    .map(|m| message_has_flag(m, flag))
-            })
-            .collect()
-    };
-    let value = next_flag_value(known);
+    let snapshot = snapshot_flag_values(ctx, &message_ids, flag);
+    let value = next_flag_value(snapshot.iter().map(|(_, on)| *on));
     apply_toggleable_flag(ctx, &message_ids, flag, value);
 
     let folder_id = FolderId::new(mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
-    if let Err(e) = connector
+    let result = connector
         .update_envelope_flags(&folder_id, &core_ids, &[(flag, value)])
-        .await
-    {
+        .await;
+
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
+        if let Err(e) = result {
+            error!("Failed to update {flag:?} flag after session change: {e}");
+            ctx.show_toast(ToastAction::error(format!(
+                "Could not update {}: {e}",
+                flag_label(flag)
+            )));
+        }
+        return;
+    }
+    if let Err(e) = result {
         error!("Failed to update {flag:?} flag: {e}");
-        apply_toggleable_flag(ctx, &message_ids, flag, !value);
-        let label = match flag {
-            EnvelopeFlag::Starred => "star",
-            EnvelopeFlag::Flagged => "flag",
-            _ => "flag",
-        };
-        ctx.show_toast(ToastAction::error(format!("Could not update {label}: {e}")));
+        restore_flag_values(ctx, &snapshot, flag);
+        ctx.show_toast(ToastAction::error(format!(
+            "Could not update {}: {e}",
+            flag_label(flag)
+        )));
         return;
     }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
+}
+
+fn same_mail_session(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) -> bool {
+    selected_account_is(ctx, account_id) && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
+}
+
+fn flag_label(flag: EnvelopeFlag) -> &'static str {
+    match flag {
+        EnvelopeFlag::Starred => "star",
+        EnvelopeFlag::Flagged => "flag",
+        _ => "flag",
+    }
 }
 
 fn message_has_flag(msg: &crate::message::Message, flag: EnvelopeFlag) -> bool {
@@ -2278,8 +2299,62 @@ fn message_has_flag(msg: &crate::message::Message, flag: EnvelopeFlag) -> bool {
         EnvelopeFlag::Starred => msg.is_starred,
         EnvelopeFlag::Flagged => msg.is_flagged,
         EnvelopeFlag::Read => msg.is_read,
+        EnvelopeFlag::Answered => msg.is_answered,
         EnvelopeFlag::Draft => msg.envelope.is_draft,
         EnvelopeFlag::Deleted => msg.envelope.is_deleted,
+    }
+}
+
+fn set_message_flag(msg: &mut crate::message::Message, flag: EnvelopeFlag, value: bool) {
+    match flag {
+        EnvelopeFlag::Starred => {
+            msg.is_starred = value;
+            msg.envelope.is_starred = value;
+        }
+        EnvelopeFlag::Flagged => {
+            msg.is_flagged = value;
+            msg.envelope.is_flagged = value;
+        }
+        EnvelopeFlag::Read => {
+            msg.is_read = value;
+            msg.envelope.is_read = value;
+        }
+        EnvelopeFlag::Answered => {
+            msg.is_answered = value;
+            msg.envelope.is_answered = value;
+        }
+        EnvelopeFlag::Draft => msg.envelope.is_draft = value,
+        EnvelopeFlag::Deleted => msg.envelope.is_deleted = value,
+    }
+}
+
+fn snapshot_flag_values(
+    ctx: &AppContext,
+    ids: &[MessageId],
+    flag: EnvelopeFlag,
+) -> Vec<(MessageId, bool)> {
+    let list = ctx.messages.read();
+    ids.iter()
+        .filter_map(|id| {
+            list.find(|m| m.id == *id)
+                .map(|m| (id.clone(), message_has_flag(m, flag)))
+        })
+        .collect()
+}
+
+fn restore_flag_values(ctx: &mut AppContext, snapshot: &[(MessageId, bool)], flag: EnvelopeFlag) {
+    let wanted: std::collections::HashMap<&MessageId, bool> =
+        snapshot.iter().map(|(id, on)| (id, *on)).collect();
+    for msg in ctx.messages.write().iter_mut() {
+        let Some(&value) = wanted.get(&msg.id) else {
+            continue;
+        };
+        if message_has_flag(msg, flag) == value {
+            continue;
+        }
+        let mut next = (**msg).clone();
+        set_message_flag(&mut next, flag, value);
+        *msg = Arc::new(next);
     }
 }
 
@@ -2290,22 +2365,7 @@ fn apply_toggleable_flag(ctx: &mut AppContext, ids: &[MessageId], flag: Envelope
             continue;
         }
         let mut next = (**msg).clone();
-        match flag {
-            EnvelopeFlag::Starred => {
-                next.is_starred = value;
-                next.envelope.is_starred = value;
-            }
-            EnvelopeFlag::Flagged => {
-                next.is_flagged = value;
-                next.envelope.is_flagged = value;
-            }
-            EnvelopeFlag::Read => {
-                next.is_read = value;
-                next.envelope.is_read = value;
-            }
-            EnvelopeFlag::Draft => next.envelope.is_draft = value,
-            EnvelopeFlag::Deleted => next.envelope.is_deleted = value,
-        }
+        set_message_flag(&mut next, flag, value);
         *msg = Arc::new(next);
     }
 }

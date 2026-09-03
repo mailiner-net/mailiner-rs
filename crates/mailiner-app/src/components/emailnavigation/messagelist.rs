@@ -8,6 +8,7 @@ use crate::components::icons::{Icon, IconKind};
 use crate::components::virtual_scroll::VirtualScroll;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::mailbox::MailboxId;
 use crate::message::Message;
 use chrono::{DateTime, Utc};
 
@@ -54,6 +55,12 @@ pub fn MessageList() -> Element {
         let message_id = message.id.clone();
         let star_id = message.id.clone();
         let flag_id = message.id.clone();
+        let row_account = ctx.selected_account.peek().clone();
+        let row_mailbox = MailboxId::from(message.id.folder_id().clone());
+        let star_account = row_account.clone();
+        let flag_account = row_account;
+        let star_mailbox = row_mailbox.clone();
+        let flag_mailbox = row_mailbox;
         let is_starred = message.is_starred;
         let is_flagged = message.is_flagged;
 
@@ -120,11 +127,12 @@ pub fn MessageList() -> Element {
                                 onclick: move |evt: MouseEvent| {
                                     evt.stop_propagation();
                                     evt.prevent_default();
-                                    let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
+                                    let Some(account_id) = star_account.clone() else {
                                         return;
                                     };
                                     let _ = core_tx.send(CoreEvent::ToggleStar {
-                                        mailbox_id,
+                                        account_id,
+                                        mailbox_id: star_mailbox.clone(),
                                         message_ids: vec![star_id.clone()],
                                     });
                                 },
@@ -143,11 +151,12 @@ pub fn MessageList() -> Element {
                                 onclick: move |evt: MouseEvent| {
                                     evt.stop_propagation();
                                     evt.prevent_default();
-                                    let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
+                                    let Some(account_id) = flag_account.clone() else {
                                         return;
                                     };
                                     let _ = core_tx.send(CoreEvent::ToggleFlag {
-                                        mailbox_id,
+                                        account_id,
+                                        mailbox_id: flag_mailbox.clone(),
                                         message_ids: vec![flag_id.clone()],
                                     });
                                 },

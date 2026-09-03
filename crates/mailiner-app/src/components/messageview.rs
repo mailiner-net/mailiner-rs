@@ -510,6 +510,7 @@ fn MessageHeader(
     let show_plain_toggle = loaded
         .as_ref()
         .is_some_and(|loaded| has_html_and_plain(&loaded.parts));
+    let account_id = ctx.selected_account.read().clone();
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()
@@ -610,16 +611,20 @@ fn MessageHeader(
                         icon: IconKind::Star,
                         aria_pressed: Some(is_starred),
                         onclick: {
+                            let account_id = account_id.clone();
                             let mailbox_id = mailbox_id.clone();
                             let ids = selected_ids.clone();
                             move |_| {
-                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
                                     return;
                                 };
                                 if ids.is_empty() {
                                     return;
                                 }
                                 let _ = core_tx.send(CoreEvent::ToggleStar {
+                                    account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
                                 });
@@ -637,16 +642,20 @@ fn MessageHeader(
                         icon: IconKind::Flag,
                         aria_pressed: Some(is_flagged),
                         onclick: {
+                            let account_id = account_id.clone();
                             let mailbox_id = mailbox_id.clone();
                             let ids = selected_ids.clone();
                             move |_| {
-                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
                                     return;
                                 };
                                 if ids.is_empty() {
                                     return;
                                 }
                                 let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                    account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
                                 });

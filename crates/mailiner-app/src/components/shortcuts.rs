@@ -11,6 +11,7 @@ use mailiner_composer::ComposeIntent;
 use super::compose::{open_new_message, open_reply_or_forward};
 use super::icons::{IconButton, IconKind};
 use super::messageview::{MessageScroll, find_envelope, ready_loaded, scroll_message_view};
+use crate::account::AccountId;
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
@@ -168,19 +169,21 @@ fn run_shortcut(
             });
         }
         ShortcutId::ToggleStar => {
-            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+            let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
                 return;
             };
             let _ = core.send(CoreEvent::ToggleStar {
+                account_id,
                 mailbox_id,
                 message_ids,
             });
         }
         ShortcutId::ToggleFlag => {
-            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+            let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
                 return;
             };
             let _ = core.send(CoreEvent::ToggleFlag {
+                account_id,
                 mailbox_id,
                 message_ids,
             });
@@ -219,6 +222,16 @@ fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<Message
             ctx.show_toast(ToastAction::info("Select a message first"));
             None
         }
+    }
+}
+
+fn require_toggle_target(ctx: &AppContext) -> Option<(AccountId, MailboxId, Vec<MessageId>)> {
+    let account_id = ctx.selected_account.peek().clone();
+    match (account_id, require_selected_messages(ctx)) {
+        (Some(account_id), Some((mailbox_id, message_ids))) => {
+            Some((account_id, mailbox_id, message_ids))
+        }
+        _ => None,
     }
 }
 

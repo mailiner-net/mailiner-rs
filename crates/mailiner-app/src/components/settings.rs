@@ -105,7 +105,7 @@ pub fn SettingsPage() -> Element {
                     h2 { "Composer" }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "Defaults for new messages. Reply and forward still follow the original format unless you choose plain text."
+                        "The composer is a plain-text editor. Rich sends an HTML alternative of the same text."
                     }
                     div {
                         class: "onboarding-field",

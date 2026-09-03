@@ -2582,7 +2582,12 @@ async fn handle_move_messages(
             if !selected_account_is(ctx, &account_id)
                 || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
             {
-                let moved = dest_uids.len().max(message_ids.len());
+                // COPYUID present → mapped count; empty → no mapping, assume all moved.
+                let moved = if dest_uids.is_empty() {
+                    message_ids.len()
+                } else {
+                    dest_uids.len()
+                };
                 persist_stale_move_counts(
                     manager.cache(),
                     ctx,

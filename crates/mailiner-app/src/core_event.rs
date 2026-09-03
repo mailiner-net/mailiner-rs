@@ -1658,19 +1658,17 @@ fn messages_from_envelopes(
 
 fn apply_snippets(
     ctx: &mut AppContext,
-    needed: &[MessageId],
-    raw: HashMap<mailiner_core::MessageId, String>,
+    raw: HashMap<mailiner_core::MessageId, mailiner_core::TextPrefix>,
 ) {
-    let wanted: std::collections::HashSet<&MessageId> = needed.iter().collect();
     for msg in ctx.messages.write().iter_mut() {
-        if !wanted.contains(&msg.id) || msg.snippet.is_some() {
+        if msg.snippet.is_some() {
             continue;
         }
-        let cleaned = raw
-            .get(&msg.id)
-            .map(|s| clean_snippet(s))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_default();
+        let Some(prefix) = raw.get(&msg.id) else {
+            // Peek/structure failed — leave unset so a later load can retry.
+            continue;
+        };
+        let cleaned = clean_snippet(&prefix.text, prefix.is_html);
         let mut next = (**msg).clone();
         next.snippet = Some(cleaned.clone());
         next.envelope.snippet = Some(cleaned);
@@ -1682,11 +1680,13 @@ fn apply_snippets(
 ///
 /// List rows are already on screen; this must not run before the envelope batch
 /// is written. Failures leave `snippet` unset so a later page load can retry.
+/// `persist` is true only when the contiguous cached prefix can grow/change.
 async fn fetch_and_apply_snippets(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     account_id: &AccountId,
     mailbox_id: &MailboxId,
+    persist: bool,
 ) {
     if ctx.selected_mailbox.read().as_ref() != Some(mailbox_id)
         || !selected_account_is(ctx, account_id)
@@ -1718,8 +1718,10 @@ async fn fetch_and_apply_snippets(
             {
                 return;
             }
-            apply_snippets(ctx, &needed, raw);
-            persist_selected_messages(manager.cache(), ctx, account_id).await;
+            apply_snippets(ctx, raw);
+            if persist {
+                persist_selected_messages(manager.cache(), ctx, account_id).await;
+            }
         }
         Err(e) => {
             warn!("snippet fetch failed for {}: {e}", mailbox_id.as_str());
@@ -1926,7 +1928,7 @@ async fn handle_select_mailbox(
                     ctx.messages_loading.set(false);
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
-                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
+                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, true).await;
                 }
                 Err(e) => {
                     error!(
@@ -1947,7 +1949,7 @@ async fn handle_select_mailbox(
                     if ctx.messages.read().cached_count() > 0 {
                         persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     }
-                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
+                    fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, true).await;
                 }
             }
 
@@ -2072,10 +2074,11 @@ async fn handle_fetch_message_range(
             let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             ctx.messages.write().insert_batch(range.start, batch);
             // Only rewrite localStorage when the contiguous cached prefix grew.
-            if contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before {
+            let prefix_grew = contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before;
+            if prefix_grew {
                 persist_selected_messages(manager.cache(), ctx, &account_id).await;
             }
-            fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id).await;
+            fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, prefix_grew).await;
         }
         Err(e) => {
             error!(

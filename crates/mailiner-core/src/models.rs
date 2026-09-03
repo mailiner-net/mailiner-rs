@@ -502,6 +502,26 @@ impl LoadedMessage {
     }
 }
 
+/// Decoded prefix of the first text part (`BODY.PEEK[section]<0.N>`).
+///
+/// Missing from a [`crate::connector::EmailConnector::fetch_text_prefixes`]
+/// map means the peek failed and the caller should retry. An empty `text`
+/// means there is no preview (no text part).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextPrefix {
+    pub text: String,
+    pub is_html: bool,
+}
+
+impl TextPrefix {
+    pub fn empty() -> Self {
+        Self {
+            text: String::new(),
+            is_html: false,
+        }
+    }
+}
+
 /// Chunk of transfer-encoded bytes for streaming attachment download.
 #[derive(Debug, Clone)]
 pub struct PartChunk {

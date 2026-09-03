@@ -17,7 +17,7 @@ use crate::folder_name::{
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
     Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
-    MessageListFilter, MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
+    MessageListFilter, MessagePart, MessageSort, PartChunk, PartKind, TextPrefix, TransferEncoding,
 };
 
 /// Hierarchy delimiter used by [`MockConnector`] folder create/rename.
@@ -145,13 +145,14 @@ where
     /// Peek a short prefix of the first text part for each id.
     ///
     /// Uses `BODY.PEEK[section]<0.max_octets>` (never the whole part). Missing
-    /// map entries mean no preview (no text part, or the peek failed).
+    /// map entries mean the peek failed (retry). Empty [`TextPrefix::text`]
+    /// means there is no text part.
     async fn fetch_text_prefixes(
         &self,
         folder_id: &FolderId,
         message_ids: &[MessageId],
         max_octets: usize,
-    ) -> Result<HashMap<MessageId, String>>;
+    ) -> Result<HashMap<MessageId, TextPrefix>>;
 
     /// Stream a single part for attachment download.
     async fn stream_raw_part(
@@ -582,14 +583,20 @@ where
         _folder_id: &FolderId,
         message_ids: &[MessageId],
         max_octets: usize,
-    ) -> Result<HashMap<MessageId, String>> {
+    ) -> Result<HashMap<MessageId, TextPrefix>> {
         let take = max_octets.max(1);
         let mut map = HashMap::new();
         for id in message_ids {
             // First text part of [`mock_multipart_structure`] is section 1.1.
             let raw = mock_section_bytes("1.1");
             let text = String::from_utf8_lossy(&raw[..raw.len().min(take)]).into_owned();
-            map.insert(id.clone(), text);
+            map.insert(
+                id.clone(),
+                TextPrefix {
+                    text,
+                    is_html: false,
+                },
+            );
         }
         Ok(map)
     }
@@ -969,8 +976,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(map.len(), 2);
-        assert_eq!(map[&ids[0]], "Hello plain text");
-        assert_eq!(map[&ids[1]], "Hello plain text");
+        assert_eq!(map[&ids[0]].text, "Hello plain text");
+        assert!(!map[&ids[0]].is_html);
+        assert_eq!(map[&ids[1]].text, "Hello plain text");
     }
 
     #[test]

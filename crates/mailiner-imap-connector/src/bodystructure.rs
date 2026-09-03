@@ -115,6 +115,9 @@ fn walk_preview_text<'a>(
     plain: &mut Option<PreviewTextPart<'a>>,
     html: &mut Option<PreviewTextPart<'a>>,
 ) {
+    if mailiner_mime::is_attachment(part) {
+        return;
+    }
     if part.type_ == "multipart" {
         for (i, sub) in part.subparts.iter().enumerate() {
             let mut child = path.to_vec();
@@ -123,7 +126,7 @@ fn walk_preview_text<'a>(
         }
         return;
     }
-    if mailiner_mime::is_attachment(part) || part.type_ != "text" {
+    if part.type_ != "text" {
         return;
     }
     let section = if path.is_empty() {
@@ -215,6 +218,38 @@ mod tests {
         let preview = first_preview_text(&root).expect("plain part");
         assert_eq!(preview.section, "1.1");
         assert_eq!(preview.part.subtype, "plain");
+    }
+
+    #[test]
+    fn preview_text_skips_attached_multipart() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "multipart".into(),
+                    subtype: "alternative".into(),
+                    disposition: Some(mailiner_core::ContentDisposition {
+                        type_: "ATTACHMENT".into(),
+                        attributes: Default::default(),
+                    }),
+                    subparts: vec![BodyPart {
+                        type_: "text".into(),
+                        subtype: "plain".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let preview = first_preview_text(&root).expect("outer text");
+        assert_eq!(preview.section, "2");
     }
 
     #[test]

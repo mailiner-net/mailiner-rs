@@ -6,9 +6,16 @@ pub const SNIPPET_MAX_CHARS: usize = 120;
 pub const SNIPPET_FETCH_OCTETS: usize = 2048;
 
 /// Strip markup/quotes, collapse whitespace, and truncate for a list row.
-pub fn clean_snippet(raw: &str) -> String {
-    let without_tags = strip_html(raw);
-    let without_quotes = strip_quoted_lines(&without_tags);
+///
+/// `is_html` must come from the peeked part's MIME type so a `text/plain`
+/// body that mentions `<foo>` is not treated as markup.
+pub fn clean_snippet(raw: &str, is_html: bool) -> String {
+    let prepared = if is_html {
+        strip_html(raw)
+    } else {
+        raw.to_string()
+    };
+    let without_quotes = strip_quoted_lines(&prepared);
     let collapsed = collapse_ws(&without_quotes);
     truncate_chars(&collapsed, SNIPPET_MAX_CHARS)
 }
@@ -41,6 +48,8 @@ fn strip_html(input: &str) -> String {
                         out.push(' ');
                         continue;
                     }
+                    // Prefix ended inside the block — do not leak CSS/JS.
+                    break;
                 }
                 // Block-ish tags become a word break so "foo</p><p>bar" stays two words.
                 out.push(' ');
@@ -164,7 +173,7 @@ mod tests {
     #[test]
     fn collapses_whitespace() {
         assert_eq!(
-            clean_snippet("Hello,\n\n  world\tfrom\r\nMailiner"),
+            clean_snippet("Hello,\n\n  world\tfrom\r\nMailiner", false),
             "Hello, world from Mailiner"
         );
     }
@@ -172,8 +181,16 @@ mod tests {
     #[test]
     fn strips_html_tags_and_entities() {
         assert_eq!(
-            clean_snippet("<p>Hello&nbsp;<b>world</b> &amp; friends&#39;s</p>"),
+            clean_snippet("<p>Hello&nbsp;<b>world</b> &amp; friends&#39;s</p>", true),
             "Hello world & friends's"
+        );
+    }
+
+    #[test]
+    fn plain_text_keeps_angle_brackets() {
+        assert_eq!(
+            clean_snippet("use Vec<String> when x < y", false),
+            "use Vec<String> when x < y"
         );
     }
 
@@ -181,7 +198,12 @@ mod tests {
     fn strips_script_and_style() {
         let raw = "<html><head><style>p{color:red}</style></head>\
                    <body><script>alert(1)</script><p>Visible</p></body></html>";
-        assert_eq!(clean_snippet(raw), "Visible");
+        assert_eq!(clean_snippet(raw, true), "Visible");
+    }
+
+    #[test]
+    fn unclosed_style_does_not_leak() {
+        assert!(clean_snippet("<html><head><style>p{color:red}", true).is_empty());
     }
 
     #[test]
@@ -193,33 +215,33 @@ mod tests {
                    -- \n\
                    Jane Doe\n\
                    Engineer";
-        assert_eq!(clean_snippet(raw), "Thanks for the update.");
+        assert_eq!(clean_snippet(raw, false), "Thanks for the update.");
     }
 
     #[test]
     fn truncates_to_max_chars() {
         let long = "a".repeat(SNIPPET_MAX_CHARS + 40);
-        let out = clean_snippet(&long);
+        let out = clean_snippet(&long, false);
         assert_eq!(out.chars().count(), SNIPPET_MAX_CHARS);
         assert!(out.chars().all(|c| c == 'a'));
     }
 
     #[test]
     fn empty_after_cleanup() {
-        assert!(clean_snippet("   \n\t  ").is_empty());
-        assert!(clean_snippet("<div>  </div>").is_empty());
-        assert!(clean_snippet("> only quotes").is_empty());
+        assert!(clean_snippet("   \n\t  ", false).is_empty());
+        assert!(clean_snippet("<div>  </div>", true).is_empty());
+        assert!(clean_snippet("> only quotes", false).is_empty());
     }
 
     #[test]
     fn keeps_unicode() {
-        assert_eq!(clean_snippet("Café ☕\nnaïve"), "Café ☕ naïve");
+        assert_eq!(clean_snippet("Café ☕\nnaïve", false), "Café ☕ naïve");
     }
 
     #[test]
     fn unclosed_tag_does_not_eat_body() {
         assert_eq!(
-            clean_snippet("before <notatag after"),
+            clean_snippet("before <notatag after", true),
             "before <notatag after"
         );
     }

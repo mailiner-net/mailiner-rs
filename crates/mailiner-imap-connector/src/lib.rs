@@ -35,7 +35,7 @@ use mailiner_core::{
     is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, AccountId,
     BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
-    MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult,
+    MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult, TextPrefix,
 };
 use std::collections::HashMap;
 
@@ -882,6 +882,7 @@ struct SnippetPlan {
     encoding: String,
     content_type: String,
     charset: Option<String>,
+    is_html: bool,
 }
 
 fn snippet_plan(id: &MessageId, root: &BodyPart) -> Option<SnippetPlan> {
@@ -892,6 +893,7 @@ fn snippet_plan(id: &MessageId, root: &BodyPart) -> Option<SnippetPlan> {
         encoding: leaf.part.encoding.clone().unwrap_or_else(|| "7BIT".into()),
         content_type: leaf.part.content_type(),
         charset: leaf.part.charset().map(str::to_string),
+        is_html: leaf.part.subtype == "html",
     })
 }
 
@@ -1772,7 +1774,7 @@ where
         folder_id: &FolderId,
         message_ids: &[MessageId],
         max_octets: usize,
-    ) -> MailinerResult<HashMap<MessageId, String>> {
+    ) -> MailinerResult<HashMap<MessageId, TextPrefix>> {
         require_folder(folder_id, message_ids)?;
         if message_ids.is_empty() {
             return Ok(HashMap::new());
@@ -1781,33 +1783,36 @@ where
 
         let mut plans = Vec::new();
         let mut missing = Vec::new();
+        let mut out = HashMap::new();
         {
             let cache = self.structure_cache.lock().await;
             for id in message_ids {
                 match cache.get(&(folder_id.clone(), id.clone())) {
-                    Some(root) => {
-                        if let Some(plan) = snippet_plan(id, root) {
-                            plans.push(plan);
+                    Some(root) => match snippet_plan(id, root) {
+                        Some(plan) => plans.push(plan),
+                        None => {
+                            out.insert(id.clone(), TextPrefix::empty());
                         }
-                    }
+                    },
                     None => missing.push(id.clone()),
                 }
             }
         }
         for id in missing {
             match self.get_body_structure(folder_id, &id).await {
-                Ok(root) => {
-                    if let Some(plan) = snippet_plan(&id, &root) {
-                        plans.push(plan);
+                Ok(root) => match snippet_plan(&id, &root) {
+                    Some(plan) => plans.push(plan),
+                    None => {
+                        out.insert(id, TextPrefix::empty());
                     }
-                }
+                },
                 Err(e) => {
                     tracing::debug!("snippet BODYSTRUCTURE {} failed: {e}", id.as_uid());
                 }
             }
         }
         if plans.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(out);
         }
 
         let mut by_section: std::collections::BTreeMap<String, Vec<SnippetPlan>> =
@@ -1828,7 +1833,6 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
 
-        let mut out = HashMap::new();
         for (section, group) in by_section {
             let uids = group
                 .iter()
@@ -1863,7 +1867,13 @@ where
                     plan.charset.as_deref(),
                 ) {
                     Ok(mailiner_mime::DecodedContent::Text(text)) => {
-                        out.insert(plan.id, text);
+                        out.insert(
+                            plan.id,
+                            TextPrefix {
+                                text,
+                                is_html: plan.is_html,
+                            },
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => {

@@ -231,16 +231,22 @@ pub trait OutboxStore {
         skip: &[AccountId],
     ) -> Result<Option<OutboxItem>, AccountStoreError> {
         let items = self.list().await?;
-        Ok(pick_oldest_queued(&items, skip))
+        Ok(pick_oldest_queued(&items, skip, &[]))
     }
 }
 
-/// Oldest queued row, skipping accounts that already have an SMTP op in flight.
-pub(crate) fn pick_oldest_queued(items: &[OutboxItem], skip: &[AccountId]) -> Option<OutboxItem> {
+/// Oldest queued row, skipping busy accounts and items already tried this drain.
+pub(crate) fn pick_oldest_queued(
+    items: &[OutboxItem],
+    skip_accounts: &[AccountId],
+    skip_ids: &[OutboxId],
+) -> Option<OutboxItem> {
     items
         .iter()
         .filter(|i| {
-            i.state == OutboxItemState::Queued && !skip.iter().any(|id| *id == i.account_id)
+            i.state == OutboxItemState::Queued
+                && !skip_accounts.iter().any(|id| *id == i.account_id)
+                && !skip_ids.iter().any(|id| *id == i.id)
         })
         .min_by(|a, b| {
             a.created_at
@@ -603,5 +609,9 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let items = store.list().await.unwrap();
+        let next = pick_oldest_queued(&items, &[], std::slice::from_ref(&older.id)).unwrap();
+        assert_eq!(next.id, newer.id);
     }
 }

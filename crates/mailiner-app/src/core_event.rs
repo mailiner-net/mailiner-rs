@@ -43,7 +43,8 @@ use crate::message_list_filter::{
 };
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
-    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
+    MAX_OUTBOX_AUTO_ATTEMPTS, OutboxId, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
+    pick_oldest_queued,
 };
 use crate::reconnect::reconnect_backoff_ms;
 use crate::send::{OutboxDisplay, SendPhase, SendState};
@@ -3642,21 +3643,27 @@ async fn handle_send_message(
     reply_source: Option<MessageId>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
-        ctx.send_status.set(Some(SendState::Failed {
-            account_id,
-            kind: SendErrorKind::NotConfigured,
-            message: "Account not found.".into(),
-            retryable: false,
-        }));
+        ctx.set_send_status(
+            account_id.clone(),
+            SendState::Failed {
+                account_id,
+                kind: SendErrorKind::NotConfigured,
+                message: "Account not found.".into(),
+                retryable: false,
+            },
+        );
         return;
     };
     if let Err(err) = preflight(&config) {
-        ctx.send_status.set(Some(SendState::Failed {
-            account_id,
-            kind: err.kind,
-            message: err.message,
-            retryable: false,
-        }));
+        ctx.set_send_status(
+            account_id.clone(),
+            SendState::Failed {
+                account_id,
+                kind: err.kind,
+                message: err.message,
+                retryable: false,
+            },
+        );
         return;
     }
     let mut item = match OutboxItem::from_request(
@@ -3667,12 +3674,15 @@ async fn handle_send_message(
     ) {
         Ok(i) => i,
         Err(e) => {
-            ctx.send_status.set(Some(SendState::Failed {
-                account_id,
-                kind: SendErrorKind::MessageTooLarge,
-                message: e.to_string(),
-                retryable: false,
-            }));
+            ctx.set_send_status(
+                account_id.clone(),
+                SendState::Failed {
+                    account_id,
+                    kind: SendErrorKind::MessageTooLarge,
+                    message: e.to_string(),
+                    retryable: false,
+                },
+            );
             return;
         }
     };
@@ -3683,12 +3693,15 @@ async fn handle_send_message(
         item.set_reply_source(source);
     }
     if let Err(e) = outbox.upsert(&item).await {
-        ctx.send_status.set(Some(SendState::Failed {
-            account_id,
-            kind: SendErrorKind::Internal,
-            message: e.to_string(),
-            retryable: false,
-        }));
+        ctx.set_send_status(
+            account_id.clone(),
+            SendState::Failed {
+                account_id,
+                kind: SendErrorKind::Internal,
+                message: e.to_string(),
+                retryable: false,
+            },
+        );
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
@@ -3701,7 +3714,7 @@ async fn handle_send_message(
         ctx.compose_draft.set(None);
     }
     if inflight.is_busy(&account_id) {
-        ctx.send_status.set(Some(SendState::Idle));
+        ctx.set_send_status(account_id, SendState::Idle);
         return;
     }
     item.attempts = 1;
@@ -3729,10 +3742,13 @@ fn start_send_item(
         is_test: false,
         reply_source: item.reply_source.clone(),
     });
-    ctx.send_status.set(Some(SendState::Sending {
-        account_id,
-        phase: SendPhase::Connecting,
-    }));
+    ctx.set_send_status(
+        account_id.clone(),
+        SendState::Sending {
+            account_id,
+            phase: SendPhase::Connecting,
+        },
+    );
     spawn_submit(
         config,
         request,
@@ -3757,20 +3773,23 @@ async fn drain_outbox(
     smtp_tx: &UnboundedSender<CoreEvent>,
     inflight: &mut SmtpInflight,
 ) {
-    // Fill one slot per idle account. Accounts already sending (or failed
-    // this pass) go into `blocked` so we cannot loop on the same Queued row.
-    let mut blocked: Vec<AccountId> = inflight.busy_account_ids().cloned().collect();
+    // Fill one slot per idle account. Skip items already tried this pass so a
+    // Failed upsert cannot spin; do not treat a failed item as occupying the
+    // account slot (a later Queued row for the same account can still start).
+    let mut skip_ids: Vec<OutboxId> = Vec::new();
     loop {
-        let Some(mut item) = (match outbox.oldest_queued_except(&blocked).await {
+        let blocked: Vec<AccountId> = inflight.busy_account_ids().cloned().collect();
+        let items = match outbox.list().await {
             Ok(v) => v,
             Err(e) => {
-                warn!("oldest_queued failed: {e}");
+                warn!("outbox list failed: {e}");
                 return;
             }
-        }) else {
+        };
+        let Some(mut item) = pick_oldest_queued(&items, &blocked, &skip_ids) else {
             return;
         };
-        blocked.push(item.account_id.clone());
+        skip_ids.push(item.id.clone());
         let Some(config) = manager.resolve_config(&item.account_id).await else {
             item.state = OutboxItemState::Failed;
             item.last_error = Some("Account is no longer available.".into());
@@ -3957,9 +3976,12 @@ async fn handle_smtp_finished(
             if let Some(id) = flight.outbox_id {
                 let _ = outbox.delete(&id).await;
             }
-            ctx.send_status.set(Some(SendState::Sent {
-                account_id: flight.account_id.clone(),
-            }));
+            ctx.set_send_status(
+                flight.account_id.clone(),
+                SendState::Sent {
+                    account_id: flight.account_id.clone(),
+                },
+            );
             ctx.show_toast(ToastAction::Sent);
             let _ = receipt;
             if let Some(rfc822) = rfc822 {
@@ -3993,12 +4015,15 @@ async fn handle_smtp_finished(
                     let _ = outbox.upsert(&item).await;
                 }
             }
-            ctx.send_status.set(Some(SendState::Failed {
-                account_id: flight.account_id,
-                kind: err.kind,
-                message: err.message,
-                retryable: err.kind.is_retryable(),
-            }));
+            ctx.set_send_status(
+                flight.account_id.clone(),
+                SendState::Failed {
+                    account_id: flight.account_id,
+                    kind: err.kind,
+                    message: err.message,
+                    retryable: err.kind.is_retryable(),
+                },
+            );
         }
         SmtpOutcome::Test { request_id, result } => {
             let state = match result {

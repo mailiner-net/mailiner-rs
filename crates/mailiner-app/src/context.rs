@@ -84,9 +84,8 @@ pub struct AppContext {
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
     /// Per-account connection lifecycle (no secrets).
     pub connection_states: Signal<HashMap<AccountId, ConnectionState>>,
-    /// Last composer send outcome. SMTP itself is one in-flight op per account;
-    /// the outbox list is the source of truth for concurrent sends.
-    pub send_status: Signal<Option<SendState>>,
+    /// Per-account composer send outcome (one SMTP op may run per account).
+    pub send_status: Signal<HashMap<AccountId, SendState>>,
     /// Form Test SMTP, keyed by ephemeral request id.
     pub smtp_test_status: Signal<HashMap<AccountId, SendState>>,
     /// Test SMTP request ids whose form unmounted before the result arrived.
@@ -152,13 +151,25 @@ impl AppContext {
         self.message_view.set(MessageViewState::Empty);
         self.download_status.write().clear();
         self.connection_states.write().clear();
-        self.send_status.set(None);
+        self.send_status.write().clear();
         self.smtp_test_status.write().clear();
         self.smtp_test_abandoned.write().clear();
         self.outbox.write().clear();
         self.toast.set(None);
         self.compose_draft.set(None);
         self.mailbox_picker.set(None);
+    }
+
+    /// Record composer send progress for one account without clobbering others.
+    pub fn set_send_status(&mut self, account_id: AccountId, state: SendState) {
+        match state {
+            SendState::Idle => {
+                self.send_status.write().remove(&account_id);
+            }
+            other => {
+                self.send_status.write().insert(account_id, other);
+            }
+        }
     }
 
     /// Record a Test SMTP UI state unless the form already unmounted.

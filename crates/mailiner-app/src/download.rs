@@ -133,6 +133,55 @@ pub fn content_binary_cap() -> usize {
     MAX_BINARY_DECODE_BYTES
 }
 
+/// Trigger a browser download of `text` (JSON export, etc.).
+pub fn save_text_download(filename: &str, mime: &str, text: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+
+        let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
+        let document = window.document().ok_or_else(|| "no document".to_string())?;
+
+        let props = BlobPropertyBag::new();
+        let ct = if mime.is_empty() {
+            "application/octet-stream"
+        } else {
+            mime
+        };
+        props.set_type(ct);
+
+        let bytes = text.as_bytes();
+        let u8 = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+        u8.copy_from(bytes);
+        let parts = js_sys::Array::new();
+        parts.push(&u8);
+        let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &props)
+            .map_err(|e| format!("blob: {e:?}"))?;
+        let url =
+            Url::create_object_url_with_blob(&blob).map_err(|e| format!("object url: {e:?}"))?;
+
+        let a = document
+            .create_element("a")
+            .map_err(|e| format!("create a: {e:?}"))?
+            .dyn_into::<HtmlAnchorElement>()
+            .map_err(|_| "not an anchor".to_string())?;
+        a.set_href(&url);
+        a.set_download(filename);
+        let body = document.body().ok_or_else(|| "no body".to_string())?;
+        let _ = body.append_child(&a);
+        a.click();
+        let _ = body.remove_child(&a);
+        let _ = Url::revoke_object_url(&url);
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (filename, mime, text);
+        Ok(())
+    }
+}
+
 /// Accumulates decoded octets as discrete Blob parts.
 ///
 /// Wire chunks are TE-decoded incrementally; each decoded slice is pushed into the
@@ -323,6 +372,11 @@ mod tests {
         assert_eq!(dl.wire_received, 11);
         let out = dl.finish_to_bytes().unwrap();
         assert_eq!(out, b"hello world");
+    }
+
+    #[test]
+    fn save_text_download_host_is_ok() {
+        save_text_download("mailiner-accounts.json", "application/json", "{}").unwrap();
     }
 
     #[test]

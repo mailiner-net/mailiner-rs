@@ -90,6 +90,14 @@ pub struct AppContext {
     pub compose_draft: Signal<Option<ComposeSession>>,
     /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
+    /// Bumped after a successful `ClearLocalData` wipe.
+    pub sign_out_epoch: Signal<u64>,
+    /// True while a sign-out wipe is in flight (blocks accounts navigation).
+    pub sign_out_pending: Signal<bool>,
+    /// `sign_out_epoch` when the current wipe started.
+    pub sign_out_started: Signal<u64>,
+    /// Set when the wipe failed; the confirmation stays on screen.
+    pub sign_out_error: Signal<Option<String>>,
 }
 
 impl AppContext {
@@ -105,6 +113,30 @@ impl AppContext {
             .map(|t| t.id.wrapping_add(1))
             .unwrap_or(1);
         toast.set(Some(Toast { id, action }));
+    }
+
+    /// Wipe session UI after a full local-data delete (onboarding is next).
+    pub fn reset_after_sign_out(&mut self) {
+        self.accounts.write().clear();
+        self.selected_account.set(None);
+        self.mailbox_nodes.write().clear();
+        self.mailbox_roots.write().clear();
+        self.messages.set(SparseList::new(0));
+        self.messages_loading.set(false);
+        self.message_sort.set(mailiner_core::MessageSort::default());
+        self.sort_supports_size_sender.set(false);
+        self.selected_mailbox.set(None);
+        self.selection.set(MessageSelection::default());
+        self.message_view.set(MessageViewState::Empty);
+        self.download_status.write().clear();
+        self.connection_states.write().clear();
+        self.send_status.set(None);
+        self.smtp_test_status.write().clear();
+        self.smtp_test_abandoned.write().clear();
+        self.outbox.write().clear();
+        self.toast.set(None);
+        self.compose_draft.set(None);
+        self.mailbox_picker.set(None);
     }
 
     /// Record a Test SMTP UI state unless the form already unmounted.

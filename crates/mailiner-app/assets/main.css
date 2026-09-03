@@ -744,6 +744,26 @@ a.accounts-link-btn {
     margin-top: 1.25rem;
 }
 
+.accounts-data {
+    margin-top: 1.25rem;
+}
+
+.accounts-data-title {
+    margin: 0 0 0.35rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #555;
+}
+
+.accounts-data-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
 .accounts-nav {
     margin-top: 1rem;
     gap: 0.65rem;

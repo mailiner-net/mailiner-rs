@@ -202,6 +202,9 @@ pub enum CoreEvent {
     /// UI mutated store (edit/delete). Manager drops deleted connectors; does not auto-connect.
     AccountsChanged,
 
+    /// Sign-out: drop every connector and cached config (secrets).
+    ClearLocalData,
+
     SendMessage {
         account_id: AccountId,
         request: SubmitRequest,
@@ -348,6 +351,17 @@ pub async fn core_loop(
                     &mut smtp_generation,
                 )
                 .await;
+            }
+            CoreEvent::ClearLocalData => {
+                // Drop the SMTP slot now. A later SmtpFinished must not persist
+                // (would recreate outbox/cache keys after the wipe).
+                if let Some(mut flight) = inflight.take()
+                    && let Some(tx) = flight.cancel_tx.take()
+                {
+                    let _ = tx.send(());
+                }
+                smtp_generation = smtp_generation.wrapping_add(1);
+                handle_clear_local_data(&mut manager, &mut ctx, outbox.as_ref()).await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
@@ -3538,6 +3552,48 @@ async fn handle_test_smtp(
     spawn_test(config, request_id, generation, cancel_rx, smtp_tx.clone());
 }
 
+async fn handle_clear_local_data(
+    manager: &mut AccountConnectionManager,
+    ctx: &mut AppContext,
+    outbox: &dyn OutboxStore,
+) {
+    manager.disconnect_all(ctx).await;
+
+    match manager.store().list().await {
+        Ok(list) => {
+            for cfg in list {
+                if let Err(e) = manager.store().delete(&cfg.id).await {
+                    warn!("sign-out delete {} failed: {e}", cfg.id);
+                }
+            }
+        }
+        Err(e) => warn!("sign-out list accounts failed: {e}"),
+    }
+    if let Err(e) = manager.store().set_active_id(None).await {
+        warn!("sign-out set_active_id(None) failed: {e}");
+    }
+    if let Ok(items) = outbox.list().await {
+        for item in items {
+            let _ = outbox.delete(&item.id).await;
+        }
+    }
+
+    // After the current handler has finished: no in-flight persist can land
+    // after this wipe.
+    let wipe_err = crate::local_data::clear_mailiner_local_storage().err();
+    if let Some(e) = wipe_err {
+        warn!("clear_mailiner_local_storage failed: {e}");
+        ctx.show_toast(ToastAction::Error {
+            message: format!("Some local Mailiner data could not be removed: {e}"),
+        });
+        ctx.sign_out_error.set(Some(e.to_string()));
+        return;
+    }
+    ctx.reset_after_sign_out();
+    let next_epoch = ctx.sign_out_epoch.peek().wrapping_add(1);
+    ctx.sign_out_epoch.set(next_epoch);
+}
+
 async fn handle_smtp_finished(
     manager: &mut AccountConnectionManager,
     ctx: &mut AppContext,
@@ -3548,6 +3604,12 @@ async fn handle_smtp_finished(
     generation: u64,
     outcome: SmtpOutcome,
 ) {
+    if generation != *smtp_generation && inflight.is_none() {
+        // Sign-out already dropped the slot; do not persist. Ordinary
+        // cancel (Disconnect / DeleteOutbox / purge) keeps the slot so
+        // this handler can settle it below.
+        return;
+    }
     let Some(flight) = inflight.take() else {
         // Inflight was dropped (item deleted) but DATA may still have succeeded.
         // Never leave that rfc822 queued for a second submit.

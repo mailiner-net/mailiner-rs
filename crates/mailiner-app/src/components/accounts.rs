@@ -19,6 +19,8 @@ use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::download::save_text_download;
+use crate::local_data::{AccountsExport, accounts_export_filename};
 
 /// Debounce for rapid account-switch clicks (ms).
 const SWITCH_DEBOUNCE_MS: u32 = 200;
@@ -37,9 +39,11 @@ pub fn AccountsSettingsPage() -> Element {
     let selected = ctx.selected_account;
     let connection_states = ctx.connection_states;
     let quota = *ctx.account_quota.read();
+    let wiping = *ctx.sign_out_pending.read();
 
     let mut confirm_delete_id = use_signal(|| None::<AccountId>);
-    let action_error = use_signal(|| None::<String>);
+    let mut confirm_data = use_signal(|| None::<DataConfirm>);
+    let mut action_error = use_signal(|| None::<String>);
     let pending_switch = use_signal(|| None::<AccountId>);
     let switch_gen = use_signal(|| 0u64);
 
@@ -148,7 +152,7 @@ pub fn AccountsSettingsPage() -> Element {
                                             button {
                                                 r#type: "button",
                                                 class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
-                                                disabled: switching,
+                                                disabled: switching || wiping,
                                                 onclick: move |_| {
                                                     if selected_switch.read().as_ref() == Some(&id_switch) {
                                                         return;
@@ -193,16 +197,19 @@ pub fn AccountsSettingsPage() -> Element {
                                                 if switching { "Switching…" } else { "Switch" }
                                             }
                                         }
-                                        Link {
-                                            to: Route::AccountEditView {
-                                                id: id.as_str().to_string(),
-                                            },
-                                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-link-btn",
-                                            "Edit"
+                                        if !wiping {
+                                            Link {
+                                                to: Route::AccountEditView {
+                                                    id: id.as_str().to_string(),
+                                                },
+                                                class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-link-btn",
+                                                "Edit"
+                                            }
                                         }
                                         button {
                                             r#type: "button",
                                             class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-btn-danger",
+                                            disabled: wiping,
                                             onclick: move |_| confirm_delete_id.set(Some(id_delete.clone())),
                                             "Delete"
                                         }
@@ -236,18 +243,203 @@ pub fn AccountsSettingsPage() -> Element {
                      last-write-wins."
                 }
 
+                section {
+                    class: "accounts-data onboarding-section",
+                    h2 { class: "accounts-data-title", "Data" }
+                    p {
+                        class: "bootstrap-muted",
+                        "Export connection settings, or remove everything Mailiner stored in \
+                         this browser. Mail on the server is not affected."
+                    }
+                    div {
+                        class: "accounts-data-actions",
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                spawn(download_accounts_export(store_ctx, action_error, false));
+                            },
+                            "Export accounts"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                confirm_data.set(Some(DataConfirm::FullBackup));
+                            },
+                            "Export full backup…"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-btn-danger",
+                            onclick: move |_| {
+                                action_error.set(None);
+                                confirm_data.set(Some(DataConfirm::SignOut));
+                            },
+                            "Sign out / delete local data…"
+                        }
+                    }
+                    if let Some(kind) = confirm_data() {
+                        DataActionConfirm {
+                            kind,
+                            confirm_data,
+                            action_error,
+                            bootstrap,
+                            store_ctx,
+                        }
+                    }
+                }
+
                 nav {
                     class: "bootstrap-nav accounts-nav",
-                    Link {
-                        to: Route::AccountNewView {},
-                        class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
-                        "Add account"
+                    if wiping {
+                        span {
+                            class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
+                            "Add account"
+                        }
+                        span {
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Back to mail"
+                        }
+                    } else {
+                        Link {
+                            to: Route::AccountNewView {},
+                            class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
+                            "Add account"
+                        }
+                        Link {
+                            to: Route::MainView {},
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Back to mail"
+                        }
                     }
-                    Link {
-                        to: Route::MainView {},
-                        class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
-                        "Back to mail"
-                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DataConfirm {
+    FullBackup,
+    SignOut,
+}
+
+async fn download_accounts_export(
+    store_ctx: Signal<Option<AccountStoreContext>>,
+    mut action_error: Signal<Option<String>>,
+    includes_secrets: bool,
+) {
+    let Some(store) = store_ctx() else {
+        action_error.set(Some("Account storage is not available.".into()));
+        return;
+    };
+    let configs = match store.0.list().await {
+        Ok(list) => list,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to read accounts: {e}")));
+            return;
+        }
+    };
+    let active = match store.0.get_active_id().await {
+        Ok(id) => id,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to read active account: {e}")));
+            return;
+        }
+    };
+    let export = AccountsExport::new(configs, active, includes_secrets, Utc::now());
+    let json = match export.to_pretty_json() {
+        Ok(s) => s,
+        Err(e) => {
+            action_error.set(Some(format!("Failed to encode export: {e}")));
+            return;
+        }
+    };
+    let name = accounts_export_filename(includes_secrets, export.exported_at);
+    if let Err(e) = save_text_download(&name, "application/json", &json) {
+        action_error.set(Some(format!("Failed to download export: {e}")));
+        return;
+    }
+    action_error.set(None);
+}
+
+#[component]
+fn DataActionConfirm(
+    kind: DataConfirm,
+    mut confirm_data: Signal<Option<DataConfirm>>,
+    mut action_error: Signal<Option<String>>,
+    bootstrap: Signal<AppBootstrapState>,
+    store_ctx: Signal<Option<AccountStoreContext>>,
+) -> Element {
+    let mut ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let wiping = *ctx.sign_out_pending.read();
+    let mut sign_out_error = ctx.sign_out_error;
+    use_effect(move || {
+        if let Some(err) = sign_out_error() {
+            action_error.set(Some(format!(
+                "Some local Mailiner data could not be removed: {err}"
+            )));
+        }
+    });
+
+    let (body, confirm_label, danger) = match kind {
+        DataConfirm::FullBackup => (
+            "This file contains IMAP/SMTP passwords and proxy tokens. Anyone with the file can \
+             access your mail. Continue?",
+            "Download backup",
+            false,
+        ),
+        DataConfirm::SignOut => (
+            "Delete all Mailiner data stored in this browser? This removes accounts, passwords, \
+             cached mail, the outbox, and preferences. Mail on the server is not affected.",
+            "Delete local data",
+            true,
+        ),
+    };
+
+    rsx! {
+        div {
+            class: "accounts-confirm",
+            role: "alertdialog",
+            p { "{body}" }
+            div {
+                class: "onboarding-actions",
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary",
+                    disabled: wiping,
+                    onclick: move |_| confirm_data.set(None),
+                    "Cancel"
+                }
+                button {
+                    r#type: "button",
+                    class: if danger {
+                        "onboarding-btn onboarding-btn-primary accounts-btn-danger-solid"
+                    } else {
+                        "onboarding-btn onboarding-btn-primary"
+                    },
+                    disabled: wiping,
+                    onclick: move |_| {
+                        match kind {
+                            DataConfirm::FullBackup => {
+                                confirm_data.set(None);
+                                spawn(download_accounts_export(store_ctx, action_error, true));
+                            }
+                            DataConfirm::SignOut => {
+                                // Wipe runs in core_loop after the current IMAP/SMTP
+                                // handler finishes. AppShell navigates after the ack.
+                                ctx.sign_out_error.set(None);
+                                ctx.sign_out_started.set(*ctx.sign_out_epoch.peek());
+                                ctx.sign_out_pending.set(true);
+                                core_tx.send(CoreEvent::ClearLocalData);
+                            }
+                        }
+                    },
+                    if wiping { "Deleting…" } else { "{confirm_label}" }
                 }
             }
         }

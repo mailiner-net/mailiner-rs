@@ -29,6 +29,7 @@ mod core_event;
 mod download;
 mod formatter;
 mod layout;
+mod local_data;
 mod mail_cache;
 mod mailbox;
 mod message;
@@ -309,6 +310,10 @@ fn App() -> Element {
         crate::ui_prefs::apply_theme(pref);
         pref
     });
+    let sign_out_epoch = use_signal(|| 0u64);
+    let sign_out_pending = use_signal(|| false);
+    let sign_out_started = use_signal(|| 0u64);
+    let sign_out_error = use_signal(|| None::<String>);
 
     let ctx = AppContext {
         accounts,
@@ -333,6 +338,10 @@ fn App() -> Element {
         toast,
         compose_draft,
         mailbox_picker,
+        sign_out_epoch,
+        sign_out_pending,
+        sign_out_started,
+        sign_out_error,
     };
     let ctx_clone = ctx.clone();
 
@@ -379,8 +388,29 @@ fn App() -> Element {
 /// Root layout: no mail chrome on loading / store error / onboarding; outlet otherwise.
 #[component]
 fn AppShell() -> Element {
-    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
     let nav = use_navigator();
+    let ctx = use_context::<AppContext>();
+    let epoch = ctx.sign_out_epoch;
+    let mut pending = ctx.sign_out_pending;
+    let started = ctx.sign_out_started;
+    let mut sign_out_error = ctx.sign_out_error;
+
+    // Survives leaving the accounts confirm dialog so a finished wipe still
+    // reaches onboarding even if the user navigated away mid-delete.
+    use_effect(move || {
+        let current = epoch();
+        if let Some(_err) = sign_out_error() {
+            pending.set(false);
+            sign_out_error.set(None);
+            return;
+        }
+        if pending() && current != started() {
+            pending.set(false);
+            info!("Signed out → NeedsOnboarding");
+            bootstrap.set(AppBootstrapState::NeedsOnboarding);
+        }
+    });
 
     // Deep-link guards (prefer replace to avoid back-stack traps).
     // Reads bootstrap signal + current route (subscribes via router) so both updates re-run.

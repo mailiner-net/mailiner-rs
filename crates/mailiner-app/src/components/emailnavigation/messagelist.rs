@@ -51,6 +51,11 @@ pub fn MessageList() -> Element {
         let is_selected = selection.contains(&message.id);
         let is_focused = selection.focus() == Some(&message.id);
         let avatar = message.avatar_color();
+        let message_id = message.id.clone();
+        let star_id = message.id.clone();
+        let flag_id = message.id.clone();
+        let is_starred = message.is_starred;
+        let is_flagged = message.is_flagged;
 
         rsx! {
             div {
@@ -69,7 +74,7 @@ pub fn MessageList() -> Element {
                 onclick: move |evt: MouseEvent| {
                     evt.prevent_default();
                     let _ = core_tx.send(CoreEvent::SelectListClick {
-                        message_id: message.id.clone(),
+                        message_id: message_id.clone(),
                         index,
                         extend: evt.modifiers().shift(),
                         toggle: evt.modifiers().ctrl() || evt.modifiers().meta(),
@@ -102,23 +107,51 @@ pub fn MessageList() -> Element {
                                     Icon { size: 14, icon: IconKind::ArrowUturnLeft }
                                 }
                             }
-                            if message.is_starred {
-                                span {
-                                    class: "message-star-indicator",
-                                    role: "img",
-                                    aria_label: "Starred",
-                                    title: "Starred",
-                                    Icon { size: 14, icon: IconKind::Star }
-                                }
+                            button {
+                                class: "message-star-indicator",
+                                class: if is_starred { "is-on" },
+                                r#type: "button",
+                                aria_pressed: if is_starred { "true" } else { "false" },
+                                aria_label: if is_starred { "Unstar" } else { "Star" },
+                                title: if is_starred { "Unstar" } else { "Star" },
+                                onmousedown: move |evt: MouseEvent| {
+                                    evt.stop_propagation();
+                                },
+                                onclick: move |evt: MouseEvent| {
+                                    evt.stop_propagation();
+                                    evt.prevent_default();
+                                    let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
+                                        return;
+                                    };
+                                    let _ = core_tx.send(CoreEvent::ToggleStar {
+                                        mailbox_id,
+                                        message_ids: vec![star_id.clone()],
+                                    });
+                                },
+                                Icon { size: 14, icon: IconKind::Star }
                             }
-                            if message.is_flagged {
-                                span {
-                                    class: "message-flag-indicator",
-                                    role: "img",
-                                    aria_label: "Flagged",
-                                    title: "Flagged",
-                                    Icon { size: 14, icon: IconKind::Flag }
-                                }
+                            button {
+                                class: "message-flag-indicator",
+                                class: if is_flagged { "is-on" },
+                                r#type: "button",
+                                aria_pressed: if is_flagged { "true" } else { "false" },
+                                aria_label: if is_flagged { "Unflag" } else { "Flag" },
+                                title: if is_flagged { "Unflag" } else { "Flag" },
+                                onmousedown: move |evt: MouseEvent| {
+                                    evt.stop_propagation();
+                                },
+                                onclick: move |evt: MouseEvent| {
+                                    evt.stop_propagation();
+                                    evt.prevent_default();
+                                    let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
+                                        return;
+                                    };
+                                    let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                        mailbox_id,
+                                        message_ids: vec![flag_id.clone()],
+                                    });
+                                },
+                                Icon { size: 14, icon: IconKind::Flag }
                             }
                             if message.has_attachments {
                                 span {

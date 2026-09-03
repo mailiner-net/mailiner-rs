@@ -167,6 +167,24 @@ fn run_shortcut(
                 message_ids,
             });
         }
+        ShortcutId::ToggleStar => {
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::ToggleStar {
+                mailbox_id,
+                message_ids,
+            });
+        }
+        ShortcutId::ToggleFlag => {
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::ToggleFlag {
+                mailbox_id,
+                message_ids,
+            });
+        }
         ShortcutId::ShowHelp => {
             help_open.set(true);
         }

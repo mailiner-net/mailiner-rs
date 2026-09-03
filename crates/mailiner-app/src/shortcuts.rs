@@ -23,6 +23,8 @@ pub enum ShortcutId {
     MoveToTrash,
     DeletePermanently,
     SelectAll,
+    ToggleStar,
+    ToggleFlag,
     ShowHelp,
 }
 
@@ -201,6 +203,23 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         group: ShortcutGroup::Mail,
     },
     Shortcut {
+        id: ShortcutId::ToggleStar,
+        keys: &["s", "S"],
+        require_shift: false,
+        label: "S",
+        description: "Star or unstar message",
+        group: ShortcutGroup::Mail,
+    },
+    // F is Forward; I is free and reads as "important".
+    Shortcut {
+        id: ShortcutId::ToggleFlag,
+        keys: &["i", "I"],
+        require_shift: false,
+        label: "I",
+        description: "Flag or unflag message",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
         id: ShortcutId::ScrollMessageDown,
         keys: &["ArrowRight"],
         require_shift: false,
@@ -349,6 +368,26 @@ mod tests {
         assert_eq!(
             shortcut_for_key("E", true).map(|s| s.id),
             Some(ShortcutId::Archive)
+        );
+    }
+
+    #[test]
+    fn star_and_flag_keys_do_not_collide() {
+        assert_eq!(
+            shortcut_for_key("s", false).map(|s| s.id),
+            Some(ShortcutId::ToggleStar)
+        );
+        assert_eq!(
+            shortcut_for_key("S", true).map(|s| s.id),
+            Some(ShortcutId::ToggleStar)
+        );
+        assert_eq!(
+            shortcut_for_key("i", false).map(|s| s.id),
+            Some(ShortcutId::ToggleFlag)
+        );
+        assert_eq!(
+            shortcut_for_key("f", false).map(|s| s.id),
+            Some(ShortcutId::Forward)
         );
     }
 

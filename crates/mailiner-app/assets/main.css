@@ -1740,7 +1740,41 @@ textarea.ui-input {
 .message-attachment-indicator {
     flex-shrink: 0;
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-muted);
+}
+
+.message-star-indicator,
+.message-flag-indicator {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.4;
+}
+
+.message-star-indicator:hover,
+.message-flag-indicator:hover {
+    opacity: 1;
+}
+
+.message-star-indicator.is-on,
+.message-star-btn.is-on {
+    color: #e6a817;
+    opacity: 1;
+}
+
+.message-flag-indicator.is-on,
+.message-flag-btn.is-on {
+    color: #d9480f;
+    opacity: 1;
+}
+
+.message-view-actions .message-star-btn,
+.message-view-actions .message-flag-btn {
+    padding: 0.3rem 0.45rem;
 }
 
 .message-date {

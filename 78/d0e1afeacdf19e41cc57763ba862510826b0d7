@@ -1,0 +1,56 @@
+crates/mailiner-app/src/send.rs
+  s_22d601aa7837b5::t_a139d466128af5 3,15-16
+crates/mailiner-composer/src/export.rs
+  s_22d601aa7837b5::t_32ca9b57e80e6b 375
+crates/mailiner-composer/src/reply/prefill.rs
+  s_22d601aa7837b5::t_4a9d4e5df55bc9 595-600
+  s_22d601aa7837b5::t_72eaa527938915 736-740,751,755-759,769,776-777,787-790,804-810,832-837,853
+  s_22d601aa7837b5::t_1c8d0dacd2a68c 121-124,128-230
+  s_22d601aa7837b5::t_b79aa5cd437de6 581-583,585-586,590,592-594,601-720
+  s_22d601aa7837b5::t_97dd4806329050 572-580,584,587-589,591,721-735,741-750,752-754,760-768,770-775,778-786,791-803,811-831,838-852,854-856
+  s_22d601aa7837b5::t_29edd7ff7c71ff 3,6-7,10,21
+crates/mailiner-composer/src/reply/mod.rs
+  s_22d601aa7837b5::t_09a9e4bda04696 7
+crates/mailiner-app/assets/main.css
+  s_22d601aa7837b5::t_d4d718fc9f4969 1044-1063
+crates/mailiner-composer/src/shell/attachment_list.rs
+  s_22d601aa7837b5::t_74a509bd64cda2 110,194,202
+crates/mailiner-composer/src/model/attachment.rs
+  s_22d601aa7837b5::t_a83aea5763e1bb 46-56
+  s_22d601aa7837b5::t_9b9ffc6bcf8e26 70-71
+crates/mailiner-composer/src/lib.rs
+  s_22d601aa7837b5::t_82598418e3f8df 36-37,40-41
+crates/mailiner-app/src/core_event.rs
+  s_22d601aa7837b5::t_90a95eb3cb9a7e 16,38
+  s_22d601aa7837b5::t_7bb77f8a3ebbc2 108-111,380-381
+  s_22d601aa7837b5::t_5b8b127c14264b 2249-2354,2356-2425,2427-2462
+crates/mailiner-app/src/components/compose.rs
+  s_22d601aa7837b5::t_7cf1389028e6ee 250,256-286,288-297
+  s_22d601aa7837b5::t_de83a51c861f65 416,418,429-430,448,454,459,473,476,478-479,481,496-497,499,501-508
+  s_22d601aa7837b5::t_e97660c2656724 714-729,765-769
+  s_22d601aa7837b5::t_ee7c3853ecba00 155-162
+  s_22d601aa7837b5::t_71d55be4037926 14-15,74
+  s_22d601aa7837b5::t_6c48c86d44cf02 442
+  s_22d601aa7837b5::t_9682827e8ae0e0 452,475,477,480,490,498,500,509
+  s_22d601aa7837b5::t_d3c43d6416201f 413
+  s_22d601aa7837b5::t_64b829ed8c2e1c 108
+  s_22d601aa7837b5::t_a44e890c1e6eec 287,431-437
+crates/mailiner-composer/src/model/mod.rs
+  s_22d601aa7837b5::t_7fe7c294153579 8-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "78d0e1afeacdf19e41cc57763ba862510826b0d7",
+  "prompts": {},
+  "sessions": {
+    "s_22d601aa7837b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06941-9cbd-79c0-8a84-fd2d942067eb",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

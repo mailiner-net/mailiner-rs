@@ -8,7 +8,7 @@ pub mod submit;
 pub use body::{BodyPart, ContentDisposition};
 pub use connector::{
     mock_multipart_structure, mock_rfc822, mock_text_part, EmailConnector, MockConnector,
-    PartStream,
+    PartStream, MOCK_RFC822_HEADERS,
 };
 pub use error::{MailinerError, Result};
 pub use ids::{AccountId, EmptyMessageId, FolderId, MessageId, MessagePartId};

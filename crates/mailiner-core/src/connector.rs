@@ -239,6 +239,17 @@ Content-Type: text/plain; charset=us-ascii\r\n\
 Hello from MockConnector.\r\n"
 }
 
+/// Plausible RFC 5322 header block for MockConnector / tests (`BODY.PEEK[HEADER]`).
+pub const MOCK_RFC822_HEADERS: &[u8] = b"\
+From: Sender <sender@example.com>\r\n\
+To: Test Recipient <recipient@example.com>\r\n\
+Subject: Test Message\r\n\
+Date: Wed, 01 Jan 2020 00:00:00 +0000\r\n\
+Message-ID: <mock@example.com>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"----=_mock\"\r\n\
+\r\n";
+
 fn mock_section_bytes(section: &str) -> Vec<u8> {
     match section {
         "" => mock_rfc822().to_vec(),
@@ -249,6 +260,7 @@ fn mock_section_bytes(section: &str) -> Vec<u8> {
             b"UERGRGF0YQ==".to_vec()
         }
         "TEXT" => b"Single part body.".to_vec(),
+        "HEADER" => MOCK_RFC822_HEADERS.to_vec(),
         _ => format!("mock-section-{}", section).into_bytes(),
     }
 }
@@ -562,6 +574,60 @@ mod tests {
         assert_eq!(s.type_, "multipart");
         assert_eq!(s.subtype, "mixed");
         assert_eq!(s.subparts.len(), 2);
+    }
+
+    #[test]
+    fn mock_header_section_is_rfc5322() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+        #[derive(Debug)]
+        struct NoopStream;
+
+        impl AsyncRead for NoopStream {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                _: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for NoopStream {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let connector = MockConnector::new();
+        let folder = FolderId::new("inbox");
+        let msg = MessageId::new(folder.clone(), "test-message-1");
+        let sections = ["HEADER".to_string()];
+        let map = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_raw_parts(
+            &connector, &folder, &msg, &sections,
+        ))
+        .unwrap();
+        let bytes = map.get("HEADER").expect("HEADER section");
+        assert_eq!(bytes.as_slice(), MOCK_RFC822_HEADERS);
+        let text = std::str::from_utf8(bytes).unwrap();
+        assert!(text.contains("From:"));
+        assert!(text.contains("Subject:"));
+        assert!(text.contains("\r\n\r\n"));
     }
 
     #[test]

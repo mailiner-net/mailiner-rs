@@ -11,8 +11,8 @@ use crate::account_store::{
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, MailboxPickerHost, MessageList, MessageView, OnboardingForm, OutboxPanel,
-    SettingsPage, ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
+    EmailNavigation, MailboxPickerHost, MessageHeadersHost, MessageList, MessageView,
+    OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -29,6 +29,7 @@ mod context;
 mod core_event;
 mod download;
 mod formatter;
+mod headers;
 mod layout;
 mod local_data;
 mod mail_cache;
@@ -305,6 +306,7 @@ fn App() -> Element {
     let account_quota = use_signal(|| None);
     let selection = use_signal(crate::selection::MessageSelection::default);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
+    let message_headers = use_signal(|| crate::context::MessageHeadersState::Closed);
     let download_status = use_signal(HashMap::new);
     let send_status = use_signal(HashMap::new);
     let smtp_test_status = use_signal(HashMap::new);
@@ -341,6 +343,7 @@ fn App() -> Element {
         selection,
         message_view,
         message_bodies: Rc::new(std::cell::RefCell::new(LoadedMessageCache::new())),
+        message_headers,
         download_status,
         connection_states,
         send_status,
@@ -528,6 +531,7 @@ fn MainView() -> Element {
         ComposeOverlay {}
         ToastHost {}
         MailboxPickerHost {}
+        MessageHeadersHost {}
         ShortcutsHost {}
     }
 }

@@ -44,6 +44,24 @@ pub enum MessageViewState {
     },
 }
 
+/// Full RFC 5322 header block for the open “Show headers” dialog.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum MessageHeadersState {
+    #[default]
+    Closed,
+    Loading {
+        message_id: MessageId,
+    },
+    Ready {
+        message_id: MessageId,
+        text: String,
+    },
+    Error {
+        message_id: MessageId,
+        message: String,
+    },
+}
+
 impl Default for MessageViewState {
     fn default() -> Self {
         Self::Empty
@@ -80,6 +98,8 @@ pub struct AppContext {
     /// Session-only decoded bodies (current + adjacent prefetch). Not a Signal:
     /// UI must not re-render on LRU inserts.
     pub message_bodies: Rc<RefCell<LoadedMessageCache>>,
+    /// Full header block dialog (`Closed` = hidden).
+    pub message_headers: Signal<MessageHeadersState>,
     /// Per-section attachment download progress (section path → status).
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
     /// Per-account connection lifecycle (no secrets).
@@ -149,6 +169,7 @@ impl AppContext {
         self.selected_mailbox.set(None);
         self.selection.set(MessageSelection::default());
         self.message_view.set(MessageViewState::Empty);
+        self.message_headers.set(MessageHeadersState::Closed);
         self.download_status.write().clear();
         self.connection_states.write().clear();
         self.send_status.write().clear();

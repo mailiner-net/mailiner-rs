@@ -4,6 +4,7 @@ pub mod account_config;
 pub mod account_store;
 pub mod download;
 pub mod formatter;
+pub mod headers;
 pub mod layout;
 pub mod local_data;
 pub mod mail_cache;

@@ -2006,6 +2006,35 @@ textarea.ui-input {
 }
 
 
+.headers-dialog {
+    width: min(48rem, 94vw);
+    max-height: min(85vh, 48rem);
+}
+
+.headers-pre {
+    margin: 0;
+    flex: 1 1 auto;
+    min-height: 12rem;
+    max-height: min(60vh, 36rem);
+    overflow: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--sidebar-border);
+    border-radius: var(--radius-sm);
+    background: var(--sidebar);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--text-xs);
+    line-height: 1.45;
+    white-space: pre;
+    tab-size: 4;
+    user-select: text;
+}
+
+.headers-status {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+}
+
 /* Nested mail-chrome rules. Do not append new top-level CSS after this. */
 #app {
     #emailnavigation {

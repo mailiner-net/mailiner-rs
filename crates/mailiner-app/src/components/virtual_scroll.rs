@@ -420,6 +420,7 @@ where
     // effects that also read them re-triggers the effect forever and freezes wasm).
     let pending_ranges = use_hook(|| Rc::new(RefCell::new(Vec::<Range<usize>>::new())));
     let last_total = use_hook(|| Rc::new(Cell::new(0usize)));
+    let current_item_height = use_hook(|| Rc::new(Cell::new(props.item_height)));
     let mut scroll_generation = use_signal(|| 0u64);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
@@ -431,7 +432,15 @@ where
     let on_need_range = props.on_need_range;
     let pending_for_viewport = pending_ranges.clone();
     let last_total_for_viewport = last_total.clone();
+    let height_for_viewport = current_item_height.clone();
     use_effect(use_reactive!(|item_height| {
+        if height_for_viewport.get() != item_height {
+            height_for_viewport.set(item_height);
+            // Drop in-flight scroll tasks that captured the previous row height.
+            let next = *scroll_generation.peek() + 1;
+            scroll_generation.set(next);
+        }
+
         let items = items_signal.read().clone();
         let total = items.total_count();
         let height = *measured_height.read();
@@ -471,10 +480,12 @@ where
 
     let props_for_scroll = props.clone();
     let pending_for_scroll = pending_ranges.clone();
+    let height_for_scroll = current_item_height.clone();
     let container_clone = container_ref;
     let handle_scroll = move |_| {
         let props = props_for_scroll.clone();
         let pending_ranges = pending_for_scroll.clone();
+        let current_item_height = height_for_scroll.clone();
         let generation = {
             let next = *scroll_generation.peek() + 1;
             scroll_generation.set(next);
@@ -483,9 +494,13 @@ where
         spawn(async move {
             if let Some(element) = container_clone.read().as_ref() {
                 if let Ok(offset) = element.get_scroll_offset().await {
+                    if *scroll_generation.peek() != generation {
+                        return;
+                    }
                     let total = props.items.peek().total_count();
                     let height = *measured_height.peek();
-                    let vp = ViewportInfo::calculate(offset.y, height, props.item_height, total);
+                    let vp =
+                        ViewportInfo::calculate(offset.y, height, current_item_height.get(), total);
                     viewport_info.set(vp);
                 }
             }

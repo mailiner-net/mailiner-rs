@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 use mailiner_core::models::TransferEncoding;
 
+use crate::account::AccountId;
 use crate::context::{AppContext, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, size_to_human};
@@ -29,8 +30,9 @@ pub fn AttachmentsFooter() -> Element {
     let view = ctx.message_view.read().clone();
     let mailbox = ctx.selected_mailbox.read().clone();
 
-    let (message_id, mailbox_id, rows) = match (view, mailbox) {
-        (MessageViewState::Ready { message_id, loaded }, Some(mailbox_id)) => {
+    let account = ctx.selected_account.read().clone();
+    let (account_id, message_id, mailbox_id, rows) = match (view, mailbox, account) {
+        (MessageViewState::Ready { message_id, loaded }, Some(mailbox_id), Some(account_id)) => {
             let rows: Vec<AttachmentRow> = loaded
                 .parts
                 .iter()
@@ -52,7 +54,7 @@ pub fn AttachmentsFooter() -> Element {
             if rows.is_empty() {
                 return rsx! {};
             }
-            (message_id, mailbox_id, rows)
+            (account_id, message_id, mailbox_id, rows)
         }
         _ => return rsx! {},
     };
@@ -70,6 +72,8 @@ pub fn AttachmentsFooter() -> Element {
     let save_all_rows = rows.clone();
     let save_all_mailbox = mailbox_id.clone();
     let save_all_message = message_id.clone();
+    let save_all_account = account_id.clone();
+    let mut download_status = ctx.download_status;
 
     rsx! {
         footer {
@@ -78,31 +82,41 @@ pub fn AttachmentsFooter() -> Element {
                 class: "message-attachments-details",
                 summary {
                     class: "message-attachments-summary",
-                    span { "{summary}" }
-                    if count > 1 {
-                        button {
-                            class: "attachment-download-btn",
-                            r#type: "button",
-                            disabled: any_busy,
-                            title: "Download every attachment",
-                            aria_label: "Save all attachments",
-                            onclick: move |evt| {
-                                evt.stop_propagation();
-                                evt.prevent_default();
-                                // Core loop is serial; queued events run one IMAP fetch at a time.
-                                // A failure leaves later items queued so remaining files still save.
-                                for event in save_all_events(
-                                    &save_all_mailbox,
-                                    &save_all_message,
-                                    &save_all_rows,
-                                ) {
-                                    let _ = core_tx.send(event);
+                    div {
+                        class: "message-attachments-summary-inner",
+                        span { "{summary}" }
+                        if count > 1 {
+                            button {
+                                class: "attachment-download-btn",
+                                r#type: "button",
+                                disabled: any_busy,
+                                title: "Download every attachment",
+                                aria_label: "Save all attachments",
+                                onclick: move |evt| {
+                                    evt.stop_propagation();
+                                    evt.prevent_default();
+                                    // Hold the button disabled across the serial queue gap
+                                    // (Finished of N before InProgress of N+1).
+                                    mark_pending_downloads(
+                                        &mut download_status.write(),
+                                        &save_all_rows,
+                                    );
+                                    // Core loop is serial; queued events run one IMAP fetch at a time.
+                                    // A failure leaves later items queued so remaining files still save.
+                                    for event in save_all_events(
+                                        &save_all_account,
+                                        &save_all_mailbox,
+                                        &save_all_message,
+                                        &save_all_rows,
+                                    ) {
+                                        let _ = core_tx.send(event);
+                                    }
+                                },
+                                if any_busy {
+                                    "Saving…"
+                                } else {
+                                    "Save all"
                                 }
-                            },
-                            if any_busy {
-                                "Saving…"
-                            } else {
-                                "Save all"
                             }
                         }
                     }
@@ -112,6 +126,7 @@ pub fn AttachmentsFooter() -> Element {
                     for row in rows {
                         AttachmentItem {
                             key: "{row.section}",
+                            account_id: account_id.clone(),
                             message_id: message_id.clone(),
                             mailbox_id: mailbox_id.clone(),
                             row: row,
@@ -124,21 +139,24 @@ pub fn AttachmentsFooter() -> Element {
 }
 
 fn save_all_events(
+    account_id: &AccountId,
     mailbox_id: &MailboxId,
     message_id: &MessageId,
     rows: &[AttachmentRow],
 ) -> Vec<CoreEvent> {
     rows.iter()
-        .map(|row| attachment_download_event(mailbox_id, message_id, row))
+        .map(|row| attachment_download_event(account_id, mailbox_id, message_id, row))
         .collect()
 }
 
 fn attachment_download_event(
+    account_id: &AccountId,
     mailbox_id: &MailboxId,
     message_id: &MessageId,
     row: &AttachmentRow,
 ) -> CoreEvent {
     CoreEvent::DownloadAttachment {
+        account_id: account_id.clone(),
         mailbox_id: mailbox_id.clone(),
         message_id: message_id.clone(),
         section: row.section.clone(),
@@ -146,6 +164,18 @@ fn attachment_download_event(
         content_type: row.content_type.clone(),
         encoding: row.encoding,
         size_hint: row.wire_size,
+    }
+}
+
+fn mark_pending_downloads(status: &mut HashMap<String, DownloadStatus>, rows: &[AttachmentRow]) {
+    for row in rows {
+        status.insert(
+            row.section.clone(),
+            DownloadStatus::InProgress {
+                received: 0,
+                total: row.wire_size,
+            },
+        );
     }
 }
 
@@ -159,7 +189,12 @@ fn any_download_in_progress<'a>(
 }
 
 #[component]
-fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentRow) -> Element {
+fn AttachmentItem(
+    account_id: AccountId,
+    message_id: MessageId,
+    mailbox_id: MailboxId,
+    row: AttachmentRow,
+) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let section = row.section.clone();
@@ -220,6 +255,7 @@ fn AttachmentItem(message_id: MessageId, mailbox_id: MailboxId, row: AttachmentR
                     disabled: busy,
                     onclick: move |_| {
                         let _ = core_tx.send(attachment_download_event(
+                            &account_id,
                             &mailbox_id,
                             &message_id,
                             &row_for_click,
@@ -265,22 +301,27 @@ mod tests {
         }
     }
 
-    fn ids() -> (MailboxId, MessageId) {
+    fn ids() -> (AccountId, MailboxId, MessageId) {
+        let account = AccountId::new("acct-1");
         let mailbox = MailboxId::from("INBOX".to_string());
         let message = MessageId::new(FolderId::new("INBOX"), "42");
-        (mailbox, message)
+        (account, mailbox, message)
     }
 
     #[test]
     fn save_all_queues_one_event_per_row_in_order() {
-        let (mailbox, message) = ids();
+        let (account, mailbox, message) = ids();
         let rows = vec![row("2", "a.pdf"), row("3", "b.txt")];
-        let events = save_all_events(&mailbox, &message, &rows);
+        let events = save_all_events(&account, &mailbox, &message, &rows);
         assert_eq!(events.len(), 2);
         match &events[0] {
             CoreEvent::DownloadAttachment {
-                section, filename, ..
+                account_id,
+                section,
+                filename,
+                ..
             } => {
+                assert_eq!(account_id, &account);
                 assert_eq!(section, "2");
                 assert_eq!(filename, "a.pdf");
             }
@@ -288,13 +329,26 @@ mod tests {
         }
         match &events[1] {
             CoreEvent::DownloadAttachment {
-                section, filename, ..
+                account_id,
+                section,
+                filename,
+                ..
             } => {
+                assert_eq!(account_id, &account);
                 assert_eq!(section, "3");
                 assert_eq!(filename, "b.txt");
             }
             _ => panic!("expected DownloadAttachment"),
         }
+    }
+
+    #[test]
+    fn mark_pending_keeps_save_all_busy_after_first_finishes() {
+        let rows = vec![row("2", "a.pdf"), row("3", "b.txt")];
+        let mut status = HashMap::new();
+        mark_pending_downloads(&mut status, &rows);
+        status.insert("2".into(), DownloadStatus::Finished);
+        assert!(any_download_in_progress(&status, ["2", "3"]));
     }
 
     #[test]

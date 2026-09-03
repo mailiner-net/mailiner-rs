@@ -11,7 +11,7 @@ pub struct PrintHeaders<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrintError {
-    /// Iframe setup failed and `window.open` returned `None`.
+    /// `window.open` returned `None` and the iframe fallback also failed.
     PopupBlocked,
     Failed,
 }
@@ -111,12 +111,13 @@ pub fn open_print_document(html: &str, on_error: impl FnOnce(PrintError) + 'stat
         let on_error = Rc::new(Cell::new(Some(
             Box::new(on_error) as Box<dyn FnOnce(PrintError)>
         )));
-        if open_print_iframe(html, on_error.clone()).is_ok() {
-            return;
-        }
         match open_print_window(html) {
             Ok(popup) => print_when_ready(popup, on_error),
-            Err(err) => take_print_error(&on_error, err),
+            Err(win_err) => {
+                if open_print_iframe(html, on_error.clone()).is_err() {
+                    take_print_error(&on_error, win_err);
+                }
+            }
         }
     }
     #[cfg(not(feature = "web"))]
@@ -151,7 +152,7 @@ fn remove_node(node: &web_sys::Node) {
     }
 }
 
-/// Hidden iframe: `load` waits for the document and its images.
+/// Hidden iframe fallback: `load` waits for the document and its images.
 #[cfg(feature = "web")]
 fn open_print_iframe(html: &str, on_error: PrintErrorCb) -> Result<(), PrintError> {
     use wasm_bindgen::JsCast;

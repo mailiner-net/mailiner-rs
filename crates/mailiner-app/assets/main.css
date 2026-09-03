@@ -366,6 +366,11 @@ button.flat {
     width: 100%;
 }
 
+.onboarding-field select {
+    appearance: auto;
+    cursor: pointer;
+}
+
 .onboarding-field input:focus,
 .onboarding-field select:focus {
     outline: 2px solid color-mix(in srgb, var(--item-accent) 45%, transparent);
@@ -377,6 +382,12 @@ button.flat {
 .onboarding-field select:disabled {
     opacity: 0.65;
     background: var(--input-disabled);
+    cursor: default;
+}
+
+.onboarding-preset-hint {
+    margin: 0.15rem 0 0;
+    font-size: 0.8rem;
 }
 
 .onboarding-disclosure {

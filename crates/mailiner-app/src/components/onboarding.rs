@@ -51,6 +51,7 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
+    let mut smtp_open = use_signal(|| false);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -319,6 +320,18 @@ pub fn OnboardingForm() -> Element {
                         set_remote_port: move |v| remote_port.set(v),
                         set_smtp_remote_host: move |v| smtp_remote_host.set(v),
                         set_smtp_remote_port: move |v| smtp_remote_port.set(v),
+                        smtp_host: smtp_host(),
+                        smtp_port: smtp_port(),
+                        smtp_username: smtp_username(),
+                        smtp_use_tls: smtp_tls_mode() != SmtpTlsMode::None,
+                        set_smtp_host: move |v| smtp_host.set(v),
+                        set_smtp_port: move |v| smtp_port.set(v),
+                        set_smtp_username: move |v| smtp_username.set(v),
+                        set_smtp_use_tls: move |v| {
+                            let port = smtp_port().parse().unwrap_or(465);
+                            smtp_tls_mode.set(crate::account_config::tls_mode_from_legacy(v, port));
+                        },
+                        set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
                     }
@@ -336,6 +349,7 @@ pub fn OnboardingForm() -> Element {
                         set_smtp_password: move |v| smtp_password.set(v),
                         set_smtp_tls_mode: move |v| smtp_tls_mode.set(v),
                         busy: busy,
+                        open: smtp_open(),
                     }
 
                     FormStatusBanner { message: status_message() }

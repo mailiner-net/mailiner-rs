@@ -740,6 +740,14 @@ a.accounts-link-btn {
     font-size: 0.9rem;
 }
 
+.accounts-notifications {
+    margin-top: 0.35rem;
+}
+
+.accounts-notifications .bootstrap-muted {
+    margin: 0 0 0.65rem;
+}
+
 .accounts-security-note {
     margin-top: 1.25rem;
 }

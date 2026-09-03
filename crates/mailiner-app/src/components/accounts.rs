@@ -88,6 +88,8 @@ pub fn AccountsSettingsPage() -> Element {
 
                 PrivacyPrefsSection {}
 
+                NotificationsSettings {}
+
                 if let Some(err) = action_error() {
                     p {
                         class: "onboarding-status onboarding-status-error",
@@ -540,6 +542,99 @@ fn DataActionConfirm(
                 }
             }
         }
+    }
+}
+
+/// Inbox desktop-notification toggle. Off until the browser grants permission.
+#[component]
+fn NotificationsSettings() -> Element {
+    let ctx = use_context::<AppContext>();
+    let mut notify_inbox = ctx.notify_inbox;
+    let mut permission = use_signal(crate::notifications::current_permission);
+    let mut hint = use_signal(|| None::<String>);
+    let pref_on = notify_inbox();
+    let perm = permission();
+    let checked = pref_on && perm == crate::notifications::NotifyPermission::Granted;
+    let blocked = matches!(
+        perm,
+        crate::notifications::NotifyPermission::Denied
+            | crate::notifications::NotifyPermission::Unsupported
+    );
+
+    rsx! {
+        fieldset {
+            class: "onboarding-section accounts-notifications",
+            legend { "Notifications" }
+            p {
+                class: "bootstrap-muted",
+                "The tab title always shows Inbox unread. Desktop alerts stay off until \
+                 you allow them in this browser."
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: checked,
+                        disabled: blocked,
+                        onchange: move |evt| {
+                            let want = evt.checked();
+                            spawn(async move {
+                                if want {
+                                    let next =
+                                        crate::notifications::request_permission().await;
+                                    permission.set(next);
+                                    if next == crate::notifications::NotifyPermission::Granted
+                                    {
+                                        crate::ui_prefs::save_notify_inbox(true);
+                                        notify_inbox.set(true);
+                                        hint.set(None);
+                                    } else {
+                                        crate::ui_prefs::save_notify_inbox(false);
+                                        notify_inbox.set(false);
+                                        hint.set(Some(permission_hint(next).to_string()));
+                                    }
+                                } else {
+                                    crate::ui_prefs::save_notify_inbox(false);
+                                    notify_inbox.set(false);
+                                    hint.set(None);
+                                }
+                            });
+                        },
+                    }
+                    "Notify me about new Inbox mail"
+                }
+            }
+            if let Some(text) = hint() {
+                p { class: "bootstrap-muted", "{text}" }
+            } else if let Some(text) = permission_status_text(perm) {
+                p { class: "bootstrap-muted", "{text}" }
+            }
+        }
+    }
+}
+
+fn permission_hint(perm: crate::notifications::NotifyPermission) -> &'static str {
+    match perm {
+        crate::notifications::NotifyPermission::Denied => {
+            "Notifications are blocked for this site. Allow them in the browser, then try again."
+        }
+        crate::notifications::NotifyPermission::Unsupported => {
+            "This browser does not support notifications."
+        }
+        crate::notifications::NotifyPermission::Prompt => {
+            "Permission was not granted. Enable the toggle again to retry."
+        }
+        crate::notifications::NotifyPermission::Granted => "",
+    }
+}
+
+fn permission_status_text(perm: crate::notifications::NotifyPermission) -> Option<&'static str> {
+    match perm {
+        crate::notifications::NotifyPermission::Denied => Some(permission_hint(perm)),
+        crate::notifications::NotifyPermission::Unsupported => Some(permission_hint(perm)),
+        _ => None,
     }
 }
 

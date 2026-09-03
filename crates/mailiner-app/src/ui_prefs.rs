@@ -351,6 +351,9 @@ pub const ACK_UNREAD_KEY: &str = "mailiner.ui.ackUnread.v1";
 /// Schema version for [`AckUnreadBlob`].
 pub const ACK_UNREAD_SCHEMA_VERSION: u32 = 1;
 
+/// `localStorage` key for the Inbox desktop-notification toggle (default off).
+pub const NOTIFY_INBOX_KEY: &str = "mailiner.ui.notifyInbox";
+
 /// Single JSON document stored under [`LAST_MAILBOX_KEY`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LastMailboxBlob {
@@ -719,6 +722,18 @@ pub fn retain_ack_unread(known: &HashSet<AccountId>) {
         blob.retain_accounts(known);
         save_ack_blob(kv, &blob)
     });
+}
+
+/// Whether the user opted in to Inbox desktop notifications.
+///
+/// Default is off. The toggle is only persisted as on after Notification
+/// permission is granted.
+pub fn load_notify_inbox() -> bool {
+    with_kv(|kv| Ok(kv.get_item(NOTIFY_INBOX_KEY)?.as_deref() == Some("1"))).unwrap_or(false)
+}
+
+pub fn save_notify_inbox(enabled: bool) {
+    let _ = with_kv(|kv| kv.set_item(NOTIFY_INBOX_KEY, if enabled { "1" } else { "0" }));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1144,6 +1159,17 @@ mod tests {
         ));
         assert!(load_remote_image_senders().addresses.is_empty());
         assert!(load_remote_image_senders().domains.is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn notify_inbox_defaults_off_and_roundtrips() {
+        host_kv::reset();
+        assert!(!load_notify_inbox());
+        save_notify_inbox(true);
+        assert!(load_notify_inbox());
+        save_notify_inbox(false);
+        assert!(!load_notify_inbox());
         host_kv::reset();
     }
 }

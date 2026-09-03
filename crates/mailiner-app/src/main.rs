@@ -36,6 +36,7 @@ mod mailbox;
 mod message;
 mod message_list_filter;
 mod message_loader;
+mod notifications;
 mod outbox_store;
 mod print;
 mod reconnect;
@@ -318,6 +319,7 @@ fn App() -> Element {
     let sign_out_started = use_signal(|| 0u64);
     let sign_out_error = use_signal(|| None::<String>);
     let message_drag = use_signal(|| None);
+    let notify_inbox = use_signal(crate::ui_prefs::load_notify_inbox);
 
     let ctx = AppContext {
         accounts,
@@ -349,6 +351,7 @@ fn App() -> Element {
         sign_out_started,
         sign_out_error,
         message_drag,
+        notify_inbox,
     };
     let ctx_clone = ctx.clone();
 
@@ -387,9 +390,21 @@ fn App() -> Element {
             http_equiv: "Content-Security-Policy",
             content: CONTENT_SECURITY_POLICY,
         }
+        TabTitle {}
 
         Router::<Route> {}
     }
+}
+
+/// Inbox unread on `document.title`. Updates whenever folder counts change.
+#[component]
+fn TabTitle() -> Element {
+    let ctx = use_context::<AppContext>();
+    let unread = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read())
+        .map(|(_, n)| n)
+        .unwrap_or(0);
+    let title = crate::notifications::tab_title(unread);
+    rsx! { document::Title { "{title}" } }
 }
 
 /// Root layout: no mail chrome on loading / store error / onboarding; outlet otherwise.

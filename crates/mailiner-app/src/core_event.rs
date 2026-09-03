@@ -167,6 +167,7 @@ pub enum CoreEvent {
     },
     /// IMAP SUBSCRIBE / UNSUBSCRIBE for one folder.
     SetFolderSubscribed {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         subscribed: bool,
     },
@@ -608,10 +609,14 @@ pub async fn core_loop(
                 handle_delete_folder(&manager, &mut ctx, account_id, mailbox_id).await;
             }
             CoreEvent::SetFolderSubscribed {
+                account_id,
                 mailbox_id,
                 subscribed,
             } => {
-                handle_set_folder_subscribed(&manager, &mut ctx, mailbox_id, subscribed).await;
+                handle_set_folder_subscribed(
+                    &manager, &mut ctx, account_id, mailbox_id, subscribed,
+                )
+                .await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -3542,13 +3547,13 @@ async fn handle_delete_folder(
 async fn handle_set_folder_subscribed(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     subscribed: bool,
 ) {
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
+    if !selected_account_is(ctx, &account_id) {
         return;
-    };
+    }
     let allowed = ctx
         .mailbox_nodes
         .read()

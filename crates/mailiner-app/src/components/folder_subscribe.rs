@@ -139,7 +139,9 @@ fn FolderSubscribeDialog() -> Element {
 
 #[component]
 fn SubscribeRow(entry: crate::mailbox::MailboxEntry) -> Element {
+    let ctx = use_context::<AppContext>();
     let core = use_coroutine_handle::<CoreEvent>();
+    let account_id = ctx.selected_account.read().clone();
     let indent = "\u{00a0}\u{00a0}".repeat(entry.depth);
     let label = format!("{indent}{}", entry.title);
     let toggle_label = if entry.subscribed {
@@ -161,8 +163,13 @@ fn SubscribeRow(entry: crate::mailbox::MailboxEntry) -> Element {
                     onchange: {
                         let id = entry.id.clone();
                         let next = !entry.subscribed;
+                        let account_id = account_id.clone();
                         move |_| {
+                            let Some(account_id) = account_id.clone() else {
+                                return;
+                            };
                             let _ = core.send(CoreEvent::SetFolderSubscribed {
+                                account_id,
                                 mailbox_id: id.clone(),
                                 subscribed: next,
                             });

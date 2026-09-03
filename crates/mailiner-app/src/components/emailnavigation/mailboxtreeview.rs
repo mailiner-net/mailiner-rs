@@ -403,7 +403,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
     let account_id = ctx.selected_account.read().clone();
     let create_account = account_id.clone();
     let rename_account = account_id.clone();
-    let delete_account = account_id;
+    let delete_account = account_id.clone();
     let create_mailbox = mailbox_id.clone();
     let rename_mailbox = mailbox_id.clone();
     let delete_mailbox = mailbox_id.clone();
@@ -495,10 +495,13 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                         class: "folder-menu-item",
                         role: "menuitem",
                         onclick: move |evt| {
-                            let _ = core_tx.send(CoreEvent::SetFolderSubscribed {
-                                mailbox_id: mailbox_id.clone(),
-                                subscribed: !subscribed,
-                            });
+                            if let Some(account_id) = account_id.clone() {
+                                let _ = core_tx.send(CoreEvent::SetFolderSubscribed {
+                                    account_id,
+                                    mailbox_id: mailbox_id.clone(),
+                                    subscribed: !subscribed,
+                                });
+                            }
                             onclose.call(evt);
                         },
                         "{toggle_label}"

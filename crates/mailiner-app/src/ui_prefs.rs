@@ -767,6 +767,7 @@ pub fn apply_theme(pref: ThemePref) {
     {
         let _ = value;
     }
+}
 
 pub fn load_show_all_folders() -> bool {
     with_kv(|kv| {
@@ -780,6 +781,7 @@ pub fn load_show_all_folders() -> bool {
 
 pub fn save_show_all_folders(show_all: bool) {
     let _ = with_kv(|kv| kv.set_item(SHOW_ALL_FOLDERS_KEY, if show_all { "1" } else { "0" }));
+}
 
 /// Drop last-mailbox rows for accounts that are no longer known.
 pub fn retain_last_mailboxes(known: &HashSet<AccountId>) {
@@ -1029,6 +1031,7 @@ mod tests {
             kv.set_item(THEME_KEY, "rainbow").expect("set");
         });
         assert_eq!(load_theme(), ThemePref::System);
+    }
 
     #[test]
     fn show_all_folders_roundtrip() {

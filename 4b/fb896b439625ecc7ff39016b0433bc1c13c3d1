@@ -1,0 +1,19 @@
+crates/mailiner-app/src/core_event.rs
+  s_630206927fd386::t_81278bb9757e62 1897-1908,1926-1930
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "4bfb896b439625ecc7ff39016b0433bc1c13c3d1",
+  "prompts": {},
+  "sessions": {
+    "s_630206927fd386": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06975-8daf-7252-982d-1a2f8284370e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

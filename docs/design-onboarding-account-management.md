@@ -1,16 +1,56 @@
 # Onboarding Page & Account Management for Mailiner
 
+> **Historical.** This document planned first-run onboarding and account
+> management. That work has shipped. Do **not** treat the “current state”,
+> non-goals, or PR plan below as a backlog — they describe mid-2026 code
+> (hard-coded IMAP, stub SMTP, no persist). See **What shipped** for the live
+> app. The original design is kept underneath as context.
+
 | Field | Value |
 |-------|-------|
 | **Title** | Onboarding Page & Account Management for Mailiner |
 | **Author** | TBD |
 | **Date** | 2026-07-24 |
-| **Status** | Draft (rev 3 — post-save failure + dev_default bootstrap) |
+| **Status** | Historical (rev 3 planned the work; archived 2026-09-03) |
 | **Audience** | Senior engineers familiar with the Mailiner codebase |
 
 ---
 
-## Overview
+## What shipped
+
+Verified against `main` (2026-09-03). Pointers are the live modules, not the
+pre-change locations in the draft below.
+
+- **No hard-coded IMAP.** `IMAP_PASSWORD`, `build.rs` inject, and the dummy
+  `main.rs` seed are gone. Empty store → `/onboarding`; persisted accounts →
+  `/`. `dev-defaults` prefills the form only and does not auto-connect or
+  write `localStorage`.
+- **Browser-local accounts.** `BrowserAccountStore` persists
+  `mailiner.accounts.v1` in origin `localStorage` (schema 1). Secrets never
+  enter `AppContext` signals; forms load them via `store.get`.
+- **Onboarding + settings.** Single-page form (identity, IMAP, proxy, optional
+  SMTP). **Test connection** (IMAP) and **Test SMTP**. Save is
+  connect-before-persist (`CommitNewAccount`). Settings at
+  `/settings/accounts` list / add / edit / delete / switch; deleting the last
+  account returns to onboarding.
+- **Connection manager.** `AccountConnectionManager` is keyed by `AccountId`.
+  Connector calls in `core_loop` soft-fail. Connect budget is 20s.
+  `WebSocketStream::try_new` no longer panics. UI shows a connection badge.
+- **SMTP is not a stub.** `send.rs` is composer/Test-SMTP UI state.
+  `mailiner-smtp-connector` submits over a second proxy WebSocket. Account
+  forms collect live SMTP settings (implicit TLS, STARTTLS, or plaintext).
+  See [`design-smtp-async-smtp.md`](design-smtp-async-smtp.md) (also
+  Historical).
+- **CSP baseline** ships as `CONTENT_SECURITY_POLICY` in `main.rs` (meta tag
+  after WASM mount; prefer the same policy as an HTTP header at deploy).
+
+Still out of scope, same as the original non-goals: OAuth / server-side
+accounts, concurrent background sync for every account, autodiscover, OS
+keychain, IndexedDB for account configs.
+
+---
+
+## Overview (historical)
 
 Mailiner currently connects to a single hard-coded IMAP server on startup: password from `env!("IMAP_PASSWORD")` (injected by `build.rs`), WebSocket proxy URL, host, and username all literals in `core_loop`. Connect/auth failures use `.expect(...)`, which **panics the core coroutine** (the Dioxus UI shell may keep rendering an empty mailbox chrome depending on WASM panic hook behavior — it is not a clean process abort). A dummy `Account` is seeded in `main.rs`. This is unsuitable for real use and blocks multi-account.
 

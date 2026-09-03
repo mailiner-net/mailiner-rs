@@ -76,6 +76,7 @@ pub enum CoreEvent {
     },
     /// Copy to another folder; source messages stay.
     CopyMessages {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
         dest_mailbox_id: MailboxId,
@@ -332,12 +333,20 @@ pub async fn core_loop(
                     .await;
             }
             CoreEvent::CopyMessages {
+                account_id,
                 mailbox_id,
                 message_ids,
                 dest_mailbox_id,
             } => {
-                handle_copy_messages(&manager, &mut ctx, mailbox_id, message_ids, dest_mailbox_id)
-                    .await;
+                handle_copy_messages(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    dest_mailbox_id,
+                )
+                .await;
             }
             CoreEvent::MoveToTrash {
                 mailbox_id,
@@ -1865,6 +1874,7 @@ async fn handle_move_messages(
 async fn handle_copy_messages(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: Vec<MessageId>,
     dest_mailbox_id: MailboxId,
@@ -1872,13 +1882,11 @@ async fn handle_copy_messages(
     if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if !selected_account_is(ctx, &account_id)
+        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+    {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.show_toast(ToastAction::error("No account selected"));
-        return;
-    };
     let Some(connector) = manager.get(&account_id) else {
         ctx.show_toast(ToastAction::error("Not connected"));
         return;
@@ -1892,21 +1900,28 @@ async fn handle_copy_messages(
         .await
     {
         Ok(_) => {
-            let unread_n = unread_among(ctx, &message_ids);
-            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&dest_mailbox_id) {
-                node.total_count = node.total_count.saturating_add(message_ids.len());
+            let still_here = selected_account_is(ctx, &account_id)
+                && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id);
+            if still_here {
+                let unread_n = unread_among(ctx, &message_ids);
+                if let Some(node) = ctx.mailbox_nodes.write().get_mut(&dest_mailbox_id) {
+                    node.total_count = node.total_count.saturating_add(message_ids.len());
+                }
+                if unread_n != 0 {
+                    bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
+                }
+                persist_folder_tree(manager.cache(), ctx, &account_id).await;
             }
-            if unread_n != 0 {
-                bump_mailbox_unread(ctx, &dest_mailbox_id, unread_n, false);
-            }
-            let dest_label = ctx
-                .mailbox_nodes
-                .read()
-                .get(&dest_mailbox_id)
-                .map(|n| n.title().to_string())
-                .unwrap_or_else(|| dest_mailbox_id.to_string());
+            let dest_label = if still_here {
+                ctx.mailbox_nodes
+                    .read()
+                    .get(&dest_mailbox_id)
+                    .map(|n| n.title().to_string())
+                    .unwrap_or_else(|| dest_mailbox_id.to_string())
+            } else {
+                dest_mailbox_id.to_string()
+            };
             ctx.show_toast(ToastAction::info(format!("Copied to {dest_label}")));
-            persist_folder_tree(manager.cache(), ctx, &account_id).await;
             invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
         }
         Err(e) => {

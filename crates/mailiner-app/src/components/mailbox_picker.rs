@@ -125,7 +125,13 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                             dest_mailbox_id: id,
                         }
                     } else {
+                        let Some(account_id) = ctx.selected_account.peek().clone() else {
+                            ctx.show_toast(ToastAction::error("No account selected"));
+                            picker.set(None);
+                            return;
+                        };
                         CoreEvent::CopyMessages {
+                            account_id,
                             mailbox_id,
                             message_ids,
                             dest_mailbox_id: id,

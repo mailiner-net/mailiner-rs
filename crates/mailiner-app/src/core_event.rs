@@ -1912,7 +1912,7 @@ async fn handle_copy_messages(
                 }
                 persist_folder_tree(manager.cache(), ctx, &account_id).await;
             }
-            if same_account {
+            if selected_account_is(ctx, &account_id) {
                 let dest_label = ctx
                     .mailbox_nodes
                     .read()

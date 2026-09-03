@@ -906,6 +906,14 @@ a.accounts-link-btn {
     text-decoration: underline;
 }
 
+.pane-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
 .theme-select {
     flex: 0 0 auto;
     font: inherit;
@@ -960,6 +968,23 @@ a.accounts-link-btn {
 .privacy-sender-pref {
     color: var(--text-muted);
     flex-shrink: 0;
+
+.folder-new {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--foreground);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.folder-new:hover {
+    background: var(--item-hover-background);
 }
 
 .pane-header-settings {
@@ -1997,6 +2022,44 @@ textarea.ui-input {
     font-size: var(--text-sm);
     padding: var(--space-4) var(--margin);
     margin: 0;
+}
+
+.folder-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+}
+
+.folder-context-menu {
+    position: fixed;
+    z-index: 20;
+    min-width: 10rem;
+    padding: 0.25rem 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.folder-context-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    font-size: var(--text-sm);
+    color: var(--foreground);
+    background: none;
+    border: none;
+    padding: 0.4rem 0.85rem;
+    cursor: pointer;
+}
+
+.folder-context-menu button:hover {
+    background: var(--item-hover-background);
+}
+
+.folder-context-menu button.is-danger {
+    color: var(--danger);
 }
 
 .message-avatar {

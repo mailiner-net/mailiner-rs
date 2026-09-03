@@ -10,11 +10,17 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
+use crate::folder_name::{
+    is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path,
+};
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
     Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
     MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
+
+/// Hierarchy delimiter used by [`MockConnector`] folder create/rename.
+const MOCK_FOLDER_DELIMITER: &str = "/";
 
 /// Stream of transfer-encoded part chunks (attachment download).
 pub type PartStream = Pin<Box<dyn Stream<Item = Result<PartChunk>> + Send>>;
@@ -101,6 +107,20 @@ where
 
     /// Permanently delete every message in `folder_id`. An already-empty folder is success.
     async fn empty_folder(&self, folder_id: &FolderId) -> Result<()>;
+
+    /// CREATE `name` under `parent_id` (or at the root). `name` is a single path segment.
+    async fn create_folder(
+        &self,
+        account_id: &AccountId,
+        name: &str,
+        parent_id: Option<&FolderId>,
+    ) -> Result<Folder>;
+
+    /// RENAME `folder_id` so its last path segment is `new_name`.
+    async fn rename_folder(&self, folder_id: &FolderId, new_name: &str) -> Result<Folder>;
+
+    /// DELETE `folder_id`. Inbox cannot be deleted.
+    async fn delete_folder(&self, folder_id: &FolderId) -> Result<()>;
 
     /// FETCH BODYSTRUCTURE for one message (UID). Selects `folder_id` if needed.
     async fn get_body_structure(
@@ -417,6 +437,68 @@ where
         Ok(())
     }
 
+    async fn create_folder(
+        &self,
+        account_id: &AccountId,
+        name: &str,
+        parent_id: Option<&FolderId>,
+    ) -> Result<Folder> {
+        let full_name = join_mailbox_path(
+            parent_id.map(FolderId::as_str),
+            name,
+            Some(MOCK_FOLDER_DELIMITER),
+        )?;
+        if is_inbox_mailbox(&full_name) {
+            return Err(crate::MailinerError::InvalidData(
+                "Cannot create a folder named Inbox".into(),
+            ));
+        }
+        let (_, leaf) = mailbox_parent_and_leaf(&full_name, Some(MOCK_FOLDER_DELIMITER));
+        let leaf = leaf.to_string();
+        Ok(Folder {
+            id: FolderId::new(full_name),
+            account_id: account_id.clone(),
+            name: leaf,
+            parent_id: parent_id.cloned(),
+            role: crate::MailboxRole::Other,
+            selectable: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    async fn rename_folder(&self, folder_id: &FolderId, new_name: &str) -> Result<Folder> {
+        if is_inbox_mailbox(folder_id.as_str()) {
+            return Err(crate::MailinerError::InvalidData(
+                "Cannot rename Inbox".into(),
+            ));
+        }
+        let full_name =
+            rename_mailbox_path(folder_id.as_str(), new_name, Some(MOCK_FOLDER_DELIMITER))?;
+        let (parent, leaf) = mailbox_parent_and_leaf(&full_name, Some(MOCK_FOLDER_DELIMITER));
+        let parent = parent.map(FolderId::new);
+        let leaf = leaf.to_string();
+        Ok(Folder {
+            id: FolderId::new(full_name),
+            account_id: AccountId::new("mock-account-1"),
+            name: leaf,
+            parent_id: parent,
+            role: crate::MailboxRole::Other,
+            selectable: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    async fn delete_folder(&self, folder_id: &FolderId) -> Result<()> {
+        if is_inbox_mailbox(folder_id.as_str()) {
+            return Err(crate::MailinerError::InvalidData(
+                "Cannot delete Inbox".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn get_body_structure(
         &self,
         _folder_id: &FolderId,
@@ -529,12 +611,82 @@ mod tests {
         }
     }
 
+    fn mock() -> MockConnector {
+        MockConnector::new()
+    }
+
+    #[test]
+    fn mock_create_folder_joins_parent() {
+        let account = AccountId::new("mock-account-1");
+        let parent = FolderId::new("INBOX");
+        let folder = futures::executor::block_on(EmailConnector::<NoopStream>::create_folder(
+            &mock(),
+            &account,
+            "Work",
+            Some(&parent),
+        ))
+        .unwrap();
+        assert_eq!(folder.id.as_str(), "INBOX/Work");
+        assert_eq!(folder.name, "Work");
+        assert_eq!(
+            folder.parent_id.as_ref().map(|id| id.as_str()),
+            Some("INBOX")
+        );
+        assert!(folder.selectable);
+    }
+
+    #[test]
+    fn mock_create_folder_rejects_delimiter() {
+        let account = AccountId::new("mock-account-1");
+        let err = futures::executor::block_on(EmailConnector::<NoopStream>::create_folder(
+            &mock(),
+            &account,
+            "foo/bar",
+            None,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("hierarchy separator"));
+    }
+
+    #[test]
+    fn mock_rename_folder_replaces_leaf() {
+        let folder = futures::executor::block_on(EmailConnector::<NoopStream>::rename_folder(
+            &mock(),
+            &FolderId::new("INBOX/Work"),
+            "Archive",
+        ))
+        .unwrap();
+        assert_eq!(folder.id.as_str(), "INBOX/Archive");
+        assert_eq!(folder.name, "Archive");
+        assert_eq!(
+            folder.parent_id.as_ref().map(|id| id.as_str()),
+            Some("INBOX")
+        );
+    }
+
+    #[test]
+    fn mock_delete_folder_refuses_inbox() {
+        let err = futures::executor::block_on(EmailConnector::<NoopStream>::delete_folder(
+            &mock(),
+            &FolderId::new("INBOX"),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("Inbox"));
+        assert!(
+            futures::executor::block_on(EmailConnector::<NoopStream>::delete_folder(
+                &mock(),
+                &FolderId::new("Archive"),
+            ))
+            .is_ok()
+        );
+    }
+
     #[test]
     fn mock_empty_folder_succeeds() {
-        let connector = MockConnector::new();
         let folder = FolderId::new("trash");
         let result = futures::executor::block_on(EmailConnector::<NoopStream>::empty_folder(
-            &connector, &folder,
+            &mock(),
+            &folder,
         ));
         assert!(result.is_ok());
     }

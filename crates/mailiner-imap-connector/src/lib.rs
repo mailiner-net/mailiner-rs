@@ -28,6 +28,7 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
+    is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, Account,
     AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
     MessageSort, PartChunk, PartStream, Result as MailinerResult,
@@ -153,6 +154,51 @@ where
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to APPEND to {mailbox}: {e}")))?;
         Ok(())
+    }
+
+    /// Hierarchy delimiter from `LIST "" ""`, else the first listed mailbox.
+    async fn hierarchy_delimiter(&self) -> Result<Option<String>, ImapError> {
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated);
+            };
+            let mut list = session
+                .list(Some(""), Some(""))
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to LIST delimiter: {e}")))?;
+            let mut delim = None;
+            while let Some(result) = list.next().await {
+                let mailbox = result
+                    .map_err(|e| ImapError::Imap(format!("Failed to read LIST delimiter: {e}")))?;
+                if let Some(d) = mailbox.delimiter().filter(|d| !d.is_empty()) {
+                    delim = Some(d.to_string());
+                }
+            }
+            if delim.is_some() {
+                return Ok(delim);
+            }
+        }
+        let listed = self.list_all_mailboxes().await?;
+        Ok(listed
+            .iter()
+            .find_map(|m| m.delimiter.clone().filter(|d| !d.is_empty())))
+    }
+
+    /// Drop cached rows for `folder_id` and any children under the same delimiter.
+    async fn forget_folder_tree(&self, folder_id: &FolderId, delimiter: Option<&str>) {
+        {
+            let mut cache = self.structure_cache.lock().await;
+            cache.retain(|(fid, _), _| {
+                !mailbox_is_self_or_descendant(fid.as_str(), folder_id.as_str(), delimiter)
+            });
+        }
+        let mut slot = self.list_index.lock().await;
+        if slot.as_ref().is_some_and(|idx| {
+            mailbox_is_self_or_descendant(&idx.folder, folder_id.as_str(), delimiter)
+        }) {
+            *slot = None;
+        }
     }
 
     async fn list_all_mailboxes(&self) -> Result<Vec<ListedMailbox>, ImapError> {
@@ -678,6 +724,36 @@ fn uid_set(folder_id: &FolderId, ids: &[MessageId]) -> Result<String, ImapError>
 
 fn quote_mailbox(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn mailbox_is_self_or_descendant(name: &str, ancestor: &str, delimiter: Option<&str>) -> bool {
+    if name == ancestor {
+        return true;
+    }
+    match delimiter.filter(|d| !d.is_empty()) {
+        Some(d) => name
+            .strip_prefix(ancestor)
+            .is_some_and(|rest| rest.starts_with(d)),
+        None => false,
+    }
+}
+
+/// SELECT INBOX so DELETE/RENAME is not run against the currently selected mailbox.
+async fn select_inbox_before_mutate<S>(
+    session: &mut Session<TlsStream<S>>,
+    folder_id: &str,
+) -> Result<(), ImapError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    if is_inbox_mailbox(folder_id) {
+        return Ok(());
+    }
+    session
+        .select("INBOX")
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to select INBOX: {e}")))?;
+    Ok(())
 }
 
 fn expand_uid_set(folder_id: &FolderId, members: &[imap_proto::UidSetMember]) -> Vec<MessageId> {
@@ -1239,6 +1315,109 @@ where
         Ok(())
     }
 
+    async fn create_folder(
+        &self,
+        account_id: &AccountId,
+        name: &str,
+        parent_id: Option<&FolderId>,
+    ) -> MailinerResult<Folder> {
+        let delim = self.hierarchy_delimiter().await?;
+        let delim = delim.as_deref();
+        let full_name = join_mailbox_path(parent_id.map(FolderId::as_str), name, delim)?;
+        if is_inbox_mailbox(&full_name) {
+            return Err(MailinerError::InvalidData(
+                "Cannot create a folder named Inbox".into(),
+            ));
+        }
+
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+            session
+                .create(&full_name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to create folder: {e}")))?;
+        }
+
+        let (_, leaf) = mailbox_parent_and_leaf(&full_name, delim);
+        let leaf = leaf.to_string();
+        let role = role_from_name(&full_name, delim);
+        Ok(Folder {
+            id: FolderId::new(full_name),
+            account_id: account_id.clone(),
+            name: leaf,
+            parent_id: parent_id.cloned(),
+            role,
+            selectable: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    async fn rename_folder(&self, folder_id: &FolderId, new_name: &str) -> MailinerResult<Folder> {
+        if is_inbox_mailbox(folder_id.as_str()) {
+            return Err(MailinerError::InvalidData("Cannot rename Inbox".into()));
+        }
+        let delim = self.hierarchy_delimiter().await?;
+        let delim = delim.as_deref();
+        let full_name = rename_mailbox_path(folder_id.as_str(), new_name, delim)?;
+        if is_inbox_mailbox(&full_name) {
+            return Err(MailinerError::InvalidData(
+                "Cannot rename a folder to Inbox".into(),
+            ));
+        }
+
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+            select_inbox_before_mutate(session, folder_id.as_str()).await?;
+            session
+                .rename(folder_id.as_str(), &full_name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to rename folder: {e}")))?;
+        }
+        self.forget_folder_tree(folder_id, delim).await;
+
+        let (parent, leaf) = mailbox_parent_and_leaf(&full_name, delim);
+        let parent = parent.map(FolderId::new);
+        let leaf = leaf.to_string();
+        let role = role_from_name(&full_name, delim);
+        Ok(Folder {
+            id: FolderId::new(full_name),
+            account_id: self.account_id.clone(),
+            name: leaf,
+            parent_id: parent,
+            role,
+            selectable: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    async fn delete_folder(&self, folder_id: &FolderId) -> MailinerResult<()> {
+        if is_inbox_mailbox(folder_id.as_str()) {
+            return Err(MailinerError::InvalidData("Cannot delete Inbox".into()));
+        }
+        let delim = self.hierarchy_delimiter().await?;
+        {
+            let mut imap = self.imap.lock().await;
+            let ImapSession::Authenticated(session) = &mut *imap else {
+                return Err(ImapError::NotAuthenticated.into());
+            };
+            select_inbox_before_mutate(session, folder_id.as_str()).await?;
+            session
+                .delete(folder_id.as_str())
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to delete folder: {e}")))?;
+        }
+        self.forget_folder_tree(folder_id, delim.as_deref()).await;
+        Ok(())
+    }
+
     async fn get_body_structure(
         &self,
         folder_id: &FolderId,
@@ -1676,6 +1855,18 @@ mod tests {
         assert_eq!(cmd, r#"UID COPY 12,44 "Archive""#);
         assert!(!cmd.contains("MOVE"));
         assert!(!cmd.contains("Deleted"));
+    }
+
+    #[test]
+    fn descendant_match_uses_delimiter() {
+        assert!(mailbox_is_self_or_descendant(
+            "INBOX.Work",
+            "INBOX",
+            Some(".")
+        ));
+        assert!(mailbox_is_self_or_descendant("INBOX", "INBOX", Some(".")));
+        assert!(!mailbox_is_self_or_descendant("INBOX2", "INBOX", Some(".")));
+        assert!(!mailbox_is_self_or_descendant("INBOX.Work", "INBOX", None));
     }
 
     #[test]

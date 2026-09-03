@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::folder_name::FolderNameError;
 use crate::ids::MessageId;
 
 #[derive(Error, Debug)]
@@ -28,6 +29,9 @@ pub enum MailinerError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("{0}")]
+    FolderName(#[from] FolderNameError),
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),

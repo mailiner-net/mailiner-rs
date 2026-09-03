@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use mailiner_core::{Folder, FolderCounts, FolderId, MailboxRole};
+use mailiner_core::{Folder, FolderCounts, FolderId, MailboxRole, is_inbox_mailbox};
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct MailboxId(String);
@@ -186,6 +186,47 @@ pub fn apply_unread_new_state(
 /// Trash special-use folder that can be selected (not `\\Noselect`).
 pub fn can_empty_trash(node: &MailboxNode) -> bool {
     node.selectable && node.role == MailboxRole::Trash
+}
+
+/// Inbox cannot be renamed or deleted (IMAP `INBOX` is special).
+pub fn can_manage_folder(node: &MailboxNode) -> bool {
+    node.role != MailboxRole::Inbox && !is_inbox_mailbox(node.id.as_str())
+}
+
+/// New id for `selected` after `old` was renamed to `new`.
+pub fn remap_renamed_mailbox(
+    old: &MailboxId,
+    new: &MailboxId,
+    selected: &MailboxId,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> Option<MailboxId> {
+    if selected == old {
+        return Some(new.clone());
+    }
+    if !mailbox_is_ancestor(old, selected, nodes) {
+        return None;
+    }
+    let rest = selected.as_str().strip_prefix(old.as_str())?;
+    Some(MailboxId::from(format!("{}{rest}", new.as_str())))
+}
+
+/// `id` and its descendants, deepest first (safe IMAP DELETE order).
+pub fn mailbox_subtree_deepest_first(
+    id: &MailboxId,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> Vec<MailboxId> {
+    let mut out = Vec::new();
+    fn walk(id: &MailboxId, nodes: &HashMap<MailboxId, MailboxNode>, out: &mut Vec<MailboxId>) {
+        let Some(node) = nodes.get(id) else {
+            return;
+        };
+        for child in &node.children {
+            walk(child, nodes, out);
+        }
+        out.push(id.clone());
+    }
+    walk(id, nodes, &mut out);
+    out
 }
 
 /// First mailbox with `role`, if any.
@@ -827,6 +868,77 @@ mod tests {
             .map(|e| e.id.to_string())
             .collect();
         assert_eq!(entries, vec!["INBOX", "[Gmail]/Sent Mail"]);
+    }
+
+    #[test]
+    fn can_manage_folder_refuses_inbox() {
+        let inbox = MailboxNode::from(folder("INBOX", "INBOX", None, MailboxRole::Inbox));
+        assert!(!can_manage_folder(&inbox));
+        let named = MailboxNode::from(folder("inbox", "inbox", None, MailboxRole::Other));
+        assert!(!can_manage_folder(&named));
+        let work = MailboxNode::from(folder("Work", "Work", None, MailboxRole::Other));
+        assert!(can_manage_folder(&work));
+        let sent = MailboxNode::from(folder("Sent", "Sent", None, MailboxRole::Sent));
+        assert!(can_manage_folder(&sent));
+    }
+
+    #[test]
+    fn remap_renamed_mailbox_updates_self_and_children() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("INBOX.Work", "Work", Some("INBOX"), MailboxRole::Other),
+            folder("INBOX.Work.A", "A", Some("INBOX.Work"), MailboxRole::Other),
+            folder("INBOX.Work2", "Work2", Some("INBOX"), MailboxRole::Other),
+        ]);
+        let old = MailboxId::from("INBOX.Work".to_string());
+        let new = MailboxId::from("INBOX.Archive".to_string());
+        assert_eq!(
+            remap_renamed_mailbox(&old, &new, &old, &nodes)
+                .unwrap()
+                .as_str(),
+            "INBOX.Archive"
+        );
+        assert_eq!(
+            remap_renamed_mailbox(
+                &old,
+                &new,
+                &MailboxId::from("INBOX.Work.A".to_string()),
+                &nodes
+            )
+            .unwrap()
+            .as_str(),
+            "INBOX.Archive.A"
+        );
+        assert!(
+            remap_renamed_mailbox(
+                &old,
+                &new,
+                &MailboxId::from("INBOX.Work2".to_string()),
+                &nodes
+            )
+            .is_none()
+        );
+        assert!(
+            remap_renamed_mailbox(&old, &new, &MailboxId::from("INBOX".to_string()), &nodes)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn subtree_deepest_first_includes_self() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("KDE", "KDE", None, MailboxRole::Other),
+            folder("KDE.pim", "pim", Some("KDE"), MailboxRole::Other),
+            folder(
+                "KDE.pim.inbox",
+                "inbox",
+                Some("KDE.pim"),
+                MailboxRole::Other,
+            ),
+        ]);
+        let ids = mailbox_subtree_deepest_first(&MailboxId::from("KDE".to_string()), &nodes);
+        let names: Vec<_> = ids.iter().map(|id| id.as_str()).collect();
+        assert_eq!(names, ["KDE.pim.inbox", "KDE.pim", "KDE"]);
     }
 
     #[test]

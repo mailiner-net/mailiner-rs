@@ -4,6 +4,8 @@ use mailiner_core::MessageSort;
 use super::super::icons::{Icon, IconKind};
 use super::super::theme::ThemeSelect;
 
+use super::mailboxtreeview::prompt_folder_name;
+
 use crate::Route;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -173,6 +175,24 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if props.mode == Mode::MailboxTreeView {
+                if let Some(account_id) = current_account_id.clone() {
+                    button {
+                        class: "folder-new",
+                        title: "Create a new folder",
+                        aria_label: "New folder",
+                        onclick: move |_| {
+                            let Some(name) = prompt_folder_name("New folder name", "") else {
+                                return;
+                            };
+                            let _ = core_tx.send(CoreEvent::CreateFolder {
+                                account_id: account_id.clone(),
+                                parent_id: None,
+                                name,
+                            });
+                        },
+                        "New folder"
+                    }
+                }
                 ThemeSelect { class: "theme-select pane-header-theme", }
                 Link {
                     to: Route::SettingsView {},

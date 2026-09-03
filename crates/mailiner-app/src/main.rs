@@ -288,6 +288,7 @@ fn App() -> Element {
     let messages = use_signal(|| SparseList::new(0));
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
+    let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
     let sort_supports_size_sender = use_signal(|| false);
     let selection = use_signal(crate::selection::MessageSelection::default);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
@@ -307,6 +308,7 @@ fn App() -> Element {
         messages,
         messages_loading,
         message_sort,
+        message_list_density,
         sort_supports_size_sender,
         selected_mailbox,
         selected_account,

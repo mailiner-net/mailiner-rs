@@ -7,6 +7,7 @@ use crate::Route;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::mailbox::can_empty_trash;
+use crate::ui_prefs::MessageListDensity;
 
 /// Confirm before permanently emptying Trash. Non-web builds fail closed.
 fn confirm_empty_trash() -> bool {
@@ -46,6 +47,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let current_mailbox_id = ctx.selected_mailbox.read();
     let current_account_id = ctx.selected_account.read();
     let sort = *ctx.message_sort.read();
+    let mut density = ctx.message_list_density;
+    let current_density = *density.read();
     let supports_size_sender = *ctx.sort_supports_size_sender.read();
     let message_total = ctx.messages.read().total_count();
 
@@ -90,6 +93,26 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if props.mode == Mode::MessageList {
+                select {
+                    class: "message-density",
+                    aria_label: "Message list density",
+                    title: "List density",
+                    value: "{current_density.as_key()}",
+                    onchange: move |evt| {
+                        if let Some(next) = MessageListDensity::from_key(&evt.value()) {
+                            crate::ui_prefs::save_message_list_density(next);
+                            density.set(next);
+                        }
+                    },
+                    for option in MessageListDensity::ALL {
+                        option {
+                            value: "{option.as_key()}",
+                            selected: option == current_density,
+                            "{option.label()}"
+                        }
+                    }
+                }
+
                 select {
                     class: "message-sort",
                     aria_label: "Sort messages",

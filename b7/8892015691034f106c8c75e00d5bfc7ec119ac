@@ -1,0 +1,21 @@
+crates/mailiner-imap-connector/src/sent.rs
+  s_ec254cc4620923::t_ca272a30a2bba5 242-254
+  s_ec254cc4620923::t_668e03c14951d7 12-13,17,19-21,30,40-42,48,58-66,68-78,91-95
+  s_ec254cc4620923::t_9233f5faeab6f6 352-356,394-396,411,414,417-421,428,430-448,450-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b78892015691034f106c8c75e00d5bfc7ec119ac",
+  "prompts": {},
+  "sessions": {
+    "s_ec254cc4620923": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06949-a611-7c03-a4af-7269fc075519",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -423,45 +423,45 @@ where
     let mut scroll_generation = use_signal(|| 0u64);
     let mut container_ref = use_signal(|| None::<Rc<MountedData>>);
 
-    // React to `items` and measured height. Never write reactive state that this
-    // effect also reads with `.read()` (use peek for viewport when writing it).
-    use_effect({
-        let props = props.clone();
-        let pending_ranges = pending_ranges.clone();
-        let last_total = last_total.clone();
-        move || {
-            let items = props.items.read().clone();
-            let total = items.total_count();
-            let height = *measured_height.read();
-
-            let total_changed = total != last_total.get();
-            if total_changed {
-                last_total.set(total);
-                pending_ranges.borrow_mut().clear();
-            }
-
-            let scroll_top = if total_changed {
-                0.0
-            } else {
-                viewport_info.peek().scroll_top
-            };
-            let new_vp = ViewportInfo::calculate(scroll_top, height, props.item_height, total);
-            if new_vp != *viewport_info.peek() {
-                viewport_info.set(new_vp);
-            }
-
-            // Wait for ResizeObserver before requesting data so we only fetch
-            // what fits the real viewport (+ buffer).
-            if height <= 0.0 {
-                return;
-            }
-
-            let buffered = new_vp.buffered_range(props.buffer_size, total);
-            queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
-        }
-    });
-
+    // React to `items`, measured height, and row height. Never write reactive
+    // state that this effect also reads with `.read()` (use peek for viewport).
     let item_height = props.item_height;
+    let items_signal = props.items;
+    let buffer_size = props.buffer_size;
+    let on_need_range = props.on_need_range;
+    let pending_for_viewport = pending_ranges.clone();
+    let last_total_for_viewport = last_total.clone();
+    use_effect(use_reactive!(|item_height| {
+        let items = items_signal.read().clone();
+        let total = items.total_count();
+        let height = *measured_height.read();
+
+        let total_changed = total != last_total_for_viewport.get();
+        if total_changed {
+            last_total_for_viewport.set(total);
+            pending_for_viewport.borrow_mut().clear();
+        }
+
+        let scroll_top = if total_changed {
+            0.0
+        } else {
+            viewport_info.peek().scroll_top
+        };
+        let new_vp = ViewportInfo::calculate(scroll_top, height, item_height, total);
+        if new_vp != *viewport_info.peek() {
+            viewport_info.set(new_vp);
+        }
+
+        // Wait for ResizeObserver before requesting data so we only fetch
+        // what fits the real viewport (+ buffer).
+        if height <= 0.0 {
+            return;
+        }
+
+        let buffered = new_vp.buffered_range(buffer_size, total);
+        queue_missing_fetches(&items, buffered, &pending_for_viewport, on_need_range);
+    }));
+
     let reveal_index = props.reveal_index;
     use_effect(use_reactive!(|reveal_index| {
         if let Some(index) = reveal_index {
@@ -743,6 +743,15 @@ mod tests {
         assert_eq!(vp.visible_count, 6);
         assert_eq!(vp.last_visible_index, 5);
         assert_eq!(vp.buffered_range(2, 1000), 0..8);
+    }
+
+    #[test]
+    fn viewport_recalculates_when_item_height_changes() {
+        let comfortable = ViewportInfo::calculate(520.0, 320.0, 52.0, 1000);
+        let compact = ViewportInfo::calculate(520.0, 320.0, 40.0, 1000);
+        assert_eq!(comfortable.first_visible_index, 10);
+        assert_eq!(compact.first_visible_index, 13);
+        assert!(compact.visible_count > comfortable.visible_count);
     }
 
     #[test]

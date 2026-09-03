@@ -1,0 +1,50 @@
+crates/mailiner-composer/src/export.rs
+  s_21dae74a752adf::t_9a05001e400889 405-424
+crates/mailiner-app/src/components/icons.rs
+  s_21dae74a752adf::t_e134c6b5c36480 22,80-81
+crates/mailiner-app/assets/main.css
+  s_21dae74a752adf::t_fd18cd5df9ba7c 1240-1246
+crates/mailiner-composer/src/lib.rs
+  s_21dae74a752adf::t_f25c7e3681f760 42-44
+crates/mailiner-app/src/components/compose.rs
+  s_21dae74a752adf::t_f9934b035b6f56 616-617
+  s_21dae74a752adf::t_c035e53c4a4a29 239,654
+  s_21dae74a752adf::t_2494e8727f369c 672,675-677,689-695,697-704
+  s_21dae74a752adf::t_131375187e5f0b 1099
+  s_21dae74a752adf::t_b9fd0ae8fe97d4 680-688,696,1087,1089
+  s_21dae74a752adf::t_bf25ec0b63a5a1 240-244
+  s_21dae74a752adf::t_4f91e04b3e92dd 363-406,408,411,417-427,433,436-437,441-450,453,457-486,492,507-559,561-599,601-607,610,612-613,618-622,625-627,629
+  s_21dae74a752adf::t_e185d8ce36ebec 428-432,487-491,502,600,611
+  s_21dae74a752adf::t_eb1e35be3f36ed 615
+  s_21dae74a752adf::t_30a2525ca11ba1 826-855,988-1029,1031-1047,1049-1051,1053-1081,1084,1098,1100,1114-1117
+  s_21dae74a752adf::t_17c98fb74ee75a 9-10,14-15,19-20,182-187
+  s_21dae74a752adf::t_e0c937ba4aead3 290-329,339-342,348-349
+crates/mailiner-html/src/lib.rs
+  s_21dae74a752adf::t_ca02c60251da80 317-326
+  s_21dae74a752adf::t_0bb4d09f4471c2 17-30
+crates/mailiner-composer/src/sanitize/mod.rs
+  s_21dae74a752adf::t_36bd036ad063c6 4-5
+crates/mailiner-app/Cargo.toml
+  s_21dae74a752adf::t_97b5d9233a076c 49,51-53,57-58
+crates/mailiner-composer/src/shell/attachment_list.rs
+  s_21dae74a752adf::t_928fdcf8ab40c4 3-7,117-170,172,175-206
+  s_21dae74a752adf::t_91a949ce0f8b0f 301-306,308-312
+  s_21dae74a752adf::t_63849c7d72d9d6 171,173-174,299-300,313,315-352
+  s_21dae74a752adf::t_4898ae04454432 314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0743ce9b2b29efc404a2a5e8247fbf048f9445ac",
+  "prompts": {},
+  "sessions": {
+    "s_21dae74a752adf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06998-cae9-7642-a37b-4bc68a95087a",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -14,6 +14,8 @@ pub enum ShortcutId {
     Archive,
     NextMessage,
     PrevMessage,
+    NextUnread,
+    PrevUnread,
     ExtendNextMessage,
     ExtendPrevMessage,
     ScrollMessageDown,
@@ -158,6 +160,23 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: false,
         label: "↑",
         description: "Previous message",
+        group: ShortcutGroup::Mail,
+    },
+    // n/p (not KMail A/Z): A is already Reply all.
+    Shortcut {
+        id: ShortcutId::NextUnread,
+        keys: &["n", "N"],
+        require_shift: false,
+        label: "N",
+        description: "Next unread message",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::PrevUnread,
+        keys: &["p", "P"],
+        require_shift: false,
+        label: "P",
+        description: "Previous unread message",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -388,6 +407,30 @@ mod tests {
         assert_eq!(
             shortcut_for_key("f", false).map(|s| s.id),
             Some(ShortcutId::Forward)
+        );
+    }
+
+    #[test]
+    fn next_and_prev_unread_keys_resolve() {
+        assert_eq!(
+            shortcut_for_key("n", false).map(|s| s.id),
+            Some(ShortcutId::NextUnread)
+        );
+        assert_eq!(
+            shortcut_for_key("N", true).map(|s| s.id),
+            Some(ShortcutId::NextUnread)
+        );
+        assert_eq!(
+            shortcut_for_key("p", false).map(|s| s.id),
+            Some(ShortcutId::PrevUnread)
+        );
+        assert_eq!(
+            shortcut_for_key("P", true).map(|s| s.id),
+            Some(ShortcutId::PrevUnread)
+        );
+        assert_eq!(
+            shortcut_for_key("a", false).map(|s| s.id),
+            Some(ShortcutId::ReplyAll)
         );
     }
 

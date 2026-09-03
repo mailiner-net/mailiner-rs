@@ -138,6 +138,12 @@ fn run_shortcut(
                 extend: true,
             });
         }
+        ShortcutId::NextUnread => {
+            let _ = core.send(CoreEvent::SelectAdjacentUnread { delta: 1 });
+        }
+        ShortcutId::PrevUnread => {
+            let _ = core.send(CoreEvent::SelectAdjacentUnread { delta: -1 });
+        }
         ShortcutId::ScrollMessageDown => {
             scroll_message_view(true, MessageScroll::Line);
         }

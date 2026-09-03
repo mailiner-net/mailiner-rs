@@ -330,6 +330,49 @@ pub fn adjacent_index(total: usize, current: Option<usize>, delta: i32) -> Optio
     }
 }
 
+/// Result of walking the list for the next/previous unread row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnreadScan {
+    /// Loaded unread row at this index.
+    Found(usize),
+    /// First unloaded index in the scan direction.
+    Hole(usize),
+    /// Reached the list edge with no unread row.
+    None,
+}
+
+/// Walk from `current` by `delta` (`+1` next, `-1` previous) until an unread
+/// row, a hole, or the list edge.
+///
+/// `is_unread(i)` is `Some(true)` unread, `Some(false)` read, `None` not loaded.
+/// With no current row, next starts at 0 and previous at `total - 1`.
+pub fn next_unread_index(
+    total: usize,
+    current: Option<usize>,
+    delta: i32,
+    mut is_unread: impl FnMut(usize) -> Option<bool>,
+) -> UnreadScan {
+    if total == 0 || delta == 0 {
+        return UnreadScan::None;
+    }
+    let step: i64 = if delta > 0 { 1 } else { -1 };
+    let mut i = match current {
+        Some(idx) => idx as i64 + step,
+        None if step > 0 => 0,
+        None => total as i64 - 1,
+    };
+    let last = total as i64;
+    while i >= 0 && i < last {
+        let idx = i as usize;
+        match is_unread(idx) {
+            Some(true) => return UnreadScan::Found(idx),
+            Some(false) => i += step,
+            None => return UnreadScan::Hole(idx),
+        }
+    }
+    UnreadScan::None
+}
+
 /// Subtract already-pending ranges so we do not re-request in-flight data.
 fn subtract_pending(needed: Vec<Range<usize>>, pending: &[Range<usize>]) -> Vec<Range<usize>> {
     if pending.is_empty() {
@@ -843,5 +886,45 @@ mod tests {
         assert_eq!(adjacent_index(5, Some(0), -1), None);
         assert_eq!(adjacent_index(5, Some(4), 1), None);
         assert_eq!(adjacent_index(5, Some(4), -1), Some(3));
+    }
+
+    /// `Some(true)` unread, `Some(false)` read, `None` hole.
+    fn scan(rows: &[Option<bool>], current: Option<usize>, delta: i32) -> UnreadScan {
+        next_unread_index(rows.len(), current, delta, |i| rows[i])
+    }
+
+    #[test]
+    fn next_unread_index_finds_first_and_last_when_unfocused() {
+        let rows = [Some(false), Some(true), Some(false), Some(true)];
+        assert_eq!(scan(&rows, None, 1), UnreadScan::Found(1));
+        assert_eq!(scan(&rows, None, -1), UnreadScan::Found(3));
+        assert_eq!(scan(&[], None, 1), UnreadScan::None);
+    }
+
+    #[test]
+    fn next_unread_index_skips_current_even_if_unread() {
+        let rows = [Some(true), Some(false), Some(true)];
+        assert_eq!(scan(&rows, Some(0), 1), UnreadScan::Found(2));
+        assert_eq!(scan(&rows, Some(2), -1), UnreadScan::Found(0));
+        assert_eq!(scan(&rows, Some(2), 1), UnreadScan::None);
+        assert_eq!(scan(&rows, Some(0), -1), UnreadScan::None);
+    }
+
+    #[test]
+    fn next_unread_index_stops_at_first_hole() {
+        let rows = [Some(false), None, Some(true)];
+        assert_eq!(scan(&rows, Some(0), 1), UnreadScan::Hole(1));
+        let rows = [Some(true), None, Some(false)];
+        assert_eq!(scan(&rows, Some(2), -1), UnreadScan::Hole(1));
+    }
+
+    #[test]
+    fn next_unread_index_skips_read_rows() {
+        let rows = [Some(true), Some(false), Some(false), Some(true)];
+        assert_eq!(scan(&rows, Some(0), 1), UnreadScan::Found(3));
+        assert_eq!(
+            scan(&[Some(false), Some(false)], Some(0), 1),
+            UnreadScan::None
+        );
     }
 }

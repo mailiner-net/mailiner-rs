@@ -10,9 +10,9 @@ use crate::account_config::DEFAULT_SMTP_PORT;
 use crate::account_config::SmtpTlsMode;
 use crate::account_config::dev_form_prefill;
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
-    apply_smtp_test_outcome, build_config_from_form, kind_label, start_smtp_test,
-    use_form_test_status_cleanup,
+    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
+    FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form, kind_label,
+    start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -52,6 +52,7 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
+    let mut signature = use_signal(String::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -178,6 +179,7 @@ pub fn OnboardingForm() -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -224,6 +226,7 @@ pub fn OnboardingForm() -> Element {
                 smtp_tls_mode(),
                 &smtp_remote_host(),
                 &smtp_remote_port(),
+                &signature(),
                 Utc::now(),
             ),
             phase,
@@ -257,6 +260,7 @@ pub fn OnboardingForm() -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -334,6 +338,13 @@ pub fn OnboardingForm() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountSignatureFields {
+                        id_prefix: "onboarding",
+                        signature: signature(),
+                        set_signature: move |v| signature.set(v),
+                        busy: busy,
                     }
 
                     AccountSmtpFields {

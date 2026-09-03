@@ -7,4 +7,6 @@ pub struct Account {
     pub email: String,
     /// IMAP hostname (non-secret display field for account list).
     pub host: String,
+    /// Optional plain-text signature (not a secret).
+    pub signature: Option<String>,
 }

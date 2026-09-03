@@ -55,6 +55,9 @@ pub struct AccountConfig {
     pub display_name: String,
     /// Primary mailbox address (From: / identity).
     pub email: String,
+    /// Optional plain-text signature appended when opening a compose draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     pub imap: ImapSettings,
     /// Optional until send is implemented; persisted for forward-compat.
     pub smtp: Option<SmtpSettings>,
@@ -402,6 +405,7 @@ impl AccountConfig {
             name: self.display_name.clone(),
             email: self.email.clone(),
             host: self.imap.host.clone(),
+            signature: self.signature.clone(),
         }
     }
 
@@ -490,6 +494,16 @@ fn strip_url_userinfo(url: &str) -> String {
     match authority.rsplit_once('@') {
         Some((_, host)) => format!("{scheme}://{host}{suffix}"),
         None => url.to_string(),
+    }
+}
+
+/// Trim surrounding whitespace; empty / whitespace-only → `None`.
+pub fn normalize_signature(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -731,6 +745,7 @@ mod tests {
             id: AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
             display_name: "Work".into(),
             email: "user@example.com".into(),
+            signature: None,
             imap: sample_imap(),
             smtp: None,
             proxy: sample_proxy(),
@@ -999,6 +1014,67 @@ mod tests {
         assert_eq!(ui.name, "Work");
         assert_eq!(ui.email, "user@example.com");
         assert_eq!(ui.host, config.imap.host);
+        assert!(ui.signature.is_none());
+    }
+
+    #[test]
+    fn serde_old_config_without_signature_defaults_none() {
+        let json = serde_json::to_string(&sample_config()).unwrap();
+        assert!(
+            !json.contains("signature"),
+            "None signature should be omitted: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.signature.is_none());
+
+        let old = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "display_name": "Work",
+            "email": "user@example.com",
+            "imap": {
+                "host": "imap.example.com",
+                "port": 993,
+                "username": "user@example.com",
+                "password": "s3cret",
+                "use_tls": true
+            },
+            "smtp": null,
+            "proxy": {
+                "base_url": "ws://localhost:9400/proxy",
+                "token": "testtoken",
+                "remote_host": null,
+                "remote_port": null
+            },
+            "created_at": "2024-06-15T12:00:00Z",
+            "updated_at": "2024-06-15T12:00:00Z"
+        }"#;
+        let back: AccountConfig = serde_json::from_str(old).expect("old blob without signature");
+        assert!(back.signature.is_none());
+        assert_eq!(back.email, "user@example.com");
+    }
+
+    #[test]
+    fn serde_roundtrip_signature() {
+        let mut config = sample_config();
+        config.signature = Some("Jane Doe\nExample Corp".into());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"signature\":\"Jane Doe\\nExample Corp\""),
+            "signature missing: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.signature.as_deref(), Some("Jane Doe\nExample Corp"));
+        assert_eq!(back.to_ui_account().signature, back.signature);
+    }
+
+    #[test]
+    fn normalize_signature_empty_is_none() {
+        assert_eq!(normalize_signature(""), None);
+        assert_eq!(normalize_signature("   \n\t  "), None);
+        assert_eq!(
+            normalize_signature("  Jane Doe\nExample Corp  \n"),
+            Some("Jane Doe\nExample Corp".into())
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::identity::FromIdentity;
 use crate::model::draft::{caps, BodyMode, ComposerAddress, DraftDocument};
 use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
+use crate::reply::signature::apply_plain_signature;
 use crate::shell::attachment_list::draft_payload_bytes;
 
 /// How the user opened the composer.
@@ -40,20 +41,26 @@ pub enum PrefillError {
 /// Plain bodies use `>` quotes. HTML bodies are sanitized via
 /// [`crate::sanitize::sanitize_for_edit`] and wrapped as a rich quote.
 /// `cid:` images referenced by the quote are copied onto [`DraftDocument::inline_images`].
+///
+/// `signature` is applied once to the initial plain body (after any quote).
+/// Pass `None` when the account has no signature.
 pub fn build_draft(
     intent: ComposeIntent,
     identity: &FromIdentity,
     envelope: Option<&Envelope>,
     loaded: Option<&LoadedMessage>,
+    signature: Option<&str>,
 ) -> Result<DraftDocument, PrefillError> {
-    match intent {
-        ComposeIntent::New => Ok(DraftDocument::new_empty(identity)),
+    let mut draft = match intent {
+        ComposeIntent::New => DraftDocument::new_empty(identity),
         ComposeIntent::Reply | ComposeIntent::ReplyAll | ComposeIntent::Forward => {
             let env = envelope.ok_or(PrefillError::EnvelopeRequired)?;
             let loaded = loaded.ok_or(PrefillError::BodyNotLoaded)?;
-            build_reply_like(intent, identity, env, loaded)
+            build_reply_like(intent, identity, env, loaded)?
         }
-    }
+    };
+    apply_plain_signature(&mut draft, signature);
+    Ok(draft)
 }
 
 fn build_reply_like(
@@ -438,7 +445,7 @@ mod tests {
     #[test]
     fn new_compose_rich_empty() {
         let id = FromIdentity::new("Me", "me@example.com");
-        let d = build_draft(ComposeIntent::New, &id, None, None).unwrap();
+        let d = build_draft(ComposeIntent::New, &id, None, None, None).unwrap();
         assert_eq!(d.mode, BodyMode::Rich);
         assert!(d.to.is_empty());
         assert_eq!(d.from.as_ref().unwrap().email, "me@example.com");
@@ -449,7 +456,7 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
         let loaded = loaded_plain("Hi there");
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(d.mode, BodyMode::Plain);
         assert_eq!(d.to[0].email, "alice@example.com");
         assert!(d.subject.starts_with("Re:"), "{}", d.subject);
@@ -462,7 +469,14 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
         let loaded = loaded_plain("x");
-        let d = build_draft(ComposeIntent::ReplyAll, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(
+            ComposeIntent::ReplyAll,
+            &id,
+            Some(&env),
+            Some(&loaded),
+            None,
+        )
+        .unwrap();
         assert!(d.to.iter().any(|a| a.email == "alice@example.com"));
         assert!(!d.to.iter().any(|a| a.email == "me@example.com"));
         assert!(d.cc.iter().any(|a| a.email == "cc@example.com"));
@@ -480,7 +494,7 @@ mod tests {
         env.in_reply_to = Some("<parent@x>".into());
         env.references = vec!["<root@x>".into(), "<parent@x>".into()];
         let loaded = loaded_plain("x");
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(d.to[0].email, "reply@example.com");
         assert_eq!(d.in_reply_to.as_deref(), Some("<mid@x>"));
         assert_eq!(
@@ -499,7 +513,7 @@ mod tests {
         let mut env = env_with_from("alice@example.com");
         env.rfc_message_id = Some("<mid@x>".into());
         let loaded = loaded_plain("body");
-        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(d.in_reply_to.is_none());
         assert!(d.references.is_empty());
     }
@@ -509,7 +523,7 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
         let loaded = loaded_html_only("<p>Hi</p><script>alert(1)</script>");
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(d.mode, BodyMode::Rich);
         assert!(d.html_body.contains("Hi"), "{}", d.html_body);
         assert!(!d.html_body.contains("script"), "{}", d.html_body);
@@ -521,7 +535,7 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
         let loaded = loaded_plain("body");
-        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(d.to.is_empty());
         assert!(d.subject.starts_with("Fwd:"), "{}", d.subject);
     }
@@ -535,7 +549,7 @@ mod tests {
             r#"<p>Hi <img src="cid:logo@x" alt="logo"></p>"#,
             vec![cid_png("logo@x", &png)],
         );
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(d.mode, BodyMode::Rich);
         assert_eq!(d.inline_images.len(), 1);
         assert_eq!(d.inline_images[0].content_id, "logo@x");
@@ -553,7 +567,7 @@ mod tests {
             r#"<img src="cid:pic@mailiner">"#,
             vec![cid_png("<pic@mailiner>", &png)],
         );
-        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(d.inline_images.len(), 1);
         assert_eq!(d.inline_images[0].content_id, "pic@mailiner");
         assert!(d.html_body.contains("cid:pic@mailiner"), "{}", d.html_body);
@@ -564,7 +578,7 @@ mod tests {
         let id = FromIdentity::new("Me", "me@example.com");
         let env = env_with_from("alice@example.com");
         let loaded = loaded_html_only(r#"<p>Hi <img src="cid:gone@x"></p>"#);
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(d.inline_images.is_empty());
         assert!(!d.html_body.contains("cid:gone@x"), "{}", d.html_body);
         assert!(d.prefill_warnings.iter().any(|w| w.contains("Missing")));
@@ -579,7 +593,7 @@ mod tests {
             r#"<p>Hi <img src="cid:logo@x"></p>"#,
             vec![cid_png("<logo@x>", &png)],
         );
-        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         let prepared = crate::prepare_submit(&d, &id).unwrap();
         let s = String::from_utf8_lossy(&prepared.rfc822);
         assert!(s.contains("multipart/related"), "{s}");
@@ -596,12 +610,63 @@ mod tests {
             r#"<p>Hi <img src="cid:logo@x"></p>"#,
             vec![cid_png("logo@x", &png)],
         );
-        let mut d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let mut d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(!d.inline_images.is_empty());
         assert!(!d.html_body.is_empty());
         discard_rich_quote(&mut d);
         assert_eq!(d.mode, BodyMode::Plain);
         assert!(d.html_body.is_empty());
         assert!(d.inline_images.is_empty());
+    }
+
+    #[test]
+    fn draft_build_includes_signature_after_quote() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_plain("Hi there");
+        let d = build_draft(
+            ComposeIntent::Reply,
+            &id,
+            Some(&env),
+            Some(&loaded),
+            Some("Jane Doe"),
+        )
+        .unwrap();
+        assert!(d.plain_body.contains("> Hi there"), "{}", d.plain_body);
+        assert!(
+            d.plain_body.ends_with("\n-- \nJane Doe"),
+            "{}",
+            d.plain_body
+        );
+    }
+
+    #[test]
+    fn draft_build_missing_signature_is_noop() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_plain("Hi there");
+        let with = build_draft(
+            ComposeIntent::Reply,
+            &id,
+            Some(&env),
+            Some(&loaded),
+            Some("  "),
+        )
+        .unwrap();
+        let without =
+            build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
+        assert_eq!(with.plain_body, without.plain_body);
+        assert!(
+            !without.plain_body.contains("-- "),
+            "{}",
+            without.plain_body
+        );
+    }
+
+    #[test]
+    fn new_draft_includes_signature() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let d = build_draft(ComposeIntent::New, &id, None, None, Some("Jane Doe")).unwrap();
+        assert_eq!(d.plain_body, "\n-- \nJane Doe");
     }
 }

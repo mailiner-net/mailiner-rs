@@ -37,9 +37,9 @@ pub use model::{
     FileAttachment, InlineId, InlineImage,
 };
 pub use reply::{
-    attribution_line, bare_content_id, build_draft, discard_rich_quote, extract_cid_refs,
-    normalize_cid, quote_plain, rehydrate_cids, subject_with_prefix, CidRehydrateResult,
-    ComposeIntent, PrefillError,
+    append_plain_signature, apply_plain_signature, attribution_line, bare_content_id, build_draft,
+    discard_rich_quote, extract_cid_refs, normalize_cid, quote_plain, rehydrate_cids,
+    subject_with_prefix, CidRehydrateResult, ComposeIntent, PrefillError, SIGDASH,
 };
 pub use sanitize::{
     is_safe_image_content_type, sanitize_for_edit, sanitize_for_export, SAFE_IMAGE_ACCEPT,

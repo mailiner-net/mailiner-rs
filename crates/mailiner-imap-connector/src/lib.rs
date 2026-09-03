@@ -1338,13 +1338,45 @@ where
 
                 if state.offset >= state.max_download {
                     state.done = true;
-                    return Some((
-                        Err(MailinerError::Connector(format!(
-                            "attachment exceeds download limit (> {})",
-                            state.max_download
-                        ))),
-                        state,
-                    ));
+                    if state.offset > state.max_download {
+                        return Some((
+                            Err(MailinerError::Connector(format!(
+                                "attachment exceeds download limit (> {})",
+                                state.max_download
+                            ))),
+                            state,
+                        ));
+                    }
+                    // Exact limit: probe one extra byte so MAX-sized parts succeed
+                    // and MAX+1 is still rejected.
+                    let probe = {
+                        let mut guard = state.imap.lock().await;
+                        match &mut *guard {
+                            ImapSession::Authenticated(session) => {
+                                Self::fetch_partial_chunk(
+                                    session,
+                                    &state.folder_id,
+                                    &state.message_id,
+                                    &state.section,
+                                    state.offset,
+                                    1,
+                                )
+                                .await
+                            }
+                            _ => Err(ImapError::NotAuthenticated),
+                        }
+                    };
+                    return match probe {
+                        Ok(bytes) if bytes.is_empty() => None,
+                        Ok(_) => Some((
+                            Err(MailinerError::Connector(format!(
+                                "attachment exceeds download limit (> {})",
+                                state.max_download
+                            ))),
+                            state,
+                        )),
+                        Err(e) => Some((Err(e.into()), state)),
+                    };
                 }
 
                 let remaining_cap = (state.max_download - state.offset) as usize;
@@ -1428,16 +1460,17 @@ where
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to fetch message size: {e}")))?;
 
-            if let Some(fetch) = fetch.next().await {
-                let fetch = fetch
-                    .map_err(|e| ImapError::Imap(format!("Failed to fetch message size: {e}")))?;
-                if let Some(size) = fetch.size {
-                    if u64::from(size) > Self::MAX_DOWNLOAD {
-                        return Err(MailinerError::Connector(format!(
-                            "message exceeds download limit ({size} > {})",
-                            Self::MAX_DOWNLOAD
-                        )));
-                    }
+            let fetch = fetch
+                .next()
+                .await
+                .ok_or_else(|| ImapError::InvalidData("Message not found".to_string()))?
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch message size: {e}")))?;
+            if let Some(size) = fetch.size {
+                if u64::from(size) > Self::MAX_DOWNLOAD {
+                    return Err(MailinerError::Connector(format!(
+                        "message exceeds download limit ({size} > {})",
+                        Self::MAX_DOWNLOAD
+                    )));
                 }
             }
         }

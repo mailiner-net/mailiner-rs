@@ -2413,11 +2413,17 @@ async fn handle_save_message_eml(
         Ok(bytes) => bytes,
         Err(e) => {
             error!("fetch_raw_message failed: {}", e);
-            ctx.download_status.write().insert(
-                EML_DOWNLOAD_KEY.into(),
-                DownloadStatus::Error(e.to_string()),
-            );
-            ctx.show_toast(ToastAction::error(format!("Could not save message: {e}")));
+            if selected_account_is(ctx, &account_id)
+                && ctx.selection.read().focus() == Some(&message_id)
+            {
+                ctx.download_status.write().insert(
+                    EML_DOWNLOAD_KEY.into(),
+                    DownloadStatus::Error(e.to_string()),
+                );
+                ctx.show_toast(ToastAction::error(format!("Could not save message: {e}")));
+            } else {
+                ctx.download_status.write().remove(EML_DOWNLOAD_KEY);
+            }
             return;
         }
     };

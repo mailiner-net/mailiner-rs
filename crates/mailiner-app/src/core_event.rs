@@ -2125,7 +2125,7 @@ async fn handle_select_message(
     }
 }
 
-fn snapshot_selection_unread(ctx: &AppContext) {
+fn snapshot_selection_unread(ctx: &mut AppContext) {
     let list = ctx.messages.read();
     let mut sel = ctx.selection.write();
     for id in sel.ids_vec() {

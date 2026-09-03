@@ -27,6 +27,27 @@ pub struct FormatResult {
     pub inlined_part_ids: Vec<String>,
 }
 
+/// Clear decoded payloads on parts that were inlined as `data:` URLs.
+///
+/// Keeps metadata (id, type, filename, sizes) so the part can still be listed.
+pub fn drop_inlined_payloads(parts: &mut [MessagePart], inlined_part_ids: &[String]) {
+    if inlined_part_ids.is_empty() {
+        return;
+    }
+    for part in parts {
+        if inlined_part_ids.iter().any(|id| part.id.as_str() == id) {
+            part.content = MessageContent::Empty;
+        }
+    }
+}
+
+impl FormatResult {
+    /// Drop Binary/Text on [`Self::inlined_part_ids`] after a successful format.
+    pub fn drop_inlined_payloads(&self, parts: &mut [MessagePart]) {
+        drop_inlined_payloads(parts, &self.inlined_part_ids);
+    }
+}
+
 pub struct MessageFormatter {
     pub options: FormatOptions,
     pub prevented_remote_resources: bool,
@@ -211,5 +232,76 @@ mod tests {
         let r = f.format(&parts).unwrap();
         assert!(r.html.contains("PLAIN body"));
         assert!(!r.html.contains("HTML body"));
+    }
+
+    fn png_part(id: &str, cid: &str, bytes: &[u8]) -> MessagePart {
+        let now = Utc::now();
+        MessagePart {
+            id: MessagePartId::new(id),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
+            path: vec!["2".into()],
+            kind: PartKind::Image,
+            content_type: "image/png".into(),
+            charset: None,
+            content_id: Some(cid.into()),
+            description: None,
+            filename: Some("logo.png".into()),
+            encoding: TransferEncoding::Base64,
+            original_size: Some(bytes.len() as u64),
+            size: bytes.len() as u64,
+            is_attachment: true,
+            is_hidden: true,
+            content: MessageContent::Binary(bytes.to_vec()),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn format_then_drop_clears_inlined_binary() {
+        let html = part(
+            PartKind::TextHtml,
+            "text/html",
+            r#"<img src="cid:logo@x"><img src="cid:unused@x">"#,
+        );
+        let inlined = png_part("img", "<logo@x>", b"\x89PNG");
+        let leftover = png_part("other", "<other@x>", b"\x89PNG extra");
+        let mut parts = vec![html, inlined, leftover];
+        let mut f = MessageFormatter::with_defaults();
+        let r = f.format(&parts).unwrap();
+        assert!(r.html.contains("data:image/png;base64,"));
+        assert!(r.inlined_part_ids.iter().any(|id| id == "img"));
+        assert!(!r.inlined_part_ids.iter().any(|id| id == "other"));
+
+        r.drop_inlined_payloads(&mut parts);
+
+        assert!(matches!(parts[1].content, MessageContent::Empty));
+        assert!(parts[1].is_hidden);
+        assert_eq!(parts[1].filename.as_deref(), Some("logo.png"));
+        assert_eq!(parts[1].content_type, "image/png");
+        assert_eq!(parts[1].content_id.as_deref(), Some("<logo@x>"));
+        assert_eq!(parts[1].size, 4);
+        assert!(matches!(parts[2].content, MessageContent::Binary(_)));
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+
+        // Viewer caches HTML because a later format cannot rebuild data: URLs.
+        let r2 = f.format(&parts).unwrap();
+        assert!(!r2.html.contains("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn drop_is_noop_without_inlined_ids() {
+        let mut parts = vec![png_part("img", "<logo@x>", b"\x89PNG")];
+        drop_inlined_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Binary(_)));
+    }
+
+    #[test]
+    fn drop_preserves_visible_attachment_flag() {
+        let mut parts = vec![png_part("img", "<logo@x>", b"\x89PNG")];
+        parts[0].is_hidden = false;
+        drop_inlined_payloads(&mut parts, &["img".into()]);
+        assert!(matches!(parts[0].content, MessageContent::Empty));
+        assert!(!parts[0].is_hidden);
     }
 }

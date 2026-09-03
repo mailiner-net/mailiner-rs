@@ -275,9 +275,19 @@ mod tests {
     fn cid_to_data_url() {
         let html = html_part(r#"<img src="cid:logo@x">"#);
         let img = png_part("<logo@x>", b"\x89PNG");
-        let r = format_html(&html, &[html.clone(), img], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            &[html.clone(), img.clone()],
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(r.html.contains("data:image/png;base64,"));
         assert!(r.inlined_part_ids.iter().any(|id| id == "img"));
+
+        let mut parts = vec![html, img];
+        r.drop_inlined_payloads(&mut parts);
+        assert!(matches!(parts[1].content, MessageContent::Empty));
+        assert_eq!(parts[1].content_id.as_deref(), Some("<logo@x>"));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use mailiner_core::models::{MessageContent, PartKind};
 use crate::components::attachments::AttachmentsFooter;
 use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
-use crate::formatter::{FormatOptions, MessageFormatter};
+use crate::formatter::{FormatOptions, MessageFormatter, drop_inlined_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
@@ -200,12 +200,15 @@ pub fn MessageView() -> Element {
     let mut formatted_html = use_signal(|| String::new());
     let mut prevented_remote = use_signal(|| false);
     let last_msg_key = use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(None::<String>)));
+    let html_cache =
+        use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(InlinedHtmlCache::default())));
 
     // Format body + privacy flag when loaded message or allow_remote changes.
     // Mount into shadow DOM after formatting.
     {
-        let ctx = ctx.clone();
+        let mut ctx = ctx.clone();
         let last_msg_key = last_msg_key.clone();
+        let html_cache = html_cache.clone();
         use_effect(move || {
             let view = ctx.message_view.read().clone();
             let allow = *allow_remote.read();
@@ -215,6 +218,7 @@ pub fn MessageView() -> Element {
             // Reset per-message toggles when the selected message changes.
             if *last_msg_key.borrow() != key {
                 *last_msg_key.borrow_mut() = key.clone();
+                html_cache.borrow_mut().reset();
                 if allow || prefer {
                     allow_remote.set(false);
                     prefer_plain.set(false);
@@ -223,23 +227,9 @@ pub fn MessageView() -> Element {
                 }
             }
 
-            match &view {
-                MessageViewState::Ready { loaded, .. } => {
-                    let mut fmt = MessageFormatter::new(FormatOptions {
-                        allow_remote_resources: allow,
-                        prefer_plain: prefer,
-                    });
-                    if let Some(result) = fmt.format(&loaded.parts) {
-                        prevented_remote.set(result.prevented_remote_resources && !allow);
-                        formatted_html.set(result.html.clone());
-                        mount_shadow_html(MESSAGE_CONTENT_ID, &result.html);
-                    } else {
-                        prevented_remote.set(false);
-                        let fallback =
-                            "<p class=\"mlnr-empty-body\">No displayable content.</p>".to_string();
-                        formatted_html.set(fallback.clone());
-                        mount_shadow_html(MESSAGE_CONTENT_ID, &fallback);
-                    }
+            let ready = match &view {
+                MessageViewState::Ready { message_id, loaded } => {
+                    Some((message_id.clone(), loaded.clone()))
                 }
                 MessageViewState::Empty
                 | MessageViewState::Loading { .. }
@@ -247,7 +237,66 @@ pub fn MessageView() -> Element {
                     prevented_remote.set(false);
                     formatted_html.set(String::new());
                     mount_shadow_html(MESSAGE_CONTENT_ID, "");
+                    None
                 }
+            };
+            let Some((message_id, loaded)) = ready else {
+                return;
+            };
+            drop(view);
+
+            if !prefer {
+                let cache = html_cache.borrow();
+                if let Some(html) = cache.html_for(&key, allow) {
+                    prevented_remote.set(cache.prevented_remote && !allow);
+                    mount_shadow_html(MESSAGE_CONTENT_ID, html);
+                    return;
+                }
+            }
+
+            let mut fmt = MessageFormatter::new(FormatOptions {
+                allow_remote_resources: allow,
+                prefer_plain: prefer,
+            });
+            if let Some(result) = fmt.format(&loaded.parts) {
+                let inlined = result.inlined_part_ids.clone();
+                let prevented = result.prevented_remote_resources;
+                let html = result.html;
+
+                prevented_remote.set(prevented && !allow);
+                mount_shadow_html(MESSAGE_CONTENT_ID, &html);
+
+                if !prefer && !inlined.is_empty() {
+                    // Keep at most one extra HTML copy (the other remote-policy
+                    // variant) so Allow still works after Binary is dropped.
+                    let allowed_html = if prevented && !allow {
+                        MessageFormatter::new(FormatOptions {
+                            allow_remote_resources: true,
+                            prefer_plain: false,
+                        })
+                        .format(&loaded.parts)
+                        .map(|r| r.html)
+                    } else {
+                        None
+                    };
+                    *html_cache.borrow_mut() = InlinedHtmlCache {
+                        message_key: key.clone(),
+                        blocked: Some(html),
+                        allowed: allowed_html,
+                        prevented_remote: prevented,
+                    };
+                } else {
+                    formatted_html.set(html);
+                }
+
+                drop(loaded);
+                apply_inlined_payload_drop(&mut ctx, &message_id, &inlined);
+            } else {
+                prevented_remote.set(false);
+                let fallback =
+                    "<p class=\"mlnr-empty-body\">No displayable content.</p>".to_string();
+                formatted_html.set(fallback.clone());
+                mount_shadow_html(MESSAGE_CONTENT_ID, &fallback);
             }
         });
     }
@@ -321,6 +370,69 @@ pub fn MessageView() -> Element {
             }
         }
     }
+}
+
+/// Cached HTML so Allow / plain toggles can re-render after CID payloads are dropped.
+#[derive(Default)]
+struct InlinedHtmlCache {
+    message_key: Option<String>,
+    blocked: Option<String>,
+    allowed: Option<String>,
+    prevented_remote: bool,
+}
+
+impl InlinedHtmlCache {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn html_for(&self, key: &Option<String>, allow_remote: bool) -> Option<&str> {
+        if self.message_key != *key {
+            return None;
+        }
+        if allow_remote {
+            self.allowed.as_deref().or(self.blocked.as_deref())
+        } else {
+            self.blocked.as_deref()
+        }
+    }
+}
+
+fn inlined_parts_hold_payload(
+    loaded: &mailiner_core::models::LoadedMessage,
+    ids: &[String],
+) -> bool {
+    loaded.parts.iter().any(|p| {
+        ids.iter().any(|id| p.id.as_str() == id) && !matches!(p.content, MessageContent::Empty)
+    })
+}
+
+fn apply_inlined_payload_drop(ctx: &mut AppContext, message_id: &MessageId, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let needs_drop = match &*ctx.message_view.read() {
+        MessageViewState::Ready {
+            message_id: id,
+            loaded,
+        } if id == message_id => inlined_parts_hold_payload(loaded, ids),
+        _ => false,
+    };
+    if !needs_drop {
+        return;
+    }
+    let mut view = ctx.message_view.write();
+    let MessageViewState::Ready {
+        message_id: id,
+        loaded,
+    } = &mut *view
+    else {
+        return;
+    };
+    if id != message_id {
+        return;
+    }
+    drop_inlined_payloads(&mut Arc::make_mut(loaded).parts, ids);
 }
 
 fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {
@@ -728,5 +840,31 @@ mod tests {
         assert_eq!(second, 96.0);
         let after_pause = next_smooth_target(96.0, second, 1100.0, 1600.0, 48.0, 1000.0, 350.0);
         assert_eq!(after_pause, 144.0);
+    }
+
+    #[test]
+    fn html_cache_serves_blocked_and_allowed() {
+        let key = Some("5:INBOX\u{1f}1".into());
+        let cache = InlinedHtmlCache {
+            message_key: key.clone(),
+            blocked: Some("blocked".into()),
+            allowed: Some("allowed".into()),
+            prevented_remote: true,
+        };
+        assert_eq!(cache.html_for(&key, false), Some("blocked"));
+        assert_eq!(cache.html_for(&key, true), Some("allowed"));
+        assert_eq!(cache.html_for(&Some("other".into()), false), None);
+    }
+
+    #[test]
+    fn html_cache_allowed_falls_back_to_blocked() {
+        let key = Some("k".into());
+        let cache = InlinedHtmlCache {
+            message_key: key.clone(),
+            blocked: Some("same".into()),
+            allowed: None,
+            prevented_remote: false,
+        };
+        assert_eq!(cache.html_for(&key, true), Some("same"));
     }
 }

@@ -11,6 +11,7 @@ mod onboarding;
 mod outbox;
 mod shortcuts;
 mod split;
+mod theme;
 mod toast;
 pub mod virtual_scroll;
 

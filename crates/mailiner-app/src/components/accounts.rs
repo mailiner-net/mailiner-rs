@@ -15,6 +15,7 @@ use crate::components::account_form::{
     apply_smtp_test_outcome, build_config_from_form, credentials_changed, kind_label,
     start_smtp_test, use_form_test_status_cleanup,
 };
+use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -58,6 +59,26 @@ pub fn AccountsSettingsPage() -> Element {
                     class: "bootstrap-muted",
                     "Manage email accounts stored in this browser. Only the active account \
                      stays connected."
+                }
+
+                fieldset {
+                    class: "onboarding-section appearance-section",
+                    legend { "Appearance" }
+                    div {
+                        class: "onboarding-field",
+                        label {
+                            r#for: "theme-pref",
+                            "Theme"
+                        }
+                        ThemeSelect {
+                            id: "theme-pref",
+                            class: "theme-select appearance-theme-select",
+                        }
+                    }
+                    p {
+                        class: "bootstrap-muted",
+                        "System follows this device's light or dark setting."
+                    }
                 }
 
                 if let Some(err) = action_error() {

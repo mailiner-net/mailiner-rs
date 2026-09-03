@@ -1,6 +1,5 @@
 //! Mailbox roles from RFC 6154 special-use, then name heuristics.
 
-use chrono::Utc;
 use mailiner_core::{AccountId, Folder, FolderId, MailboxRole};
 
 /// One LIST/LSUB row, enough to pick a role or Sent target.
@@ -95,7 +94,6 @@ pub fn role_from_name(name: &str, delim: Option<&str>) -> MailboxRole {
 /// prefixes are emitted as stubs so nested children keep their ancestor chain.
 /// A `NIL` / empty delimiter means a flat name — do not split on `/`.
 pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> Vec<Folder> {
-    let now = Utc::now();
     let by_name: std::collections::HashMap<&str, &ListedMailbox> =
         listed.iter().map(|m| (m.name.as_str(), m)).collect();
     let mut out = Vec::new();
@@ -114,7 +112,6 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                     None,
                     m.role(),
                     true,
-                    now,
                 );
             }
             Some(d) => {
@@ -141,7 +138,6 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                         parent.as_deref(),
                         role,
                         selectable,
-                        now,
                     );
                 }
             }
@@ -160,7 +156,6 @@ fn push_folder(
     parent: Option<&str>,
     role: MailboxRole,
     selectable: bool,
-    now: chrono::DateTime<Utc>,
 ) {
     if !seen.insert(full_name.to_string()) {
         if selectable {
@@ -178,8 +173,6 @@ fn push_folder(
         parent_id: parent.map(|p| FolderId::new(p.to_string())),
         role,
         selectable,
-        created_at: now,
-        updated_at: now,
     });
 }
 

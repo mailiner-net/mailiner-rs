@@ -12,8 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Account, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MessageContent,
-    MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
+    Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MessageContent, MessagePart,
+    MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).
@@ -28,7 +28,7 @@ where
     async fn disconnect(&self) -> Result<()>;
 
     // Account operations
-    async fn authenticate(&self, credentials: &str) -> Result<Account>;
+    async fn authenticate(&self, credentials: &str) -> Result<()>;
 
     // Folder operations
     async fn list_folders(&self, account_id: &AccountId) -> Result<Vec<Folder>>;
@@ -151,8 +151,6 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_deleted: false,
             has_attachments: n.is_multiple_of(2),
             size: Some(1_000 + ((n * 37) % 97) as u64 * 100),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
         });
     }
     Ok(envelopes)
@@ -245,14 +243,8 @@ where
         Ok(())
     }
 
-    async fn authenticate(&self, _credentials: &str) -> Result<Account> {
-        Ok(Account {
-            id: AccountId::new("mock-account-1"),
-            name: "Mock Account".to_string(),
-            email: "mock@example.com".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        })
+    async fn authenticate(&self, _credentials: &str) -> Result<()> {
+        Ok(())
     }
 
     async fn list_folders(&self, account_id: &AccountId) -> Result<Vec<Folder>> {
@@ -264,8 +256,6 @@ where
                 parent_id: None,
                 role: crate::MailboxRole::Inbox,
                 selectable: true,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
             },
             Folder {
                 id: FolderId::new("sent"),
@@ -274,8 +264,6 @@ where
                 parent_id: None,
                 role: crate::MailboxRole::Sent,
                 selectable: true,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
             },
         ])
     }

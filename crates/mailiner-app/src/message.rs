@@ -154,8 +154,6 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
-            created_at: now,
-            updated_at: now,
         };
         let msg = Message::from(envelope.clone());
         assert_eq!(msg.cc.as_deref(), Some("Cc Name <cc@example.com>"));
@@ -210,8 +208,6 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
-            created_at: now,
-            updated_at: now,
         };
         let msg = Message::from(envelope);
         assert!(msg.is_starred);

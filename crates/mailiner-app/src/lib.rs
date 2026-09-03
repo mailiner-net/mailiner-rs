@@ -11,6 +11,7 @@ pub mod message;
 pub mod message_loader;
 pub mod outbox_store;
 pub mod print;
+pub mod reconnect;
 pub mod selection;
 pub mod send;
 pub mod shortcuts;

@@ -10,6 +10,7 @@
 //! Rapid `SelectAccount` switches are serialized: the second waits for the first to finish
 //! (up to [`CONNECT_TIMEOUT_MS`]), then runs with a fresh generation — not a mid-flight cancel.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -26,7 +27,8 @@ use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::context::AppContext;
 use crate::mail_cache::MailCache;
-use crate::websocket_stream::WebSocketStream;
+use crate::reconnect::{is_session_death, is_session_death_message};
+use crate::websocket_stream::{WebSocketStream, WsDeathWatch};
 
 /// Overall connect budget: WS open + TLS + LOGIN (wall clock).
 pub const CONNECT_TIMEOUT_MS: u32 = 20_000;
@@ -37,6 +39,11 @@ pub enum ConnectionState {
     Connecting,
     Authenticating,
     Ready,
+    /// Waiting to retry after the IMAP/WebSocket session died.
+    Reconnecting {
+        failed_attempts: u32,
+        delay_ms: u32,
+    },
     Error {
         message: String,
         kind: ConnectErrorKind,
@@ -219,6 +226,12 @@ pub struct AccountConnectionManager {
     /// Generation counter for switch debounce / stale result ignore.
     /// See module docs: v1 serializes connects; generation is defensive / future-proof.
     connect_generation: HashMap<AccountId, u64>,
+    /// Watchers for WebSocket close/error on live sessions.
+    ws_watches: HashMap<AccountId, WsDeathWatch>,
+    /// Consecutive failed auto-reconnects (reset on success or manual Retry).
+    reconnect_attempts: HashMap<AccountId, u32>,
+    /// Transport deaths noted from IMAP command errors (drained by `core_loop`).
+    session_deaths: RefCell<HashSet<AccountId>>,
     store: Rc<dyn AccountStore>,
     cache: Rc<dyn MailCache>,
 }
@@ -230,6 +243,9 @@ impl AccountConnectionManager {
             configs: HashMap::new(),
             memory_only: HashSet::new(),
             connect_generation: HashMap::new(),
+            ws_watches: HashMap::new(),
+            reconnect_attempts: HashMap::new(),
+            session_deaths: RefCell::new(HashSet::new()),
             store,
             cache,
         }
@@ -301,6 +317,65 @@ impl AccountConnectionManager {
             == expected
     }
 
+    pub fn current_generation(&self, account_id: &AccountId) -> u64 {
+        self.connect_generation
+            .get(account_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn reconnect_attempts(&self, account_id: &AccountId) -> u32 {
+        self.reconnect_attempts
+            .get(account_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn reset_reconnect_attempts(&mut self, account_id: &AccountId) {
+        self.reconnect_attempts.remove(account_id);
+    }
+
+    pub fn bump_reconnect_attempts(&mut self, account_id: &AccountId) -> u32 {
+        let entry = self
+            .reconnect_attempts
+            .entry(account_id.clone())
+            .or_insert(0);
+        *entry = entry.saturating_add(1);
+        *entry
+    }
+
+    pub fn death_watches(&self) -> Vec<(AccountId, WsDeathWatch)> {
+        self.ws_watches
+            .iter()
+            .map(|(id, watch)| (id.clone(), watch.clone()))
+            .collect()
+    }
+
+    /// Record a transport death from an IMAP command error (idempotent).
+    pub fn note_imap_error(&self, account_id: &AccountId, err: &MailinerError) {
+        if is_session_death(err) {
+            self.session_deaths.borrow_mut().insert(account_id.clone());
+        }
+    }
+
+    pub fn note_imap_error_msg(&self, account_id: &AccountId, msg: &str) {
+        if is_session_death_message(msg) {
+            self.session_deaths.borrow_mut().insert(account_id.clone());
+        }
+    }
+
+    pub fn take_session_deaths(&self) -> Vec<AccountId> {
+        self.session_deaths.borrow_mut().drain().collect()
+    }
+
+    /// Drop a dead connector without LOGOUT (transport is already gone).
+    pub fn drop_dead_connector(&mut self, account_id: &AccountId) {
+        self.connectors.remove(account_id);
+        self.ws_watches.remove(account_id);
+        self.session_deaths.borrow_mut().remove(account_id);
+        self.bump_generation(account_id);
+    }
+
     /// Disconnect all accounts except optionally `keep`.
     pub async fn disconnect_others(&mut self, keep: Option<&AccountId>, ctx: &mut AppContext) {
         let ids: Vec<AccountId> = self
@@ -323,7 +398,10 @@ impl AccountConnectionManager {
         }
         self.configs.remove(account_id);
         self.memory_only.remove(account_id);
-        // Bump generation so any in-flight connect is ignored.
+        self.ws_watches.remove(account_id);
+        self.reconnect_attempts.remove(account_id);
+        self.session_deaths.borrow_mut().remove(account_id);
+        // Bump generation so any in-flight connect / auto-reconnect is ignored.
         self.bump_generation(account_id);
         set_connection_state(ctx, account_id, ConnectionState::Disconnected);
     }
@@ -353,6 +431,7 @@ impl AccountConnectionManager {
             if let Some(connector) = self.connectors.remove(account_id) {
                 let _ = connector.disconnect().await;
             }
+            self.ws_watches.remove(account_id);
         }
 
         match mode {
@@ -373,7 +452,7 @@ impl AccountConnectionManager {
         let connect_result = connect_account(config, ctx).await;
 
         if !self.generation_matches(account_id, my_gen) {
-            if let Ok(connector) = connect_result {
+            if let Ok((connector, _)) = connect_result {
                 let _ = connector.disconnect().await;
             }
             // Stale attempt: only surface Cancelled if nothing newer has overwritten state.
@@ -385,10 +464,12 @@ impl AccountConnectionManager {
         }
 
         match connect_result {
-            Ok(connector) => {
+            Ok((connector, watch)) => {
                 // KeepActiveUntilReady deliberately does **not** disconnect others here.
                 // Callers switch active-only only after full commit (store writes) succeed.
                 self.connectors.insert(account_id.clone(), connector);
+                self.ws_watches.insert(account_id.clone(), watch);
+                self.reconnect_attempts.remove(account_id);
                 set_connection_state(ctx, account_id, ConnectionState::Ready);
                 info!("Account {} connected and authenticated", account_id);
                 Ok(())
@@ -452,7 +533,7 @@ impl AccountConnectionManager {
         let result = connect_account(&test_config, ctx).await;
 
         match result {
-            Ok(connector) => {
+            Ok((connector, _watch)) => {
                 if let Err(e) = connector.disconnect().await {
                     warn!("test connection disconnect: {}", e);
                 }
@@ -472,7 +553,7 @@ impl AccountConnectionManager {
 async fn connect_account(
     config: &AccountConfig,
     ctx: &mut AppContext,
-) -> Result<ImapConnector<WebSocketStream>, ConnectError> {
+) -> Result<(ImapConnector<WebSocketStream>, WsDeathWatch), ConnectError> {
     let account_id = config.id.clone();
 
     let connect_fut = async {
@@ -483,6 +564,7 @@ async fn connect_account(
 
         info!("Opening WebSocket for account {}…", account_id);
         let stream = WebSocketStream::try_new(&url).map_err(|e| classify_io_error(&e))?;
+        let watch = stream.death_watch();
 
         stream
             .wait_until_open()
@@ -510,7 +592,7 @@ async fn connect_account(
             .await
             .map_err(|e| classify_mailiner_error(&e))?;
 
-        Ok(connector)
+        Ok((connector, watch))
     };
 
     let timeout_fut = TimeoutFuture::new(CONNECT_TIMEOUT_MS);

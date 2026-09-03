@@ -35,6 +35,7 @@ mod message;
 mod message_loader;
 mod outbox_store;
 mod print;
+mod reconnect;
 mod selection;
 mod send;
 mod shortcuts;

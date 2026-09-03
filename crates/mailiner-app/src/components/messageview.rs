@@ -362,17 +362,17 @@ fn print_loaded_message(ctx: &AppContext, message: &Message, body_html: &str) {
         },
         body_html,
     );
-    match open_print_document(&html) {
-        Ok(()) => {}
-        Err(PrintError::PopupBlocked) => {
+    let ctx = ctx.clone();
+    open_print_document(&html, move |err| match err {
+        PrintError::PopupBlocked => {
             ctx.show_toast(ToastAction::info(
                 "Pop-up blocked. Allow pop-ups to print this message.",
             ));
         }
-        Err(PrintError::Failed) => {
+        PrintError::Failed => {
             ctx.show_toast(ToastAction::error("Could not open print preview."));
         }
-    }
+    });
 }
 
 #[component]

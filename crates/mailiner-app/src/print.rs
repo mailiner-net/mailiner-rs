@@ -11,7 +11,7 @@ pub struct PrintHeaders<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrintError {
-    /// `window.open` returned `None` (and iframe fallback did not run).
+    /// Iframe setup failed and `window.open` returned `None`.
     PopupBlocked,
     Failed,
 }
@@ -100,21 +100,39 @@ fn escape_html(s: &str) -> String {
 }
 
 /// Open a print-only document and call `print()`. Does not print Mailiner chrome.
-pub fn open_print_document(html: &str) -> Result<(), PrintError> {
+///
+/// `on_error` runs for setup failures and for a later `print()` failure.
+pub fn open_print_document(html: &str, on_error: impl FnOnce(PrintError) + 'static) {
     #[cfg(feature = "web")]
     {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let on_error = Rc::new(Cell::new(Some(
+            Box::new(on_error) as Box<dyn FnOnce(PrintError)>
+        )));
+        if open_print_iframe(html, on_error.clone()).is_ok() {
+            return;
+        }
         match open_print_window(html) {
-            Ok(()) => Ok(()),
-            Err(PrintError::PopupBlocked) => {
-                open_print_iframe(html).map_err(|_| PrintError::PopupBlocked)
-            }
-            Err(err) => open_print_iframe(html).or(Err(err)),
+            Ok(popup) => print_when_ready(popup, on_error),
+            Err(err) => take_print_error(&on_error, err),
         }
     }
     #[cfg(not(feature = "web"))]
     {
         let _ = html;
-        Err(PrintError::Failed)
+        on_error(PrintError::Failed);
+    }
+}
+
+#[cfg(feature = "web")]
+fn take_print_error(
+    on_error: &std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(PrintError)>>>>,
+    err: PrintError,
+) {
+    if let Some(cb) = on_error.take() {
+        cb(err);
     }
 }
 
@@ -127,22 +145,18 @@ fn html_document_inner(html: &str) -> &str {
 }
 
 #[cfg(feature = "web")]
-fn open_print_window(html: &str) -> Result<(), PrintError> {
-    let window = web_sys::window().ok_or(PrintError::Failed)?;
-    let popup = window
-        .open_with_url_and_target("about:blank", "_blank")
-        .map_err(|_| PrintError::Failed)?
-        .ok_or(PrintError::PopupBlocked)?;
-    let doc = popup.document().ok_or(PrintError::Failed)?;
-    let root = doc.document_element().ok_or(PrintError::Failed)?;
-    root.set_inner_html(html_document_inner(html));
-    let _ = popup.focus();
-    popup.print().map_err(|_| PrintError::Failed)?;
-    Ok(())
-}
+type PrintErrorCb = std::rc::Rc<std::cell::Cell<Option<Box<dyn FnOnce(PrintError)>>>>;
 
 #[cfg(feature = "web")]
-fn open_print_iframe(html: &str) -> Result<(), PrintError> {
+fn remove_node(node: &web_sys::Node) {
+    if let Some(parent) = node.parent_node() {
+        let _ = parent.remove_child(node);
+    }
+}
+
+/// Hidden iframe: `load` waits for the document and its images.
+#[cfg(feature = "web")]
+fn open_print_iframe(html: &str, on_error: PrintErrorCb) -> Result<(), PrintError> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use web_sys::{HtmlElement, HtmlIFrameElement};
@@ -173,24 +187,111 @@ fn open_print_iframe(html: &str) -> Result<(), PrintError> {
     let iframe_for_load = iframe.clone();
     let on_load = Closure::once(move || {
         let Some(frame_win) = iframe_for_load.content_window() else {
+            remove_node(&iframe_for_load);
+            take_print_error(&on_error, PrintError::Failed);
             return;
         };
         let frame = iframe_for_load.clone();
         let after = Closure::once(move || {
-            if let Some(parent) = frame.parent_node() {
-                let _ = parent.remove_child(&frame);
-            }
+            remove_node(&frame);
         });
         frame_win.set_onafterprint(Some(after.as_ref().unchecked_ref()));
         after.forget();
         let _ = frame_win.focus();
-        let _ = frame_win.print();
+        if frame_win.print().is_err() {
+            remove_node(&iframe_for_load);
+            take_print_error(&on_error, PrintError::Failed);
+        }
     });
     host.set_onload(Some(on_load.as_ref().unchecked_ref()));
     on_load.forget();
     iframe.set_srcdoc(html);
     body.append_child(&iframe).map_err(|_| PrintError::Failed)?;
     Ok(())
+}
+
+#[cfg(feature = "web")]
+fn open_print_window(html: &str) -> Result<web_sys::Window, PrintError> {
+    let window = web_sys::window().ok_or(PrintError::Failed)?;
+    let popup = window
+        .open_with_url_and_target("about:blank", "_blank")
+        .map_err(|_| PrintError::Failed)?
+        .ok_or(PrintError::PopupBlocked)?;
+    let doc = popup.document().ok_or(PrintError::Failed)?;
+    let root = doc.document_element().ok_or(PrintError::Failed)?;
+    root.set_inner_html(html_document_inner(html));
+    Ok(popup)
+}
+
+/// `about:blank` has already loaded; wait for images before `print()`.
+#[cfg(feature = "web")]
+fn print_when_ready(win: web_sys::Window, on_error: PrintErrorCb) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    use web_sys::HtmlImageElement;
+
+    let fired = Rc::new(Cell::new(false));
+    let fire = {
+        let win = win.clone();
+        let on_error = on_error.clone();
+        let fired = fired.clone();
+        move || {
+            if fired.replace(true) {
+                return;
+            }
+            let _ = win.focus();
+            if win.print().is_err() {
+                take_print_error(&on_error, PrintError::Failed);
+            }
+        }
+    };
+
+    let Some(doc) = win.document() else {
+        fire();
+        return;
+    };
+    let Ok(imgs) = doc.query_selector_all("img") else {
+        fire();
+        return;
+    };
+
+    let pending = Rc::new(Cell::new(0u32));
+    for i in 0..imgs.length() {
+        let Some(node) = imgs.get(i) else {
+            continue;
+        };
+        let Ok(img) = node.dyn_into::<HtmlImageElement>() else {
+            continue;
+        };
+        if img.complete() {
+            continue;
+        }
+        pending.set(pending.get() + 1);
+        let pending = pending.clone();
+        let fire = fire.clone();
+        let settled = Rc::new(Cell::new(false));
+        let done = Closure::wrap(Box::new(move || {
+            if settled.replace(true) {
+                return;
+            }
+            let left = pending.get().saturating_sub(1);
+            pending.set(left);
+            if left == 0 {
+                fire();
+            }
+        }) as Box<dyn FnMut()>);
+        let el: web_sys::HtmlElement = img.unchecked_into();
+        el.set_onload(Some(done.as_ref().unchecked_ref()));
+        el.set_onerror(Some(done.as_ref().unchecked_ref()));
+        done.forget();
+    }
+    if pending.get() == 0 {
+        fire();
+    } else {
+        gloo_timers::callback::Timeout::new(4_000, fire).forget();
+    }
 }
 
 #[cfg(test)]

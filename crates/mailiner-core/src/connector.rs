@@ -121,6 +121,13 @@ where
         message_id: &MessageId,
         section: &str,
     ) -> Result<PartStream>;
+
+    /// FETCH the full RFC 822 message without marking it `\Seen` (`BODY.PEEK[]`).
+    async fn fetch_raw_message(
+        &self,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+    ) -> Result<Vec<u8>>;
 }
 
 fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envelope>> {
@@ -215,8 +222,22 @@ pub fn mock_multipart_structure() -> BodyPart {
     }
 }
 
+/// Small RFC 822 fixture for MockConnector / UI development.
+pub fn mock_rfc822() -> &'static [u8] {
+    b"From: sender@example.com\r\n\
+To: recipient@example.com\r\n\
+Subject: Test Message\r\n\
+Date: Wed, 01 Jan 2020 00:00:00 +0000\r\n\
+Message-ID: <mock@example.com>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=us-ascii\r\n\
+\r\n\
+Hello from MockConnector.\r\n"
+}
+
 fn mock_section_bytes(section: &str) -> Vec<u8> {
     match section {
+        "" => mock_rfc822().to_vec(),
         "1.1" => b"Hello plain text body.".to_vec(),
         "1.2" => b"<p>Hello <b>HTML</b> body.</p>".to_vec(),
         "2" => {
@@ -414,6 +435,14 @@ where
             .collect();
         Ok(Box::pin(stream::iter(chunks)))
     }
+
+    async fn fetch_raw_message(
+        &self,
+        _folder_id: &FolderId,
+        _message_id: &MessageId,
+    ) -> Result<Vec<u8>> {
+        Ok(mock_rfc822().to_vec())
+    }
 }
 
 /// Helper: build a minimal single-part text MessagePart for tests/storage.
@@ -498,6 +527,22 @@ mod tests {
         ))
         .expect("copy");
         assert!(dest.is_empty());
+    }
+
+    #[test]
+    fn mock_fetch_raw_message_is_rfc822() {
+        let connector = MockConnector::new();
+        let folder = FolderId::new("inbox");
+        let id = MessageId::new(folder.clone(), "1");
+        let bytes = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_raw_message(
+            &connector, &folder, &id,
+        ))
+        .unwrap();
+        assert_eq!(bytes, mock_rfc822());
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("Subject: Test Message"));
+        assert!(text.contains("\r\n\r\n"));
+        assert!(text.contains("Hello from MockConnector."));
     }
 
     #[test]

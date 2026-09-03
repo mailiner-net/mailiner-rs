@@ -24,6 +24,84 @@ use crate::send::{
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
 
+fn format_composer_address(addr: &ComposerAddress) -> String {
+    match addr
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        Some(name) => format!("{name} <{}>", addr.email),
+        None => addr.email.clone(),
+    }
+}
+
+fn join_address_list(addrs: &[ComposerAddress]) -> String {
+    addrs
+        .iter()
+        .map(format_composer_address)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let name = name.trim().trim_matches('"').trim();
+    Some(ComposerAddress {
+        name: if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        },
+        email: email.to_string(),
+    })
+}
+
+fn looks_like_email(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
+}
+
+/// Parse a compose field. Named mailboxes (`Name <email>`) keep the display name.
+fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
+    let mut out = Vec::new();
+    let mut rest = raw.trim();
+    while !rest.is_empty() {
+        if let Some(open) = rest.find('<')
+            && let Some(close_rel) = rest[open..].find('>')
+        {
+            let close = open + close_rel;
+            let mut name = String::new();
+            for part in rest[..open].split(',') {
+                if name.is_empty() && looks_like_email(part) {
+                    out.push(ComposerAddress::email_only(part.trim()));
+                } else if name.is_empty() {
+                    name = part.to_string();
+                } else {
+                    name.push(',');
+                    name.push_str(part);
+                }
+            }
+            if let Some(addr) = named_composer_address(&name, &rest[open + 1..close]) {
+                out.push(addr);
+            }
+            rest = rest[close + 1..].trim_start_matches(',').trim();
+            continue;
+        }
+        out.extend(
+            rest.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ComposerAddress::email_only),
+        );
+        break;
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 struct RecipientList {
     chips: Signal<Vec<ComposerAddress>>,
@@ -810,5 +888,57 @@ pub fn ComposeOverlay() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_composer_address_keeps_name() {
+        assert_eq!(
+            format_composer_address(&ComposerAddress {
+                name: Some("Ada".into()),
+                email: "ada@example.com".into(),
+            }),
+            "Ada <ada@example.com>"
+        );
+        assert_eq!(
+            format_composer_address(&ComposerAddress::email_only("solo@example.com")),
+            "solo@example.com"
+        );
+    }
+
+    #[test]
+    fn parse_address_list_roundtrips_named_and_bare() {
+        let parsed = parse_address_list(
+            "Ada Lovelace <ada@example.com>, bob@example.com, \"Cc\" <cc@example.com>",
+        );
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(parsed[0].email, "ada@example.com");
+        assert_eq!(parsed[1].name, None);
+        assert_eq!(parsed[1].email, "bob@example.com");
+        assert_eq!(parsed[2].name.as_deref(), Some("Cc"));
+        assert_eq!(parsed[2].email, "cc@example.com");
+
+        let comma_name = parse_address_list("Lovelace, Ada <ada@example.com>");
+        assert_eq!(comma_name.len(), 1);
+        assert_eq!(comma_name[0].name.as_deref(), Some("Lovelace, Ada"));
+        assert_eq!(comma_name[0].email, "ada@example.com");
+
+        let joined = join_address_list(&parsed);
+        assert_eq!(
+            joined,
+            "Ada Lovelace <ada@example.com>, bob@example.com, Cc <cc@example.com>"
+        );
+        assert_eq!(parse_address_list(&joined), parsed);
+    }
+
+    #[test]
+    fn parse_address_list_skips_empty_mailbox() {
+        assert!(parse_address_list("No Mail <>").is_empty());
+        assert!(parse_address_list("  ,  ").is_empty());
     }
 }

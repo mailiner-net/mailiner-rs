@@ -14,6 +14,7 @@ use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
+use crate::ui_prefs::MessageListDensity;
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves the current message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +58,8 @@ pub struct AppContext {
     pub messages_loading: Signal<bool>,
     /// Active list sort (may fall back if the server lacks IMAP SORT).
     pub message_sort: Signal<mailiner_core::MessageSort>,
+    /// Virtualized message-list row density.
+    pub message_list_density: Signal<MessageListDensity>,
     /// Server advertised RFC 5256 `SORT` (Size / Sender).
     pub sort_supports_size_sender: Signal<bool>,
 

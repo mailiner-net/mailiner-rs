@@ -17,6 +17,65 @@ use mailiner_core::MessageSort;
 /// `localStorage` key for the message-list sort.
 pub const MESSAGE_SORT_KEY: &str = "mailiner.ui.messageSort";
 
+/// `localStorage` key for the message-list row density.
+pub const MESSAGE_LIST_DENSITY_KEY: &str = "mailiner.ui.messageListDensity";
+
+/// Virtualized message-list row density.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MessageListDensity {
+    Compact,
+    Cozy,
+    /// Matches the original 52px rows.
+    #[default]
+    Comfortable,
+}
+
+impl MessageListDensity {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Cozy, Self::Comfortable];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Cozy => "cozy",
+            Self::Comfortable => "comfortable",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "compact" => Some(Self::Compact),
+            "cozy" => Some(Self::Cozy),
+            "comfortable" => Some(Self::Comfortable),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Cozy => "Cozy",
+            Self::Comfortable => "Comfortable",
+        }
+    }
+
+    /// Virtualized row height; must match `#messagelist` density CSS.
+    pub fn item_height(self) -> f64 {
+        match self {
+            Self::Compact => 40.0,
+            Self::Cozy => 46.0,
+            Self::Comfortable => 52.0,
+        }
+    }
+
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::Compact => "density-compact",
+            Self::Cozy => "density-cozy",
+            Self::Comfortable => "density-comfortable",
+        }
+    }
+}
+
 /// `localStorage` key for last-opened mailbox per account.
 pub const LAST_MAILBOX_KEY: &str = "mailiner.ui.lastMailbox.v1";
 /// Schema version for [`LastMailboxBlob`] (independent of the account store).
@@ -190,6 +249,21 @@ pub fn save_message_sort(sort: MessageSort) {
     let _ = with_kv(|kv| kv.set_item(MESSAGE_SORT_KEY, sort.as_key()));
 }
 
+pub fn load_message_list_density() -> MessageListDensity {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(MESSAGE_LIST_DENSITY_KEY)?
+            .as_deref()
+            .and_then(MessageListDensity::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_message_list_density(density: MessageListDensity) {
+    let _ = with_kv(|kv| kv.set_item(MESSAGE_LIST_DENSITY_KEY, density.as_key()));
+}
+
 /// Drop last-mailbox rows for accounts that are no longer known.
 pub fn retain_last_mailboxes(known: &HashSet<AccountId>) {
     let _ = with_kv(|kv| {
@@ -349,6 +423,45 @@ mod tests {
         assert_eq!(load_message_sort(), MessageSort::Unread);
         save_message_sort(MessageSort::Sender);
         assert_eq!(load_message_sort(), MessageSort::Sender);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn message_list_density_encode_decode_roundtrip() {
+        for density in MessageListDensity::ALL {
+            let key = density.as_key();
+            assert_eq!(MessageListDensity::from_key(key), Some(density));
+        }
+        assert_eq!(MessageListDensity::from_key("nope"), None);
+        assert_eq!(
+            MessageListDensity::default(),
+            MessageListDensity::Comfortable
+        );
+        assert_eq!(MessageListDensity::Compact.item_height(), 40.0);
+        assert_eq!(MessageListDensity::Cozy.item_height(), 46.0);
+        assert_eq!(MessageListDensity::Comfortable.item_height(), 52.0);
+        assert_eq!(
+            MessageListDensity::Comfortable.css_class(),
+            "density-comfortable"
+        );
+    }
+
+    #[test]
+    fn message_list_density_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
+        save_message_list_density(MessageListDensity::Compact);
+        assert_eq!(load_message_list_density(), MessageListDensity::Compact);
+        save_message_list_density(MessageListDensity::Cozy);
+        assert_eq!(load_message_list_density(), MessageListDensity::Cozy);
+        save_message_list_density(MessageListDensity::Comfortable);
+        assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
+
+        host_kv::with(|kv| {
+            kv.set_item(MESSAGE_LIST_DENSITY_KEY, "nope")
+                .expect("set unknown density");
+        });
+        assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
         host_kv::reset();
     }
 

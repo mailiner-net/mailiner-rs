@@ -22,8 +22,6 @@ fn list_date(dt: &DateTime<Utc>) -> String {
     }
 }
 
-/// Must match `#messagelist .message-list-item` padding + avatar size.
-const ITEM_HEIGHT: f64 = 52.0;
 const BUFFER_SIZE: usize = 5;
 const MAX_CACHED: usize = 500;
 
@@ -34,6 +32,7 @@ pub fn MessageList() -> Element {
     let selected_mailbox = ctx.selected_mailbox.read().clone();
     let loading = *ctx.messages_loading.read();
     let total = ctx.messages.read().total_count();
+    let density = *ctx.message_list_density.read();
 
     let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
@@ -141,6 +140,7 @@ pub fn MessageList() -> Element {
     rsx! {
         section {
             id: "messagelist",
+            class: "{density.css_class()}",
 
             NavigationHeader {
                 mode: Mode::MessageList,
@@ -167,7 +167,7 @@ pub fn MessageList() -> Element {
                 } else {
                     VirtualScroll {
                         items: ctx.messages,
-                        item_height: ITEM_HEIGHT,
+                        item_height: density.item_height(),
                         buffer_size: BUFFER_SIZE,
                         debounce_ms: Some(100),
                         max_cached: Some(MAX_CACHED),

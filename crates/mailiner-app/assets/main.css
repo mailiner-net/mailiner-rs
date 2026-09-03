@@ -628,9 +628,9 @@ a.accounts-link-btn {
     white-space: nowrap;
 }
 
-.message-sort {
+.message-sort,
+.message-density {
     flex: 0 0 auto;
-    margin-left: auto;
     font: inherit;
     font-size: var(--text-sm);
     font-weight: 500;
@@ -640,6 +640,10 @@ a.accounts-link-btn {
     border-radius: var(--radius-sm);
     padding: 2px 6px;
     cursor: pointer;
+}
+
+.message-density {
+    margin-left: auto;
 }
 
 .empty-trash {
@@ -1667,6 +1671,33 @@ textarea.ui-input {
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
+            }
+        }
+
+        &.density-compact {
+            --message-avatar-size: 24px;
+
+            .message-list-item {
+                padding: 4px 8px;
+
+                .message-list-item-content {
+                    .message-from,
+                    .message-subject {
+                        line-height: 1.15;
+                    }
+
+                    .message-from {
+                        margin-bottom: 0;
+                    }
+                }
+            }
+        }
+
+        &.density-cozy {
+            --message-avatar-size: 28px;
+
+            .message-list-item {
+                padding: 6px 10px;
             }
         }
     }

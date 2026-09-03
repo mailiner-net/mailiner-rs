@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, DEFAULT_SMTP_PORT, ImapSettings, ProxySettings, optional_smtp_from_fields,
+    AccountConfig, ImapSettings, ProxySettings, SmtpTlsMode, default_port_for_tls_mode,
+    optional_smtp_from_tls_mode, port_for_tls_mode_change,
 };
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
@@ -97,7 +98,7 @@ pub fn build_config_from_form(
     smtp_port: &str,
     smtp_username: &str,
     smtp_password: &str,
-    smtp_use_tls: bool,
+    smtp_tls_mode: SmtpTlsMode,
     created_at: chrono::DateTime<Utc>,
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
@@ -160,12 +161,12 @@ pub fn build_config_from_form(
         }
     };
 
-    let smtp = optional_smtp_from_fields(
+    let smtp = optional_smtp_from_tls_mode(
         smtp_host,
         smtp_port,
         smtp_username,
         smtp_password,
-        smtp_use_tls,
+        smtp_tls_mode,
     )?;
 
     let now = Utc::now();
@@ -501,18 +502,19 @@ pub fn AccountSmtpFields(
     smtp_port: String,
     smtp_username: String,
     smtp_password: String,
-    smtp_use_tls: bool,
+    smtp_tls_mode: SmtpTlsMode,
     set_smtp_host: EventHandler<String>,
     set_smtp_port: EventHandler<String>,
     set_smtp_username: EventHandler<String>,
     set_smtp_password: EventHandler<String>,
-    set_smtp_use_tls: EventHandler<bool>,
+    set_smtp_tls_mode: EventHandler<SmtpTlsMode>,
     busy: bool,
     #[props(default)] open: bool,
 ) -> Element {
-    let port_placeholder = DEFAULT_SMTP_PORT.to_string();
-    let warn_starttls = smtp_use_tls && smtp_port.trim() == "587";
-    let warn_plain = !smtp_use_tls;
+    let port_placeholder = default_port_for_tls_mode(smtp_tls_mode).to_string();
+    let warn_starttls = smtp_tls_mode == SmtpTlsMode::StartTls;
+    let warn_plain = smtp_tls_mode == SmtpTlsMode::None;
+    let smtp_port_for_tls = smtp_port.clone();
     rsx! {
         fieldset {
             class: "onboarding-section",
@@ -565,18 +567,40 @@ pub fn AccountSmtpFields(
                     disabled: busy,
                 }
                 div {
-                    class: "onboarding-field onboarding-checkbox-field",
+                    class: "onboarding-field",
                     label {
-                        class: "onboarding-checkbox-label",
-                        input {
-                            id: "{id_prefix}-smtp-tls",
-                            name: "{id_prefix}-smtp-tls",
-                            r#type: "checkbox",
-                            checked: smtp_use_tls,
-                            disabled: busy,
-                            onchange: move |e| set_smtp_use_tls.call(e.checked()),
+                        r#for: "{id_prefix}-smtp-tls",
+                        "TLS mode"
+                    }
+                    select {
+                        id: "{id_prefix}-smtp-tls",
+                        name: "{id_prefix}-smtp-tls",
+                        value: smtp_tls_mode.as_form_value(),
+                        disabled: busy,
+                        onchange: move |e| {
+                            let new_mode = SmtpTlsMode::from_form_value(&e.value());
+                            let next_port = port_for_tls_mode_change(
+                                &smtp_port_for_tls,
+                                smtp_tls_mode,
+                                new_mode,
+                            );
+                            if next_port != smtp_port_for_tls {
+                                set_smtp_port.call(next_port);
+                            }
+                            set_smtp_tls_mode.call(new_mode);
+                        },
+                        option {
+                            value: "implicit",
+                            "Implicit TLS (port 465)"
                         }
-                        " Use TLS (implicit on port 465, STARTTLS on port 587)"
+                        option {
+                            value: "start_tls",
+                            "STARTTLS (port 587)"
+                        }
+                        option {
+                            value: "none",
+                            "None (plaintext)"
+                        }
                     }
                 }
                 if warn_starttls {
@@ -621,5 +645,75 @@ pub fn FormStatusBanner(message: Option<StatusMessage>) -> Element {
             }
             "{msg.body}"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn form_config(
+        smtp_host: &str,
+        smtp_port: &str,
+        smtp_tls_mode: SmtpTlsMode,
+    ) -> Result<AccountConfig, String> {
+        build_config_from_form(
+            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
+            "Work",
+            "user@example.com",
+            "imap.example.com",
+            "993",
+            "user@example.com",
+            "secret",
+            "ws://localhost:9400/proxy",
+            "token",
+            "",
+            "",
+            smtp_host,
+            smtp_port,
+            "",
+            "",
+            smtp_tls_mode,
+            Utc::now(),
+        )
+    }
+
+    #[test]
+    fn form_implicit_tls_writes_tls_mode_and_use_tls() {
+        let smtp = form_config("smtp.example.com", "465", SmtpTlsMode::Implicit)
+            .unwrap()
+            .smtp
+            .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::Implicit);
+        assert!(smtp.use_tls);
+        assert_eq!(smtp.port, 465);
+    }
+
+    #[test]
+    fn form_starttls_writes_mode_directly_not_from_port() {
+        let smtp = form_config("smtp.example.com", "465", SmtpTlsMode::StartTls)
+            .unwrap()
+            .smtp
+            .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
+        assert!(smtp.use_tls);
+        assert_eq!(smtp.port, 465);
+    }
+
+    #[test]
+    fn form_none_writes_plaintext() {
+        let smtp = form_config("smtp.example.com", "25", SmtpTlsMode::None)
+            .unwrap()
+            .smtp
+            .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::None);
+        assert!(!smtp.use_tls);
+        assert_eq!(smtp.port, 25);
+    }
+
+    #[test]
+    fn form_empty_smtp_section_is_none() {
+        let config = form_config("", "465", SmtpTlsMode::Implicit).unwrap();
+        assert!(config.smtp.is_none());
     }
 }

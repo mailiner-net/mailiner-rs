@@ -110,6 +110,24 @@ impl SmtpTlsMode {
     pub fn uses_tls(self) -> bool {
         !matches!(self, Self::None)
     }
+
+    /// Form `<select>` value (`implicit` / `start_tls` / `none`).
+    pub fn as_form_value(self) -> &'static str {
+        match self {
+            Self::Implicit => "implicit",
+            Self::StartTls => "start_tls",
+            Self::None => "none",
+        }
+    }
+
+    /// Parse a form `<select>` value; unknown → Implicit.
+    pub fn from_form_value(value: &str) -> Self {
+        match value {
+            "start_tls" => Self::StartTls,
+            "none" => Self::None,
+            _ => Self::Implicit,
+        }
+    }
 }
 
 /// Map a v1 `use_tls` + port pair. `true` + 587 → [`SmtpTlsMode::StartTls`].
@@ -127,6 +145,17 @@ pub fn default_port_for_tls_mode(mode: SmtpTlsMode) -> u16 {
         SmtpTlsMode::Implicit => DEFAULT_SMTP_PORT,
         SmtpTlsMode::StartTls => 587,
         SmtpTlsMode::None => 25,
+    }
+}
+
+/// Rewrite SMTP port when TLS mode changes, only if it is still the previous default.
+pub fn port_for_tls_mode_change(port: &str, from: SmtpTlsMode, to: SmtpTlsMode) -> String {
+    let trimmed = port.trim();
+    let prev_default = default_port_for_tls_mode(from).to_string();
+    if trimmed.is_empty() || trimmed == prev_default {
+        default_port_for_tls_mode(to).to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -1008,5 +1037,75 @@ mod tests {
         assert!(err.contains("port"), "err={err}");
         let err = optional_smtp_from_fields("smtp.example.com", "nope", "", "", true).unwrap_err();
         assert!(err.contains("port"), "err={err}");
+    }
+
+    #[test]
+    fn optional_smtp_from_tls_mode_writes_mode_and_use_tls() {
+        let smtp =
+            optional_smtp_from_tls_mode("smtp.example.com", "", "u", "", SmtpTlsMode::Implicit)
+                .unwrap()
+                .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::Implicit);
+        assert!(smtp.use_tls);
+        assert_eq!(smtp.port, DEFAULT_SMTP_PORT);
+
+        let smtp =
+            optional_smtp_from_tls_mode("smtp.example.com", "", "", "", SmtpTlsMode::StartTls)
+                .unwrap()
+                .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
+        assert!(smtp.use_tls);
+        assert_eq!(smtp.port, 587);
+
+        let smtp =
+            optional_smtp_from_tls_mode("smtp.example.com", "465", "", "", SmtpTlsMode::StartTls)
+                .unwrap()
+                .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::StartTls);
+        assert!(smtp.use_tls);
+        assert_eq!(smtp.port, 465);
+
+        let smtp = optional_smtp_from_tls_mode("smtp.example.com", "", "", "", SmtpTlsMode::None)
+            .unwrap()
+            .expect("Some");
+        assert_eq!(smtp.tls_mode, SmtpTlsMode::None);
+        assert!(!smtp.use_tls);
+        assert_eq!(smtp.port, 25);
+    }
+
+    #[test]
+    fn port_for_tls_mode_change_only_rewrites_previous_default() {
+        assert_eq!(
+            port_for_tls_mode_change("465", SmtpTlsMode::Implicit, SmtpTlsMode::StartTls),
+            "587"
+        );
+        assert_eq!(
+            port_for_tls_mode_change("587", SmtpTlsMode::StartTls, SmtpTlsMode::None),
+            "25"
+        );
+        assert_eq!(
+            port_for_tls_mode_change("", SmtpTlsMode::Implicit, SmtpTlsMode::None),
+            "25"
+        );
+        assert_eq!(
+            port_for_tls_mode_change("2525", SmtpTlsMode::Implicit, SmtpTlsMode::StartTls),
+            "2525"
+        );
+        assert_eq!(
+            port_for_tls_mode_change("587", SmtpTlsMode::Implicit, SmtpTlsMode::StartTls),
+            "587"
+        );
+    }
+
+    #[test]
+    fn form_value_roundtrip_tls_mode() {
+        for mode in [
+            SmtpTlsMode::Implicit,
+            SmtpTlsMode::StartTls,
+            SmtpTlsMode::None,
+        ] {
+            assert_eq!(SmtpTlsMode::from_form_value(mode.as_form_value()), mode);
+        }
+        assert_eq!(SmtpTlsMode::from_form_value("bogus"), SmtpTlsMode::Implicit);
     }
 }

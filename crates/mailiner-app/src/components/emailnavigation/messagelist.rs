@@ -41,6 +41,7 @@ pub fn MessageList() -> Element {
     let density = *ctx.message_list_density.read();
     let filter = *ctx.message_list_filter.read();
     let cached = ctx.messages.read().cached_count();
+    let fully_loaded = cached >= total;
     let selected_n = ctx.selection.read().len();
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
@@ -64,7 +65,7 @@ pub fn MessageList() -> Element {
     } else {
         cached > 0
     };
-    let no_loaded_matches = filtering && match_count == 0;
+    let no_loaded_matches = filtering && match_count == 0 && (fully_loaded || total == 0);
 
     let mut filtered_items = use_signal(|| SparseList::<Arc<Message>>::new(0));
     if filtering {

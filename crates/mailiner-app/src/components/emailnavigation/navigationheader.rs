@@ -116,9 +116,11 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: "Show unread messages",
                         active: filter.unread,
                         on_toggle: move |_| {
-                            let mut next = *ctx.message_list_filter.peek();
-                            next.unread = !next.unread;
-                            let _ = core_tx.send(CoreEvent::SetMessageListFilter(next));
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: true,
+                                flagged: false,
+                                has_attachment: false,
+                            });
                         },
                     }
                     FilterChip {
@@ -126,9 +128,11 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: "Show flagged messages",
                         active: filter.flagged,
                         on_toggle: move |_| {
-                            let mut next = *ctx.message_list_filter.peek();
-                            next.flagged = !next.flagged;
-                            let _ = core_tx.send(CoreEvent::SetMessageListFilter(next));
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: false,
+                                flagged: true,
+                                has_attachment: false,
+                            });
                         },
                     }
                     FilterChip {
@@ -136,9 +140,11 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: "Show messages with attachments (among loaded messages)",
                         active: filter.has_attachment,
                         on_toggle: move |_| {
-                            let mut next = *ctx.message_list_filter.peek();
-                            next.has_attachment = !next.has_attachment;
-                            let _ = core_tx.send(CoreEvent::SetMessageListFilter(next));
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: false,
+                                flagged: false,
+                                has_attachment: true,
+                            });
                         },
                     }
                 }

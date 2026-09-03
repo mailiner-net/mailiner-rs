@@ -66,8 +66,12 @@ pub enum CoreEvent {
     JumpToMailbox(MailboxId),
     /// Rebuild the current folder's list in a new order.
     SetMessageSort(MessageSort),
-    /// Toggle Unread / Flagged / Attachment list filters (AND).
-    SetMessageListFilter(MessageListFilter),
+    /// Flip the given list-filter flags (processed in order so rapid clicks compose).
+    ToggleMessageListFilter {
+        unread: bool,
+        flagged: bool,
+        has_attachment: bool,
+    },
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
         mailbox_id: MailboxId,
@@ -457,8 +461,19 @@ pub async fn core_loop(
             CoreEvent::SetMessageSort(sort) => {
                 handle_set_message_sort(&manager, &mut ctx, sort).await;
             }
-            CoreEvent::SetMessageListFilter(filter) => {
-                handle_set_message_list_filter(&manager, &mut ctx, filter).await;
+            CoreEvent::ToggleMessageListFilter {
+                unread,
+                flagged,
+                has_attachment,
+            } => {
+                handle_toggle_message_list_filter(
+                    &manager,
+                    &mut ctx,
+                    unread,
+                    flagged,
+                    has_attachment,
+                )
+                .await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -1788,7 +1803,13 @@ async fn handle_select_mailbox(
                 .set(state.supports_size_sender);
             ctx.message_sort.set(state.sort);
             crate::ui_prefs::save_last_mailbox(&account_id, &mailbox_id);
-            acknowledge_mailbox_open(ctx, &account_id, &mailbox_id, state.total, state.unread);
+            acknowledge_mailbox_open(
+                ctx,
+                &account_id,
+                &mailbox_id,
+                state.folder_total,
+                state.unread,
+            );
 
             // Fetch the first page, then swap the list atomically so a cache
             // hit stays on screen until live envelopes arrive.
@@ -1838,9 +1859,9 @@ async fn handle_select_mailbox(
             if select_first && state.total > 0 {
                 let first_id = ctx.messages.read().get(0).map(|m| m.id.clone());
                 if let Some(id) = first_id {
-                    // Unread-first: selecting the top row would immediately
-                    // consume the message the user just asked to see as unread.
-                    let auto_mark = state.sort != MessageSort::Unread;
+                    // Unread-first / unread filter: selecting the top row would
+                    // immediately consume the message the user just asked to see.
+                    let auto_mark = state.sort != MessageSort::Unread && !filter.unread;
                     handle_select_message(manager, ctx, id, auto_mark, true).await;
                 }
             }
@@ -1870,12 +1891,24 @@ async fn handle_set_message_sort(
     handle_select_mailbox(manager, ctx, mailbox_id, true).await;
 }
 
-async fn handle_set_message_list_filter(
+async fn handle_toggle_message_list_filter(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    filter: MessageListFilter,
+    unread: bool,
+    flagged: bool,
+    has_attachment: bool,
 ) {
     let prev = *ctx.message_list_filter.peek();
+    let mut filter = prev;
+    if unread {
+        filter.unread = !filter.unread;
+    }
+    if flagged {
+        filter.flagged = !filter.flagged;
+    }
+    if has_attachment {
+        filter.has_attachment = !filter.has_attachment;
+    }
     crate::ui_prefs::save_message_list_filter(filter);
     ctx.message_list_filter.set(filter);
     if prev.imap_search_query() == filter.imap_search_query() {
@@ -2002,10 +2035,27 @@ async fn handle_select_adjacent(
         return;
     }
     let total = ctx.messages.read().total_count();
+    let filter = *ctx.message_list_filter.peek();
     let current = current_list_index(ctx);
-    let Some(index) = adjacent_index(total, current, delta) else {
+    let Some(mut index) = adjacent_index(total, current, delta) else {
         return;
     };
+    if !filter.is_empty() {
+        loop {
+            let matches = ctx
+                .messages
+                .read()
+                .get(index)
+                .is_some_and(|m| filter.matches(m.is_read, m.is_flagged, m.has_attachments));
+            if matches {
+                break;
+            }
+            let Some(next) = adjacent_index(total, Some(index), delta) else {
+                return;
+            };
+            index = next;
+        }
+    }
     if extend {
         apply_index_range_selection(manager, ctx, index).await;
     }
@@ -3018,6 +3068,18 @@ async fn relocate_unread_sort_rows(
     message_ids: &[MessageId],
     now_read: bool,
 ) {
+    let filter = *ctx.message_list_filter.peek();
+    if filter.unread && now_read {
+        let core_ids = core_message_ids(message_ids);
+        if let Err(e) = connector.sync_unread_sort_index(&core_ids, true).await {
+            warn!("unread-filter index drop failed: {e}");
+        }
+        let idset: std::collections::HashSet<&MessageId> = message_ids.iter().collect();
+        ctx.messages
+            .write()
+            .remove_matching(|m| idset.contains(&m.id));
+        return;
+    }
     if *ctx.message_sort.peek() != MessageSort::Unread || message_ids.is_empty() {
         return;
     }

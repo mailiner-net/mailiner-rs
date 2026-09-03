@@ -187,8 +187,10 @@ struct ListIndex {
     /// UID order for paging. `None` only if `UID SEARCH ALL` failed (sequence fallback).
     uids: Option<Vec<u32>>,
     total: usize,
-    /// `UNSEEN` count from SELECT/SEARCH; `None` if it could not be measured.
+    /// Unseen-prefix length for unread-first sort (may be filter-scoped).
     unread: Option<usize>,
+    /// Whole-folder `UNSEEN` for the mailbox badge.
+    folder_unread: Option<usize>,
 }
 
 impl<S> ImapConnector<S>
@@ -692,6 +694,7 @@ where
                 uids: Some(Vec::new()),
                 total: 0,
                 unread: Some(0),
+                folder_unread: Some(0),
             });
         }
 
@@ -745,25 +748,26 @@ where
                     Ok(uids) => Some(uids),
                     Err(e) => {
                         tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Arrival");
-                        let unread = Self::search_unseen_count(session).await;
-                        let uids = Self::search_uids(session, search).await.ok();
-                        let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
+                        let folder_unread = Self::search_unseen_count(session).await;
+                        let uids = Self::search_uids(session, search).await?;
                         return Ok(ListIndex {
                             folder: folder_id.to_string(),
                             sort: MessageSort::Arrival,
                             filter,
                             exists,
-                            uids,
-                            total,
-                            unread,
+                            uids: Some(uids.clone()),
+                            total: uids.len(),
+                            unread: folder_unread,
+                            folder_unread,
                         });
                     }
                 }
             }
         };
 
+        let folder_unread = Self::search_unseen_count(session).await;
         if unread.is_none() {
-            unread = Self::search_unseen_count(session).await;
+            unread = folder_unread;
         }
 
         let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
@@ -775,6 +779,7 @@ where
             uids,
             total,
             unread,
+            folder_unread,
         })
     }
 
@@ -1216,7 +1221,8 @@ where
             Self::build_list_index(session, folder_id.as_str(), sort, has_sort, filter).await?;
         let state = FolderListState {
             total: index.total,
-            unread: index.unread,
+            folder_total: index.exists,
+            unread: index.folder_unread,
             sort: index.sort,
             supports_size_sender: has_sort,
         };
@@ -1390,12 +1396,38 @@ where
         let Some(index) = slot.as_mut() else {
             return Ok(Vec::new());
         };
-        if index.sort != MessageSort::Unread {
-            return Ok(Vec::new());
-        }
         let Some(uids) = index.uids.as_mut() else {
             return Ok(Vec::new());
         };
+        if index.filter.unread {
+            // Unseen-only SEARCH list: drop read UIDs; insert unread at the unseen prefix.
+            for id in message_ids {
+                let Ok(uid) = id.as_uid().parse::<u32>() else {
+                    continue;
+                };
+                if now_read {
+                    if let Some(from) = uids.iter().position(|&u| u == uid) {
+                        uids.remove(from);
+                        if index.unread.is_some_and(|n| from < n) {
+                            index.unread = Some(index.unread.unwrap_or(0).saturating_sub(1));
+                        }
+                    }
+                } else if !uids.contains(&uid) {
+                    let dest_end = index.unread.unwrap_or(0).min(uids.len());
+                    let to = uids[..dest_end]
+                        .iter()
+                        .position(|&u| u < uid)
+                        .unwrap_or(dest_end);
+                    uids.insert(to, uid);
+                    index.unread = Some(index.unread.unwrap_or(0).saturating_add(1));
+                }
+            }
+            index.total = uids.len();
+            return Ok(Vec::new());
+        }
+        if index.sort != MessageSort::Unread {
+            return Ok(Vec::new());
+        }
         let mut unread = index.unread.unwrap_or(0);
         let mut moves = Vec::new();
         for id in message_ids {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -193,7 +194,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_read: n.is_multiple_of(3),
             is_answered: n.is_multiple_of(7),
             is_starred: n.is_multiple_of(5),
-            is_flagged: false,
+            is_flagged: n.is_multiple_of(7),
             is_draft: false,
             is_deleted: false,
             has_attachments: n.is_multiple_of(2),
@@ -289,11 +290,15 @@ fn mock_section_bytes(section: &str) -> Vec<u8> {
 }
 
 /// Loader / UI fixture. Not a faithful IMAP session (no sort index, no dest UIDs).
-pub struct MockConnector;
+pub struct MockConnector {
+    list_filter: Mutex<MessageListFilter>,
+}
 
 impl MockConnector {
     pub fn new() -> Self {
-        Self
+        Self {
+            list_filter: Mutex::new(MessageListFilter::default()),
+        }
     }
 }
 
@@ -378,13 +383,21 @@ where
 
     async fn prepare_folder_list(
         &self,
-        _folder_id: &FolderId,
+        folder_id: &FolderId,
         sort: MessageSort,
-        _filter: MessageListFilter,
+        filter: MessageListFilter,
     ) -> Result<FolderListState> {
+        *self.list_filter.lock().expect("mock filter") = filter;
+        let all = mock_envelopes(folder_id, 0..100)?;
+        let folder_unread = all.iter().filter(|e| !e.is_read).count();
+        let total = all
+            .iter()
+            .filter(|e| filter.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .count();
         Ok(FolderListState {
-            total: 100,
-            unread: Some(3),
+            total,
+            folder_total: all.len(),
+            unread: Some(folder_unread),
             sort,
             supports_size_sender: false,
         })
@@ -395,7 +408,15 @@ where
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>> {
-        mock_envelopes(folder_id, range)
+        let filter = *self.list_filter.lock().expect("mock filter");
+        let all = mock_envelopes(folder_id, 0..100)?;
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|e| filter.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .collect();
+        let end = range.end.min(filtered.len());
+        let start = range.start.min(end);
+        Ok(filtered[start..end].to_vec())
     }
 
     async fn update_envelope_flags(

@@ -125,8 +125,11 @@ impl MessageListFilter {
 /// Result of preparing a folder for a paged list (after SELECT + optional SORT/SEARCH).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderListState {
+    /// Length of the prepared list (after sort + list filters).
     pub total: usize,
-    /// `UNSEEN` from the just-selected mailbox (`None` if SEARCH failed).
+    /// SELECT EXISTS / unfiltered folder size (for badges and cache).
+    pub folder_total: usize,
+    /// Whole-folder `UNSEEN` (`None` if SEARCH failed).
     pub unread: Option<usize>,
     /// Sort actually applied (may fall back from the request).
     pub sort: MessageSort,

@@ -1,0 +1,19 @@
+crates/mailiner-app/assets/main.css
+  s_3ece460bd4612e::t_00899c4fc59b46 89,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f77b7249817160b2a2341363caa13b55a8ac324b",
+  "prompts": {},
+  "sessions": {
+    "s_3ece460bd4612e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06922-2a19-7ca0-893d-2d5d5acb888d",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

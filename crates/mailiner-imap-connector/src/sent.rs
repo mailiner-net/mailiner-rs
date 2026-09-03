@@ -9,17 +9,16 @@ pub struct ListedMailbox {
     pub name: String,
     pub delimiter: Option<String>,
     pub no_select: bool,
-    /// From LIST/LSUB attributes only (`Other` if none).
-    pub special_use: MailboxRole,
+    /// LIST/LSUB special-use only. `None` if none advertised; `Some(Other)` if unmapped.
+    pub special_use: Option<MailboxRole>,
 }
 
 impl ListedMailbox {
-    /// Special-use if present, else name heuristics.
+    /// Special-use if any RFC 6154 flag was advertised, else name heuristics.
     pub fn role(&self) -> MailboxRole {
-        if self.special_use != MailboxRole::Other {
-            self.special_use
-        } else {
-            role_from_name(&self.name, self.delimiter.as_deref())
+        match self.special_use {
+            Some(role) => role,
+            None => role_from_name(&self.name, self.delimiter.as_deref()),
         }
     }
 }
@@ -28,7 +27,7 @@ impl ListedMailbox {
 pub fn find_sent_mailbox(mailboxes: &[ListedMailbox]) -> Option<&str> {
     if let Some(m) = mailboxes
         .iter()
-        .find(|m| !m.no_select && m.special_use == MailboxRole::Sent)
+        .find(|m| !m.no_select && m.special_use == Some(MailboxRole::Sent))
     {
         return Some(m.name.as_str());
     }
@@ -38,14 +37,15 @@ pub fn find_sent_mailbox(mailboxes: &[ListedMailbox]) -> Option<&str> {
         .map(|m| m.name.as_str())
 }
 
-/// Map LIST/LSUB attributes to a role. Multiple flags keep the earliest sort rank.
-pub fn special_use_from_attrs<'a, I>(attrs: I) -> (bool, MailboxRole)
+/// Map LIST/LSUB attributes to a role. `None` means no special-use flag.
+/// Unmapped RFC 6154 flags stay `Some(Other)` so name heuristics do not override them.
+pub fn special_use_from_attrs<'a, I>(attrs: I) -> (bool, Option<MailboxRole>)
 where
     I: IntoIterator<Item = &'a async_imap::types::NameAttribute<'a>>,
 {
     use async_imap::types::NameAttribute;
     let mut no_select = false;
-    let mut role = MailboxRole::Other;
+    let mut role: Option<MailboxRole> = None;
     for attr in attrs {
         let next = match attr {
             NameAttribute::NoSelect => {
@@ -55,14 +55,27 @@ where
             NameAttribute::Drafts => MailboxRole::Drafts,
             NameAttribute::Sent => MailboxRole::Sent,
             NameAttribute::Trash => MailboxRole::Trash,
-            NameAttribute::Extension(name) => extension_role(name),
-            _ => MailboxRole::Other,
+            NameAttribute::All
+            | NameAttribute::Archive
+            | NameAttribute::Flagged
+            | NameAttribute::Junk => MailboxRole::Other,
+            NameAttribute::Extension(name) => match extension_role(name) {
+                MailboxRole::Other if !is_unmapped_special_use(name) => continue,
+                mapped => mapped,
+            },
+            _ => continue,
         };
-        if next != MailboxRole::Other
-            && (role == MailboxRole::Other || next.sort_rank() < role.sort_rank())
-        {
-            role = next;
-        }
+        role = Some(match role {
+            Some(current)
+                if next != MailboxRole::Other
+                    && (current == MailboxRole::Other
+                        || next.sort_rank() < current.sort_rank()) =>
+            {
+                next
+            }
+            Some(current) => current,
+            None => next,
+        });
     }
     (no_select, role)
 }
@@ -75,9 +88,15 @@ fn extension_role(name: &str) -> MailboxRole {
     }
 }
 
+fn is_unmapped_special_use(name: &str) -> bool {
+    matches!(
+        name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+        "all" | "archive" | "flagged" | "junk"
+    )
+}
+
 /// Leaf names (ASCII lowercase) used when LIST has no special-use attribute.
 const ROLE_FROM_LEAF: &[(&str, MailboxRole)] = &[
-    ("inbox", MailboxRole::Inbox),
     ("drafts", MailboxRole::Drafts),
     ("draft", MailboxRole::Drafts),
     ("draft messages", MailboxRole::Drafts),
@@ -220,6 +239,20 @@ mod tests {
         no_select: bool,
         special_use: MailboxRole,
     ) -> ListedMailbox {
+        mb_attr(
+            name,
+            delim,
+            no_select,
+            (special_use != MailboxRole::Other).then_some(special_use),
+        )
+    }
+
+    fn mb_attr(
+        name: &str,
+        delim: Option<&str>,
+        no_select: bool,
+        special_use: Option<MailboxRole>,
+    ) -> ListedMailbox {
         ListedMailbox {
             name: name.into(),
             delimiter: delim.map(str::to_string),
@@ -316,6 +349,11 @@ mod tests {
         assert_eq!(role_from_name("INBOX", None), MailboxRole::Inbox);
         assert_eq!(role_from_name("Inbox", Some("/")), MailboxRole::Inbox);
         assert_eq!(role_from_name("inbox", Some(".")), MailboxRole::Inbox);
+        assert_eq!(
+            role_from_name("Projects/Inbox", Some("/")),
+            MailboxRole::Other
+        );
+        assert_eq!(role_from_name("INBOX.inbox", Some(".")), MailboxRole::Other);
     }
 
     #[test]
@@ -353,9 +391,9 @@ mod tests {
     fn special_use_from_attrs_named_flags() {
         use async_imap::types::NameAttribute;
         let cases = [
-            (NameAttribute::Drafts, MailboxRole::Drafts),
-            (NameAttribute::Sent, MailboxRole::Sent),
-            (NameAttribute::Trash, MailboxRole::Trash),
+            (NameAttribute::Drafts, Some(MailboxRole::Drafts)),
+            (NameAttribute::Sent, Some(MailboxRole::Sent)),
+            (NameAttribute::Trash, Some(MailboxRole::Trash)),
         ];
         for (attr, want) in cases {
             let (no_select, role) = special_use_from_attrs([attr].iter());
@@ -370,24 +408,48 @@ mod tests {
         use std::borrow::Cow;
         let (_, role) =
             special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("\\Inbox"))].iter());
-        assert_eq!(role, MailboxRole::Inbox);
+        assert_eq!(role, Some(MailboxRole::Inbox));
         let (_, role) =
             special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("outbox"))].iter());
-        assert_eq!(role, MailboxRole::Outbox);
+        assert_eq!(role, Some(MailboxRole::Outbox));
         let (no_select, role) = special_use_from_attrs([NameAttribute::NoSelect].iter());
         assert!(no_select);
-        assert_eq!(role, MailboxRole::Other);
-        let (_, role) = special_use_from_attrs([NameAttribute::Flagged].iter());
-        assert_eq!(role, MailboxRole::Other);
+        assert_eq!(role, None);
+        let (_, role) = special_use_from_attrs(
+            [NameAttribute::Extension(Cow::Borrowed("\\HasNoChildren"))].iter(),
+        );
+        assert_eq!(role, None);
     }
 
     #[test]
     fn special_use_from_attrs_keeps_earliest_sort_rank() {
         use async_imap::types::NameAttribute;
         let (_, role) = special_use_from_attrs([NameAttribute::Sent, NameAttribute::Drafts].iter());
-        assert_eq!(role, MailboxRole::Drafts);
+        assert_eq!(role, Some(MailboxRole::Drafts));
         let (_, role) = special_use_from_attrs([NameAttribute::Trash, NameAttribute::Sent].iter());
-        assert_eq!(role, MailboxRole::Sent);
+        assert_eq!(role, Some(MailboxRole::Sent));
+    }
+
+    #[test]
+    fn unmapped_special_use_skips_name_heuristic() {
+        use async_imap::types::NameAttribute;
+        use std::borrow::Cow;
+        for attr in [
+            NameAttribute::Archive,
+            NameAttribute::Junk,
+            NameAttribute::All,
+            NameAttribute::Flagged,
+        ] {
+            let (_, role) = special_use_from_attrs([attr].iter());
+            assert_eq!(role, Some(MailboxRole::Other));
+        }
+        let (_, role) =
+            special_use_from_attrs([NameAttribute::Extension(Cow::Borrowed("\\Archive"))].iter());
+        assert_eq!(role, Some(MailboxRole::Other));
+        let listed = mb_attr("Deleted Mail", Some("/"), false, Some(MailboxRole::Other));
+        assert_eq!(listed.role(), MailboxRole::Other);
+        let named = mb("Deleted Mail", Some("/"), false, MailboxRole::Other);
+        assert_eq!(named.role(), MailboxRole::Trash);
     }
 
     #[test]

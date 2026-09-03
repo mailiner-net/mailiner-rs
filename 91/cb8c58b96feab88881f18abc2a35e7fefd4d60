@@ -1,0 +1,19 @@
+crates/mailiner-app/src/components/compose.rs
+  s_22d601aa7837b5::t_1cdd56e0bcf62b 136-137,140,142,146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "91cb8c58b96feab88881f18abc2a35e7fefd4d60",
+  "prompts": {},
+  "sessions": {
+    "s_22d601aa7837b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06941-9cbd-79c0-8a84-fd2d942067eb",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

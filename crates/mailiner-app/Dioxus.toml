@@ -15,8 +15,9 @@ style = []
 script = []
 
 # Content-Security-Policy is set in-app via document::Meta (CONTENT_SECURITY_POLICY
-# in main.rs). Dioxus.toml has no first-class CSP field; prefer the meta baseline
-# (and/or HTTP headers at deploy time). See README "Content-Security-Policy".
+# in main.rs) for local `dx serve`. Dioxus.toml has no first-class CSP field.
+# Cloudflare Pages deploy also sends the same policy as an HTTP header
+# (`_headers` in the built public dir). See README "Content-Security-Policy".
 
 [web.resource.dev]
 

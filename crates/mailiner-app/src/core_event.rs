@@ -165,6 +165,11 @@ pub enum CoreEvent {
         account_id: AccountId,
         mailbox_id: MailboxId,
     },
+    /// IMAP SUBSCRIBE / UNSUBSCRIBE for one folder.
+    SetFolderSubscribed {
+        mailbox_id: MailboxId,
+        subscribed: bool,
+    },
     /// Inverse of a toasted action (central undo).
     Undo(UndoRequest),
     /// Work held until a toast dismissed without Undo (permanent delete).
@@ -601,6 +606,12 @@ pub async fn core_loop(
                 mailbox_id,
             } => {
                 handle_delete_folder(&manager, &mut ctx, account_id, mailbox_id).await;
+            }
+            CoreEvent::SetFolderSubscribed {
+                mailbox_id,
+                subscribed,
+            } => {
+                handle_set_folder_subscribed(&manager, &mut ctx, mailbox_id, subscribed).await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -1355,7 +1366,7 @@ async fn list_folders_soft(
         Ok(mboxes) => {
             let folder_ids: Vec<FolderId> = mboxes
                 .iter()
-                .filter(|f| f.selectable)
+                .filter(|f| f.selectable && f.subscribed)
                 .map(|f| f.id.clone())
                 .collect();
             let (root_ids, nodes) = crate::mailbox::build_mailbox_tree(mboxes);
@@ -1367,7 +1378,8 @@ async fn list_folders_soft(
                 let nodes = ctx.mailbox_nodes.read();
                 let roots = ctx.mailbox_roots.read();
                 let saved = crate::ui_prefs::load_last_mailbox(account_id);
-                crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots)
+                let show_all = *ctx.show_all_folders.read();
+                crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots, show_all)
             };
             if let Some(startup_id) = startup.as_ref() {
                 let one = [FolderId::new(startup_id.to_string())];
@@ -1466,7 +1478,8 @@ async fn restore_mailbox(
         let nodes = ctx.mailbox_nodes.read();
         let roots = ctx.mailbox_roots.read();
         let saved = crate::ui_prefs::load_last_mailbox(account_id);
-        crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots)
+        let show_all = *ctx.show_all_folders.read();
+        crate::mailbox::resolve_startup_mailbox(saved.as_ref(), &nodes, &roots, show_all)
     };
     let Some(mailbox_id) = to_open else {
         return;
@@ -3524,6 +3537,73 @@ async fn handle_delete_folder(
     }
     list_folders_soft(manager, ctx, &account_id).await;
     ctx.show_toast(ToastAction::info("Folder deleted"));
+}
+
+async fn handle_set_folder_subscribed(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    subscribed: bool,
+) {
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.show_toast(ToastAction::error("No account selected"));
+        return;
+    };
+    let allowed = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(crate::mailbox::can_toggle_subscription);
+    if !allowed {
+        ctx.show_toast(ToastAction::error("Inbox cannot be unsubscribed"));
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    match connector
+        .set_folder_subscribed(&folder_id, subscribed)
+        .await
+    {
+        Ok(()) => {
+            if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {
+                node.subscribed = subscribed;
+            }
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            let show_all = *ctx.show_all_folders.read();
+            let selected_hidden = !subscribed
+                && !show_all
+                && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id);
+            if selected_hidden {
+                restore_mailbox(manager, ctx, &account_id).await;
+            }
+            let title = ctx
+                .mailbox_nodes
+                .read()
+                .get(&mailbox_id)
+                .map(|n| n.title().to_string())
+                .unwrap_or_else(|| mailbox_id.to_string());
+            let msg = if subscribed {
+                format!("Subscribed to {title}")
+            } else {
+                format!("Unsubscribed from {title}")
+            };
+            ctx.show_toast(ToastAction::info(msg));
+        }
+        Err(e) => {
+            error!("Failed to set folder subscription: {}", e);
+            let action = if subscribed {
+                "subscribe"
+            } else {
+                "unsubscribe"
+            };
+            ctx.show_toast(ToastAction::error(format!(
+                "Could not {action} folder: {e}"
+            )));
+        }
+    }
 }
 
 async fn schedule_permanent_delete(

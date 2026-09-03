@@ -1,5 +1,7 @@
 //! Mailbox roles from RFC 6154 special-use, then name heuristics.
 
+use std::collections::HashSet;
+
 use mailiner_core::{AccountId, Folder, FolderId, MailboxRole};
 
 /// One LIST/LSUB row, enough to pick a role or Sent target.
@@ -10,6 +12,8 @@ pub struct ListedMailbox {
     pub no_select: bool,
     /// LIST/LSUB special-use only. `None` if none advertised; `Some(Other)` if unmapped.
     pub special_use: Option<MailboxRole>,
+    /// True until [`apply_subscriptions`] runs against a non-empty `LSUB`.
+    pub subscribed: bool,
 }
 
 impl ListedMailbox {
@@ -135,6 +139,16 @@ pub fn role_from_name(name: &str, delim: Option<&str>) -> MailboxRole {
         .unwrap_or(MailboxRole::Other)
 }
 
+/// Mark LIST rows from a non-empty `LSUB` set. `INBOX` stays subscribed.
+///
+/// Call only when `LSUB` returned at least one name; an empty set is
+/// treated as "server has no subscription list" and every folder stays shown.
+pub fn apply_subscriptions(listed: &mut [ListedMailbox], subscribed: &HashSet<String>) {
+    for m in listed {
+        m.subscribed = subscribed.contains(&m.name) || m.name.eq_ignore_ascii_case("inbox");
+    }
+}
+
 /// Build UI folders from a full `LIST`.
 ///
 /// Selectable mailboxes are included. `\Noselect` rows and missing path
@@ -159,6 +173,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                     None,
                     m.role(),
                     true,
+                    m.subscribed,
                 );
             }
             Some(d) => {
@@ -175,6 +190,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                         .map(|row| row.role())
                         .unwrap_or(MailboxRole::Other);
                     let selectable = listed_row.is_some_and(|row| !row.no_select);
+                    let subscribed = listed_row.is_some_and(|row| row.subscribed);
                     let leaf = chunks[i - 1];
                     push_folder(
                         &mut out,
@@ -185,6 +201,7 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                         parent.as_deref(),
                         role,
                         selectable,
+                        subscribed,
                     );
                 }
             }
@@ -203,12 +220,14 @@ fn push_folder(
     parent: Option<&str>,
     role: MailboxRole,
     selectable: bool,
+    subscribed: bool,
 ) {
     if !seen.insert(full_name.to_string()) {
         if selectable {
             if let Some(existing) = out.iter_mut().find(|f| f.id.as_str() == full_name) {
                 existing.selectable = true;
                 existing.role = role;
+                existing.subscribed = subscribed;
             }
         }
         return;
@@ -220,6 +239,7 @@ fn push_folder(
         parent_id: parent.map(|p| FolderId::new(p.to_string())),
         role,
         selectable,
+        subscribed,
     });
 }
 
@@ -259,6 +279,7 @@ mod tests {
             delimiter: delim.map(str::to_string),
             no_select,
             special_use,
+            subscribed: true,
         }
     }
 
@@ -619,5 +640,49 @@ mod tests {
         assert_eq!(folders[0].id.as_str(), "foo/bar");
         assert!(folders[0].parent_id.is_none());
         assert_eq!(folders[0].name, "foo/bar");
+    }
+
+    #[test]
+    fn apply_subscriptions_keeps_inbox_and_lsub_hits() {
+        let mut listed = [
+            mb("INBOX", Some("/"), false, MailboxRole::Inbox),
+            mb("Lists", Some("/"), false, MailboxRole::Other),
+            mb("Archive", Some("/"), false, MailboxRole::Other),
+        ];
+        let mut names = std::collections::HashSet::new();
+        names.insert("Lists".into());
+        apply_subscriptions(&mut listed, &names);
+        assert!(listed[0].subscribed);
+        assert!(listed[1].subscribed);
+        assert!(!listed[2].subscribed);
+        let folders = folders_from_listed(&AccountId::new("acc"), &listed);
+        assert!(
+            folders
+                .iter()
+                .find(|f| f.id.as_str() == "INBOX")
+                .unwrap()
+                .subscribed
+        );
+        assert!(
+            folders
+                .iter()
+                .find(|f| f.id.as_str() == "Lists")
+                .unwrap()
+                .subscribed
+        );
+        assert!(
+            !folders
+                .iter()
+                .find(|f| f.id.as_str() == "Archive")
+                .unwrap()
+                .subscribed
+        );
+    }
+
+    #[test]
+    fn apply_subscriptions_inbox_case_insensitive() {
+        let mut listed = [mb("Inbox", Some("."), false, MailboxRole::Inbox)];
+        apply_subscriptions(&mut listed, &std::collections::HashSet::new());
+        assert!(listed[0].subscribed);
     }
 }

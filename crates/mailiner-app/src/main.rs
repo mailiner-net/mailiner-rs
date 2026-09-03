@@ -11,9 +11,9 @@ use crate::account_store::{
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, MailboxPickerHost, MessageHeadersHost, MessageList, MessageSourceHost,
-    MessageView, OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost, SplitAxis, SplitHandle,
-    ToastHost,
+    EmailNavigation, FolderSubscribeHost, MailboxPickerHost, MessageHeadersHost, MessageList,
+    MessageSourceHost, MessageView, OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost,
+    SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -336,6 +336,8 @@ fn App() -> Element {
     let sign_out_error = use_signal(|| None::<String>);
     let message_drag = use_signal(|| None);
     let notify_inbox = use_signal(crate::ui_prefs::load_notify_inbox);
+    let folder_subscribe_open = use_signal(|| false);
+    let show_all_folders = use_signal(crate::ui_prefs::load_show_all_folders);
 
     let ctx = AppContext {
         accounts,
@@ -372,6 +374,8 @@ fn App() -> Element {
         sign_out_error,
         message_drag,
         notify_inbox,
+        folder_subscribe_open,
+        show_all_folders,
     };
     let ctx_clone = ctx.clone();
 
@@ -546,6 +550,7 @@ fn MainView() -> Element {
         MailboxPickerHost {}
         MessageHeadersHost {}
         MessageSourceHost {}
+        FolderSubscribeHost {}
         ShortcutsHost {}
     }
 }

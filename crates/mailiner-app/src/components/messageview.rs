@@ -18,7 +18,7 @@ use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
-use crate::mailbox::{MailboxId, flatten_mailboxes};
+use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
 use crate::toast::ToastAction;
@@ -766,9 +766,15 @@ fn MessageHeader(
     let move_targets = {
         let nodes = ctx.mailbox_nodes.read();
         let roots = ctx.mailbox_roots.read();
+        let show_all = *ctx.show_all_folders.read();
         flatten_mailboxes(&roots, &nodes)
             .into_iter()
-            .filter(|(id, _)| mailbox_id.as_ref() != Some(id))
+            .filter(|(id, _)| {
+                mailbox_id.as_ref() != Some(id)
+                    && nodes
+                        .get(id)
+                        .is_some_and(|n| mailbox_is_action_target(n, show_all))
+            })
             .collect::<Vec<_>>()
     };
     let mut move_seq = use_signal(|| 0u32);

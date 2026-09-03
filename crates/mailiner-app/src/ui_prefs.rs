@@ -20,6 +20,9 @@ pub const MESSAGE_SORT_KEY: &str = "mailiner.ui.messageSort";
 /// `localStorage` key for the message-list row density.
 pub const MESSAGE_LIST_DENSITY_KEY: &str = "mailiner.ui.messageListDensity";
 
+/// `localStorage` key: show unsubscribed folders in the tree / pickers.
+pub const SHOW_ALL_FOLDERS_KEY: &str = "mailiner.ui.showAllFolders";
+
 /// Virtualized message-list row density.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MessageListDensity {
@@ -764,7 +767,19 @@ pub fn apply_theme(pref: ThemePref) {
     {
         let _ = value;
     }
+
+pub fn load_show_all_folders() -> bool {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(SHOW_ALL_FOLDERS_KEY)?
+            .as_deref()
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")))
+    })
+    .unwrap_or(false)
 }
+
+pub fn save_show_all_folders(show_all: bool) {
+    let _ = with_kv(|kv| kv.set_item(SHOW_ALL_FOLDERS_KEY, if show_all { "1" } else { "0" }));
 
 /// Drop last-mailbox rows for accounts that are no longer known.
 pub fn retain_last_mailboxes(known: &HashSet<AccountId>) {
@@ -1014,6 +1029,15 @@ mod tests {
             kv.set_item(THEME_KEY, "rainbow").expect("set");
         });
         assert_eq!(load_theme(), ThemePref::System);
+
+    #[test]
+    fn show_all_folders_roundtrip() {
+        host_kv::reset();
+        assert!(!load_show_all_folders());
+        save_show_all_folders(true);
+        assert!(load_show_all_folders());
+        save_show_all_folders(false);
+        assert!(!load_show_all_folders());
         host_kv::reset();
     }
 

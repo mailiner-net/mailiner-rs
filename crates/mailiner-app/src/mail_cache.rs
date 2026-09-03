@@ -115,6 +115,7 @@ impl CachedFolderTree {
                     .map(|p| mailiner_core::FolderId::new(p.as_str())),
                 role: node.role,
                 selectable: node.selectable,
+                subscribed: node.subscribed,
             });
             counts.insert(
                 node.id.as_str().to_string(),
@@ -250,7 +251,8 @@ pub async fn hydrate_account(
     let counts = tree.counts_by_folder_id();
     apply_folder_counts(&mut nodes, &counts);
     apply_unread_new_state(&mut nodes, &counts, acknowledged);
-    let selected = resolve_startup_mailbox(saved_mailbox, &nodes, &roots);
+    let show_all = crate::ui_prefs::load_show_all_folders();
+    let selected = resolve_startup_mailbox(saved_mailbox, &nodes, &roots, show_all);
     let messages = match selected.as_ref() {
         Some(mailbox_id) => match cache.load_messages(account_id, mailbox_id, sort).await {
             Ok(list) => list.map(|list| list.to_ui_prefix()),
@@ -710,6 +712,7 @@ mod tests {
             parent_id: parent.map(FolderId::new),
             role,
             selectable: true,
+            subscribed: true,
         }
     }
 

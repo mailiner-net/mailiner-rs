@@ -1138,6 +1138,49 @@ async fn invalidate_mailbox_messages(
     }
 }
 
+/// After a MOVE that finished on a different account/mailbox, keep folder totals
+/// in sync without mutating the now-current UI list.
+async fn persist_stale_move_counts(
+    cache: &dyn MailCache,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    source: &MailboxId,
+    dest: &MailboxId,
+    moved: usize,
+) {
+    if moved == 0 {
+        return;
+    }
+    if selected_account_is(ctx, account_id) {
+        bump_mailbox_total(ctx, source, -(moved as i32));
+        bump_mailbox_total(ctx, dest, moved as i32);
+        persist_folder_tree(cache, ctx, account_id).await;
+        return;
+    }
+    let Ok(Some(mut tree)) = cache.load_folders(account_id).await else {
+        return;
+    };
+    let moved = moved as u64;
+    if let Some(src) = tree.counts.get_mut(source.as_str()) {
+        src.total_messages = src.total_messages.saturating_sub(moved);
+    }
+    if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
+        dst.total_messages = dst.total_messages.saturating_add(moved);
+    }
+    if let Err(e) = cache.save_folders(account_id, &tree).await {
+        warn!("mail cache adjust folder totals failed: {e}");
+    }
+}
+
+fn bump_mailbox_total(ctx: &mut AppContext, mailbox_id: &MailboxId, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    if let Some(node) = ctx.mailbox_nodes.write().get_mut(mailbox_id) {
+        node.total_count = (node.total_count as i32 + delta).max(0) as usize;
+    }
+}
+
 async fn handle_select_mailbox(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -1870,6 +1913,16 @@ async fn handle_move_messages(
             if !selected_account_is(ctx, &account_id)
                 || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
             {
+                let moved = dest_uids.len().max(message_ids.len());
+                persist_stale_move_counts(
+                    manager.cache(),
+                    ctx,
+                    &account_id,
+                    &mailbox_id,
+                    &dest_mailbox_id,
+                    moved,
+                )
+                .await;
                 invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
                 invalidate_mailbox_messages(manager.cache(), &account_id, &dest_mailbox_id).await;
                 return;

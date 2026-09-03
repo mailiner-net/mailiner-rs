@@ -112,6 +112,8 @@ pub struct AppContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageDrag {
     pub message_ids: Vec<MessageId>,
+    /// Folder the rows were dragged from (not whatever is selected at drop).
+    pub source_mailbox: MailboxId,
     pub over: Option<MailboxId>,
 }
 

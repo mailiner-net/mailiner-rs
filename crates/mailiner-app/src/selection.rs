@@ -456,6 +456,7 @@ mod tests {
         assert!(!s.contains(&id("gone")));
         assert_eq!(s.focus(), Some(&id("a")));
         assert_eq!(s.anchor_index(), None);
+    }
 
     #[test]
     fn drag_uses_full_selection_when_row_is_selected() {
@@ -479,4 +480,5 @@ mod tests {
     fn drag_empty_selection_is_the_row() {
         let s = MessageSelection::default();
         assert_eq!(drag_message_ids(&s, &id("a")), vec![id("a")]);
+    }
 }

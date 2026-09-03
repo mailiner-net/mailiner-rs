@@ -99,12 +99,16 @@ pub fn MessageList() -> Element {
                 },
 
                 ondragstart: move |evt: DragEvent| {
+                    let Some(source_mailbox) = ctx.selected_mailbox.peek().clone() else {
+                        return;
+                    };
                     let ids = drag_message_ids(&ctx.selection.peek(), &drag_id);
                     let dt = evt.data_transfer();
                     let _ = dt.set_data("text/plain", "mailiner-messages");
                     dt.set_effect_allowed("move");
                     message_drag.set(Some(MessageDrag {
                         message_ids: ids,
+                        source_mailbox,
                         over: None,
                     }));
                 },

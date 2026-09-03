@@ -388,6 +388,41 @@ fn same_open_draft(compose_draft: Signal<Option<ComposeSession>>, draft_id: &str
     open_draft_id(compose_draft).as_deref() == Some(draft_id)
 }
 
+enum PreRead {
+    Read,
+    Skip,
+    Stop,
+}
+
+fn pre_read_fits(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    body: Signal<String>,
+    kind: AttachKind,
+    declared: u64,
+    first_err: &mut Option<String>,
+) -> PreRead {
+    let (_, max_count, too_many) = kind_limits(kind);
+    let Some((file_count, inline_count, used)) =
+        draft_slot_counts(compose_draft, draft_id, body().len())
+    else {
+        return PreRead::Stop;
+    };
+    let count = match kind {
+        AttachKind::File => file_count,
+        AttachKind::Inline => inline_count,
+    };
+    if count >= max_count {
+        first_err.get_or_insert_with(too_many);
+        return PreRead::Stop;
+    }
+    if would_exceed_draft_cap(used, declared) {
+        first_err.get_or_insert_with(oversize_draft_message);
+        return PreRead::Skip;
+    }
+    PreRead::Read
+}
+
 fn kind_limits(kind: AttachKind) -> (u64, usize, fn() -> String) {
     match kind {
         AttachKind::File => (
@@ -497,6 +532,18 @@ async fn attach_selected_files(
         if declared > max_one {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
+        }
+        match pre_read_fits(
+            ctx.compose_draft,
+            &draft_id,
+            body,
+            kind,
+            declared,
+            &mut first_err,
+        ) {
+            PreRead::Read => {}
+            PreRead::Skip => continue,
+            PreRead::Stop => break,
         }
         let bytes = match file.read_bytes().await {
             Ok(b) => b,
@@ -623,6 +670,18 @@ async fn attach_web_images(
         if declared > caps::MAX_INLINE_BYTES {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
+        }
+        match pre_read_fits(
+            ctx.compose_draft,
+            &draft_id,
+            body,
+            AttachKind::Inline,
+            declared,
+            &mut first_err,
+        ) {
+            PreRead::Read => {}
+            PreRead::Skip => continue,
+            PreRead::Stop => break,
         }
         let bytes = match read_web_file_bytes(&file).await {
             Ok(b) => b,

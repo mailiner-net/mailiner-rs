@@ -2603,7 +2603,18 @@ async fn handle_move_messages(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let dest_id = FolderId::new(dest_mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
-    let unread_n = unread_in_ids(ctx, &message_ids);
+    let unread_flags: Vec<bool> = {
+        let from_sel = ctx.selection.read();
+        let list = ctx.messages.read();
+        message_ids
+            .iter()
+            .map(|id| {
+                from_sel.unread_among(std::slice::from_ref(id)) > 0
+                    || list.find(|m| m.id == *id).is_some_and(|m| !m.is_read)
+            })
+            .collect()
+    };
+    let unread_n = unread_flags.iter().filter(|u| **u).count();
     match connector
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
@@ -2621,7 +2632,11 @@ async fn handle_move_messages(
                     // Same-order COPYUID: only the leading mapped ids moved.
                     (
                         dest_uids.len(),
-                        unread_in_ids(ctx, &message_ids[..dest_uids.len()]),
+                        unread_flags
+                            .iter()
+                            .take(dest_uids.len())
+                            .filter(|u| **u)
+                            .count(),
                     )
                 };
                 persist_stale_move_counts(

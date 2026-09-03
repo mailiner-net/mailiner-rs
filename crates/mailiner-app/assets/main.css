@@ -754,6 +754,8 @@ a.accounts-link-btn {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     display: flex;
     flex-direction: column;
     justify-content: center;

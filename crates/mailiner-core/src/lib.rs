@@ -13,8 +13,8 @@ pub use connector::{
 pub use error::{MailinerError, Result};
 pub use ids::{AccountId, EmptyMessageId, FolderId, MessageId, MessagePartId};
 pub use models::{
-    Account, EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts,
-    FolderListState, Group, LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessagePart,
-    MessageSort, PartChunk, PartKind, TransferEncoding,
+    EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group,
+    LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessagePart, MessageSort, PartChunk,
+    PartKind, TransferEncoding,
 };
 pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};

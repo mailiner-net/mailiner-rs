@@ -12,8 +12,8 @@ use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
-    Account, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota,
-    MessageContent, MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
+    Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
+    MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Stream of transfer-encoded part chunks (attachment download).

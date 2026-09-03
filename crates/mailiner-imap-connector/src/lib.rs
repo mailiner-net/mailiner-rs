@@ -28,8 +28,8 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
-    Account, AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag,
-    Folder, FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
+    AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
+    FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
     MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };
 use std::collections::HashMap;

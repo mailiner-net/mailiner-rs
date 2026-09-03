@@ -29,19 +29,14 @@ fn strip_html(input: &str) -> String {
         if bytes[i] == b'<' {
             if let Some(tag_end) = lower[i..].find('>') {
                 let tag = &lower[i..i + tag_end];
-                let skip_block = tag.starts_with("<script")
-                    || tag.starts_with("<style")
-                    || tag.starts_with("<head")
-                    || tag.starts_with("<noscript");
+                let name = html_tag_name(tag);
+                let skip_block = matches!(name, "script" | "style" | "head" | "noscript");
                 if skip_block {
-                    let close = if tag.starts_with("<script") {
-                        "</script>"
-                    } else if tag.starts_with("<style") {
-                        "</style>"
-                    } else if tag.starts_with("<head") {
-                        "</head>"
-                    } else {
-                        "</noscript>"
+                    let close = match name {
+                        "script" => "</script>",
+                        "style" => "</style>",
+                        "head" => "</head>",
+                        _ => "</noscript>",
                     };
                     if let Some(rel) = lower[i + tag_end..].find(close) {
                         i += tag_end + rel + close.len();
@@ -74,6 +69,16 @@ fn strip_html(input: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+/// Tag name from a `<...` slice (`<head`, `</style`, `<script type=`).
+fn html_tag_name(tag: &str) -> &str {
+    let rest = tag.strip_prefix('<').unwrap_or(tag);
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 fn decode_entity(s: &str) -> Option<(char, usize)> {
@@ -204,6 +209,14 @@ mod tests {
     #[test]
     fn unclosed_style_does_not_leak() {
         assert!(clean_snippet("<html><head><style>p{color:red}", true).is_empty());
+    }
+
+    #[test]
+    fn header_element_is_not_head() {
+        assert_eq!(
+            clean_snippet("<header>Hello world</header><p>More</p>", true),
+            "Hello world More"
+        );
     }
 
     #[test]

@@ -24,6 +24,19 @@ use crate::send::{
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
 
+fn looks_like_email(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
+}
+
+fn needs_quotes(name: &str) -> bool {
+    name.contains([',', '<', '>', '"', '\\']) || looks_like_email(name)
+}
+
+fn quote_display_name(name: &str) -> String {
+    format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn format_composer_address(addr: &ComposerAddress) -> String {
     match addr
         .name
@@ -31,6 +44,9 @@ fn format_composer_address(addr: &ComposerAddress) -> String {
         .map(str::trim)
         .filter(|n| !n.is_empty())
     {
+        Some(name) if needs_quotes(name) => {
+            format!("{} <{}>", quote_display_name(name), addr.email)
+        }
         Some(name) => format!("{name} <{}>", addr.email),
         None => addr.email.clone(),
     }
@@ -49,7 +65,7 @@ fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
     if email.is_empty() {
         return None;
     }
-    let name = name.trim().trim_matches('"').trim();
+    let name = name.trim();
     Some(ComposerAddress {
         name: if name.is_empty() {
             None
@@ -60,9 +76,87 @@ fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
     })
 }
 
-fn looks_like_email(s: &str) -> bool {
+fn find_unquoted(s: &str, needle: char) -> Option<usize> {
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_quotes => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            c if c == needle && !in_quotes => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
     let s = s.trim();
-    !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
+    if !s.ends_with('"') {
+        return None;
+    }
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut quote_start = None;
+    let mut decoded = String::new();
+    for (i, c) in s.char_indices() {
+        if escaped {
+            decoded.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_quotes => escaped = true,
+            '"' if !in_quotes => {
+                in_quotes = true;
+                quote_start = Some(i);
+                decoded.clear();
+            }
+            '"' if in_quotes => in_quotes = false,
+            _ if in_quotes => decoded.push(c),
+            _ => {}
+        }
+    }
+    if in_quotes {
+        return None;
+    }
+    let start = quote_start?;
+    let prefix = s[..start].trim().trim_end_matches(',').trim();
+    Some((prefix, decoded))
+}
+
+/// Last comma-separated token before `<email>` is the display name.
+/// Earlier email-like tokens are sibling recipients.
+fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
+    let before = before.trim();
+    if before.is_empty() {
+        return String::new();
+    }
+    if let Some((bare, quoted)) = split_trailing_quoted(before) {
+        for part in bare.split(',') {
+            let part = part.trim();
+            if !part.is_empty() {
+                out.push(ComposerAddress::email_only(part));
+            }
+        }
+        return quoted;
+    }
+    let parts: Vec<&str> = before.split(',').collect();
+    let mut name_from = parts.len().saturating_sub(1);
+    while name_from > 0 && !looks_like_email(parts[name_from - 1]) {
+        name_from -= 1;
+    }
+    for part in &parts[..name_from] {
+        let part = part.trim();
+        if !part.is_empty() {
+            out.push(ComposerAddress::email_only(part));
+        }
+    }
+    parts[name_from..].join(",")
 }
 
 /// Parse a compose field. Named mailboxes (`Name <email>`) keep the display name.
@@ -70,21 +164,11 @@ fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
     let mut out = Vec::new();
     let mut rest = raw.trim();
     while !rest.is_empty() {
-        if let Some(open) = rest.find('<')
+        if let Some(open) = find_unquoted(rest, '<')
             && let Some(close_rel) = rest[open..].find('>')
         {
             let close = open + close_rel;
-            let mut name = String::new();
-            for part in rest[..open].split(',') {
-                if name.is_empty() && looks_like_email(part) {
-                    out.push(ComposerAddress::email_only(part.trim()));
-                } else if name.is_empty() {
-                    name = part.to_string();
-                } else {
-                    name.push(',');
-                    name.push_str(part);
-                }
-            }
+            let name = take_display_name(&rest[..open], &mut out);
             if let Some(addr) = named_composer_address(&name, &rest[open + 1..close]) {
                 out.push(addr);
             }
@@ -908,6 +992,13 @@ mod tests {
             format_composer_address(&ComposerAddress::email_only("solo@example.com")),
             "solo@example.com"
         );
+        assert_eq!(
+            format_composer_address(&ComposerAddress {
+                name: Some("alice@example.com".into()),
+                email: "alice@work.com".into(),
+            }),
+            "\"alice@example.com\" <alice@work.com>"
+        );
     }
 
     #[test]
@@ -934,6 +1025,25 @@ mod tests {
             "Ada Lovelace <ada@example.com>, bob@example.com, Cc <cc@example.com>"
         );
         assert_eq!(parse_address_list(&joined), parsed);
+    }
+
+    #[test]
+    fn parse_address_list_keeps_email_like_display_name() {
+        let unquoted = parse_address_list("alice@example.com <alice@work.com>");
+        assert_eq!(unquoted.len(), 1);
+        assert_eq!(unquoted[0].name.as_deref(), Some("alice@example.com"));
+        assert_eq!(unquoted[0].email, "alice@work.com");
+
+        let quoted = parse_address_list("\"alice@example.com\" <alice@work.com>");
+        assert_eq!(quoted, unquoted);
+
+        let mixed = parse_address_list("bob@example.com, \"alice@example.com\" <alice@work.com>");
+        assert_eq!(mixed.len(), 2);
+        assert_eq!(mixed[0].email, "bob@example.com");
+        assert_eq!(mixed[1].name.as_deref(), Some("alice@example.com"));
+        assert_eq!(mixed[1].email, "alice@work.com");
+
+        assert_eq!(parse_address_list(&join_address_list(&unquoted)), unquoted);
     }
 
     #[test]

@@ -1,0 +1,58 @@
+crates/mailiner-app/src/components/attachments.rs
+  s_1ba4579feeb3ad::t_880d86193b5372 244-250
+  s_1ba4579feeb3ad::t_649bde1fe7a2f1 138-143,159-203
+  s_1ba4579feeb3ad::t_dd5fb9bb3e3c24 233-236
+  s_1ba4579feeb3ad::t_ff6c89a85ded69 223
+  s_1ba4579feeb3ad::t_c90b49e74ed2da 31,52-54,57,61,82,88
+  s_1ba4579feeb3ad::t_89697170f5d524 220-222,224-232,237-243,251-260,265-293
+  s_1ba4579feeb3ad::t_14434a1466da0f 261-264
+  s_1ba4579feeb3ad::t_6d7360800beb5f 62-81
+  s_1ba4579feeb3ad::t_cb7a175ccd0ecf 1,3,7,10
+crates/mailiner-app/src/components/shortcuts.rs
+  s_1ba4579feeb3ad::t_4ed9163bf3ba7d 213-220
+crates/mailiner-app/src/main.rs
+  s_1ba4579feeb3ad::t_5136af9d1839c7 299-300
+  s_1ba4579feeb3ad::t_1c422d0f3c7dd3 322-323
+  s_1ba4579feeb3ad::t_a9305919887ac1 95-101,117
+README.md
+  s_1ba4579feeb3ad::t_753d49609d7bde 55,57-58
+crates/mailiner-app/src/download.rs
+  s_1ba4579feeb3ad::t_54a67017f3d004 390-452,457
+  s_1ba4579feeb3ad::t_3940e270ed60d4 453-456
+  s_1ba4579feeb3ad::t_509bd2ee27327f 41-74,76-86,103,114-126
+  s_1ba4579feeb3ad::t_80093407a2098f 75
+  s_1ba4579feeb3ad::t_b4acae2722428c 270-279,283,285-287,295,310-311,315-325
+  s_1ba4579feeb3ad::t_02002d0b230d5a 191-192,199-228
+  s_1ba4579feeb3ad::t_f821bd7ee1432f 305
+crates/mailiner-app/assets/main.css
+  s_1ba4579feeb3ad::t_1f2c41e08c362f 1044-1089,1820-1826,1844-1845,1856-1862
+crates/mailiner-app/src/core_event.rs
+  s_1ba4579feeb3ad::t_0c91a04ddd449d 387-408
+  s_1ba4579feeb3ad::t_8639253ef42701 2156-2187,2191-2238,2253-2346,2355,2362,2368,2396,2415,2432,2437
+  s_1ba4579feeb3ad::t_9caaa6b2bd8fd6 983,1130,1465,1682,2019
+  s_1ba4579feeb3ad::t_b54dc78d6e04ba 2239-2252
+  s_1ba4579feeb3ad::t_094c5e903ff4b2 24
+  s_1ba4579feeb3ad::t_591349415b1ed8 25-28,109-110
+crates/mailiner-app/src/context.rs
+  s_1ba4579feeb3ad::t_3d6044c9432196 109-110,113-114,121-122,126-127
+  s_1ba4579feeb3ad::t_5f2bc8d523d21d 10,71-74
+  s_1ba4579feeb3ad::t_8861e42d81c31b 93-101
+  s_1ba4579feeb3ad::t_71efd1b229196b 107,111-112,115-118,120,123-125,128-129
+  s_1ba4579feeb3ad::t_ced09652523a05 108,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "533aebefa44a5f77a4b82abac5bf8470a4bcf580",
+  "prompts": {},
+  "sessions": {
+    "s_1ba4579feeb3ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06941-9cbe-74c2-aec2-cb3061699d16",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

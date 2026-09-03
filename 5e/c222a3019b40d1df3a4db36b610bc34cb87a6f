@@ -1,0 +1,21 @@
+crates/mailiner-composer/src/shell/recipient_field.rs
+  s_15a636c9713c7b::t_506eed1f3f2d10 4,45
+  s_15a636c9713c7b::t_cd36dd2d6353a6 108-110
+  s_15a636c9713c7b::t_28e37b1cd5ea52 251-261,302-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5ec222a3019b40d1df3a4db36b610bc34cb87a6f",
+  "prompts": {},
+  "sessions": {
+    "s_15a636c9713c7b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06939-1b36-7821-ab94-12d760eb7c7b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

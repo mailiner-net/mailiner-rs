@@ -373,6 +373,30 @@ pub fn next_unread_index(
     UnreadScan::None
 }
 
+/// Exclusive start index for an unread scan (`next_unread_index`).
+///
+/// `stored` is the focus index from when the row was selected; `live` is where
+/// that message is now. Unread-first auto-mark relocates the row into the read
+/// section and slides the next unread into `stored`, so a forward scan must
+/// include that slot (`stored - 1`). Backward scans still use `stored`.
+pub fn unread_scan_from(stored: Option<usize>, live: Option<usize>, delta: i32) -> Option<usize> {
+    match (stored, live) {
+        (Some(stored), Some(live)) if live != stored && delta > 0 => stored.checked_sub(1),
+        (Some(stored), _) => Some(stored),
+        (_, live) => live,
+    }
+}
+
+/// Exclusive start so the next scan re-checks `hole` (now loaded) without
+/// walking the already-examined prefix again.
+pub fn unread_scan_resume(hole: usize, delta: i32) -> Option<usize> {
+    if delta > 0 {
+        hole.checked_sub(1)
+    } else {
+        Some(hole.saturating_add(1))
+    }
+}
+
 /// Subtract already-pending ranges so we do not re-request in-flight data.
 fn subtract_pending(needed: Vec<Range<usize>>, pending: &[Range<usize>]) -> Vec<Range<usize>> {
     if pending.is_empty() {
@@ -926,5 +950,28 @@ mod tests {
             scan(&[Some(false), Some(false)], Some(0), 1),
             UnreadScan::None
         );
+    }
+
+    #[test]
+    fn unread_scan_from_includes_vacated_slot_after_relocate() {
+        // Selected unread at 2, then relocated to 5; next unread slid into 2.
+        assert_eq!(unread_scan_from(Some(2), Some(5), 1), Some(1));
+        let after_relocate = [Some(true), Some(true), Some(true), Some(false), Some(false)];
+        assert_eq!(
+            scan(&after_relocate, unread_scan_from(Some(2), Some(3), 1), 1),
+            UnreadScan::Found(2)
+        );
+        assert_eq!(unread_scan_from(Some(0), Some(4), 1), None);
+        assert_eq!(unread_scan_from(Some(2), Some(5), -1), Some(2));
+        assert_eq!(unread_scan_from(Some(2), Some(2), 1), Some(2));
+        assert_eq!(unread_scan_from(None, Some(3), 1), Some(3));
+        assert_eq!(unread_scan_from(None, None, 1), None);
+    }
+
+    #[test]
+    fn unread_scan_resume_rechecks_the_filled_hole() {
+        assert_eq!(unread_scan_resume(0, 1), None);
+        assert_eq!(unread_scan_resume(4, 1), Some(3));
+        assert_eq!(unread_scan_resume(4, -1), Some(5));
     }
 }

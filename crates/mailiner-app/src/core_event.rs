@@ -19,6 +19,7 @@ use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::components::virtual_scroll::{
     SparseList, UnreadScan, adjacent_index, index_after_removal, next_unread_index,
+    unread_scan_from, unread_scan_resume,
 };
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
@@ -1744,6 +1745,17 @@ fn current_list_index(ctx: &AppContext) -> Option<usize> {
     })
 }
 
+fn unread_scan_start(ctx: &AppContext, delta: i32) -> Option<usize> {
+    let stored = ctx.selection.read().focus_at_index();
+    let live = ctx
+        .selection
+        .read()
+        .focus()
+        .cloned()
+        .and_then(|id| ctx.messages.read().position(|m| m.id == id));
+    unread_scan_from(stored, live, delta)
+}
+
 /// Same window `select_list_index` fetches when a keyboard move lands on a hole.
 fn adjacent_fetch_range(index: usize, total: usize) -> Range<usize> {
     index.saturating_sub(5)..(index + 15).min(total)
@@ -1842,7 +1854,7 @@ async fn handle_select_adjacent_unread(
     if *ctx.messages_loading.peek() {
         return;
     }
-    let mut from = current_list_index(ctx);
+    let mut from = unread_scan_start(ctx, delta);
     loop {
         let total = ctx.messages.read().total_count();
         let scan = {
@@ -1860,7 +1872,9 @@ async fn handle_select_adjacent_unread(
                 };
                 let range = adjacent_fetch_range(index, total);
                 handle_fetch_message_range(manager, ctx, mailbox_id, range).await;
-                if !ctx.messages.read().has_item(index) {
+                if ctx.messages.read().has_item(index) {
+                    from = unread_scan_resume(index, delta);
+                } else {
                     // Advance past this hole so a failed fetch cannot stall.
                     from = Some(index);
                 }

@@ -55,6 +55,7 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlAnchorElement",
     "HtmlElement",
+    "HtmlIFrameElement",
     "KeyboardEvent",
     "Location",
     "MessageEvent",

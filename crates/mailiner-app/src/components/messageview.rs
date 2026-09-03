@@ -14,6 +14,8 @@ use crate::core_event::CoreEvent;
 use crate::formatter::{FormatOptions, MessageFormatter};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
+use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
+use crate::toast::ToastAction;
 
 use super::compose::open_reply_or_forward;
 
@@ -270,7 +272,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Loading { .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env, prefer_plain }
+                        MessageHeader { message: env, prefer_plain, formatted_html }
                     }
                     div {
                         class: "message-view-loading",
@@ -279,7 +281,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Error { message, .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env, prefer_plain }
+                        MessageHeader { message: env, prefer_plain, formatted_html }
                     }
                     div {
                         class: "message-view-error",
@@ -288,7 +290,7 @@ pub fn MessageView() -> Element {
                 },
                 MessageViewState::Ready { .. } => rsx! {
                     if let Some(env) = envelope {
-                        MessageHeader { message: env, prefer_plain }
+                        MessageHeader { message: env, prefer_plain, formatted_html }
                     }
 
                     if *prevented_remote.read() {
@@ -348,8 +350,37 @@ pub(crate) fn ready_loaded(
     }
 }
 
+fn print_loaded_message(ctx: &AppContext, message: &Message, body_html: &str) {
+    let date = format_date(&message.date);
+    let html = build_print_document(
+        &PrintHeaders {
+            from: &message.from,
+            to: &message.to,
+            cc: message.cc.as_deref(),
+            subject: &message.subject,
+            date: &date,
+        },
+        body_html,
+    );
+    match open_print_document(&html) {
+        Ok(()) => {}
+        Err(PrintError::PopupBlocked) => {
+            ctx.show_toast(ToastAction::info(
+                "Pop-up blocked. Allow pop-ups to print this message.",
+            ));
+        }
+        Err(PrintError::Failed) => {
+            ctx.show_toast(ToastAction::error("Could not open print preview."));
+        }
+    }
+}
+
 #[component]
-fn MessageHeader(message: Arc<Message>, mut prefer_plain: Signal<bool>) -> Element {
+fn MessageHeader(
+    message: Arc<Message>,
+    mut prefer_plain: Signal<bool>,
+    formatted_html: Signal<String>,
+) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let date = format_date(&message.date);
@@ -478,6 +509,22 @@ fn MessageHeader(message: Arc<Message>, mut prefer_plain: Signal<bool>) -> Eleme
                             }
                         },
                         "Forward"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: !actions_ready,
+                        title: "Print",
+                        onclick: {
+                            let message = message.clone();
+                            let ctx = ctx.clone();
+                            move |_| {
+                                if ready_loaded(&ctx, &message.id).is_none() {
+                                    return;
+                                }
+                                print_loaded_message(&ctx, &message, &formatted_html.peek());
+                            }
+                        },
+                        "Print"
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",

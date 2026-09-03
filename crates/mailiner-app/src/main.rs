@@ -34,6 +34,7 @@ mod mailbox;
 mod message;
 mod message_loader;
 mod outbox_store;
+mod print;
 mod selection;
 mod send;
 mod shortcuts;

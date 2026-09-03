@@ -51,11 +51,11 @@ where
                 no_select = true;
                 continue;
             }
-            NameAttribute::Archive => MailboxRole::Archive,
+            NameAttribute::All | NameAttribute::Archive => MailboxRole::Archive,
             NameAttribute::Drafts => MailboxRole::Drafts,
             NameAttribute::Sent => MailboxRole::Sent,
             NameAttribute::Trash => MailboxRole::Trash,
-            NameAttribute::All | NameAttribute::Flagged | NameAttribute::Junk => MailboxRole::Other,
+            NameAttribute::Flagged | NameAttribute::Junk => MailboxRole::Other,
             NameAttribute::Extension(name) => match extension_role(name) {
                 MailboxRole::Other if !is_unmapped_special_use(name) => continue,
                 mapped => mapped,
@@ -80,7 +80,7 @@ where
 fn extension_role(name: &str) -> MailboxRole {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "inbox" => MailboxRole::Inbox,
-        "archive" => MailboxRole::Archive,
+        "all" | "archive" => MailboxRole::Archive,
         "outbox" => MailboxRole::Outbox,
         _ => MailboxRole::Other,
     }
@@ -89,7 +89,7 @@ fn extension_role(name: &str) -> MailboxRole {
 fn is_unmapped_special_use(name: &str) -> bool {
     matches!(
         name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
-        "all" | "flagged" | "junk"
+        "flagged" | "junk"
     )
 }
 
@@ -97,6 +97,7 @@ fn is_unmapped_special_use(name: &str) -> bool {
 const ROLE_FROM_LEAF: &[(&str, MailboxRole)] = &[
     ("archive", MailboxRole::Archive),
     ("archives", MailboxRole::Archive),
+    ("all mail", MailboxRole::Archive),
     ("drafts", MailboxRole::Drafts),
     ("draft", MailboxRole::Drafts),
     ("draft messages", MailboxRole::Drafts),
@@ -381,7 +382,7 @@ mod tests {
         );
         assert_eq!(
             role_from_name("[Gmail]/All Mail", Some("/")),
-            MailboxRole::Other
+            MailboxRole::Archive
         );
     }
 
@@ -389,6 +390,8 @@ mod tests {
     fn archive_special_use_from_attrs() {
         use async_imap::types::NameAttribute;
         let (_, role) = special_use_from_attrs([NameAttribute::Archive].iter());
+        assert_eq!(role, Some(MailboxRole::Archive));
+        let (_, role) = special_use_from_attrs([NameAttribute::All].iter());
         assert_eq!(role, Some(MailboxRole::Archive));
         let (_, role) = special_use_from_attrs(
             [NameAttribute::Extension(std::borrow::Cow::Borrowed(
@@ -456,11 +459,7 @@ mod tests {
     fn unmapped_special_use_skips_name_heuristic() {
         use async_imap::types::NameAttribute;
         use std::borrow::Cow;
-        for attr in [
-            NameAttribute::Junk,
-            NameAttribute::All,
-            NameAttribute::Flagged,
-        ] {
+        for attr in [NameAttribute::Junk, NameAttribute::Flagged] {
             let (_, role) = special_use_from_attrs([attr].iter());
             assert_eq!(role, Some(MailboxRole::Other));
         }

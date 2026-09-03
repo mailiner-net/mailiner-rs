@@ -83,6 +83,7 @@ pub enum CoreEvent {
     },
     /// Move to the Archive special-use folder when one exists.
     ArchiveMessages {
+        account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
@@ -362,10 +363,12 @@ pub async fn core_loop(
                 .await;
             }
             CoreEvent::ArchiveMessages {
+                account_id,
                 mailbox_id,
                 message_ids,
             } => {
-                handle_archive_messages(&manager, &mut ctx, mailbox_id, message_ids).await;
+                handle_archive_messages(&manager, &mut ctx, account_id, mailbox_id, message_ids)
+                    .await;
             }
             CoreEvent::MoveToTrash {
                 mailbox_id,
@@ -1964,17 +1967,20 @@ async fn handle_copy_messages(
 async fn handle_archive_messages(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
+    account_id: AccountId,
     mailbox_id: MailboxId,
     message_ids: Vec<MessageId>,
 ) {
     if message_ids.is_empty() {
         return;
     }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
-    let archive_id =
-        crate::mailbox::find_mailbox_with_role(&ctx.mailbox_nodes.read(), MailboxRole::Archive);
+    let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
     let Some(archive_id) = archive_id else {
         ctx.show_toast(ToastAction::error(
             "No Archive folder found on this account",

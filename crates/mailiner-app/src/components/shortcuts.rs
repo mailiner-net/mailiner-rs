@@ -90,10 +90,15 @@ fn run_shortcut(
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
         }
         ShortcutId::Archive => {
+            let Some(account_id) = ctx.selected_account.peek().clone() else {
+                ctx.show_toast(ToastAction::error("No account selected"));
+                return;
+            };
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
             let _ = core.send(CoreEvent::ArchiveMessages {
+                account_id,
                 mailbox_id,
                 message_ids,
             });

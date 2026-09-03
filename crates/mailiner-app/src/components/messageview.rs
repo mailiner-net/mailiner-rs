@@ -512,8 +512,8 @@ fn MessageHeader(
                 .map(|n| n.role == MailboxRole::Trash)
         })
         .unwrap_or(false);
-    let archive_id =
-        crate::mailbox::find_mailbox_with_role(&ctx.mailbox_nodes.read(), MailboxRole::Archive);
+    let account_id = ctx.selected_account.read().clone();
+    let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
     let show_archive = archive_id
         .as_ref()
         .is_some_and(|id| mailbox_id.as_ref() != Some(id));
@@ -722,9 +722,13 @@ fn MessageHeader(
                             class: "ui-btn ui-btn-secondary",
                             title: "Move to Archive",
                             onclick: {
+                                let account_id = account_id.clone();
                                 let mailbox_id = mailbox_id.clone();
                                 let ids = selected_ids.clone();
                                 move |_| {
+                                    let Some(account_id) = account_id.clone() else {
+                                        return;
+                                    };
                                     let Some(mailbox_id) = mailbox_id.clone() else {
                                         return;
                                     };
@@ -732,6 +736,7 @@ fn MessageHeader(
                                         return;
                                     }
                                     let _ = core_tx.send(CoreEvent::ArchiveMessages {
+                                        account_id,
                                         mailbox_id,
                                         message_ids: ids.clone(),
                                     });

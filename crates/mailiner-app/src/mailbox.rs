@@ -186,6 +186,28 @@ pub fn find_mailbox_with_role(
         .map(|(id, _)| id.clone())
 }
 
+/// Archive target: prefer a folder named Archive/Archives, else any `\Archive`/`\All`.
+pub fn find_archive_mailbox(nodes: &HashMap<MailboxId, MailboxNode>) -> Option<MailboxId> {
+    let mut named = None;
+    let mut any = None;
+    for (id, node) in nodes {
+        if !node.selectable || node.role != MailboxRole::Archive {
+            continue;
+        }
+        let leaf = node.name.to_ascii_lowercase();
+        if leaf == "archive" || leaf == "archives" {
+            return Some(id.clone());
+        }
+        if any.is_none() {
+            any = Some(id.clone());
+        }
+        if named.is_none() && leaf != "all mail" {
+            named = Some(id.clone());
+        }
+    }
+    named.or(any)
+}
+
 /// Mailbox to open after a folder list: saved id if it still exists, else Inbox, else first root.
 pub fn resolve_startup_mailbox(
     saved: Option<&MailboxId>,
@@ -492,6 +514,7 @@ mod tests {
         ]);
         let archive = find_mailbox_with_role(&nodes, MailboxRole::Archive).unwrap();
         assert_eq!(archive.to_string(), "Archive");
+        assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
         let hidden = build_mailbox_tree(vec![folder_sel(
             "virtual-archive",
             "Archive",
@@ -501,6 +524,38 @@ mod tests {
         )])
         .1;
         assert!(find_mailbox_with_role(&hidden, MailboxRole::Archive).is_none());
+        assert!(find_archive_mailbox(&hidden).is_none());
+    }
+
+    #[test]
+    fn find_archive_prefers_named_folder_over_all_mail() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder(
+                "[Gmail]/All Mail",
+                "All Mail",
+                Some("[Gmail]"),
+                MailboxRole::Archive,
+            ),
+            folder("Archive", "Archive", None, MailboxRole::Archive),
+        ]);
+        assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
+    }
+
+    #[test]
+    fn find_archive_falls_back_to_all_mail() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder(
+                "[Gmail]/All Mail",
+                "All Mail",
+                Some("[Gmail]"),
+                MailboxRole::Archive,
+            ),
+        ]);
+        assert_eq!(
+            find_archive_mailbox(&nodes).unwrap().to_string(),
+            "[Gmail]/All Mail"
+        );
     }
 
     #[test]

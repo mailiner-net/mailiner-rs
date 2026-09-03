@@ -28,8 +28,8 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
-    is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, Account,
-    AccountId, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
+    is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, AccountId,
+    BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
     MessageSort, PartChunk, PartStream, Result as MailinerResult,
 };

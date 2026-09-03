@@ -79,6 +79,18 @@ impl MessageListDensity {
 /// `localStorage` key for the color-theme override (`system` | `light` | `dark`).
 pub const THEME_KEY: &str = "mailiner.ui.theme";
 
+/// `localStorage` key for the global remote-image default (`true` | `false`).
+pub const ALLOW_REMOTE_IMAGES_KEY: &str = "mailiner.ui.allowRemoteImages";
+
+/// `localStorage` key for per-sender / per-domain remote-image overrides.
+pub const REMOTE_IMAGE_SENDERS_KEY: &str = "mailiner.ui.remoteImageSenders.v1";
+/// Schema version for [`RemoteImageSendersBlob`].
+pub const REMOTE_IMAGE_SENDERS_SCHEMA_VERSION: u32 = 1;
+/// Cap on remembered From addresses (evict an arbitrary extra on insert).
+pub const MAX_REMOTE_IMAGE_ADDRESSES: usize = 200;
+/// Cap on remembered From domains.
+pub const MAX_REMOTE_IMAGE_DOMAINS: usize = 100;
+
 /// Color theme preference. `System` follows `prefers-color-scheme`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemePref {
@@ -124,6 +136,209 @@ impl ThemePref {
             Self::Dark => Some("dark"),
         }
     }
+}
+
+/// Remembered allow/block for remote images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteImagePref {
+    Allow,
+    Block,
+}
+
+impl RemoteImagePref {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Allow => "Allow",
+            Self::Block => "Block",
+        }
+    }
+}
+
+/// Which rule produced a [`RemoteImageDecision`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RemoteImageSource {
+    Address,
+    Domain,
+    Global,
+}
+
+/// Resolved remote-image policy for one From address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoteImageDecision {
+    pub pref: RemoteImagePref,
+    pub source: RemoteImageSource,
+}
+
+impl RemoteImageDecision {
+    pub fn allowed(self) -> bool {
+        self.pref == RemoteImagePref::Allow
+    }
+}
+
+/// Address vs domain row in the remembered-sender list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RemoteImageSenderKind {
+    Address,
+    Domain,
+}
+
+/// One remembered From address or domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteImageSenderEntry {
+    pub key: String,
+    pub kind: RemoteImageSenderKind,
+    pub pref: RemoteImagePref,
+}
+
+impl RemoteImageSenderEntry {
+    pub fn display_key(&self) -> String {
+        match self.kind {
+            RemoteImageSenderKind::Address => self.key.clone(),
+            RemoteImageSenderKind::Domain => format!("@{}", self.key),
+        }
+    }
+}
+
+/// Per-From-address and per-domain remote-image overrides.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RemoteImageSendersBlob {
+    pub schema_version: u32,
+    /// Lowercased `local@domain` → pref.
+    #[serde(default)]
+    pub addresses: HashMap<String, RemoteImagePref>,
+    /// Lowercased domain (no `@`) → pref.
+    #[serde(default)]
+    pub domains: HashMap<String, RemoteImagePref>,
+}
+
+impl RemoteImageSendersBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: REMOTE_IMAGE_SENDERS_SCHEMA_VERSION,
+            addresses: HashMap::new(),
+            domains: HashMap::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > REMOTE_IMAGE_SENDERS_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported remote-image-senders schema_version {} (max supported {})",
+                blob.schema_version, REMOTE_IMAGE_SENDERS_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+
+    /// Address match wins over domain. `email` is normalized first.
+    pub fn pref_for(&self, email: &str) -> Option<(RemoteImagePref, RemoteImageSource)> {
+        let norm = normalize_email(email)?;
+        if let Some(pref) = self.addresses.get(&norm) {
+            return Some((*pref, RemoteImageSource::Address));
+        }
+        let domain = domain_of_normalized(&norm)?;
+        self.domains
+            .get(&domain)
+            .copied()
+            .map(|pref| (pref, RemoteImageSource::Domain))
+    }
+
+    pub fn set_address(&mut self, email: String, pref: RemoteImagePref) {
+        evict_if_new(&mut self.addresses, &email, MAX_REMOTE_IMAGE_ADDRESSES);
+        self.addresses.insert(email, pref);
+        self.schema_version = REMOTE_IMAGE_SENDERS_SCHEMA_VERSION;
+    }
+
+    pub fn set_domain(&mut self, domain: String, pref: RemoteImagePref) {
+        evict_if_new(&mut self.domains, &domain, MAX_REMOTE_IMAGE_DOMAINS);
+        self.domains.insert(domain, pref);
+        self.schema_version = REMOTE_IMAGE_SENDERS_SCHEMA_VERSION;
+    }
+
+    pub fn clear_address(&mut self, email: &str) {
+        self.addresses.remove(email);
+        self.schema_version = REMOTE_IMAGE_SENDERS_SCHEMA_VERSION;
+    }
+
+    pub fn clear_domain(&mut self, domain: &str) {
+        self.domains.remove(domain);
+        self.schema_version = REMOTE_IMAGE_SENDERS_SCHEMA_VERSION;
+    }
+
+    pub fn entries(&self) -> Vec<RemoteImageSenderEntry> {
+        let mut out: Vec<RemoteImageSenderEntry> = self
+            .addresses
+            .iter()
+            .map(|(key, pref)| RemoteImageSenderEntry {
+                key: key.clone(),
+                kind: RemoteImageSenderKind::Address,
+                pref: *pref,
+            })
+            .chain(
+                self.domains
+                    .iter()
+                    .map(|(key, pref)| RemoteImageSenderEntry {
+                        key: key.clone(),
+                        kind: RemoteImageSenderKind::Domain,
+                        pref: *pref,
+                    }),
+            )
+            .collect();
+        out.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.key.cmp(&b.key)));
+        out
+    }
+}
+
+fn evict_if_new(map: &mut HashMap<String, RemoteImagePref>, key: &str, max: usize) {
+    if map.contains_key(key) || map.len() < max {
+        return;
+    }
+    if let Some(victim) = map.keys().next().cloned() {
+        map.remove(&victim);
+    }
+}
+
+/// Trim + ASCII-lowercase `local@domain`. Rejects missing parts.
+pub fn normalize_email(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (local, domain) = trimmed.rsplit_once('@')?;
+    if local.is_empty() || domain.is_empty() {
+        return None;
+    }
+    if domain.starts_with('.') || domain.ends_with('.') || domain.contains('@') {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+/// Domain of a raw or already-normalized email (`example.com`, no `@`).
+pub fn domain_of_email(raw: &str) -> Option<String> {
+    domain_of_normalized(&normalize_email(raw)?)
+}
+
+/// Trim `@` / dots and lowercase a domain. Rejects empty or address-like input.
+pub fn normalize_domain(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_start_matches('@').trim_matches('.');
+    if trimmed.is_empty() || trimmed.contains('@') || trimmed.contains('/') || trimmed.contains(' ')
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+fn domain_of_normalized(email: &str) -> Option<String> {
+    let (_, domain) = email.rsplit_once('@')?;
+    normalize_domain(domain)
 }
 
 /// `localStorage` key for last-opened mailbox per account.
@@ -327,6 +542,113 @@ pub fn load_theme() -> ThemePref {
 
 pub fn save_theme(theme: ThemePref) {
     let _ = with_kv(|kv| kv.set_item(THEME_KEY, theme.as_key()));
+}
+
+pub fn load_allow_remote_images() -> bool {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(ALLOW_REMOTE_IMAGES_KEY)?
+            .as_deref()
+            .map(|s| s == "true")
+            .unwrap_or(false))
+    })
+    .unwrap_or(false)
+}
+
+pub fn save_allow_remote_images(allow: bool) {
+    let value = if allow { "true" } else { "false" };
+    let _ = with_kv(|kv| kv.set_item(ALLOW_REMOTE_IMAGES_KEY, value));
+}
+
+fn load_remote_senders_blob(
+    kv: &dyn StringKvStore,
+) -> Result<RemoteImageSendersBlob, AccountStoreError> {
+    match kv.get_item(REMOTE_IMAGE_SENDERS_KEY)? {
+        None => Ok(RemoteImageSendersBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(RemoteImageSendersBlob::empty()),
+        Some(s) => RemoteImageSendersBlob::decode(&s),
+    }
+}
+
+fn save_remote_senders_blob(
+    kv: &dyn StringKvStore,
+    blob: &RemoteImageSendersBlob,
+) -> Result<(), AccountStoreError> {
+    kv.set_item(REMOTE_IMAGE_SENDERS_KEY, &blob.encode()?)
+}
+
+pub fn load_remote_image_senders() -> RemoteImageSendersBlob {
+    with_kv(load_remote_senders_blob).unwrap_or_else(RemoteImageSendersBlob::empty)
+}
+
+/// Address override, then domain, then the global default.
+pub fn remote_image_decision(from_email: Option<&str>) -> RemoteImageDecision {
+    if let Some(email) = from_email
+        && let Some((pref, source)) = load_remote_image_senders().pref_for(email)
+    {
+        return RemoteImageDecision { pref, source };
+    }
+    RemoteImageDecision {
+        pref: if load_allow_remote_images() {
+            RemoteImagePref::Allow
+        } else {
+            RemoteImagePref::Block
+        },
+        source: RemoteImageSource::Global,
+    }
+}
+
+pub fn save_remote_image_address(email: &str, pref: RemoteImagePref) -> bool {
+    let Some(norm) = normalize_email(email) else {
+        return false;
+    };
+    with_kv(|kv| {
+        let mut blob = load_remote_senders_blob(kv)?;
+        blob.set_address(norm, pref);
+        save_remote_senders_blob(kv, &blob)
+    })
+    .is_some()
+}
+
+pub fn clear_remote_image_address(email: &str) {
+    let Some(norm) = normalize_email(email) else {
+        return;
+    };
+    let _ = with_kv(|kv| {
+        let mut blob = load_remote_senders_blob(kv)?;
+        blob.clear_address(&norm);
+        save_remote_senders_blob(kv, &blob)
+    });
+}
+
+pub fn save_remote_image_domain(domain: &str, pref: RemoteImagePref) -> bool {
+    let Some(norm) = normalize_domain(domain) else {
+        return false;
+    };
+    with_kv(|kv| {
+        let mut blob = load_remote_senders_blob(kv)?;
+        blob.set_domain(norm, pref);
+        save_remote_senders_blob(kv, &blob)
+    })
+    .is_some()
+}
+
+pub fn clear_remote_image_domain(domain: &str) {
+    let Some(norm) = normalize_domain(domain) else {
+        return;
+    };
+    let _ = with_kv(|kv| {
+        let mut blob = load_remote_senders_blob(kv)?;
+        blob.clear_domain(&norm);
+        save_remote_senders_blob(kv, &blob)
+    });
+}
+
+pub fn clear_remote_image_entry(kind: RemoteImageSenderKind, key: &str) {
+    match kind {
+        RemoteImageSenderKind::Address => clear_remote_image_address(key),
+        RemoteImageSenderKind::Domain => clear_remote_image_domain(key),
+    }
 }
 
 /// Set or clear `data-theme` on `<html>` so CSS tokens follow the pref.
@@ -625,5 +947,203 @@ mod tests {
             }
             other => panic!("expected Serialization, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn allow_remote_images_roundtrip() {
+        host_kv::reset();
+        assert!(!load_allow_remote_images());
+        save_allow_remote_images(true);
+        assert!(load_allow_remote_images());
+        save_allow_remote_images(false);
+        assert!(!load_allow_remote_images());
+        host_kv::with(|kv| {
+            kv.set_item(ALLOW_REMOTE_IMAGES_KEY, "yes")
+                .expect("set unknown remote-images value");
+        });
+        assert!(!load_allow_remote_images());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn normalize_email_and_domain() {
+        assert_eq!(
+            normalize_email("  Alice@Example.COM "),
+            Some("alice@example.com".into())
+        );
+        assert_eq!(normalize_email("nodomain"), None);
+        assert_eq!(normalize_email("@example.com"), None);
+        assert_eq!(normalize_email("alice@"), None);
+        assert_eq!(normalize_email(""), None);
+        assert_eq!(normalize_email("alice@.example.com"), None);
+        assert_eq!(
+            domain_of_email("Alice@News.Example.COM"),
+            Some("news.example.com".into())
+        );
+        assert_eq!(
+            normalize_domain("@Example.COM."),
+            Some("example.com".into())
+        );
+        assert_eq!(normalize_domain("alice@example.com"), None);
+        assert_eq!(normalize_domain("example.com/path"), None);
+        assert_eq!(normalize_domain(""), None);
+    }
+
+    #[test]
+    fn sender_pref_address_beats_domain_beats_global() {
+        host_kv::reset();
+        save_allow_remote_images(false);
+        assert_eq!(
+            remote_image_decision(Some("alice@example.com")),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Block,
+                source: RemoteImageSource::Global,
+            }
+        );
+
+        assert!(save_remote_image_domain(
+            "example.com",
+            RemoteImagePref::Allow
+        ));
+        assert_eq!(
+            remote_image_decision(Some("ALICE@Example.COM")),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Allow,
+                source: RemoteImageSource::Domain,
+            }
+        );
+
+        assert!(save_remote_image_address(
+            "alice@example.com",
+            RemoteImagePref::Block
+        ));
+        assert_eq!(
+            remote_image_decision(Some("Alice@example.com")),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Block,
+                source: RemoteImageSource::Address,
+            }
+        );
+
+        assert_eq!(
+            remote_image_decision(Some("bob@example.com")),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Allow,
+                source: RemoteImageSource::Domain,
+            }
+        );
+        assert_eq!(
+            remote_image_decision(Some("carol@other.test")),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Block,
+                source: RemoteImageSource::Global,
+            }
+        );
+        assert_eq!(
+            remote_image_decision(None),
+            RemoteImageDecision {
+                pref: RemoteImagePref::Block,
+                source: RemoteImageSource::Global,
+            }
+        );
+        host_kv::reset();
+    }
+
+    #[test]
+    fn sender_pref_clear_falls_back() {
+        host_kv::reset();
+        save_allow_remote_images(true);
+        assert!(save_remote_image_address(
+            "mallory@phish.test",
+            RemoteImagePref::Block
+        ));
+        assert!(!remote_image_decision(Some("mallory@phish.test")).allowed());
+        clear_remote_image_address("Mallory@phish.test");
+        assert!(remote_image_decision(Some("mallory@phish.test")).allowed());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn remote_image_senders_blob_roundtrip_and_entries() {
+        let mut blob = RemoteImageSendersBlob::empty();
+        blob.set_address("bob@example.com".into(), RemoteImagePref::Allow);
+        blob.set_address("alice@example.com".into(), RemoteImagePref::Block);
+        blob.set_domain("news.example.com".into(), RemoteImagePref::Allow);
+
+        let json = blob.encode().expect("encode");
+        assert!(json.contains("\"schema_version\":1"), "json={json}");
+        let back = RemoteImageSendersBlob::decode(&json).expect("decode");
+        assert_eq!(back, blob);
+
+        let entries = back.entries();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].key, "alice@example.com");
+        assert_eq!(entries[0].kind, RemoteImageSenderKind::Address);
+        assert_eq!(entries[1].key, "bob@example.com");
+        assert_eq!(entries[2].kind, RemoteImageSenderKind::Domain);
+        assert_eq!(entries[2].display_key(), "@news.example.com");
+    }
+
+    #[test]
+    fn remote_image_senders_decode_rejects_future_schema() {
+        let json = r#"{"schema_version":99,"addresses":{},"domains":{}}"#;
+        let err = RemoteImageSendersBlob::decode(json).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_image_senders_unknown_pref_is_empty() {
+        host_kv::reset();
+        host_kv::with(|kv| {
+            kv.set_item(
+                REMOTE_IMAGE_SENDERS_KEY,
+                r#"{"schema_version":1,"addresses":{"a@b.c":"maybe"},"domains":{}}"#,
+            )
+            .expect("set");
+        });
+        assert!(load_remote_image_senders().addresses.is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn remote_image_address_cap_evicts_another_key() {
+        let mut blob = RemoteImageSendersBlob::empty();
+        for i in 0..MAX_REMOTE_IMAGE_ADDRESSES {
+            blob.set_address(format!("u{i}@example.com"), RemoteImagePref::Allow);
+        }
+        assert_eq!(blob.addresses.len(), MAX_REMOTE_IMAGE_ADDRESSES);
+        blob.set_address("new@example.com".into(), RemoteImagePref::Allow);
+        assert_eq!(blob.addresses.len(), MAX_REMOTE_IMAGE_ADDRESSES);
+        assert!(blob.addresses.contains_key("new@example.com"));
+        blob.set_address("new@example.com".into(), RemoteImagePref::Block);
+        assert_eq!(blob.addresses.len(), MAX_REMOTE_IMAGE_ADDRESSES);
+        assert_eq!(
+            blob.addresses.get("new@example.com").copied(),
+            Some(RemoteImagePref::Block)
+        );
+    }
+
+    #[test]
+    fn invalid_email_is_not_saved() {
+        host_kv::reset();
+        assert!(!save_remote_image_address(
+            "not-an-email",
+            RemoteImagePref::Allow
+        ));
+        assert!(!save_remote_image_domain(
+            "alice@example.com",
+            RemoteImagePref::Allow
+        ));
+        assert!(load_remote_image_senders().addresses.is_empty());
+        assert!(load_remote_image_senders().domains.is_empty());
+        host_kv::reset();
     }
 }

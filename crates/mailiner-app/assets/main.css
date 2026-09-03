@@ -868,6 +868,37 @@ a.accounts-link-btn {
     font-size: var(--text-md);
 }
 
+.privacy-sender-heading {
+    margin: 0.5rem 0 0.15rem;
+}
+
+.privacy-sender-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.privacy-sender-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.9rem;
+}
+
+.privacy-sender-key {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.privacy-sender-pref {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
 .pane-header-settings {
     display: inline-flex;
     align-items: center;
@@ -2175,14 +2206,29 @@ textarea.ui-input {
             font-size: 0.9rem;
             flex-shrink: 0;
 
-            .message-privacy-allow {
+            .message-privacy-allow,
+            .message-privacy-remember {
                 border: 1px solid var(--item-accent);
-                background: var(--item-accent);
-                color: var(--on-accent);
                 border-radius: 4px;
                 padding: 2px 10px;
                 cursor: pointer;
                 font-size: 0.85rem;
+            }
+
+            .message-privacy-allow {
+                background: var(--item-accent);
+                color: var(--on-accent);
+            }
+
+            .message-privacy-remember {
+                background: transparent;
+                color: var(--item-accent);
+            }
+
+            &.is-allowed {
+                background: var(--info-bg);
+                border-bottom-color: var(--info-border);
+                color: var(--info-fg);
             }
         }
 

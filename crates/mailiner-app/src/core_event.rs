@@ -1742,10 +1742,12 @@ fn mailbox_is_all_mail(id: &MailboxId, name: Option<&str>) -> bool {
     if name.is_some_and(|n| n.eq_ignore_ascii_case("all mail")) {
         return true;
     }
+    // Gmail uses `/`. Do not treat `.` as hierarchy — `Reports.All Mail` is a name.
     id.as_str()
-        .rsplit(['/', '.'])
-        .next()
-        .is_some_and(|leaf| leaf.eq_ignore_ascii_case("all mail"))
+        .rsplit_once('/')
+        .map(|(_, leaf)| leaf)
+        .unwrap_or(id.as_str())
+        .eq_ignore_ascii_case("all mail")
 }
 
 /// Remove `ids` from the current list. If the selected row is among them,

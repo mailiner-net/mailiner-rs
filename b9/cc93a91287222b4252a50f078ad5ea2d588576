@@ -1,0 +1,69 @@
+crates/mailiner-app/src/ui_prefs.rs
+  s_55a915d65c4df1::t_b62c3f20d8a227 378-392
+  s_55a915d65c4df1::t_9e2efcdf82e1c2 15,20-22,196-212
+crates/mailiner-app/src/context.rs
+  s_55a915d65c4df1::t_f5502be8cdf2aa 60-61
+crates/mailiner-app/src/message_list_filter.rs
+  s_55a915d65c4df1::t_2af2f3ebf1f3bc 1-10,18-27,29-53,55-57,66,68-71,78-82,84,86-90,97-100,102,104,106-107
+  s_55a915d65c4df1::t_888f05c92d59b0 11-17,28,54,58-65,67,72-77,83,85,91-96,101,103,105
+crates/mailiner-app/src/components/virtual_scroll.rs
+  s_55a915d65c4df1::t_43b0a30b3622c2 99-103
+  s_55a915d65c4df1::t_13c70014323504 673-680
+crates/mailiner-imap-connector/src/sort.rs
+  s_55a915d65c4df1::t_6a9b6982a4af14 75-76,78-79
+  s_55a915d65c4df1::t_f35fbc22e27582 200-204
+crates/mailiner-core/src/models.rs
+  s_55a915d65c4df1::t_d9949d1173ac19 70-114,444,473-529
+crates/mailiner-app/src/core_event.rs
+  s_55a915d65c4df1::t_ce18ddc6891bfb 14,49-50
+  s_55a915d65c4df1::t_76cbfc03cfd8e8 297-299,1146-1150
+  s_55a915d65c4df1::t_b231b2e6bc0d27 1107-1120
+  s_55a915d65c4df1::t_37808f6cf41b4a 1035-1037
+  s_55a915d65c4df1::t_10c0ffecb12db3 1241-1260
+crates/mailiner-core/src/connector.rs
+  s_55a915d65c4df1::t_3547141ac228b1 16,40,45
+  s_55a915d65c4df1::t_07cba38b7364d8 310
+crates/mailiner-app/src/components/emailnavigation/navigationheader.rs
+  s_55a915d65c4df1::t_17c8c4b1e45bf0 94-130
+  s_55a915d65c4df1::t_b989fd97beed82 194-196,199,201-211
+  s_55a915d65c4df1::t_ee987d03858d28 49
+crates/mailiner-core/src/lib.rs
+  s_55a915d65c4df1::t_c83cbf6b5b2476 16-17
+crates/mailiner-app/src/lib.rs
+  s_55a915d65c4df1::t_79d92e2f9c1c00 11
+crates/mailiner-app/src/components/emailnavigation/messagelist.rs
+  s_55a915d65c4df1::t_310ec0c58dd9ee 37,39-40,49-56,90,95-107,109-110
+  s_55a915d65c4df1::t_ead8e264dcdcbe 66
+  s_55a915d65c4df1::t_6fd9e4895c1ccb 108,130-220
+  s_55a915d65c4df1::t_9b4e0a2d5bcd20 12,42-47
+  s_55a915d65c4df1::t_5083e4b1ffdcb3 41,48
+crates/mailiner-imap-connector/src/lib.rs
+  s_55a915d65c4df1::t_1e74e48e5629a1 111-112,512
+  s_55a915d65c4df1::t_2abf429e8c6466 523-526,528-534
+  s_55a915d65c4df1::t_7a27b8b51f4e97 497,505,511,521,527,535,537,540-543,547,551-554,556-558,563-564,569,574,593,611,613,616,618
+  s_55a915d65c4df1::t_1282afc236fd13 575
+  s_55a915d65c4df1::t_dc148dec0a0660 594
+  s_55a915d65c4df1::t_124b9fbb829031 31-32,110
+  s_55a915d65c4df1::t_fcb3d81efdcbf6 905,912-913,947,950-951,953-960
+crates/mailiner-app/assets/main.css
+  s_55a915d65c4df1::t_bb51945cb5580b 631-635,638-665,677-682,1624
+crates/mailiner-app/src/main.rs
+  s_55a915d65c4df1::t_08cc9b852f1cbc 292,312
+  s_55a915d65c4df1::t_37c3adaa8c10a7 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b9cc93a91287222b4252a50f078ad5ea2d588576",
+  "prompts": {},
+  "sessions": {
+    "s_55a915d65c4df1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06928-e8a2-7c13-a1e1-60ed9cc5625e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

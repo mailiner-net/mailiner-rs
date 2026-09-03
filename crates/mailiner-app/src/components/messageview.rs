@@ -3,10 +3,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
-use mailiner_composer::ComposeIntent;
+use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
 
 use mailiner_core::MailboxRole;
-use mailiner_core::models::{MessageContent, PartKind};
+use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::components::icons::{IconButton, IconKind};
@@ -20,7 +20,7 @@ use crate::message::{Message, MessageId, preview_mailbox};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
 use crate::toast::ToastAction;
 
-use super::compose::open_reply_or_forward;
+use super::compose::{open_new_message_to, open_reply_or_forward};
 
 /// Format a UTC date for the message header.
 fn format_date(dt: &DateTime<Utc>) -> String {
@@ -499,6 +499,115 @@ fn print_loaded_message(ctx: &AppContext, message: &Message, body_html: &str) {
             ctx.show_toast(ToastAction::error("Could not open print preview."));
         }
     });
+/// One mailbox shown in the viewer header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeaderAddress {
+    /// Visible text (display name, else email).
+    label: String,
+    /// Tooltip / accessible name (`Name <email>` when both exist).
+    title: String,
+    /// Prefill for compose; `None` when the mailbox is missing.
+    compose_to: Option<ComposerAddress>,
+}
+
+/// Convert a viewer [`EmailAddr`] into a compose recipient.
+///
+/// Skips missing or empty email. Keeps a trimmed display name when present.
+fn composer_address_from_email_addr(addr: &EmailAddr) -> Option<ComposerAddress> {
+    try_composer_address(addr)
+}
+
+fn header_address(addr: &EmailAddr) -> Option<HeaderAddress> {
+    let compose_to = composer_address_from_email_addr(addr);
+    let name = addr
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty());
+    let label = match (name, compose_to.as_ref()) {
+        (Some(n), _) => n.to_string(),
+        (None, Some(c)) => c.email.clone(),
+        (None, None) => return None,
+    };
+    Some(HeaderAddress {
+        label,
+        title: addr.to_string(),
+        compose_to,
+    })
+}
+
+fn header_addresses(addr: Option<&EmailAddress>) -> Vec<HeaderAddress> {
+    match addr {
+        None => Vec::new(),
+        Some(EmailAddress::List(list)) => list.iter().filter_map(header_address).collect(),
+        Some(EmailAddress::Group(groups)) => groups
+            .iter()
+            .flat_map(|g| g.members.iter())
+            .filter_map(header_address)
+            .collect(),
+    }
+}
+
+fn resolve_header_addresses(parsed: Vec<HeaderAddress>, fallback: &str) -> Vec<HeaderAddress> {
+    if !parsed.is_empty() {
+        return parsed;
+    }
+    let fallback = fallback.trim();
+    if fallback.is_empty() {
+        return Vec::new();
+    }
+    vec![HeaderAddress {
+        label: preview_mailbox(fallback).to_string(),
+        title: fallback.to_string(),
+        compose_to: None,
+    }]
+}
+
+#[component]
+fn HeaderAddressRow(
+    label: &'static str,
+    addresses: Vec<HeaderAddress>,
+    fallback: String,
+    always: bool,
+) -> Element {
+    let ctx = use_context::<AppContext>();
+    let addresses = resolve_header_addresses(addresses, &fallback);
+    if addresses.is_empty() && !always {
+        return rsx! {};
+    }
+    let title = addresses
+        .iter()
+        .map(|a| a.title.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    rsx! {
+        span {
+            class: "message-view-meta-item",
+            title: "{title}",
+            span { class: "message-view-meta-k", "{label}" }
+            " "
+            for (i, addr) in addresses.into_iter().enumerate() {
+                if i > 0 {
+                    ", "
+                }
+                if let Some(to) = addr.compose_to.clone() {
+                    button {
+                        class: "message-view-addr",
+                        r#type: "button",
+                        title: "{addr.title}",
+                        aria_label: "Compose to {addr.title}",
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| open_new_message_to(&mut ctx, to.clone())
+                        },
+                        "{addr.label}"
+                    }
+                } else {
+                    span { "{addr.label}" }
+                }
+            }
+        }
+    }
 }
 
 #[component]
@@ -953,43 +1062,35 @@ fn MessageHeader(
             }
             div {
                 class: "message-view-meta",
-                span {
-                    class: "message-view-meta-item",
-                    title: "{message.from}",
-                    span { class: "message-view-meta-k", "From" }
-                    " {message.from_preview()}"
+                HeaderAddressRow {
+                    label: "From",
+                    addresses: header_addresses(message.envelope.from.as_ref()),
+                    fallback: message.from.clone(),
+                    always: true,
                 }
-                if !message.to.trim().is_empty() {
-                    span {
-                        class: "message-view-meta-item",
-                        title: "{message.to}",
-                        span { class: "message-view-meta-k", "To" }
-                        " {message.to_preview()}"
-                    }
+                HeaderAddressRow {
+                    label: "To",
+                    addresses: header_addresses(message.envelope.to.as_ref()),
+                    fallback: message.to.clone(),
+                    always: false,
                 }
-                if let Some(cc) = message.cc.as_deref().filter(|s| !s.trim().is_empty()) {
-                    span {
-                        class: "message-view-meta-item",
-                        title: "{cc}",
-                        span { class: "message-view-meta-k", "Cc" }
-                        " {message.cc_preview()}"
-                    }
+                HeaderAddressRow {
+                    label: "Cc",
+                    addresses: header_addresses(message.envelope.cc.as_ref()),
+                    fallback: message.cc.clone().unwrap_or_default(),
+                    always: false,
                 }
-                if let Some(bcc) = message.bcc.as_deref().filter(|s| !s.trim().is_empty()) {
-                    span {
-                        class: "message-view-meta-item",
-                        title: "{bcc}",
-                        span { class: "message-view-meta-k", "Bcc" }
-                        " {message.bcc_preview()}"
-                    }
+                HeaderAddressRow {
+                    label: "Bcc",
+                    addresses: header_addresses(message.envelope.bcc.as_ref()),
+                    fallback: message.bcc.clone().unwrap_or_default(),
+                    always: false,
                 }
-                if let Some(reply_to) = reply_to.as_deref() {
-                    span {
-                        class: "message-view-meta-item",
-                        title: "{reply_to}",
-                        span { class: "message-view-meta-k", "Reply-To" }
-                        " {preview_mailbox(reply_to)}"
-                    }
+                HeaderAddressRow {
+                    label: "Reply-To",
+                    addresses: header_addresses(message.envelope.reply_to.as_ref()),
+                    fallback: reply_to.unwrap_or_default(),
+                    always: false,
                 }
                 span {
                     class: "message-view-meta-item",
@@ -1030,6 +1131,71 @@ mod tests {
             -340.0
         );
         assert_eq!(message_scroll_delta(0.0, true, MessageScroll::Page), 0.0);
+    }
+
+    fn addr(name: Option<&str>, email: Option<&str>) -> EmailAddr {
+        EmailAddr {
+            name: name.map(str::to_string),
+            email: email.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn composer_address_keeps_name_and_skips_empty_email() {
+        let named =
+            composer_address_from_email_addr(&addr(Some(" Ada "), Some(" ada@example.com ")))
+                .expect("named mailbox");
+        assert_eq!(named.name.as_deref(), Some("Ada"));
+        assert_eq!(named.email, "ada@example.com");
+
+        assert!(composer_address_from_email_addr(&addr(Some("No Mail"), None)).is_none());
+        assert!(composer_address_from_email_addr(&addr(Some("No Mail"), Some("  "))).is_none());
+        assert_eq!(
+            composer_address_from_email_addr(&addr(None, Some("solo@example.com")))
+                .map(|a| a.email),
+            Some("solo@example.com".into())
+        );
+    }
+
+    #[test]
+    fn header_addresses_flatten_and_skip_blank() {
+        let list = EmailAddress::List(vec![
+            addr(Some("Ada"), Some("ada@example.com")),
+            addr(Some("No Mail"), None),
+            addr(None, Some("  ")),
+            addr(None, Some("bob@example.com")),
+        ]);
+        let v = header_addresses(Some(&list));
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].label, "Ada");
+        assert_eq!(v[0].title, "Ada <ada@example.com>");
+        assert_eq!(
+            v[0].compose_to.as_ref().map(|a| a.email.as_str()),
+            Some("ada@example.com")
+        );
+        assert_eq!(v[1].label, "No Mail");
+        assert!(v[1].compose_to.is_none());
+        assert_eq!(v[2].label, "bob@example.com");
+        assert_eq!(
+            v[2].compose_to.as_ref().map(|a| a.email.as_str()),
+            Some("bob@example.com")
+        );
+
+        let group = EmailAddress::Group(vec![mailiner_core::models::Group {
+            name: Some("Team".into()),
+            members: vec![addr(None, Some("t1@ex.com")), addr(None, Some("t2@ex.com"))],
+        }]);
+        assert_eq!(header_addresses(Some(&group)).len(), 2);
+        assert!(header_addresses(None).is_empty());
+    }
+
+    #[test]
+    fn resolve_header_addresses_falls_back_to_preview() {
+        let fallback = resolve_header_addresses(Vec::new(), "Ada <ada@example.com>");
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].label, "Ada");
+        assert!(fallback[0].compose_to.is_none());
+        assert!(resolve_header_addresses(Vec::new(), "  ").is_empty());
     }
 
     #[test]

@@ -84,15 +84,16 @@ fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> O
     listed.into_iter().find(|a| a.id == id)
 }
 
-/// Open a blank compose for the selected account.
-pub fn open_new_message(ctx: &mut AppContext) {
+fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
     let selected = ctx.selected_account.read().clone();
-    let Some(account) = resolve_compose_account(ctx, selected.as_ref()) else {
-        return;
-    };
-    let identity = identity_from_account(account.name, account.email);
+    let account = resolve_compose_account(ctx, selected.as_ref())?;
+    let identity = identity_from_account(account.name.clone(), account.email.clone());
     let mut draft = DraftDocument::new_empty(&identity);
     draft.mode = BodyMode::Plain;
+    Some((account, draft))
+}
+
+fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) {
     open_compose(
         ctx,
         ComposeSession {
@@ -102,6 +103,23 @@ pub fn open_new_message(ctx: &mut AppContext) {
             reply_source: None,
         },
     );
+}
+
+/// Open a blank compose for the selected account.
+pub fn open_new_message(ctx: &mut AppContext) {
+    let Some((account, draft)) = new_message_draft(ctx) else {
+        return;
+    };
+    open_new_draft(ctx, account, draft);
+}
+
+/// Open a new message with To prefilled from a viewer address.
+pub fn open_new_message_to(ctx: &mut AppContext, to: ComposerAddress) {
+    let Some((account, mut draft)) = new_message_draft(ctx) else {
+        return;
+    };
+    draft.to.push(to);
+    open_new_draft(ctx, account, draft);
 }
 
 /// Prefill Reply or Forward from a loaded message.

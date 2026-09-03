@@ -1936,6 +1936,7 @@ async fn handle_select_list_click(
         ctx.selection
             .write()
             .toggle(message_id.clone(), Some(index));
+        snapshot_selection_unread(ctx);
         let Some(focus) = ctx.selection.read().focus().cloned() else {
             return;
         };
@@ -1964,6 +1965,7 @@ async fn apply_index_range_selection(
     let focus = ctx.messages.read().get(end_index).map(|m| m.id.clone());
     if let Some(focus) = focus {
         ctx.selection.write().set_range(ids, focus, Some(end_index));
+        snapshot_selection_unread(ctx);
     }
 }
 
@@ -2029,6 +2031,7 @@ async fn handle_select_message(
     } else {
         ctx.selection.write().note_focus(message_id.clone(), index);
     }
+    snapshot_selection_unread(ctx);
     ctx.download_status.set(HashMap::new());
     ctx.message_view.set(MessageViewState::Loading {
         message_id: message_id.clone(),
@@ -2122,7 +2125,33 @@ async fn handle_select_message(
     }
 }
 
+fn snapshot_selection_unread(ctx: &AppContext) {
+    let list = ctx.messages.read();
+    let mut sel = ctx.selection.write();
+    for id in sel.ids_vec() {
+        if let Some(m) = list.find(|m| m.id == id) {
+            sel.note_unread(&id, !m.is_read);
+        }
+    }
+}
+
+fn unread_in_ids(ctx: &AppContext, ids: &[MessageId]) -> usize {
+    let from_sel = ctx.selection.read().unread_among(ids);
+    let list = ctx.messages.read();
+    let from_list = ids
+        .iter()
+        .filter(|id| list.find(|m| m.id == **id).is_some_and(|m| !m.is_read))
+        .count();
+    from_sel.max(from_list)
+}
+
 fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
+    {
+        let mut sel = ctx.selection.write();
+        for id in ids {
+            sel.note_unread(id, !is_read);
+        }
+    }
     let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
     let mut unread_delta: i32 = 0;
     for msg in ctx.messages.write().iter_mut() {
@@ -2262,7 +2291,8 @@ fn take_messages_from_ui(
         }
     }
     let n = taken.len();
-    let unread_n = taken.iter().filter(|(_, m)| !m.is_read).count() as i32;
+    let unread_n =
+        unread_in_ids(ctx, ids).max(taken.iter().filter(|(_, m)| !m.is_read).count()) as i32;
     let mb = ctx.selected_mailbox.read().clone();
     if let Some(mb) = mb {
         if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mb) {
@@ -2573,7 +2603,7 @@ async fn handle_move_messages(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let dest_id = FolderId::new(dest_mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
-    let unread_n = unread_among(ctx, &message_ids);
+    let unread_n = unread_in_ids(ctx, &message_ids);
     match connector
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
@@ -2583,10 +2613,16 @@ async fn handle_move_messages(
                 || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
             {
                 // COPYUID present → mapped count; empty → no mapping, assume all moved.
-                let moved = if dest_uids.is_empty() {
-                    message_ids.len()
+                let (moved, unread_n) = if dest_uids.is_empty() {
+                    (message_ids.len(), unread_n)
+                } else if dest_uids.len() >= message_ids.len() {
+                    (dest_uids.len(), unread_n)
                 } else {
-                    dest_uids.len()
+                    // Same-order COPYUID: only the leading mapped ids moved.
+                    (
+                        dest_uids.len(),
+                        unread_in_ids(ctx, &message_ids[..dest_uids.len()]),
+                    )
                 };
                 persist_stale_move_counts(
                     manager.cache(),

@@ -1,0 +1,21 @@
+crates/mailiner-app/src/components/virtual_scroll.rs
+  s_90fd098b0716e8::t_c98ffb9be44da3 440-441
+  s_90fd098b0716e8::t_b8a50bf1dbc712 423,435,437-439,442-443,483,488,497-499
+  s_90fd098b0716e8::t_b707ab7f296de7 502-503
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "473a52268d52ec619260e35fc6f1a4fcc40275b1",
+  "prompts": {},
+  "sessions": {
+    "s_90fd098b0716e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0690f-d2bf-7e70-848f-9521893f67cf",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

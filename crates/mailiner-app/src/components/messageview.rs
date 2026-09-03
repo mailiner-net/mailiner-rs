@@ -244,16 +244,10 @@ pub fn MessageView() -> Element {
             drop(view);
 
             if !prefer {
-                let cached = {
-                    let cache = html_cache.borrow();
-                    cache
-                        .html_for(&key, allow)
-                        .map(|html| (html.to_string(), cache.prevented_remote))
-                };
-                if let Some((html, prevented)) = cached {
-                    prevented_remote.set(prevented && !allow);
-                    formatted_html.set(html.clone());
-                    mount_shadow_html(MESSAGE_CONTENT_ID, &html);
+                let cache = html_cache.borrow();
+                if let Some(html) = cache.html_for(&key, allow) {
+                    prevented_remote.set(cache.prevented_remote && !allow);
+                    mount_shadow_html(MESSAGE_CONTENT_ID, html);
                     return;
                 }
             }
@@ -267,7 +261,12 @@ pub fn MessageView() -> Element {
                 let prevented = result.prevented_remote_resources;
                 let html = result.html;
 
+                prevented_remote.set(prevented && !allow);
+                mount_shadow_html(MESSAGE_CONTENT_ID, &html);
+
                 if !prefer && !inlined.is_empty() {
+                    // Keep at most one extra HTML copy (the other remote-policy
+                    // variant) so Allow still works after Binary is dropped.
                     let allowed_html = if prevented && !allow {
                         MessageFormatter::new(FormatOptions {
                             allow_remote_resources: true,
@@ -275,22 +274,18 @@ pub fn MessageView() -> Element {
                         })
                         .format(&loaded.parts)
                         .map(|r| r.html)
-                    } else if allow {
-                        Some(html.clone())
                     } else {
                         None
                     };
                     *html_cache.borrow_mut() = InlinedHtmlCache {
                         message_key: key.clone(),
-                        blocked: Some(html.clone()),
+                        blocked: Some(html),
                         allowed: allowed_html,
                         prevented_remote: prevented,
                     };
+                } else {
+                    formatted_html.set(html);
                 }
-
-                prevented_remote.set(prevented && !allow);
-                formatted_html.set(html.clone());
-                mount_shadow_html(MESSAGE_CONTENT_ID, &html);
 
                 drop(loaded);
                 apply_inlined_payload_drop(&mut ctx, &message_id, &inlined);

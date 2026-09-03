@@ -287,7 +287,6 @@ mod tests {
         let mut parts = vec![html, img];
         r.drop_inlined_payloads(&mut parts);
         assert!(matches!(parts[1].content, MessageContent::Empty));
-        assert!(parts[1].is_hidden);
         assert_eq!(parts[1].content_id.as_deref(), Some("<logo@x>"));
     }
 

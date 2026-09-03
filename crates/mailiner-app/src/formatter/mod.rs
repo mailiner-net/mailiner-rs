@@ -37,7 +37,6 @@ pub fn drop_inlined_payloads(parts: &mut [MessagePart], inlined_part_ids: &[Stri
     for part in parts {
         if inlined_part_ids.iter().any(|id| part.id.as_str() == id) {
             part.content = MessageContent::Empty;
-            part.is_hidden = true;
         }
     }
 }
@@ -295,5 +294,14 @@ mod tests {
         let mut parts = vec![png_part("img", "<logo@x>", b"\x89PNG")];
         drop_inlined_payloads(&mut parts, &[]);
         assert!(matches!(parts[0].content, MessageContent::Binary(_)));
+    }
+
+    #[test]
+    fn drop_preserves_visible_attachment_flag() {
+        let mut parts = vec![png_part("img", "<logo@x>", b"\x89PNG")];
+        parts[0].is_hidden = false;
+        drop_inlined_payloads(&mut parts, &["img".into()]);
+        assert!(matches!(parts[0].content, MessageContent::Empty));
+        assert!(!parts[0].is_hidden);
     }
 }

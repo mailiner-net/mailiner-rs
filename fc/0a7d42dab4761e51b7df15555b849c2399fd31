@@ -1,0 +1,23 @@
+docs/design-onboarding-account-management.md
+  s_f84668b9ff28ab::t_74637260c64c0d 3-8,14,19-53
+docs/review.md
+  s_f84668b9ff28ab::t_c0cb6afbcffa4c 55
+docs/design-smtp-async-smtp.md
+  s_f84668b9ff28ab::t_bae7efb1209099 3-8,14,19-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "fc0a7d42dab4761e51b7df15555b849c2399fd31",
+  "prompts": {},
+  "sessions": {
+    "s_f84668b9ff28ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06941-9cbc-7602-a404-bddd97997e68",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -9,9 +9,11 @@ pub const SHOW_QUOTED_TEXT: &str = "Show quoted text";
 /// Injected into the message shadow root so the toggle is styled after email CSS.
 pub const QUOTE_TOGGLE_CSS: &str = r#"
 details.mlnr-quote {
+  display: block !important;
   margin: 0.75em 0 0;
 }
 details.mlnr-quote > summary.mlnr-quote-toggle {
+  display: list-item !important;
   cursor: pointer;
   font-family: system-ui, sans-serif;
   font-size: 13px;
@@ -162,6 +164,13 @@ fn re_html_tag() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").unwrap())
 }
 
+fn re_visible_replaced() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<(img|hr|picture|video|audio|canvas|object|embed|iframe)\b").unwrap()
+    })
+}
+
 fn style_ranges(html: &str) -> Vec<(usize, usize)> {
     re_style_block()
         .find_iter(html)
@@ -221,7 +230,11 @@ fn trailing_blockquote_range(html: &str, quotes: &[(usize, usize)]) -> Option<(u
 }
 
 fn is_insignificant_html(html: &str) -> bool {
-    let no_tags = re_html_tag().replace_all(html, "");
+    let without_styles = re_style_block().replace_all(html, "");
+    if re_visible_replaced().is_match(&without_styles) {
+        return false;
+    }
+    let no_tags = re_html_tag().replace_all(&without_styles, "");
     no_tags
         .replace("&nbsp;", " ")
         .replace("&#160;", " ")
@@ -239,6 +252,8 @@ mod tests {
     fn toggle_css_targets_injected_markup() {
         assert!(QUOTE_TOGGLE_CSS.contains("details.mlnr-quote"));
         assert!(QUOTE_TOGGLE_CSS.contains("mlnr-quote-toggle"));
+        assert!(QUOTE_TOGGLE_CSS.contains("display: block"));
+        assert!(QUOTE_TOGGLE_CSS.contains("display: list-item"));
     }
 
     #[test]
@@ -356,5 +371,21 @@ mod tests {
         let out = collapse_trailing_blockquotes(html);
         assert!(!out.contains("<details"), "{out}");
         assert!(out.contains("blockquote {color:red}"), "{out}");
+    }
+
+    #[test]
+    fn html_style_preamble_does_not_make_quote_only_body_collapsible() {
+        let html = "<style>body {color:red}</style><blockquote><p>Forwarded only</p></blockquote>";
+        let out = collapse_trailing_blockquotes(html);
+        assert!(!out.contains("<details"), "{out}");
+        assert!(out.contains("Forwarded only"), "{out}");
+    }
+
+    #[test]
+    fn html_image_after_blockquote_keeps_quote_open() {
+        let html = "<blockquote>old</blockquote><img src=\"cid:sig\">";
+        let out = collapse_trailing_blockquotes(html);
+        assert!(!out.contains("<details"), "{out}");
+        assert!(out.contains("<img"), "{out}");
     }
 }

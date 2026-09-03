@@ -404,4 +404,13 @@ mod tests {
         assert!(!r.html.contains("<details"), "{r:?}");
         assert!(r.html.contains("Forwarded"), "{r:?}");
     }
+
+    #[test]
+    fn does_not_wrap_when_image_follows_blockquote() {
+        let html = html_part(
+            r#"<blockquote><p>old</p></blockquote><p><img src="data:image/png;base64,aaaa"></p>"#,
+        );
+        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        assert!(!r.html.contains("<details"), "{r:?}");
+    }
 }

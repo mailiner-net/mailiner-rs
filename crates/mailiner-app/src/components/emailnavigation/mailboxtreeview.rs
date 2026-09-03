@@ -62,6 +62,7 @@ pub fn MailboxTreeView() -> Element {
                 for mailbox_id in roots.iter().cloned() {
                     if visible.as_ref().is_none_or(|ids| ids.contains(&mailbox_id)) {
                         MailboxTreeViewItem {
+                            key: "{mailbox_id.as_str()}",
                             mailbox_id: mailbox_id.clone(),
                             visible: visible.clone(),
                         }
@@ -166,6 +167,7 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 for child_id in mailbox.children.iter().cloned() {
                     if props.visible.as_ref().is_none_or(|ids| ids.contains(&child_id)) {
                         MailboxTreeViewItem {
+                            key: "{child_id.as_str()}",
                             mailbox_id: child_id.clone(),
                             visible: props.visible.clone(),
                         }

@@ -183,6 +183,7 @@ pub enum CoreEvent {
     /// Fetch pending forwarded file bytes into the open compose draft.
     FetchComposeAttachments {
         draft_id: String,
+        account_id: AccountId,
     },
 
     /// Select account for UI + ensure connector + list folders.
@@ -609,8 +610,11 @@ pub async fn core_loop(
                 )
                 .await;
             }
-            CoreEvent::FetchComposeAttachments { draft_id } => {
-                handle_fetch_compose_attachments(&manager, &mut ctx, draft_id).await;
+            CoreEvent::FetchComposeAttachments {
+                draft_id,
+                account_id,
+            } => {
+                handle_fetch_compose_attachments(&manager, &mut ctx, draft_id, account_id).await;
             }
             CoreEvent::SendMessage {
                 account_id,
@@ -3907,6 +3911,7 @@ async fn handle_fetch_compose_attachments(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
     draft_id: String,
+    account_id: AccountId,
 ) {
     let Some(items) = collect_pending_forward_fetches(ctx, &draft_id) else {
         return;
@@ -3915,10 +3920,10 @@ async fn handle_fetch_compose_attachments(
         return;
     }
 
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    if ctx.selected_account.read().as_ref() != Some(&account_id) {
         fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
         return;
-    };
+    }
     let Some(connector) = manager.get(&account_id) else {
         fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
         return;
@@ -3943,12 +3948,20 @@ async fn handle_fetch_compose_attachments(
             Ok(map) => map,
             Err(e) => {
                 error!("forward attachment fetch failed: {e}");
+                if ctx.selected_account.read().as_ref() != Some(&account_id) {
+                    fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+                    return;
+                }
                 for item in &group {
                     apply_fetched_attachment_missing(ctx, &draft_id, &item.attachment_id);
                 }
                 continue;
             }
         };
+        if ctx.selected_account.read().as_ref() != Some(&account_id) {
+            fail_forward_fetches(ctx, &draft_id, "Could not load original attachments.");
+            return;
+        }
         for item in group {
             match raw.get(&item.section) {
                 Some(wire) => match decode_transfer_encoding(wire, item.encoding.as_str()) {

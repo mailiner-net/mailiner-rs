@@ -432,8 +432,9 @@ fn submit_compose(
     mut submitting: Signal<bool>,
     mut submitted_id: Signal<Option<String>>,
     attaching: Signal<bool>,
+    forward_fetching: Signal<bool>,
 ) {
-    if submitting() || attaching() {
+    if submitting() || attaching() || forward_fetching() {
         return;
     }
     error.set(None);
@@ -617,7 +618,11 @@ fn remove_inline(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
     }
 }
 
-fn toggle_original_attachments(mut compose_draft: Signal<Option<ComposeSession>>, include: bool) {
+fn toggle_original_attachments(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    include: bool,
+    body: Signal<String>,
+) {
     let mut slot = compose_draft.write();
     let Some(session) = slot.as_mut() else {
         return;
@@ -626,10 +631,30 @@ fn toggle_original_attachments(mut compose_draft: Signal<Option<ComposeSession>>
         if session.stashed_originals.is_empty() {
             return;
         }
-        session
-            .draft
-            .attachments
-            .extend(session.stashed_originals.drain(..));
+        let mut used = live_payload_bytes(&session.draft, body().len());
+        let mut kept = Vec::new();
+        let mut skipped = 0usize;
+        for att in session.stashed_originals.drain(..) {
+            let extra = match &att.data {
+                AttachmentData::Bytes(b) => b.len() as u64,
+                AttachmentData::Pending => att.size,
+            };
+            if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS
+                || (extra > 0 && would_exceed_draft_cap(used, extra))
+            {
+                skipped += 1;
+                kept.push(att);
+                continue;
+            }
+            used = used.saturating_add(extra);
+            session.draft.attachments.push(att);
+        }
+        session.stashed_originals = kept;
+        if skipped > 0 {
+            session.draft.prefill_warnings.push(format!(
+                "{skipped} original attachment(s) were skipped (size or file limit)."
+            ));
+        }
         session.draft.touch();
     } else {
         let (orig, rest): (Vec<_>, Vec<_>) = session
@@ -753,7 +778,6 @@ fn has_pending_forward_fetch(session: &ComposeSession) -> bool {
         .draft
         .attachments
         .iter()
-        .chain(session.stashed_originals.iter())
         .any(|a| matches!(a.data, AttachmentData::Pending) && a.source.is_some())
 }
 
@@ -1281,8 +1305,15 @@ pub fn ComposeOverlay() -> Element {
                     submitted_id.set(None);
                     attaching.set(false);
                     if has_pending_forward_fetch(session) {
-                        forward_fetching.set(true);
-                        core.send(CoreEvent::FetchComposeAttachments { draft_id: id });
+                        if let Some(account_id) = ctx.selected_account.read().clone() {
+                            forward_fetching.set(true);
+                            core.send(CoreEvent::FetchComposeAttachments {
+                                draft_id: id,
+                                account_id,
+                            });
+                        } else {
+                            forward_fetching.set(false);
+                        }
                     } else {
                         forward_fetching.set(false);
                     }
@@ -1444,6 +1475,7 @@ pub fn ComposeOverlay() -> Element {
                                     submitting,
                                     submitted_id,
                                     attaching,
+                                    forward_fetching,
                                 );
                             }
                         }
@@ -1716,7 +1748,7 @@ pub fn ComposeOverlay() -> Element {
                                     onchange: move |e| {
                                         let on = e.checked();
                                         include_original.set(on);
-                                        toggle_original_attachments(compose_draft, on);
+                                        toggle_original_attachments(compose_draft, on, body);
                                     },
                                 }
                                 "Include original attachments"
@@ -1806,6 +1838,7 @@ pub fn ComposeOverlay() -> Element {
                                         submitting,
                                         submitted_id,
                                         attaching,
+                                        forward_fetching,
                                     );
                                 }
                             },

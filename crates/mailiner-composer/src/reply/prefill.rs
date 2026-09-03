@@ -3,9 +3,10 @@
 use mailiner_core::{Envelope, LoadedMessage, MessageContent, MessagePart, PartKind};
 
 use crate::identity::FromIdentity;
-use crate::model::draft::{BodyMode, ComposerAddress, DraftDocument};
+use crate::model::draft::{caps, BodyMode, ComposerAddress, DraftDocument};
 use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
+use crate::shell::attachment_list::draft_payload_bytes;
 
 /// How the user opened the composer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +120,9 @@ fn apply_html_quote(
     plain_override: Option<&str>,
 ) {
     let clean = crate::sanitize::sanitize_for_edit(html);
-    let rehydrated = crate::reply::cid::rehydrate_cids(&clean, parts, draft.inline_images.len());
+    let remaining = caps::MAX_DRAFT_BYTES.saturating_sub(draft_payload_bytes(draft));
+    let rehydrated =
+        crate::reply::cid::rehydrate_cids(&clean, parts, draft.inline_images.len(), remaining);
     draft.mode = BodyMode::Rich;
     draft.html_body = wrap_html_quote(attribution, &rehydrated.html);
     draft.plain_body = match plain_override {

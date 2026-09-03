@@ -1197,6 +1197,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     refresh_ui_accounts(manager, ctx).await;
     crate::ui_prefs::retain_last_mailboxes(&known);
     crate::ui_prefs::retain_ack_unread(&known);
+    crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
     }
@@ -3792,6 +3793,7 @@ async fn handle_send_message(
         return;
     }
     refresh_outbox_signal(outbox, ctx).await;
+    crate::draft_store::clear_draft(&account_id);
     if ctx
         .compose_draft
         .read()

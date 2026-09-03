@@ -1056,6 +1056,17 @@ a.accounts-link-btn {
     background: var(--item-hover-background);
 }
 
+.ui-btn-danger {
+    color: var(--danger);
+    border-color: var(--sidebar-border);
+    background: var(--surface);
+    margin-right: auto;
+}
+
+.ui-btn-danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+}
+
 .ui-icon-btn {
     display: inline-flex;
     align-items: center;

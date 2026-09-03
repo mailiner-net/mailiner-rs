@@ -28,6 +28,7 @@ mod connection;
 mod context;
 mod core_event;
 mod download;
+mod draft_store;
 mod formatter;
 mod headers;
 mod layout;

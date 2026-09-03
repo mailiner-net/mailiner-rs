@@ -415,8 +415,12 @@ impl InlinedHtmlCache {
         }
         if allow_remote {
             self.allowed.as_deref().or(self.blocked.as_deref())
-        } else {
+        } else if self.prevented_remote {
+            // `blocked` is only stripped HTML when we formatted with allow=false.
+            // An allow-first format stores allowed HTML there; miss so we re-strip.
             self.blocked.as_deref()
+        } else {
+            None
         }
     }
 }
@@ -1360,5 +1364,21 @@ mod tests {
             prevented_remote: false,
         };
         assert_eq!(cache.html_for(&key, true), Some("same"));
+    }
+
+    #[test]
+    fn html_cache_misses_block_when_only_allowed_html_was_stored() {
+        let key = Some("k".into());
+        let cache = InlinedHtmlCache {
+            message_key: key.clone(),
+            blocked: Some("<img src=\"https://tracker.example/pixel.png\">".into()),
+            allowed: None,
+            prevented_remote: false,
+        };
+        assert_eq!(cache.html_for(&key, false), None);
+        assert_eq!(
+            cache.html_for(&key, true),
+            Some("<img src=\"https://tracker.example/pixel.png\">")
+        );
     }
 }

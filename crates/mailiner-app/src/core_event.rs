@@ -37,6 +37,10 @@ use crate::mail_cache::{
 };
 use crate::mailbox::MailboxId;
 use crate::message::{MessageId, next_flag_value};
+use crate::message_list_filter::{
+    adjacent_matching_index, matching_ids_in_filtered_range, message_matches_text_filter,
+    text_filter_is_active,
+};
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
@@ -1387,6 +1391,7 @@ async fn restore_mailbox(
 
 fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.selected_mailbox.set(None);
+    ctx.list_text_filter.set(String::new());
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(false);
     ctx.selection.write().clear();
@@ -1593,6 +1598,10 @@ async fn handle_select_mailbox(
         .is_some_and(|n| !n.selectable)
     {
         return;
+    }
+
+    if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
+        ctx.list_text_filter.set(String::new());
     }
 
     let already_showing = ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
@@ -1837,6 +1846,11 @@ async fn handle_select_adjacent(
     if *ctx.messages_loading.peek() {
         return;
     }
+    let query = ctx.list_text_filter.peek().clone();
+    if text_filter_is_active(&query) {
+        handle_select_adjacent_filtered(manager, ctx, delta, extend, &query).await;
+        return;
+    }
     let total = ctx.messages.read().total_count();
     let current = current_list_index(ctx);
     let Some(index) = adjacent_index(total, current, delta) else {
@@ -1846,6 +1860,48 @@ async fn handle_select_adjacent(
         apply_index_range_selection(manager, ctx, index).await;
     }
     select_list_index(manager, ctx, index, !extend).await;
+}
+
+async fn handle_select_adjacent_filtered(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    delta: i32,
+    extend: bool,
+    query: &str,
+) {
+    let matching: Vec<(usize, MessageId)> = {
+        let list = ctx.messages.read();
+        list.iter_indexed()
+            .filter(|(_, m)| message_matches_text_filter(m, query))
+            .map(|(i, m)| (i, m.id.clone()))
+            .collect()
+    };
+    if matching.is_empty() {
+        return;
+    }
+    let current = ctx.selection.read().focus_at_index().or_else(|| {
+        ctx.selection
+            .read()
+            .focus()
+            .cloned()
+            .and_then(|id| matching.iter().find(|(_, mid)| *mid == id).map(|(i, _)| *i))
+    });
+    let indices: Vec<usize> = matching.iter().map(|(i, _)| *i).collect();
+    let Some(index) = adjacent_matching_index(&indices, current, delta) else {
+        return;
+    };
+    if extend {
+        apply_index_range_selection(manager, ctx, index).await;
+    }
+    // Matching rows are already loaded; skip FetchMessageRange.
+    let Some(message_id) = matching
+        .iter()
+        .find(|(i, _)| *i == index)
+        .map(|(_, id)| id.clone())
+    else {
+        return;
+    };
+    handle_select_message(manager, ctx, message_id, !extend, !extend).await;
 }
 
 enum KnownSelect {
@@ -1867,9 +1923,11 @@ async fn handle_select_known(
         return;
     }
 
+    let query = ctx.list_text_filter.peek().clone();
     let rows: Vec<(MessageId, bool)> = {
         let list = ctx.messages.read();
         list.iter_indexed()
+            .filter(|(_, m)| message_matches_text_filter(m, &query))
             .map(|(_, m)| (m.id.clone(), !m.is_read))
             .collect()
     };
@@ -1988,6 +2046,11 @@ async fn apply_index_range_selection(
     ctx: &mut AppContext,
     end_index: usize,
 ) {
+    let query = ctx.list_text_filter.peek().clone();
+    if text_filter_is_active(&query) {
+        apply_filtered_range_selection(ctx, end_index, &query);
+        return;
+    }
     let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
     let start = anchor.min(end_index);
     let end = anchor.max(end_index);
@@ -2003,6 +2066,25 @@ async fn apply_index_range_selection(
     if let Some(focus) = focus {
         ctx.selection.write().set_range(ids, focus, Some(end_index));
         snapshot_selection_unread(ctx);
+    }
+}
+
+fn apply_filtered_range_selection(ctx: &mut AppContext, end_index: usize, query: &str) {
+    let matching: Vec<(usize, MessageId)> = {
+        let list = ctx.messages.read();
+        list.iter_indexed()
+            .filter(|(_, m)| message_matches_text_filter(m, query))
+            .map(|(i, m)| (i, m.id.clone()))
+            .collect()
+    };
+    let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
+    let ids = matching_ids_in_filtered_range(&matching, anchor, end_index);
+    let focus = matching
+        .iter()
+        .find(|(i, _)| *i == end_index)
+        .map(|(_, id)| id.clone());
+    if let Some(focus) = focus {
+        ctx.selection.write().set_range(ids, focus, Some(end_index));
     }
 }
 

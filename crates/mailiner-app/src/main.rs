@@ -34,6 +34,7 @@ mod local_data;
 mod mail_cache;
 mod mailbox;
 mod message;
+mod message_list_filter;
 mod message_loader;
 mod outbox_store;
 mod print;
@@ -291,6 +292,7 @@ fn App() -> Element {
     let selected_mailbox = use_signal(|| None);
 
     let messages = use_signal(|| SparseList::new(0));
+    let list_text_filter = use_signal(String::new);
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
@@ -322,6 +324,7 @@ fn App() -> Element {
         mailbox_nodes,
         mailbox_roots,
         messages,
+        list_text_filter,
         messages_loading,
         message_sort,
         message_list_density,

@@ -9,6 +9,7 @@ pub mod local_data;
 pub mod mail_cache;
 pub mod mailbox;
 pub mod message;
+pub mod message_list_filter;
 pub mod message_loader;
 pub mod outbox_store;
 pub mod print;

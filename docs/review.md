@@ -64,7 +64,8 @@ Do not re-open these.
 
 ### 7. Prefetch has no size bound; viewer holds wire + decoded + data-URL copies
 
-- [x] Done (budget). Prefetch skips parts whose `original_size` is over 2 MiB. Still open: drop `MessageContent::Binary` after cid inlining (`inlined_part_ids` is unused for that).
+- [x] Done (budget). Prefetch skips parts whose `original_size` is over 2 MiB.
+- [x] Done (inline drop). After cid→data-URL inlining, `MessageContent::Binary` is cleared on those part ids (`inlined_part_ids`). Metadata is kept.
 
 ### 8. `fetch_raw_parts` swallows missing sections
 

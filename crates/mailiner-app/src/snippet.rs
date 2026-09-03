@@ -29,8 +29,9 @@ fn strip_html(input: &str) -> String {
         if bytes[i] == b'<' {
             if let Some(tag_end) = lower[i..].find('>') {
                 let tag = &lower[i..i + tag_end];
-                let name = html_tag_name(tag);
-                let skip_block = matches!(name, "script" | "style" | "head" | "noscript");
+                let (name, is_open) = html_tag_name(tag);
+                let skip_block =
+                    is_open && matches!(name, "script" | "style" | "head" | "noscript");
                 if skip_block {
                     let close = match name {
                         "script" => "</script>",
@@ -71,14 +72,15 @@ fn strip_html(input: &str) -> String {
     out
 }
 
-/// Tag name from a `<...` slice (`<head`, `</style`, `<script type=`).
-fn html_tag_name(tag: &str) -> &str {
+/// `(name, is_open)` from a `<...` slice (`<head`, `</style`, `<script type=`).
+fn html_tag_name(tag: &str) -> (&str, bool) {
     let rest = tag.strip_prefix('<').unwrap_or(tag);
+    let is_open = !rest.starts_with('/');
     let rest = rest.strip_prefix('/').unwrap_or(rest);
     let end = rest
-        .find(|c: char| !c.is_ascii_alphanumeric())
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == ':'))
         .unwrap_or(rest.len());
-    &rest[..end]
+    (&rest[..end], is_open)
 }
 
 fn decode_entity(s: &str) -> Option<(char, usize)> {
@@ -216,6 +218,22 @@ mod tests {
         assert_eq!(
             clean_snippet("<header>Hello world</header><p>More</p>", true),
             "Hello world More"
+        );
+    }
+
+    #[test]
+    fn stray_close_script_does_not_drop_rest() {
+        assert_eq!(
+            clean_snippet("</script>Visible text after", true),
+            "Visible text after"
+        );
+    }
+
+    #[test]
+    fn hyphenated_head_widget_is_not_head() {
+        assert_eq!(
+            clean_snippet("<head-widget>Keep me</head-widget>", true),
+            "Keep me"
         );
     }
 

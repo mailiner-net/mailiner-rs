@@ -447,12 +447,12 @@ fn submit_compose(
             session.reply_source.clone(),
         ),
         None => {
-            error.set(Some("Select an account first.".into()));
+            error.set(Some("No draft open.".into()));
             return;
         }
     };
     let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-        error.set(Some("Account not found.".into()));
+        error.set(Some("This draft's account is no longer available.".into()));
         return;
     };
     let identity = identity_from_account(account.name.clone(), account.email.clone());

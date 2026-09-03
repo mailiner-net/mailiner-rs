@@ -66,6 +66,12 @@ pub enum CoreEvent {
         delta: i32,
         extend: bool,
     },
+    /// Select every currently loaded row in the open folder.
+    SelectAllKnown,
+    /// Select loaded unread rows in the open folder.
+    SelectUnreadKnown,
+    /// Invert membership over currently loaded rows.
+    InvertSelection,
     MarkRead {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
@@ -340,6 +346,15 @@ pub async fn core_loop(
             }
             CoreEvent::SelectAdjacent { delta, extend } => {
                 handle_select_adjacent(&manager, &mut ctx, delta, extend).await;
+            }
+            CoreEvent::SelectAllKnown => {
+                handle_select_known(&manager, &mut ctx, KnownSelect::All).await;
+            }
+            CoreEvent::SelectUnreadKnown => {
+                handle_select_known(&manager, &mut ctx, KnownSelect::Unread).await;
+            }
+            CoreEvent::InvertSelection => {
+                handle_select_known(&manager, &mut ctx, KnownSelect::Invert).await;
             }
             CoreEvent::MarkRead {
                 mailbox_id,
@@ -1462,6 +1477,65 @@ async fn handle_select_adjacent(
         apply_index_range_selection(manager, ctx, index).await;
     }
     select_list_index(manager, ctx, index, !extend).await;
+}
+
+enum KnownSelect {
+    All,
+    Unread,
+    Invert,
+}
+
+/// Select / invert over cached list rows only (virtual list may have holes).
+async fn handle_select_known(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mode: KnownSelect,
+) {
+    if ctx.selected_mailbox.peek().is_none() {
+        return;
+    }
+    if *ctx.messages_loading.peek() {
+        return;
+    }
+
+    let rows: Vec<(MessageId, bool)> = {
+        let list = ctx.messages.read();
+        list.iter_indexed()
+            .map(|(_, m)| (m.id.clone(), !m.is_read))
+            .collect()
+    };
+    if rows.is_empty() {
+        return;
+    }
+
+    {
+        let mut sel = ctx.selection.write();
+        match mode {
+            KnownSelect::All => {
+                sel.select_all(rows.iter().map(|(id, _)| id.clone()));
+            }
+            KnownSelect::Unread => {
+                sel.select_unread(
+                    rows.iter()
+                        .filter(|(_, unread)| *unread)
+                        .map(|(id, _)| id.clone()),
+                );
+            }
+            KnownSelect::Invert => {
+                sel.invert(rows.iter().map(|(id, _)| id.clone()));
+            }
+        }
+    }
+
+    let Some(focus) = ctx.selection.read().focus().cloned() else {
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
+        return;
+    };
+    // Multi-select must not consume unread (`should_auto_mark_read`).
+    handle_select_message(manager, ctx, focus, false, false).await;
+    // `note_focus` has the current (post-relocate) index; use it as the range start.
+    ctx.selection.write().reset_range_anchor();
 }
 
 async fn handle_select_list_click(

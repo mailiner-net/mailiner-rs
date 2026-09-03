@@ -22,6 +22,7 @@ pub enum ShortcutId {
     PageMessageUp,
     MoveToTrash,
     DeletePermanently,
+    SelectAll,
     ShowHelp,
 }
 
@@ -189,6 +190,16 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         description: "Delete message permanently",
         group: ShortcutGroup::Mail,
     },
+    // Ctrl/Cmd+A is handled in the window listener; empty keys keep
+    // shortcut_for_key from stealing A (Reply all).
+    Shortcut {
+        id: ShortcutId::SelectAll,
+        keys: &[],
+        require_shift: false,
+        label: "Ctrl/⌘+A",
+        description: "Select all messages",
+        group: ShortcutGroup::Mail,
+    },
     Shortcut {
         id: ShortcutId::ScrollMessageDown,
         keys: &["ArrowRight"],
@@ -306,6 +317,21 @@ mod tests {
         assert_eq!(send.description, "Send message");
         assert!(shortcut_for_key("Enter", false).is_none());
         assert!(shortcut_for_key("Enter", true).is_none());
+    }
+
+    #[test]
+    fn select_all_is_help_only_and_does_not_steal_a() {
+        let select_all = GLOBAL_SHORTCUTS
+            .iter()
+            .find(|s| s.id == ShortcutId::SelectAll)
+            .expect("SelectAll catalog entry");
+        assert!(select_all.keys.is_empty());
+        assert_eq!(select_all.label, "Ctrl/⌘+A");
+        assert_eq!(select_all.description, "Select all messages");
+        assert_eq!(
+            shortcut_for_key("a", false).map(|s| s.id),
+            Some(ShortcutId::ReplyAll)
+        );
     }
 
     #[test]

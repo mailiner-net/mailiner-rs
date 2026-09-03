@@ -23,6 +23,16 @@ fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
     evt.stop_propagation();
 }
 
+fn is_select_all_chord(evt: &web_sys::KeyboardEvent) -> bool {
+    if evt.alt_key() || evt.shift_key() {
+        return false;
+    }
+    if !(evt.ctrl_key() || evt.meta_key()) {
+        return false;
+    }
+    evt.key().eq_ignore_ascii_case("a")
+}
+
 fn event_target_is_editable(evt: &web_sys::KeyboardEvent) -> bool {
     let Some(target) = evt.target() else {
         return false;
@@ -160,6 +170,9 @@ fn run_shortcut(
         ShortcutId::ShowHelp => {
             help_open.set(true);
         }
+        ShortcutId::SelectAll => {
+            let _ = core.send(CoreEvent::SelectAllKnown);
+        }
     }
 }
 
@@ -204,6 +217,16 @@ pub fn ShortcutsHost() -> Element {
         let core = core;
         let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
             if evt.ctrl_key() || evt.meta_key() || evt.alt_key() {
+                if is_select_all_chord(&evt)
+                    && !event_target_is_editable(&evt)
+                    && ctx.compose_draft.peek().is_none()
+                    && ctx.mailbox_picker.peek().is_none()
+                {
+                    claim_shortcut(&evt);
+                    if !*help_open.peek() {
+                        run_shortcut(ShortcutId::SelectAll, &mut ctx, core, &mut help_open);
+                    }
+                }
                 return;
             }
             if event_target_is_editable(&evt) {

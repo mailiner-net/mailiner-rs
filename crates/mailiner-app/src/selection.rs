@@ -127,6 +127,50 @@ impl MessageSelection {
             self.focus_at_index = None;
         }
     }
+
+    /// Select every known id (list order). Keeps focus when it is still known.
+    pub fn select_all(&mut self, known: impl IntoIterator<Item = MessageId>) {
+        self.replace_with(known);
+    }
+
+    /// Select the known unread ids (list order). Keeps focus when it is unread.
+    pub fn select_unread(&mut self, unread: impl IntoIterator<Item = MessageId>) {
+        self.replace_with(unread);
+    }
+
+    /// Invert membership over `known`. Ids not in `known` are dropped.
+    pub fn invert(&mut self, known: impl IntoIterator<Item = MessageId>) {
+        let inverted: Vec<MessageId> = known
+            .into_iter()
+            .filter(|id| !self.ids.contains(id))
+            .collect();
+        self.replace_with(inverted);
+    }
+
+    /// Next Shift-range starts at the current focus row (after a bulk select).
+    pub fn reset_range_anchor(&mut self) {
+        self.anchor_index = self.focus_at_index;
+    }
+
+    fn replace_with(&mut self, ids: impl IntoIterator<Item = MessageId>) {
+        let ordered: Vec<MessageId> = ids.into_iter().collect();
+        if ordered.is_empty() {
+            self.clear();
+            return;
+        }
+        let set: HashSet<MessageId> = ordered.iter().cloned().collect();
+        let keep_focus = self.focus.clone().filter(|id| set.contains(id));
+        let keep_focus_at = if keep_focus.is_some() {
+            self.focus_at_index
+        } else {
+            None
+        };
+        self.ids = set;
+        self.focus = keep_focus.or_else(|| ordered.first().cloned());
+        self.focus_at_index = keep_focus_at;
+        // Drop a pre-bulk Shift start; caller syncs from the live focus index.
+        self.anchor_index = None;
+    }
 }
 
 /// Auto-mark `\Seen` only when opening a single message.
@@ -205,5 +249,120 @@ mod tests {
         assert!(!should_auto_mark_read(true, true));
         assert!(!should_auto_mark_read(false, false));
         assert!(!should_auto_mark_read(false, true));
+    }
+
+    #[test]
+    fn select_all_keeps_focus_when_still_known() {
+        let mut s = MessageSelection::default();
+        s.replace(id("b"), Some(1));
+        s.select_all([id("a"), id("b"), id("c")]);
+        assert_eq!(s.len(), 3);
+        assert!(s.is_multi());
+        assert!(s.contains(&id("a")));
+        assert!(s.contains(&id("b")));
+        assert!(s.contains(&id("c")));
+        assert_eq!(s.focus(), Some(&id("b")));
+        assert_eq!(s.anchor_index(), None);
+        assert_eq!(s.focus_at_index(), Some(1));
+        assert!(!should_auto_mark_read(true, s.is_multi()));
+    }
+
+    #[test]
+    fn select_all_drops_stale_range_anchor() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.set_range([id("a"), id("b")], id("b"), Some(1));
+        assert_eq!(s.anchor_index(), Some(0));
+        s.select_all([id("a"), id("b"), id("c")]);
+        assert_eq!(s.focus(), Some(&id("b")));
+        assert_eq!(s.anchor_index(), None);
+        s.note_focus(id("b"), Some(4));
+        s.reset_range_anchor();
+        assert_eq!(s.anchor_index(), Some(4));
+        assert_eq!(s.focus_at_index(), Some(4));
+    }
+
+    #[test]
+    fn select_all_moves_focus_when_unknown() {
+        let mut s = MessageSelection::default();
+        s.replace(id("z"), Some(9));
+        s.select_all([id("a"), id("b")]);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.focus(), Some(&id("a")));
+        assert_eq!(s.focus_at_index(), None);
+        assert_eq!(s.anchor_index(), None);
+    }
+
+    #[test]
+    fn select_all_empty_clears() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.select_all(std::iter::empty());
+        assert!(s.is_empty());
+        assert_eq!(s.focus(), None);
+        assert_eq!(s.anchor_index(), None);
+    }
+
+    #[test]
+    fn select_unread_replaces_set() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.select_unread([id("b"), id("c")]);
+        assert_eq!(s.len(), 2);
+        assert!(s.contains(&id("b")));
+        assert!(s.contains(&id("c")));
+        assert!(!s.contains(&id("a")));
+        assert_eq!(s.focus(), Some(&id("b")));
+        assert_eq!(s.focus_at_index(), None);
+        assert_eq!(s.anchor_index(), None);
+        assert!(!should_auto_mark_read(true, s.is_multi()));
+    }
+
+    #[test]
+    fn select_unread_keeps_focus_when_unread() {
+        let mut s = MessageSelection::default();
+        s.replace(id("b"), Some(1));
+        s.select_unread([id("b"), id("c")]);
+        assert_eq!(s.focus(), Some(&id("b")));
+        assert_eq!(s.focus_at_index(), Some(1));
+        assert_eq!(s.anchor_index(), None);
+    }
+
+    #[test]
+    fn invert_flips_known_membership() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.toggle(id("b"), Some(1));
+        s.invert([id("a"), id("b"), id("c")]);
+        assert_eq!(s.len(), 1);
+        assert!(s.contains(&id("c")));
+        assert!(!s.contains(&id("a")));
+        assert!(!s.contains(&id("b")));
+        assert_eq!(s.focus(), Some(&id("c")));
+        assert_eq!(s.focus_at_index(), None);
+        assert_eq!(s.anchor_index(), None);
+        assert!(!s.is_multi());
+    }
+
+    #[test]
+    fn invert_of_all_clears() {
+        let mut s = MessageSelection::default();
+        s.select_all([id("a"), id("b")]);
+        s.invert([id("a"), id("b")]);
+        assert!(s.is_empty());
+        assert_eq!(s.focus(), None);
+    }
+
+    #[test]
+    fn invert_drops_ids_not_in_known() {
+        let mut s = MessageSelection::default();
+        s.replace(id("gone"), Some(4));
+        s.invert([id("a"), id("b")]);
+        assert_eq!(s.len(), 2);
+        assert!(s.contains(&id("a")));
+        assert!(s.contains(&id("b")));
+        assert!(!s.contains(&id("gone")));
+        assert_eq!(s.focus(), Some(&id("a")));
+        assert_eq!(s.anchor_index(), None);
     }
 }

@@ -1,0 +1,19 @@
+crates/mailiner-app/src/core_event.rs
+  s_660d0b62a52b15::t_41d81a842f12d6 1903-1905,1915-1917,1921-1923,1928-1930
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "fa4ee10bcf5399c64862c220f0591d3b6a7a5fb5",
+  "prompts": {},
+  "sessions": {
+    "s_660d0b62a52b15": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06922-2a0d-7c40-8f2c-e6584800580a",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -3581,13 +3581,15 @@ async fn handle_clear_local_data(
     // After the current handler has finished: no in-flight persist can land
     // after this wipe.
     let wipe_err = crate::local_data::clear_mailiner_local_storage().err();
-    ctx.reset_after_sign_out();
     if let Some(e) = wipe_err {
         warn!("clear_mailiner_local_storage failed: {e}");
         ctx.show_toast(ToastAction::Error {
             message: format!("Some local Mailiner data could not be removed: {e}"),
         });
+        ctx.sign_out_error.set(Some(e.to_string()));
+        return;
     }
+    ctx.reset_after_sign_out();
     let next_epoch = ctx.sign_out_epoch.peek().wrapping_add(1);
     ctx.sign_out_epoch.set(next_epoch);
 }

@@ -90,8 +90,14 @@ pub struct AppContext {
     pub compose_draft: Signal<Option<ComposeSession>>,
     /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
-    /// Bumped after `ClearLocalData` finishes so the UI can leave the session.
+    /// Bumped after a successful `ClearLocalData` wipe.
     pub sign_out_epoch: Signal<u64>,
+    /// True while a sign-out wipe is in flight (blocks accounts navigation).
+    pub sign_out_pending: Signal<bool>,
+    /// `sign_out_epoch` when the current wipe started.
+    pub sign_out_started: Signal<u64>,
+    /// Set when the wipe failed; the confirmation stays on screen.
+    pub sign_out_error: Signal<Option<String>>,
 }
 
 impl AppContext {

@@ -39,6 +39,7 @@ pub fn AccountsSettingsPage() -> Element {
     let selected = ctx.selected_account;
     let connection_states = ctx.connection_states;
     let quota = *ctx.account_quota.read();
+    let wiping = *ctx.sign_out_pending.read();
 
     let mut confirm_delete_id = use_signal(|| None::<AccountId>);
     let mut confirm_data = use_signal(|| None::<DataConfirm>);
@@ -151,7 +152,7 @@ pub fn AccountsSettingsPage() -> Element {
                                             button {
                                                 r#type: "button",
                                                 class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
-                                                disabled: switching,
+                                                disabled: switching || wiping,
                                                 onclick: move |_| {
                                                     if selected_switch.read().as_ref() == Some(&id_switch) {
                                                         return;
@@ -196,16 +197,19 @@ pub fn AccountsSettingsPage() -> Element {
                                                 if switching { "Switching…" } else { "Switch" }
                                             }
                                         }
-                                        Link {
-                                            to: Route::AccountEditView {
-                                                id: id.as_str().to_string(),
-                                            },
-                                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-link-btn",
-                                            "Edit"
+                                        if !wiping {
+                                            Link {
+                                                to: Route::AccountEditView {
+                                                    id: id.as_str().to_string(),
+                                                },
+                                                class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-link-btn",
+                                                "Edit"
+                                            }
                                         }
                                         button {
                                             r#type: "button",
                                             class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm accounts-btn-danger",
+                                            disabled: wiping,
                                             onclick: move |_| confirm_delete_id.set(Some(id_delete.clone())),
                                             "Delete"
                                         }
@@ -290,15 +294,26 @@ pub fn AccountsSettingsPage() -> Element {
 
                 nav {
                     class: "bootstrap-nav accounts-nav",
-                    Link {
-                        to: Route::AccountNewView {},
-                        class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
-                        "Add account"
-                    }
-                    Link {
-                        to: Route::MainView {},
-                        class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
-                        "Back to mail"
+                    if wiping {
+                        span {
+                            class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
+                            "Add account"
+                        }
+                        span {
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Back to mail"
+                        }
+                    } else {
+                        Link {
+                            to: Route::AccountNewView {},
+                            class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
+                            "Add account"
+                        }
+                        Link {
+                            to: Route::MainView {},
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Back to mail"
+                        }
                     }
                 }
             }
@@ -356,30 +371,20 @@ fn DataActionConfirm(
     kind: DataConfirm,
     mut confirm_data: Signal<Option<DataConfirm>>,
     mut action_error: Signal<Option<String>>,
-    mut bootstrap: Signal<AppBootstrapState>,
+    bootstrap: Signal<AppBootstrapState>,
     store_ctx: Signal<Option<AccountStoreContext>>,
 ) -> Element {
-    let ctx = use_context::<AppContext>();
+    let mut ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
-    let nav = use_navigator();
-    let mut wait_for_epoch = use_signal(|| None::<u64>);
-    let epoch = ctx.sign_out_epoch;
+    let wiping = *ctx.sign_out_pending.read();
+    let mut sign_out_error = ctx.sign_out_error;
     use_effect(move || {
-        let current = epoch();
-        let Some(started) = wait_for_epoch() else {
-            return;
-        };
-        if current == started {
-            return;
+        if let Some(err) = sign_out_error() {
+            action_error.set(Some(format!(
+                "Some local Mailiner data could not be removed: {err}"
+            )));
         }
-        wait_for_epoch.set(None);
-        confirm_data.set(None);
-        action_error.set(None);
-        info!("Signed out → NeedsOnboarding");
-        bootstrap.set(AppBootstrapState::NeedsOnboarding);
-        nav.replace(Route::OnboardingView {});
     });
-    let wiping = wait_for_epoch().is_some();
 
     let (body, confirm_label, danger) = match kind {
         DataConfirm::FullBackup => (
@@ -426,9 +431,10 @@ fn DataActionConfirm(
                             }
                             DataConfirm::SignOut => {
                                 // Wipe runs in core_loop after the current IMAP/SMTP
-                                // handler finishes. Navigate only after that ack so a
-                                // reload cannot keep credentials on disk.
-                                wait_for_epoch.set(Some(*ctx.sign_out_epoch.peek()));
+                                // handler finishes. AppShell navigates after the ack.
+                                ctx.sign_out_error.set(None);
+                                ctx.sign_out_started.set(*ctx.sign_out_epoch.peek());
+                                ctx.sign_out_pending.set(true);
                                 core_tx.send(CoreEvent::ClearLocalData);
                             }
                         }

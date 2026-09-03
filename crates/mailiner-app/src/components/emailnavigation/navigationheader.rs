@@ -175,10 +175,10 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             if props.mode == Mode::MailboxTreeView {
                 ThemeSelect { class: "theme-select pane-header-theme", }
                 Link {
-                    to: Route::AccountsSettingsView {},
+                    to: Route::SettingsView {},
                     class: "pane-header-settings",
-                    title: "Account settings",
-                    aria_label: "Account settings",
+                    title: "Settings",
+                    aria_label: "Settings",
                     Icon {
                         size: 22,
                         icon: IconKind::Cog6Tooth,

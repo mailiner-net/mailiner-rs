@@ -305,6 +305,10 @@ pub fn AccountsSettingsPage() -> Element {
                         }
                         span {
                             class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Settings"
+                        }
+                        span {
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
                             "Back to mail"
                         }
                     } else {
@@ -312,6 +316,11 @@ pub fn AccountsSettingsPage() -> Element {
                             to: Route::AccountNewView {},
                             class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
                             "Add account"
+                        }
+                        Link {
+                            to: Route::SettingsView {},
+                            class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
+                            "Settings"
                         }
                         Link {
                             to: Route::MainView {},

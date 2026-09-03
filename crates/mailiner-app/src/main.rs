@@ -12,7 +12,7 @@ use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
     EmailNavigation, MailboxPickerHost, MessageList, MessageView, OnboardingForm, OutboxPanel,
-    ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
+    SettingsPage, ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
@@ -75,6 +75,8 @@ pub(crate) enum Route {
     MainView {},
     #[route("/onboarding")]
     OnboardingView {},
+    #[route("/settings")]
+    SettingsView {},
     #[route("/settings/accounts")]
     AccountsSettingsView {},
     #[route("/settings/accounts/new")]
@@ -545,6 +547,16 @@ fn redirecting_shell() -> Element {
             p { class: "bootstrap-muted", "Redirecting…" }
         }
     }
+}
+
+/// General settings (`/settings`).
+#[component]
+fn SettingsView() -> Element {
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    if !matches!(bootstrap(), AppBootstrapState::Ready) {
+        return redirecting_shell();
+    }
+    rsx! { SettingsPage {} }
 }
 
 /// Account list settings (`/settings/accounts`).

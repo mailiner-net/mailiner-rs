@@ -269,11 +269,14 @@ fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> O
 }
 
 fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
-    let selected = ctx.selected_account.read().clone();
-    let account = resolve_compose_account(ctx, selected.as_ref())?;
+    let preferred = crate::ui_prefs::load_default_from_account();
+    let account = resolve_compose_account(ctx, preferred.as_ref())?;
     let identity = identity_from_account(account.name.clone(), account.email.clone());
     let mut draft = DraftDocument::new_empty(&identity);
-    draft.mode = BodyMode::Plain;
+    draft.mode = match crate::ui_prefs::load_compose_body_mode() {
+        crate::ui_prefs::ComposeBodyMode::Plain => BodyMode::Plain,
+        crate::ui_prefs::ComposeBodyMode::Rich => BodyMode::Rich,
+    };
     Some((account, draft))
 }
 
@@ -320,7 +323,10 @@ pub fn open_reply_or_forward(
     let identity = identity_from_account(account.name, account.email);
     match build_draft(intent, &identity, Some(envelope), Some(loaded)) {
         Ok(mut draft) => {
-            draft.mode = BodyMode::Plain;
+            if crate::ui_prefs::load_compose_body_mode() == crate::ui_prefs::ComposeBodyMode::Plain
+            {
+                draft.mode = BodyMode::Plain;
+            }
             let title = match intent {
                 ComposeIntent::Forward => "Forward",
                 ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",
@@ -355,24 +361,22 @@ fn submit_compose(
         return;
     }
     error.set(None);
-    let Some(account_id) = ctx
-        .compose_draft
-        .read()
-        .as_ref()
-        .map(|s| s.account_id.clone())
-    else {
-        error.set(Some("Select an account first.".into()));
-        return;
+    let (account_id, mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
+        Some(session) => (
+            session.account_id.clone(),
+            session.draft.clone(),
+            session.reply_source.clone(),
+        ),
+        None => {
+            error.set(Some("Select an account first.".into()));
+            return;
+        }
     };
     let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
         error.set(Some("Account not found.".into()));
         return;
     };
     let identity = identity_from_account(account.name.clone(), account.email.clone());
-    let (mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
-        Some(session) => (session.draft.clone(), session.reply_source.clone()),
-        None => (DraftDocument::new_empty(&identity), None),
-    };
     draft.mode = BodyMode::Plain;
     draft.from = Some(composer_address_from_identity(&identity));
     draft.plain_body = form.body.peek().clone();

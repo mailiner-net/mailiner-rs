@@ -79,6 +79,12 @@ impl MessageListDensity {
 /// `localStorage` key for the color-theme override (`system` | `light` | `dark`).
 pub const THEME_KEY: &str = "mailiner.ui.theme";
 
+/// `localStorage` key for the default composer body mode.
+pub const COMPOSE_BODY_MODE_KEY: &str = "mailiner.ui.composeBodyMode";
+
+/// `localStorage` key for the preferred compose From account.
+pub const DEFAULT_FROM_ACCOUNT_KEY: &str = "mailiner.ui.defaultFromAccount";
+
 /// `localStorage` key for the global remote-image default (`true` | `false`).
 pub const ALLOW_REMOTE_IMAGES_KEY: &str = "mailiner.ui.allowRemoteImages";
 
@@ -134,6 +140,41 @@ impl ThemePref {
             Self::System => None,
             Self::Light => Some("light"),
             Self::Dark => Some("dark"),
+        }
+    }
+}
+
+/// Default editor format when opening a new message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ComposeBodyMode {
+    /// Matches the current plain-text compose overlay.
+    #[default]
+    Plain,
+    Rich,
+}
+
+impl ComposeBodyMode {
+    pub const ALL: [Self; 2] = [Self::Plain, Self::Rich];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Rich => "rich",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "plain" => Some(Self::Plain),
+            "rich" => Some(Self::Rich),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "Plain text",
+            Self::Rich => "Rich text",
         }
     }
 }
@@ -547,6 +588,53 @@ pub fn save_theme(theme: ThemePref) {
     let _ = with_kv(|kv| kv.set_item(THEME_KEY, theme.as_key()));
 }
 
+pub fn load_compose_body_mode() -> ComposeBodyMode {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(COMPOSE_BODY_MODE_KEY)?
+            .as_deref()
+            .and_then(ComposeBodyMode::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_compose_body_mode(mode: ComposeBodyMode) {
+    let _ = with_kv(|kv| kv.set_item(COMPOSE_BODY_MODE_KEY, mode.as_key()));
+}
+
+/// Preferred compose From account, if one was saved.
+pub fn load_default_from_account() -> Option<AccountId> {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(DEFAULT_FROM_ACCOUNT_KEY)?
+            .filter(|s| !s.is_empty())
+            .map(AccountId::new))
+    })
+    .flatten()
+}
+
+pub fn save_default_from_account(account_id: Option<&AccountId>) {
+    let _ = with_kv(|kv| match account_id {
+        Some(id) if !id.as_str().is_empty() => kv.set_item(DEFAULT_FROM_ACCOUNT_KEY, id.as_str()),
+        _ => kv.set_item(DEFAULT_FROM_ACCOUNT_KEY, ""),
+    });
+}
+
+/// Use the saved From account when it still exists; otherwise the active account.
+pub fn resolve_compose_account_id(
+    preferred: Option<&AccountId>,
+    selected: Option<&AccountId>,
+    known: impl Fn(&AccountId) -> bool,
+) -> Option<AccountId> {
+    if let Some(id) = preferred {
+        if known(id) {
+            return Some(id.clone());
+        }
+    }
+    selected.filter(|id| known(id)).cloned()
+}
+
 pub fn load_allow_remote_images() -> bool {
     with_kv(|kv| {
         Ok(kv
@@ -929,6 +1017,67 @@ mod tests {
         });
         assert_eq!(load_theme(), ThemePref::System);
         host_kv::reset();
+    }
+
+    #[test]
+    fn compose_body_mode_encode_decode_roundtrip() {
+        for mode in ComposeBodyMode::ALL {
+            assert_eq!(ComposeBodyMode::from_key(mode.as_key()), Some(mode));
+        }
+        assert_eq!(ComposeBodyMode::from_key("html"), None);
+        assert_eq!(ComposeBodyMode::default(), ComposeBodyMode::Plain);
+    }
+
+    #[test]
+    fn compose_body_mode_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_compose_body_mode(), ComposeBodyMode::Plain);
+        save_compose_body_mode(ComposeBodyMode::Rich);
+        assert_eq!(load_compose_body_mode(), ComposeBodyMode::Rich);
+        save_compose_body_mode(ComposeBodyMode::Plain);
+        assert_eq!(load_compose_body_mode(), ComposeBodyMode::Plain);
+        host_kv::with(|kv| {
+            kv.set_item(COMPOSE_BODY_MODE_KEY, "nope")
+                .expect("set unknown compose mode");
+        });
+        assert_eq!(load_compose_body_mode(), ComposeBodyMode::Plain);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn default_from_account_roundtrip() {
+        host_kv::reset();
+        assert!(load_default_from_account().is_none());
+        let acc = AccountId::new("from-acc");
+        save_default_from_account(Some(&acc));
+        assert_eq!(
+            load_default_from_account().as_ref().map(|id| id.as_str()),
+            Some("from-acc")
+        );
+        save_default_from_account(None);
+        assert!(load_default_from_account().is_none());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn resolve_compose_account_prefers_saved_when_known() {
+        let preferred = AccountId::new("pref");
+        let selected = AccountId::new("sel");
+        let known = |id: &AccountId| id.as_str() == "pref" || id.as_str() == "sel";
+        assert_eq!(
+            resolve_compose_account_id(Some(&preferred), Some(&selected), known)
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("pref")
+        );
+        let unknown = AccountId::new("gone");
+        assert_eq!(
+            resolve_compose_account_id(Some(&unknown), Some(&selected), known)
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("sel")
+        );
+        assert!(resolve_compose_account_id(Some(&unknown), None, known).is_none());
     }
 
     #[test]

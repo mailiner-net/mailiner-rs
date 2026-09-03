@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
+    ArchiveBox,
     ArrowUturnLeft,
     ChevronDown,
     ChevronRight,
@@ -31,6 +32,10 @@ struct PathSpec {
 
 fn spec(kind: IconKind) -> PathSpec {
     match kind {
+        IconKind::ArchiveBox => PathSpec {
+            d: "M3.375 3C2.33947 3 1.5 3.83947 1.5 4.875V5.625C1.5 6.66053 2.33947 7.5 3.375 7.5H20.625C21.6605 7.5 22.5 6.66053 22.5 5.625V4.875C22.5 3.83947 21.6605 3 20.625 3H3.375Z M3.08728 9L3.62728 18.1764C3.80981 19.7537 5.0784 21 6.62003 21H17.3791C18.9208 21 20.1894 19.7537 20.3719 18.1764L20.9127 9H3.08728ZM9.25 12.75C9.25 12.3358 9.58579 12 10 12H14C14.4142 12 14.75 12.3358 14.75 12.75C14.75 13.1642 14.4142 13.5 14 13.5H10C9.58579 13.5 9.25 13.1642 9.25 12.75Z",
+            evenodd: true,
+        },
         IconKind::ArrowUturnLeft => PathSpec {
             d: "M9.53 2.47a.75.75 0 0 1 0 1.06L4.81 8.25H15a6.75 6.75 0 0 1 0 13.5h-3a.75.75 0 0 1 0-1.5h3a5.25 5.25 0 1 0 0-10.5H4.81l4.72 4.72a.75.75 0 1 1-1.06 1.06l-6-6a.75.75 0 0 1 0-1.06l6-6a.75.75 0 0 1 1.06 0Z",
             evenodd: true,

@@ -81,6 +81,11 @@ pub enum CoreEvent {
         message_ids: Vec<MessageId>,
         dest_mailbox_id: MailboxId,
     },
+    /// Move to the Archive special-use folder when one exists.
+    ArchiveMessages {
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Move to the Trash special-use folder, or permanently delete when already there.
     MoveToTrash {
         mailbox_id: MailboxId,
@@ -355,6 +360,12 @@ pub async fn core_loop(
                     dest_mailbox_id,
                 )
                 .await;
+            }
+            CoreEvent::ArchiveMessages {
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_archive_messages(&manager, &mut ctx, mailbox_id, message_ids).await;
             }
             CoreEvent::MoveToTrash {
                 mailbox_id,
@@ -1948,6 +1959,29 @@ async fn handle_copy_messages(
             }
         }
     }
+}
+
+async fn handle_archive_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let archive_id =
+        crate::mailbox::find_mailbox_with_role(&ctx.mailbox_nodes.read(), MailboxRole::Archive);
+    let Some(archive_id) = archive_id else {
+        ctx.show_toast(ToastAction::error(
+            "No Archive folder found on this account",
+        ));
+        return;
+    };
+    handle_move_messages(manager, ctx, mailbox_id, message_ids, archive_id).await;
 }
 
 async fn handle_move_to_trash(

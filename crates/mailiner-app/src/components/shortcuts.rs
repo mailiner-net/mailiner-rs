@@ -89,6 +89,15 @@ fn run_shortcut(
             }
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
         }
+        ShortcutId::Archive => {
+            let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::ArchiveMessages {
+                mailbox_id,
+                message_ids,
+            });
+        }
         ShortcutId::NextMessage => {
             let _ = core.send(CoreEvent::SelectAdjacent {
                 delta: 1,

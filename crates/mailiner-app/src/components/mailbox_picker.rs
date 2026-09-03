@@ -16,6 +16,7 @@ use crate::toast::ToastAction;
 fn role_icon(role: MailboxRole) -> IconKind {
     match role {
         MailboxRole::Inbox => IconKind::Inbox,
+        MailboxRole::Archive => IconKind::ArchiveBox,
         MailboxRole::Drafts => IconKind::PencilSquare,
         MailboxRole::Sent => IconKind::PaperAirplane,
         MailboxRole::Outbox => IconKind::InboxStack,

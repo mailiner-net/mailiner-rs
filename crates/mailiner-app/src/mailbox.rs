@@ -67,7 +67,7 @@ impl From<Folder> for MailboxNode {
     }
 }
 
-/// Inbox, Drafts, Sent, Outbox, Trash, then remaining names A–Z.
+/// Inbox, Archive, Drafts, Sent, Outbox, Trash, then remaining names A–Z.
 pub fn build_mailbox_tree(
     folders: Vec<Folder>,
 ) -> (Vec<MailboxId>, HashMap<MailboxId, MailboxNode>) {
@@ -427,6 +427,8 @@ mod tests {
         let inbox = folder("INBOX", "INBOX", None, MailboxRole::Inbox);
         let node = MailboxNode::from(inbox);
         assert_eq!(node.title(), "Inbox");
+        let archive = folder("All Mail", "All Mail", None, MailboxRole::Archive);
+        assert_eq!(MailboxNode::from(archive).title(), "Archive");
         let junk = folder("Junk", "Junk", None, MailboxRole::Other);
         assert_eq!(MailboxNode::from(junk).title(), "Junk");
     }
@@ -440,7 +442,7 @@ mod tests {
             folder("Drafts", "Drafts", None, MailboxRole::Drafts),
             folder("Trash", "Trash", None, MailboxRole::Trash),
             folder("Outbox", "Outbox", None, MailboxRole::Outbox),
-            folder("Archive", "Archive", None, MailboxRole::Other),
+            folder("Archive", "Archive", None, MailboxRole::Archive),
         ]);
         let names: Vec<_> = roots
             .iter()
@@ -449,7 +451,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "INBOX", "Drafts", "Sent", "Outbox", "Trash", "Archive", "Junk"
+                "INBOX", "Archive", "Drafts", "Sent", "Outbox", "Trash", "Junk"
             ]
         );
     }
@@ -480,6 +482,25 @@ mod tests {
         let trash = find_mailbox_with_role(&nodes, MailboxRole::Trash).unwrap();
         assert_eq!(trash.to_string(), "Trash");
         assert!(find_mailbox_with_role(&nodes, MailboxRole::Outbox).is_none());
+    }
+
+    #[test]
+    fn find_archive_role() {
+        let (_, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder("Archive", "Archive", None, MailboxRole::Archive),
+        ]);
+        let archive = find_mailbox_with_role(&nodes, MailboxRole::Archive).unwrap();
+        assert_eq!(archive.to_string(), "Archive");
+        let hidden = build_mailbox_tree(vec![folder_sel(
+            "virtual-archive",
+            "Archive",
+            None,
+            MailboxRole::Archive,
+            false,
+        )])
+        .1;
+        assert!(find_mailbox_with_role(&hidden, MailboxRole::Archive).is_none());
     }
 
     #[test]

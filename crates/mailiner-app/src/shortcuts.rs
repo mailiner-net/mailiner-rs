@@ -11,6 +11,7 @@ pub enum ShortcutId {
     JumpToFolder,
     MoveToFolder,
     CopyToFolder,
+    Archive,
     NextMessage,
     PrevMessage,
     ExtendNextMessage,
@@ -130,6 +131,14 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: true,
         label: "Shift+C",
         description: "Copy message to folder",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::Archive,
+        keys: &["e", "E"],
+        require_shift: false,
+        label: "E",
+        description: "Archive message",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -303,6 +312,18 @@ mod tests {
     fn unknown_key_is_none() {
         assert!(shortcut_for_key("x", false).is_none());
         assert!(shortcut_for_key("Escape", false).is_none());
+    }
+
+    #[test]
+    fn archive_key_resolves() {
+        assert_eq!(
+            shortcut_for_key("e", false).map(|s| s.id),
+            Some(ShortcutId::Archive)
+        );
+        assert_eq!(
+            shortcut_for_key("E", true).map(|s| s.id),
+            Some(ShortcutId::Archive)
+        );
     }
 
     #[test]

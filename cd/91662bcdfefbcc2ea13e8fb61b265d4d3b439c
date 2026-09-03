@@ -1,0 +1,23 @@
+crates/mailiner-core/src/lib.rs
+  s_b03c4dddb62e6c::t_7e7273ef51b07d 16-17
+crates/mailiner-core/src/connector.rs
+  s_b03c4dddb62e6c::t_bdd8a2e4af921d 15
+crates/mailiner-imap-connector/src/lib.rs
+  s_b03c4dddb62e6c::t_3f5c8861d0c602 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cd91662bcdfefbcc2ea13e8fb61b265d4d3b439c",
+  "prompts": {},
+  "sessions": {
+    "s_b03c4dddb62e6c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0698a-8f4d-7db1-bcf3-df3fd6eeafa5",
+        "model": "unknown"
+      },
+      "human_author": null
+    }
+  }
+}

@@ -221,7 +221,39 @@ pub trait OutboxStore {
     async fn upsert(&self, item: &OutboxItem) -> Result<(), AccountStoreError>;
     async fn delete(&self, id: &OutboxId) -> Result<(), AccountStoreError>;
     async fn delete_for_account(&self, account_id: &AccountId) -> Result<(), AccountStoreError>;
-    async fn oldest_queued(&self) -> Result<Option<OutboxItem>, AccountStoreError>;
+    async fn oldest_queued(&self) -> Result<Option<OutboxItem>, AccountStoreError> {
+        self.oldest_queued_except(&[]).await
+    }
+
+    /// Oldest `Queued` item whose account is not in `skip` (busy in-flight slots).
+    async fn oldest_queued_except(
+        &self,
+        skip: &[AccountId],
+    ) -> Result<Option<OutboxItem>, AccountStoreError> {
+        let items = self.list().await?;
+        Ok(pick_oldest_queued(&items, skip, &[]))
+    }
+}
+
+/// Oldest queued row, skipping busy accounts and items already tried this drain.
+pub(crate) fn pick_oldest_queued(
+    items: &[OutboxItem],
+    skip_accounts: &[AccountId],
+    skip_ids: &[OutboxId],
+) -> Option<OutboxItem> {
+    items
+        .iter()
+        .filter(|i| {
+            i.state == OutboxItemState::Queued
+                && !skip_accounts.iter().any(|id| *id == i.account_id)
+                && !skip_ids.iter().any(|id| *id == i.id)
+        })
+        .min_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        })
+        .cloned()
 }
 
 /// In-memory store for host tests.
@@ -280,19 +312,6 @@ impl OutboxStore for InMemoryOutboxStore {
             .borrow_mut()
             .retain(|i| i.account_id != *account_id);
         Ok(())
-    }
-
-    async fn oldest_queued(&self) -> Result<Option<OutboxItem>, AccountStoreError> {
-        let items = self.items.borrow();
-        Ok(items
-            .iter()
-            .filter(|i| i.state == OutboxItemState::Queued)
-            .min_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.as_str().cmp(b.id.as_str()))
-            })
-            .cloned())
     }
 }
 
@@ -377,19 +396,6 @@ impl<K: StringKvStore> OutboxStore for BrowserOutboxStore<K> {
         blob.items.retain(|i| i.account_id != *account_id);
         self.save(&blob)
     }
-
-    async fn oldest_queued(&self) -> Result<Option<OutboxItem>, AccountStoreError> {
-        let blob = self.load()?;
-        Ok(blob
-            .items
-            .into_iter()
-            .filter(|i| i.state == OutboxItemState::Queued)
-            .min_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.as_str().cmp(b.id.as_str()))
-            }))
-    }
 }
 
 /// UI row (no rfc822).
@@ -423,6 +429,7 @@ impl From<&OutboxItem> for OutboxListEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use mailiner_core::SubmitRequest;
 
     fn req(n: usize) -> SubmitRequest {
@@ -569,5 +576,42 @@ mod tests {
             .unwrap();
         assert_eq!(store.list().await.unwrap().len(), 1);
         assert_eq!(store.list().await.unwrap()[0].account_id.as_str(), "b");
+    }
+
+    #[tokio::test]
+    async fn oldest_queued_skips_busy_accounts() {
+        let store = InMemoryOutboxStore::new();
+        let mut older =
+            OutboxItem::from_request(AccountId::new("a"), &req(4), "A".into(), "t".into()).unwrap();
+        older.created_at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let mut newer =
+            OutboxItem::from_request(AccountId::new("b"), &req(4), "B".into(), "t".into()).unwrap();
+        newer.created_at = Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap();
+        let mut later_a =
+            OutboxItem::from_request(AccountId::new("a"), &req(4), "A2".into(), "t".into())
+                .unwrap();
+        later_a.created_at = Utc.with_ymd_and_hms(2026, 1, 3, 0, 0, 0).unwrap();
+        store.upsert(&older).await.unwrap();
+        store.upsert(&newer).await.unwrap();
+        store.upsert(&later_a).await.unwrap();
+
+        assert_eq!(store.oldest_queued().await.unwrap().unwrap().id, older.id);
+        let skipped = store
+            .oldest_queued_except(&[AccountId::new("a")])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(skipped.id, newer.id);
+        assert!(
+            store
+                .oldest_queued_except(&[AccountId::new("a"), AccountId::new("b")])
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let items = store.list().await.unwrap();
+        let next = pick_oldest_queued(&items, &[], std::slice::from_ref(&older.id)).unwrap();
+        assert_eq!(next.id, newer.id);
     }
 }

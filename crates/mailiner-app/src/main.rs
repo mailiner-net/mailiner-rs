@@ -43,6 +43,7 @@ mod reconnect;
 mod selection;
 mod send;
 mod shortcuts;
+mod smtp_inflight;
 mod smtp_session;
 mod toast;
 mod ui_prefs;
@@ -302,7 +303,7 @@ fn App() -> Element {
     let selection = use_signal(crate::selection::MessageSelection::default);
     let message_view = use_signal(|| crate::context::MessageViewState::Empty);
     let download_status = use_signal(HashMap::new);
-    let send_status = use_signal(|| None);
+    let send_status = use_signal(HashMap::new);
     let smtp_test_status = use_signal(HashMap::new);
     let smtp_test_abandoned = use_signal(HashSet::new);
     let outbox = use_signal(Vec::new);

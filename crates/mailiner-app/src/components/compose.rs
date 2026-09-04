@@ -240,6 +240,11 @@ fn apply_draft_fields(draft: &DraftDocument, form: &mut ComposeForm) {
     form.body.set(draft.plain_body.clone());
 }
 
+fn compose_send_state(ctx: &AppContext) -> Option<SendState> {
+    let account_id = ctx.compose_draft.read().as_ref()?.account_id.clone();
+    ctx.send_status.read().get(&account_id).cloned()
+}
+
 /// Open a new / reply / forward session. Replaces any existing compose draft.
 pub fn open_compose(ctx: &mut AppContext, session: ComposeSession) {
     ctx.compose_draft.set(Some(session));
@@ -930,7 +935,7 @@ pub fn ComposeOverlay() -> Element {
     let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let last_draft_id = use_signal(|| None::<String>);
-    // Local only: global `send_status` stays `Sending` after the dialog
+    // Local only: per-account `send_status` stays `Sending` after the dialog
     // closes (outbox drain) and must not disable a newly opened draft.
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
@@ -1042,21 +1047,15 @@ pub fn ComposeOverlay() -> Element {
         let mut submitting = submitting;
         let submitted_id = submitted_id;
         use_effect(move || {
-            if !matches!(
-                ctx.send_status.read().as_ref(),
-                Some(SendState::Failed { .. })
-            ) {
+            if !matches!(compose_send_state(&ctx), Some(SendState::Failed { .. })) {
                 return;
             }
-            let Some(open_id) = ctx
+            let open_id = ctx
                 .compose_draft
                 .read()
                 .as_ref()
-                .map(|s| s.draft.id.as_str().to_string())
-            else {
-                return;
-            };
-            if submitted_id() == Some(open_id) {
+                .map(|s| s.draft.id.as_str().to_string());
+            if submitted_id() == open_id {
                 submitting.set(false);
             }
         });
@@ -1414,7 +1413,7 @@ pub fn ComposeOverlay() -> Element {
                     if let Some(err) = error() {
                         p { class: "ui-alert-error", "{err}" }
                     }
-                    if let Some(SendState::Failed { message, .. }) = ctx.send_status.read().as_ref() {
+                    if let Some(SendState::Failed { message, .. }) = compose_send_state(&ctx) {
                         p { class: "ui-alert-error", "{message}" }
                     }
                     div {

@@ -8,7 +8,6 @@ use futures_channel::mpsc::UnboundedSender;
 use futures_channel::oneshot;
 use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
-use mailiner_core::MessageId;
 use mailiner_core::submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
 use mailiner_smtp_connector::{SmtpConnector, SmtpError};
 
@@ -48,16 +47,6 @@ pub enum SmtpOutcome {
         request_id: AccountId,
         result: Result<(), ClassifiedSendError>,
     },
-}
-
-pub struct InFlightSmtp {
-    pub account_id: AccountId,
-    pub generation: u64,
-    pub cancel_tx: Option<oneshot::Sender<()>>,
-    pub outbox_id: Option<OutboxId>,
-    pub is_test: bool,
-    /// Source message to mark `\Answered` if the outbox row cannot be re-read.
-    pub reply_source: Option<MessageId>,
 }
 
 pub fn preflight(config: &AccountConfig) -> Result<(), ClassifiedSendError> {

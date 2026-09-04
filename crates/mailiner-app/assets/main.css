@@ -434,6 +434,11 @@ button.flat {
     border-color: var(--item-accent);
 }
 
+.onboarding-field input[readonly] {
+    background: var(--surface-muted);
+    cursor: text;
+}
+
 .onboarding-field input:disabled,
 .onboarding-field select:disabled,
 .onboarding-field textarea:disabled {

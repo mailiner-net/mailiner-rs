@@ -1,4 +1,4 @@
-//! Pre-auth mechanism selection: SASL PLAIN when advertised, else IMAP LOGIN.
+//! Pre-auth mechanism selection: SASL PLAIN / LOGIN, or XOAUTH2 when requested.
 
 use std::fmt::Debug;
 
@@ -7,7 +7,28 @@ use async_imap::{Authenticator, Client};
 use imap_proto::{Capability, Response, ResponseCode};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-/// RFC 4616 SASL PLAIN (`NUL authcid NUL passwd`). No XOAUTH2.
+/// How the connector should authenticate. Password is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImapAuthKind {
+    #[default]
+    Password,
+    Xoauth2,
+}
+
+/// RFC 7628 / Google XOAUTH2 SASL blob: `user=…\x01auth=Bearer …\x01\x01`.
+pub fn xoauth2_sasl_payload(username: &str, access_token: &str) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(username.len() + access_token.len() + 20);
+    buf.extend_from_slice(b"user=");
+    buf.extend_from_slice(username.as_bytes());
+    buf.push(0x01);
+    buf.extend_from_slice(b"auth=Bearer ");
+    buf.extend_from_slice(access_token.as_bytes());
+    buf.push(0x01);
+    buf.push(0x01);
+    buf
+}
+
+/// RFC 4616 SASL PLAIN (`NUL authcid NUL passwd`).
 pub(crate) struct SaslPlain<'a> {
     pub username: &'a str,
     pub password: &'a str,
@@ -26,9 +47,24 @@ impl Authenticator for SaslPlain<'_> {
     }
 }
 
+/// SASL XOAUTH2. `credentials` is the access token (never a password).
+pub(crate) struct SaslXoauth2<'a> {
+    pub username: &'a str,
+    pub access_token: &'a str,
+}
+
+impl Authenticator for SaslXoauth2<'_> {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        xoauth2_sasl_payload(self.username, self.access_token)
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PreauthCaps {
     pub auth_plain: bool,
+    pub auth_xoauth2: bool,
     pub login_disabled: bool,
 }
 
@@ -36,15 +72,26 @@ pub(crate) struct PreauthCaps {
 pub(crate) enum AuthChoice {
     Plain,
     Login,
+    Xoauth2,
     None,
 }
 
 impl PreauthCaps {
+    /// Password login: PLAIN if advertised, else IMAP LOGIN unless disabled.
     pub(crate) fn choice(self) -> AuthChoice {
         if self.auth_plain {
             AuthChoice::Plain
         } else if !self.login_disabled {
             AuthChoice::Login
+        } else {
+            AuthChoice::None
+        }
+    }
+
+    /// OAuth: XOAUTH2 only. Never fall back to LOGIN with a bearer token.
+    pub(crate) fn choice_oauth(self) -> AuthChoice {
+        if self.auth_xoauth2 {
+            AuthChoice::Xoauth2
         } else {
             AuthChoice::None
         }
@@ -55,6 +102,7 @@ pub(crate) fn apply_capability_list(list: &[Capability<'_>], caps: &mut PreauthC
     for c in list {
         match c {
             Capability::Auth(m) if m.eq_ignore_ascii_case("PLAIN") => caps.auth_plain = true,
+            Capability::Auth(m) if m.eq_ignore_ascii_case("XOAUTH2") => caps.auth_xoauth2 = true,
             Capability::Atom(a) if a.eq_ignore_ascii_case("LOGINDISABLED") => {
                 caps.login_disabled = true;
             }
@@ -158,5 +206,39 @@ mod tests {
             password: "secret",
         };
         assert_eq!(auth.process(b""), b"\0user@example.com\0secret");
+    }
+
+    #[test]
+    fn xoauth2_sasl_blob_is_user_soh_auth_bearer_soh_soh() {
+        let blob = xoauth2_sasl_payload("ada@gmail.com", "ya29.token");
+        assert_eq!(
+            blob,
+            b"user=ada@gmail.com\x01auth=Bearer ya29.token\x01\x01"
+        );
+        let mut auth = SaslXoauth2 {
+            username: "ada@gmail.com",
+            access_token: "ya29.token",
+        };
+        assert_eq!(auth.process(b""), blob);
+    }
+
+    #[test]
+    fn oauth_choice_requires_xoauth2() {
+        assert_eq!(
+            caps_from(&["IMAP4rev1", "AUTH=XOAUTH2", "AUTH=PLAIN"]).choice_oauth(),
+            AuthChoice::Xoauth2
+        );
+        assert_eq!(
+            caps_from(&["IMAP4rev1", "AUTH=PLAIN", "LOGINDISABLED"]).choice_oauth(),
+            AuthChoice::None
+        );
+    }
+
+    #[test]
+    fn password_choice_ignores_xoauth2() {
+        assert_eq!(
+            caps_from(&["IMAP4rev1", "AUTH=XOAUTH2"]).choice(),
+            AuthChoice::Login
+        );
     }
 }

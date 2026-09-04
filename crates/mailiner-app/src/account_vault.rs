@@ -63,6 +63,8 @@ pub struct AccountSecrets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smtp_password: Option<String>,
     pub proxy_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_tokens: Option<crate::account_config::Oauth2Tokens>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -149,6 +151,7 @@ pub fn extract_secrets(accounts: &[AccountConfig]) -> SecretsPayload {
                 imap_password: a.imap.password.clone(),
                 smtp_password: a.smtp.as_ref().and_then(|s| s.password.clone()),
                 proxy_token: a.proxy.token.clone(),
+                oauth2_tokens: a.oauth2.as_ref().map(|o| o.tokens.clone()),
             })
             .collect(),
     }
@@ -163,6 +166,11 @@ pub fn apply_secrets(accounts: &mut [AccountConfig], payload: &SecretsPayload) {
                 smtp.password = s.smtp_password.clone();
             }
             acc.proxy.token = s.proxy_token.clone();
+            if let Some(oauth) = acc.oauth2.as_mut()
+                && let Some(tokens) = s.oauth2_tokens.clone()
+            {
+                oauth.tokens = tokens;
+            }
         }
     }
 }
@@ -469,6 +477,8 @@ mod tests {
             email: format!("{id}@example.com"),
             identities: Vec::new(),
             signature: None,
+            auth_kind: crate::account_config::AuthKind::Password,
+            oauth2: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),
                 993,
@@ -518,6 +528,46 @@ mod tests {
             Some("smtp-secret")
         );
         assert_eq!(restored.proxy.token, "proxy-token");
+    }
+
+    #[test]
+    fn extract_and_apply_roundtrip_oauth_tokens() {
+        let mut original = sample("a1", "", None, "proxy-token");
+        original.auth_kind = crate::account_config::AuthKind::Oauth2;
+        original.oauth2 = Some(crate::account_config::Oauth2Settings {
+            provider: crate::account_config::Oauth2Provider::Google,
+            client_id: "cid".into(),
+            tenant: None,
+            tokens: crate::account_config::Oauth2Tokens {
+                access_token: "ya29.secret".into(),
+                refresh_token: Some("1//refresh".into()),
+                expires_at: None,
+            },
+        });
+        let payload = extract_secrets(std::slice::from_ref(&original));
+        assert_eq!(
+            payload.accounts[0]
+                .oauth2_tokens
+                .as_ref()
+                .map(|t| t.access_token.as_str()),
+            Some("ya29.secret")
+        );
+        let mut restored = original.clone();
+        restored.redact_secrets();
+        assert!(
+            restored
+                .oauth2
+                .as_ref()
+                .is_some_and(|o| o.tokens.access_token.is_empty())
+        );
+        apply_secrets(std::slice::from_mut(&mut restored), &payload);
+        assert_eq!(
+            restored
+                .oauth2
+                .as_ref()
+                .map(|o| o.tokens.access_token.as_str()),
+            Some("ya29.secret")
+        );
     }
 
     #[test]

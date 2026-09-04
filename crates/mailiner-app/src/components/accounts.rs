@@ -10,15 +10,15 @@ use crate::AppBootstrapState;
 use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, AccountIdentity, DEFAULT_SMTP_PORT, ImapTlsMode, SmtpTlsMode, dev_form_prefill,
-    extra_ca_pems_to_text, imap_tls_mode_from_legacy,
+    AccountConfig, AccountIdentity, AuthKind, DEFAULT_SMTP_PORT, ImapTlsMode, Oauth2Provider,
+    Oauth2Tokens, SmtpTlsMode, dev_form_prefill, extra_ca_pems_to_text, imap_tls_mode_from_legacy,
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountIdentitiesFields, AccountSignatureFields, AccountSmtpFields,
-    AccountTlsFields, FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome,
-    build_config_from_form, credentials_changed, kind_label, provide_lookup_edit_guard,
-    start_smtp_test, use_form_test_status_cleanup,
+    AccountConnectionFields, AccountIdentitiesFields, AccountOauthFields, AccountSignatureFields,
+    AccountSmtpFields, AccountTlsFields, FormAuth, FormPhase, FormStatusBanner, StatusMessage,
+    apply_form_auth, apply_smtp_test_outcome, build_config_from_form, credentials_changed,
+    kind_label, provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -1062,6 +1062,11 @@ pub fn AccountNewPage() -> Element {
     let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
+    let mut auth_kind = use_signal(|| AuthKind::Password);
+    let mut oauth_provider = use_signal(|| Oauth2Provider::Google);
+    let mut oauth_client_id = use_signal(String::new);
+    let mut oauth_tenant = use_signal(String::new);
+    let mut oauth_tokens = use_signal(|| None::<Oauth2Tokens>);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -1156,6 +1161,13 @@ pub fn AccountNewPage() -> Element {
     });
 
     let busy = !matches!(phase(), FormPhase::Idle);
+    let current_auth = move || FormAuth {
+        kind: auth_kind(),
+        provider: oauth_provider(),
+        client_id: oauth_client_id(),
+        tenant: oauth_tenant(),
+        tokens: oauth_tokens(),
+    };
 
     let on_test = move |_| {
         if busy {
@@ -1186,6 +1198,7 @@ pub fn AccountNewPage() -> Element {
             &extra_ca_pems(),
             Utc::now(),
         )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         {
             Ok(config) => {
@@ -1234,6 +1247,7 @@ pub fn AccountNewPage() -> Element {
                 &extra_ca_pems(),
                 Utc::now(),
             )
+            .and_then(|c| apply_form_auth(c, &current_auth()))
             .and_then(|c| c.with_identities(identities())),
             phase,
             test_request_id,
@@ -1271,6 +1285,7 @@ pub fn AccountNewPage() -> Element {
             &extra_ca_pems(),
             Utc::now(),
         )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         {
             Ok(config) => {
@@ -1296,8 +1311,8 @@ pub fn AccountNewPage() -> Element {
                 h1 { class: "bootstrap-title", "Add account" }
                 p {
                     class: "bootstrap-muted",
-                    "Use your IMAP username and password (or provider app password). \
-                     OAuth sign-in is not supported yet."
+                    "Use an IMAP password (or provider app password), or sign in \
+                     with OAuth 2.0 for Gmail and Outlook."
                 }
 
                 form {
@@ -1346,6 +1361,23 @@ pub fn AccountNewPage() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                        hide_imap_password: auth_kind() == AuthKind::Oauth2,
+                    }
+
+                    AccountOauthFields {
+                        id_prefix: "account-new",
+                        auth_kind: auth_kind(),
+                        set_auth_kind: move |v| auth_kind.set(v),
+                        provider: oauth_provider(),
+                        set_provider: move |v| oauth_provider.set(v),
+                        client_id: oauth_client_id(),
+                        set_client_id: move |v| oauth_client_id.set(v),
+                        tenant: oauth_tenant(),
+                        set_tenant: move |v| oauth_tenant.set(v),
+                        tokens: oauth_tokens(),
+                        set_tokens: move |v| oauth_tokens.set(v),
+                        imap_host: imap_host(),
+                        busy: busy,
                     }
 
                     AccountTlsFields {
@@ -1472,6 +1504,11 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
     let mut open_smtp = use_signal(|| false);
+    let mut auth_kind = use_signal(|| AuthKind::Password);
+    let mut oauth_provider = use_signal(|| Oauth2Provider::Google);
+    let mut oauth_client_id = use_signal(String::new);
+    let mut oauth_tenant = use_signal(String::new);
+    let mut oauth_tokens = use_signal(|| None::<Oauth2Tokens>);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -1536,6 +1573,12 @@ pub fn AccountEditPage(id: String) -> Element {
                     extra_ca_pems.set(extra_ca_pems_to_text(&cfg.extra_ca_pems));
                     signature.set(cfg.signature.clone().unwrap_or_default());
                     identities.set(cfg.identities.clone());
+                    let loaded = FormAuth::from_config(&cfg);
+                    auth_kind.set(loaded.kind);
+                    oauth_provider.set(loaded.provider);
+                    oauth_client_id.set(loaded.client_id);
+                    oauth_tenant.set(loaded.tenant);
+                    oauth_tokens.set(loaded.tokens);
                     original.set(Some(cfg));
                     load_state.set(EditLoadState::Ready);
                 }
@@ -1709,6 +1752,13 @@ pub fn AccountEditPage(id: String) -> Element {
     }
 
     let busy = !matches!(phase(), FormPhase::Idle);
+    let current_auth = move || FormAuth {
+        kind: auth_kind(),
+        provider: oauth_provider(),
+        client_id: oauth_client_id(),
+        tenant: oauth_tenant(),
+        tokens: oauth_tokens(),
+    };
     let open_advanced = {
         let rh = remote_host();
         let rp = remote_port();
@@ -1749,6 +1799,7 @@ pub fn AccountEditPage(id: String) -> Element {
             &extra_ca_pems(),
             orig.created_at,
         )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         {
             Ok(config) => {
@@ -1800,6 +1851,7 @@ pub fn AccountEditPage(id: String) -> Element {
                 &extra_ca_pems(),
                 orig.created_at,
             )
+            .and_then(|c| apply_form_auth(c, &current_auth()))
             .and_then(|c| c.with_identities(identities())),
             phase,
             test_request_id,
@@ -1840,6 +1892,7 @@ pub fn AccountEditPage(id: String) -> Element {
             &extra_ca_pems(),
             orig.created_at,
         )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         {
             Ok(c) => c,
@@ -1960,6 +2013,23 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_smtp_open: move |v| open_smtp.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
+                        hide_imap_password: auth_kind() == AuthKind::Oauth2,
+                    }
+
+                    AccountOauthFields {
+                        id_prefix: "account-edit",
+                        auth_kind: auth_kind(),
+                        set_auth_kind: move |v| auth_kind.set(v),
+                        provider: oauth_provider(),
+                        set_provider: move |v| oauth_provider.set(v),
+                        client_id: oauth_client_id(),
+                        set_client_id: move |v| oauth_client_id.set(v),
+                        tenant: oauth_tenant(),
+                        set_tenant: move |v| oauth_tenant.set(v),
+                        tokens: oauth_tokens(),
+                        set_tokens: move |v| oauth_tokens.set(v),
+                        imap_host: imap_host(),
+                        busy: busy,
                     }
 
                     AccountTlsFields {

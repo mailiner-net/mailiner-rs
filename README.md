@@ -36,11 +36,11 @@ look like it comes from the proxy.
 
 Account settings, the local address book, and recent compose recipients are
 stored only in this browser on this device (localStorage). Mailiner has no
-server account. IMAP/SMTP passwords and proxy tokens can be encrypted at rest
-with an optional unlock passphrase (WebCrypto AES-GCM, PBKDF2-SHA-256). Without
-a passphrase they remain plaintext in origin storage. Anyone with this browser
-profile can use Mailiner while a session is unlocked; clear site data to remove
-the vault.
+server account. IMAP/SMTP passwords, OAuth tokens, and proxy tokens can be
+encrypted at rest with an optional unlock passphrase (WebCrypto AES-GCM,
+PBKDF2-SHA-256). Without a passphrase they remain plaintext in origin storage.
+Anyone with this browser profile can use Mailiner while a session is unlocked;
+clear site data to remove the vault.
 
 Incoming-mail filters (Settings → Filters) also live only in this browser. They
 run locally when a folder is opened or new mail arrives (IDLE / NOOP). Vacation
@@ -128,9 +128,30 @@ Step 3: open the app in the browser. With an empty account store you will see
 1. Enter display name and email — Mailiner looks up IMAP/SMTP (Mozilla ISPDB,
    then domain `.well-known` autoconfig, then common `imap.` / `smtp.` host
    guesses). You can edit the result.
-2. Enter IMAP password, proxy base URL and token (and optional remote overrides)
+2. Enter IMAP password, proxy base URL and token (and optional remote overrides),
+   **or** choose **OAuth 2.0** for Gmail / Outlook (see below)
 3. Optionally click **Test connection**
 4. Click **Save & continue** — Mailiner connects and authenticates first; only
    on success are settings saved and the main mail UI opened
 
 No build-time `IMAP_PASSWORD` is required.
+
+### OAuth 2.0 (Gmail and Outlook)
+
+Mailiner does **not** ship Google or Microsoft client IDs. Operators bring a
+**public** OAuth client (authorization-code + PKCE; no client secret).
+
+1. Create a Web / SPA OAuth client in Google Cloud Console or Microsoft Entra.
+2. Add the exact redirect URI shown on the account form:
+   `https://<your-origin>/oauth/callback`
+   Local `dx serve` uses `http://localhost:<port>/oauth/callback` (Google
+   allows `http://localhost`; Microsoft does too for loopback).
+3. On the account form, choose **OAuth 2.0**, pick Google or Microsoft, paste
+   the client ID (and a Microsoft tenant if you are not using `common`).
+4. Click **Sign in with Google/Microsoft**. A popup (or same-tab redirect)
+   completes consent; Mailiner stores the access and refresh tokens with the
+   account (encrypted if you set an unlock passphrase).
+5. IMAP and SMTP then authenticate with SASL **XOAUTH2**. Tokens are refreshed
+   automatically before AUTH when expired.
+
+Password / app-password login remains the default.

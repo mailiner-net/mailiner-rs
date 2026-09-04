@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, AccountIdentity, ImapSettings, ImapTlsMode, ProxySettings, SmtpTlsMode,
-    default_port_for_tls_mode, extra_ca_pems_from_text, normalize_signature,
-    optional_smtp_from_tls_mode, port_for_imap_tls_mode_change, port_for_tls_mode_change,
+    AccountConfig, AccountIdentity, AuthKind, ImapSettings, ImapTlsMode, Oauth2Provider,
+    Oauth2Settings, Oauth2Tokens, ProxySettings, SmtpTlsMode, default_port_for_tls_mode,
+    extra_ca_pems_from_text, normalize_signature, optional_smtp_from_tls_mode,
+    port_for_imap_tls_mode_change, port_for_tls_mode_change,
 };
 use crate::autodiscover::{
     DiscoverSource, DiscoveredConfig, apply_discovered, domain_from_email, lookup_servers,
@@ -17,6 +18,9 @@ use crate::autodiscover::{
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::oauth::{
+    OauthAuthorizeRequest, OauthError, complete_same_tab_signin, documented_redirect_uri,
+};
 use crate::provider_preset::{
     PresetFormFields, ProviderPreset, apply_email_change, apply_preset, matching_preset,
 };
@@ -301,9 +305,6 @@ pub fn build_config_from_form(
     if username.is_empty() {
         return Err("IMAP username is required.".into());
     }
-    if password.is_empty() {
-        return Err("IMAP password is required.".into());
-    }
     if proxy_base.is_empty() {
         return Err("Proxy base URL is required (e.g. ws://localhost:9400/proxy).".into());
     }
@@ -340,6 +341,8 @@ pub fn build_config_from_form(
         email: email.to_string(),
         identities: Vec::new(),
         signature: normalize_signature(signature),
+        auth_kind: crate::account_config::AuthKind::Password,
+        oauth2: None,
         imap: ImapSettings::new(
             host,
             port,
@@ -374,8 +377,84 @@ pub fn credentials_changed(old: &AccountConfig, new: &AccountConfig) -> bool {
         || old.imap.password != new.imap.password
         || old.imap.tls_mode != new.imap.tls_mode
         || old.imap.use_tls != new.imap.use_tls
+        || old.auth_kind != new.auth_kind
+        || old.oauth2 != new.oauth2
         || old.proxy != new.proxy
         || old.extra_ca_pems != new.extra_ca_pems
+}
+
+/// Auth fields collected by [`AccountOauthFields`].
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct FormAuth {
+    pub kind: AuthKind,
+    pub provider: Oauth2Provider,
+    pub client_id: String,
+    pub tenant: String,
+    pub tokens: Option<Oauth2Tokens>,
+}
+
+impl FormAuth {
+    pub fn password() -> Self {
+        Self::default()
+    }
+
+    pub fn from_config(config: &AccountConfig) -> Self {
+        let Some(oauth) = config.oauth2.as_ref() else {
+            return Self {
+                kind: config.auth_kind,
+                ..Self::default()
+            };
+        };
+        Self {
+            kind: config.auth_kind,
+            provider: oauth.provider,
+            client_id: oauth.client_id.clone(),
+            tenant: oauth.tenant.clone().unwrap_or_default(),
+            tokens: Some(oauth.tokens.clone()),
+        }
+    }
+}
+
+/// Attach password / OAuth2 settings after [`build_config_from_form`].
+pub fn apply_form_auth(
+    mut config: AccountConfig,
+    auth: &FormAuth,
+) -> Result<AccountConfig, String> {
+    match auth.kind {
+        AuthKind::Password => {
+            if config.imap.password.is_empty() {
+                return Err("IMAP password is required.".into());
+            }
+            config.auth_kind = AuthKind::Password;
+            config.oauth2 = None;
+            Ok(config)
+        }
+        AuthKind::Oauth2 => {
+            let client_id = auth.client_id.trim();
+            if client_id.is_empty() {
+                return Err(
+                    "OAuth client ID is required. Paste a public client ID from the provider console."
+                        .into(),
+                );
+            }
+            let tokens = auth
+                .tokens
+                .clone()
+                .filter(|t| t.access_token_nonempty())
+                .ok_or_else(|| {
+                    "Sign in with OAuth before testing or saving this account.".to_string()
+                })?;
+            let tenant = auth.tenant.trim();
+            config.auth_kind = AuthKind::Oauth2;
+            config.oauth2 = Some(Oauth2Settings {
+                provider: auth.provider,
+                client_id: client_id.to_string(),
+                tenant: (!tenant.is_empty()).then(|| tenant.to_string()),
+                tokens,
+            });
+            Ok(config)
+        }
+    }
 }
 
 /// Consume a terminal Test SMTP outcome for `rid` into the form banner.
@@ -536,6 +615,7 @@ pub fn AccountConnectionFields(
     set_smtp_open: EventHandler<bool>,
     busy: bool,
     #[props(default)] open_advanced: bool,
+    #[props(default)] hide_imap_password: bool,
 ) -> Element {
     let host_placeholder = email_to_imap_host_hint(&email);
     let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
@@ -812,14 +892,16 @@ pub fn AccountConnectionFields(
                 autocomplete: "username",
                 disabled: busy,
             }
-            FormField {
-                label: "Password",
-                id: "{id_prefix}-imap-password",
-                value: imap_password,
-                oninput: move |v| set_imap_password.call(v),
-                input_type: "password",
-                autocomplete: "current-password",
-                disabled: busy,
+            if !hide_imap_password {
+                FormField {
+                    label: "Password",
+                    id: "{id_prefix}-imap-password",
+                    value: imap_password,
+                    oninput: move |v| set_imap_password.call(v),
+                    input_type: "password",
+                    autocomplete: "current-password",
+                    disabled: busy,
+                }
             }
         }
 
@@ -905,11 +987,240 @@ pub fn AccountConnectionFields(
 
         p {
             class: "onboarding-disclosure bootstrap-muted",
-            "Your IMAP password is stored only in this browser on this device. \
-             Mailiner has no server account. Optionally protect stored passwords \
-             and proxy tokens with an unlock passphrase. Anyone with this browser \
-             profile can still use Mailiner while it is unlocked. Use a private \
-             device; clear site data to remove it."
+            "Your IMAP password or OAuth tokens are stored only in this browser \
+             on this device. Mailiner has no server account. Optionally protect \
+             stored secrets and proxy tokens with an unlock passphrase. Anyone \
+             with this browser profile can still use Mailiner while it is \
+             unlocked. Use a private device; clear site data to remove it."
+        }
+    }
+}
+
+/// Password vs OAuth 2.0 (authorization-code + PKCE).
+#[component]
+pub fn AccountOauthFields(
+    id_prefix: String,
+    auth_kind: AuthKind,
+    set_auth_kind: EventHandler<AuthKind>,
+    provider: Oauth2Provider,
+    set_provider: EventHandler<Oauth2Provider>,
+    client_id: String,
+    set_client_id: EventHandler<String>,
+    tenant: String,
+    set_tenant: EventHandler<String>,
+    tokens: Option<Oauth2Tokens>,
+    set_tokens: EventHandler<Option<Oauth2Tokens>>,
+    imap_host: String,
+    busy: bool,
+) -> Element {
+    let mut oauth_status = use_signal(|| None::<StatusMessage>);
+    let mut oauth_busy = use_signal(|| false);
+    let redirect_uri = use_hook(documented_redirect_uri);
+    let signed_in = tokens
+        .as_ref()
+        .is_some_and(Oauth2Tokens::access_token_nonempty);
+
+    // Same-tab return after popup fallback.
+    use_future(move || async move {
+        match complete_same_tab_signin().await {
+            Ok(Some(tokens)) => {
+                set_tokens.call(Some(tokens));
+                oauth_status.set(Some(StatusMessage::success(
+                    "Signed in with OAuth. You can test or save.",
+                )));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                oauth_status.set(Some(StatusMessage::error("OAuth", e.user_message())));
+            }
+        }
+    });
+
+    let inferred = Oauth2Provider::from_imap_host(&imap_host);
+    let show_tenant = provider == Oauth2Provider::Microsoft;
+    let sign_in_label = match provider {
+        Oauth2Provider::Google => "Sign in with Google",
+        Oauth2Provider::Microsoft => "Sign in with Microsoft",
+    };
+
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "Sign-in" }
+            p {
+                class: "bootstrap-muted",
+                "Password login is the default. OAuth 2.0 (XOAUTH2) is available \
+                 for Gmail and Outlook / Microsoft 365. Mailiner does not ship a \
+                 client ID — paste a public client ID from the provider console \
+                 and register the redirect URI below."
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "{id_prefix}-auth-kind", "Method" }
+                select {
+                    id: "{id_prefix}-auth-kind",
+                    name: "{id_prefix}-auth-kind",
+                    value: auth_kind.as_form_value(),
+                    disabled: busy || oauth_busy(),
+                    onchange: move |e| {
+                        set_auth_kind.call(AuthKind::from_form_value(&e.value()));
+                    },
+                    option {
+                        value: "password",
+                        selected: auth_kind == AuthKind::Password,
+                        "Password / app password"
+                    }
+                    option {
+                        value: "oauth2",
+                        selected: auth_kind == AuthKind::Oauth2,
+                        "OAuth 2.0 (XOAUTH2)"
+                    }
+                }
+            }
+            if auth_kind == AuthKind::Oauth2 {
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "{id_prefix}-oauth-provider", "Provider" }
+                    select {
+                        id: "{id_prefix}-oauth-provider",
+                        name: "{id_prefix}-oauth-provider",
+                        value: provider.as_key(),
+                        disabled: busy || oauth_busy(),
+                        onchange: move |e| {
+                            set_provider.call(Oauth2Provider::from_key(&e.value()));
+                        },
+                        option {
+                            value: "google",
+                            selected: provider == Oauth2Provider::Google,
+                            "{Oauth2Provider::Google.label()}"
+                        }
+                        option {
+                            value: "microsoft",
+                            selected: provider == Oauth2Provider::Microsoft,
+                            "{Oauth2Provider::Microsoft.label()}"
+                        }
+                    }
+                }
+                if let Some(hint) = inferred {
+                    if hint != provider {
+                        p {
+                            class: "bootstrap-muted",
+                            "IMAP host looks like {hint.label()}."
+                        }
+                    }
+                }
+                FormField {
+                    label: "OAuth client ID",
+                    id: "{id_prefix}-oauth-client-id",
+                    value: client_id.clone(),
+                    oninput: move |v| set_client_id.call(v),
+                    placeholder: "Paste a public client ID",
+                    autocomplete: "off",
+                    disabled: busy || oauth_busy(),
+                }
+                if show_tenant {
+                    FormField {
+                        label: "Microsoft tenant (optional)",
+                        id: "{id_prefix}-oauth-tenant",
+                        value: tenant.clone(),
+                        oninput: move |v| set_tenant.call(v),
+                        placeholder: "common",
+                        autocomplete: "off",
+                        disabled: busy || oauth_busy(),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "{id_prefix}-oauth-redirect", "Redirect URI" }
+                    input {
+                        id: "{id_prefix}-oauth-redirect",
+                        name: "{id_prefix}-oauth-redirect",
+                        r#type: "text",
+                        value: "{redirect_uri}",
+                        readonly: true,
+                        autocomplete: "off",
+                    }
+                    p {
+                        class: "bootstrap-muted onboarding-preset-hint",
+                        "Register this exact URI on the OAuth client (Web / SPA, \
+                         public client, PKCE). Local dx serve uses http://localhost \
+                         with the serve port."
+                    }
+                }
+                div {
+                    class: "onboarding-lookup-row",
+                    button {
+                        r#type: "button",
+                        class: "onboarding-btn onboarding-btn-secondary",
+                        disabled: busy || oauth_busy(),
+                        onclick: {
+                            let client_id = client_id.clone();
+                            let tenant = tenant.clone();
+                            move |_| {
+                                if oauth_busy() {
+                                    return;
+                                }
+                                let req = OauthAuthorizeRequest {
+                                    provider,
+                                    client_id: client_id.clone(),
+                                    tenant: {
+                                        let t = tenant.trim();
+                                        if t.is_empty() { None } else { Some(t.to_string()) }
+                                    },
+                                    redirect_uri: documented_redirect_uri(),
+                                    return_path: None,
+                                };
+                                oauth_busy.set(true);
+                                oauth_status.set(Some(StatusMessage::info(
+                                    "Complete sign-in in the popup…",
+                                )));
+                                spawn(async move {
+                                    #[cfg(target_arch = "wasm32")]
+                                    let result = crate::oauth::sign_in_with_popup(&req).await;
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    let result: Result<Oauth2Tokens, OauthError> = {
+                                        let _ = req;
+                                        Err(OauthError::BrowserOnly)
+                                    };
+                                    oauth_busy.set(false);
+                                    match result {
+                                        Ok(tokens) => {
+                                            set_tokens.call(Some(tokens));
+                                            oauth_status.set(Some(StatusMessage::success(
+                                                "Signed in with OAuth. You can test or save.",
+                                            )));
+                                        }
+                                        Err(OauthError::Cancelled) => {
+                                            oauth_status.set(Some(StatusMessage::info(
+                                                "OAuth sign-in was cancelled.",
+                                            )));
+                                        }
+                                        Err(e) => {
+                                            oauth_status.set(Some(StatusMessage::error(
+                                                "OAuth",
+                                                e.user_message(),
+                                            )));
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                        if oauth_busy() {
+                            "Signing in…"
+                        } else {
+                            "{sign_in_label}"
+                        }
+                    }
+                    if signed_in {
+                        p {
+                            class: "bootstrap-muted onboarding-lookup-status",
+                            role: "status",
+                            "Signed in. Access token is stored with this account."
+                        }
+                    }
+                }
+                FormStatusBanner { message: oauth_status() }
+            }
         }
     }
 }
@@ -1618,6 +1929,72 @@ nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
         )
         .unwrap_err();
         assert!(err.contains("Extra CA certificates"), "{err}");
+    }
+
+    #[test]
+    fn apply_form_auth_password_requires_password() {
+        let mut cfg = form("smtp.example.com", "", "").unwrap();
+        cfg.imap.password.clear();
+        let err = apply_form_auth(cfg, &FormAuth::password()).unwrap_err();
+        assert!(err.contains("IMAP password"), "{err}");
+    }
+
+    #[test]
+    fn apply_form_auth_oauth_requires_client_and_tokens() {
+        let cfg = form("smtp.example.com", "", "").unwrap();
+        let err = apply_form_auth(
+            cfg.clone(),
+            &FormAuth {
+                kind: AuthKind::Oauth2,
+                provider: Oauth2Provider::Google,
+                client_id: String::new(),
+                tenant: String::new(),
+                tokens: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("client ID"), "{err}");
+
+        let err = apply_form_auth(
+            cfg,
+            &FormAuth {
+                kind: AuthKind::Oauth2,
+                provider: Oauth2Provider::Google,
+                client_id: "cid".into(),
+                tenant: String::new(),
+                tokens: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("Sign in with OAuth"), "{err}");
+    }
+
+    #[test]
+    fn apply_form_auth_oauth_stores_tokens() {
+        let cfg = apply_form_auth(
+            form("smtp.example.com", "", "").unwrap(),
+            &FormAuth {
+                kind: AuthKind::Oauth2,
+                provider: Oauth2Provider::Google,
+                client_id: "cid.apps.googleusercontent.com".into(),
+                tenant: String::new(),
+                tokens: Some(Oauth2Tokens {
+                    access_token: "ya29.a".into(),
+                    refresh_token: Some("1//r".into()),
+                    expires_at: None,
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.auth_kind, AuthKind::Oauth2);
+        assert_eq!(
+            cfg.oauth2.as_ref().map(|o| o.client_id.as_str()),
+            Some("cid.apps.googleusercontent.com")
+        );
+        assert_eq!(
+            cfg.oauth2.as_ref().map(|o| o.tokens.access_token.as_str()),
+            Some("ya29.a")
+        );
     }
 
     #[test]

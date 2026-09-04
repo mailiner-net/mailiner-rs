@@ -9,14 +9,15 @@ use futures_channel::oneshot;
 use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
 use mailiner_core::submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
-use mailiner_smtp_connector::{SmtpConnector, SmtpError};
+use mailiner_smtp_connector::{SmtpAuthKind, SmtpConnector, SmtpError};
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, SmtpTlsMode, ehlo_domain, smtp_password, smtp_username,
+    AccountConfig, AuthKind, SmtpTlsMode, ehlo_domain, smtp_auth_secret, smtp_username,
 };
 use crate::connection::CONNECT_TIMEOUT_MS;
 use crate::core_event::CoreEvent;
+use crate::oauth;
 use crate::outbox_store::OutboxId;
 use crate::websocket_stream::WebSocketStream;
 
@@ -115,8 +116,10 @@ async fn run_submit(
     timeout_ms: u32,
 ) -> Result<SubmitReceipt, ClassifiedSendError> {
     let work = async {
+        let mut config = config;
+        prepare_oauth(&mut config).await?;
         let (connector, stream, mode) = open_stream(&config).await?;
-        let password = smtp_password(&config);
+        let secret = smtp_auth_secret(&config);
         match mode {
             SmtpTlsMode::Implicit => {
                 let tls = connector
@@ -124,18 +127,18 @@ async fn run_submit(
                     .await
                     .map_err(ClassifiedSendError::from)?;
                 connector
-                    .submit(tls, &password, &request)
+                    .submit(tls, &secret, &request)
                     .await
                     .map_err(ClassifiedSendError::from)
             }
             SmtpTlsMode::StartTls => connector
-                .submit_starttls(stream, &password, &request)
+                .submit_starttls(stream, &secret, &request)
                 .await
                 .map_err(ClassifiedSendError::from),
             SmtpTlsMode::None => {
                 info!(host = %connector.host(), "SMTP plaintext");
                 connector
-                    .submit(stream, &password, &request)
+                    .submit(stream, &secret, &request)
                     .await
                     .map_err(ClassifiedSendError::from)
             }
@@ -149,8 +152,10 @@ async fn run_test(
     cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(), ClassifiedSendError> {
     let work = async {
+        let mut config = config;
+        prepare_oauth(&mut config).await?;
         let (connector, stream, mode) = open_stream(&config).await?;
-        let password = smtp_password(&config);
+        let secret = smtp_auth_secret(&config);
         match mode {
             SmtpTlsMode::Implicit => {
                 let tls = connector
@@ -158,18 +163,18 @@ async fn run_test(
                     .await
                     .map_err(ClassifiedSendError::from)?;
                 connector
-                    .test(tls, &password)
+                    .test(tls, &secret)
                     .await
                     .map_err(ClassifiedSendError::from)
             }
             SmtpTlsMode::StartTls => connector
-                .test_starttls(stream, &password)
+                .test_starttls(stream, &secret)
                 .await
                 .map_err(ClassifiedSendError::from),
             SmtpTlsMode::None => {
                 info!(host = %connector.host(), "SMTP plaintext");
                 connector
-                    .test(stream, &password)
+                    .test(stream, &secret)
                     .await
                     .map_err(ClassifiedSendError::from)
             }
@@ -211,6 +216,11 @@ async fn open_stream(
             message: e.to_string(),
         })?;
 
+    let auth_kind = if config.auth_kind == AuthKind::Oauth2 {
+        SmtpAuthKind::Xoauth2
+    } else {
+        SmtpAuthKind::Password
+    };
     let connector = SmtpConnector::new(
         config.id.clone(),
         smtp.host.clone(),
@@ -218,8 +228,22 @@ async fn open_stream(
         smtp_username(config),
         ehlo_domain(config),
     )
+    .with_auth_kind(auth_kind)
     .with_extra_ca_pems(config.extra_ca_pems.clone());
     Ok((connector, stream, smtp.tls_mode))
+}
+
+async fn prepare_oauth(config: &mut AccountConfig) -> Result<(), ClassifiedSendError> {
+    if !config.uses_oauth2() {
+        return Ok(());
+    }
+    oauth::ensure_fresh_oauth(config)
+        .await
+        .map(|_| ())
+        .map_err(|e| ClassifiedSendError {
+            kind: SendErrorKind::Auth,
+            message: e.user_message().to_string(),
+        })
 }
 
 async fn race<T, F>(
@@ -267,6 +291,8 @@ mod tests {
             email: "user@example.com".into(),
             identities: Vec::new(),
             signature: None,
+            auth_kind: crate::account_config::AuthKind::Password,
+            oauth2: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),
                 993,

@@ -150,6 +150,136 @@ pub fn normalize_identities(
     Ok(out)
 }
 
+/// How IMAP/SMTP authenticate. Missing on older blobs → password.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthKind {
+    #[default]
+    Password,
+    Oauth2,
+}
+
+impl AuthKind {
+    pub fn is_password(&self) -> bool {
+        matches!(self, Self::Password)
+    }
+
+    pub fn as_form_value(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::Oauth2 => "oauth2",
+        }
+    }
+
+    pub fn from_form_value(value: &str) -> Self {
+        match value {
+            "oauth2" => Self::Oauth2,
+            _ => Self::Password,
+        }
+    }
+}
+
+/// OAuth2 identity provider. Mailiner does not ship client IDs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Oauth2Provider {
+    #[default]
+    Google,
+    Microsoft,
+}
+
+impl Oauth2Provider {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::Microsoft => "microsoft",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Google => "Google (Gmail)",
+            Self::Microsoft => "Microsoft (Outlook / 365)",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "microsoft" => Self::Microsoft,
+            _ => Self::Google,
+        }
+    }
+
+    /// Guess from a documented IMAP host, if any.
+    pub fn from_imap_host(host: &str) -> Option<Self> {
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        if host == "imap.gmail.com" || host.ends_with(".gmail.com") {
+            return Some(Self::Google);
+        }
+        if host == "outlook.office365.com"
+            || host == "imap-mail.outlook.com"
+            || host.ends_with(".office365.com")
+            || host.ends_with(".outlook.com")
+        {
+            return Some(Self::Microsoft);
+        }
+        None
+    }
+}
+
+/// Bearer tokens for XOAUTH2. `Debug` redacts the secrets.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Oauth2Tokens {
+    pub access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl Oauth2Tokens {
+    pub fn access_token_nonempty(&self) -> bool {
+        !self.access_token.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.access_token.clear();
+        self.refresh_token = None;
+        self.expires_at = None;
+    }
+}
+
+impl fmt::Debug for Oauth2Tokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Oauth2Tokens")
+            .field("access_token", &"***")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "***"))
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// User-supplied public client plus stored tokens.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Oauth2Settings {
+    pub provider: Oauth2Provider,
+    pub client_id: String,
+    /// Microsoft tenant (`common`, `organizations`, `consumers`, or a GUID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+    pub tokens: Oauth2Tokens,
+}
+
+impl Oauth2Settings {
+    pub fn tenant_or_common(&self) -> &str {
+        self.tenant
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or("common")
+    }
+}
+
 /// Full account configuration including connection secrets.
 ///
 /// `Debug` is derived; secret-bearing nested fields implement redacting `Debug`
@@ -167,6 +297,12 @@ pub struct AccountConfig {
     /// Optional plain-text signature appended when opening a compose draft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Password (default) or OAuth2 / XOAUTH2.
+    #[serde(default, skip_serializing_if = "AuthKind::is_password")]
+    pub auth_kind: AuthKind,
+    /// Present when [`Self::auth_kind`] is [`AuthKind::Oauth2`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2: Option<Oauth2Settings>,
     pub imap: ImapSettings,
     /// Optional until send is implemented; persisted for forward-compat.
     pub smtp: Option<SmtpSettings>,
@@ -680,8 +816,16 @@ impl AccountConfig {
         if let Some(smtp) = self.smtp.as_mut() {
             smtp.password = None;
         }
+        if let Some(oauth) = self.oauth2.as_mut() {
+            oauth.tokens.clear();
+        }
         self.proxy.token.clear();
         self.proxy.base_url = strip_embedded_proxy_secrets(&self.proxy.base_url);
+    }
+
+    /// True when this account authenticates with a stored OAuth2 access token.
+    pub fn uses_oauth2(&self) -> bool {
+        self.auth_kind == AuthKind::Oauth2
     }
 
     /// Clone with IMAP/SMTP passwords and the proxy token removed.
@@ -903,6 +1047,30 @@ pub fn smtp_password(config: &AccountConfig) -> String {
     config.imap.password.clone()
 }
 
+/// Secret passed to IMAP AUTH: OAuth access token or the IMAP password.
+pub fn imap_auth_secret(config: &AccountConfig) -> String {
+    if config.uses_oauth2() {
+        return config
+            .oauth2
+            .as_ref()
+            .map(|o| o.tokens.access_token.clone())
+            .unwrap_or_default();
+    }
+    config.imap.password.clone()
+}
+
+/// Secret passed to SMTP AUTH: OAuth access token or [`smtp_password`].
+pub fn smtp_auth_secret(config: &AccountConfig) -> String {
+    if config.uses_oauth2() {
+        return config
+            .oauth2
+            .as_ref()
+            .map(|o| o.tokens.access_token.clone())
+            .unwrap_or_default();
+    }
+    smtp_password(config)
+}
+
 /// EHLO domain: account email domain, else `smtp.host`. Never `127.0.0.1`.
 pub fn ehlo_domain(config: &AccountConfig) -> String {
     if let Some((_, domain)) = config.email.rsplit_once('@') {
@@ -1037,6 +1205,8 @@ mod tests {
             email: "user@example.com".into(),
             identities: Vec::new(),
             signature: None,
+            auth_kind: AuthKind::Password,
+            oauth2: None,
             imap: sample_imap(),
             smtp: None,
             proxy: sample_proxy(),
@@ -1308,6 +1478,114 @@ mod tests {
         assert_eq!(ui.host, config.imap.host);
         assert!(ui.signature.is_none());
         assert!(ui.identities.is_empty());
+    }
+
+    #[test]
+    fn serde_auth_kind_defaults_to_password() {
+        let json = serde_json::to_string(&sample_config()).unwrap();
+        assert!(
+            !json.contains("auth_kind"),
+            "password default should be omitted: {json}"
+        );
+        let old = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "display_name": "Work",
+            "email": "user@example.com",
+            "imap": {
+                "host": "imap.example.com",
+                "port": 993,
+                "username": "user@example.com",
+                "password": "s3cret",
+                "use_tls": true
+            },
+            "smtp": null,
+            "proxy": {
+                "base_url": "ws://localhost:9400/proxy",
+                "token": "testtoken",
+                "remote_host": null,
+                "remote_port": null
+            },
+            "created_at": "2024-06-15T12:00:00Z",
+            "updated_at": "2024-06-15T12:00:00Z"
+        }"#;
+        let back: AccountConfig = serde_json::from_str(old).unwrap();
+        assert_eq!(back.auth_kind, AuthKind::Password);
+        assert!(back.oauth2.is_none());
+    }
+
+    #[test]
+    fn serde_roundtrip_oauth2_auth_kind() {
+        let mut config = sample_config();
+        config.auth_kind = AuthKind::Oauth2;
+        config.oauth2 = Some(Oauth2Settings {
+            provider: Oauth2Provider::Google,
+            client_id: "public-client.apps.googleusercontent.com".into(),
+            tenant: None,
+            tokens: Oauth2Tokens {
+                access_token: "ya29.secret".into(),
+                refresh_token: Some("1//refresh".into()),
+                expires_at: Some(Utc.with_ymd_and_hms(2026, 9, 4, 12, 0, 0).unwrap()),
+            },
+        });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"auth_kind\":\"oauth2\""));
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auth_kind, AuthKind::Oauth2);
+        assert_eq!(
+            back.oauth2.as_ref().map(|o| o.client_id.as_str()),
+            Some("public-client.apps.googleusercontent.com")
+        );
+        assert_eq!(
+            back.oauth2.as_ref().map(|o| o.tokens.access_token.as_str()),
+            Some("ya29.secret")
+        );
+    }
+
+    #[test]
+    fn debug_redacts_oauth_tokens() {
+        let mut config = sample_config();
+        config.auth_kind = AuthKind::Oauth2;
+        config.oauth2 = Some(Oauth2Settings {
+            provider: Oauth2Provider::Microsoft,
+            client_id: "client-id".into(),
+            tenant: Some("common".into()),
+            tokens: Oauth2Tokens {
+                access_token: "access-secret-token".into(),
+                refresh_token: Some("refresh-secret-token".into()),
+                expires_at: None,
+            },
+        });
+        let dbg = format!("{config:?}");
+        assert!(!dbg.contains("access-secret-token"), "access leaked: {dbg}");
+        assert!(
+            !dbg.contains("refresh-secret-token"),
+            "refresh leaked: {dbg}"
+        );
+        assert!(dbg.contains("access_token: \"***\""), "{dbg}");
+    }
+
+    #[test]
+    fn without_secrets_redacts_oauth_tokens() {
+        let mut config = sample_config();
+        config.auth_kind = AuthKind::Oauth2;
+        config.oauth2 = Some(Oauth2Settings {
+            provider: Oauth2Provider::Google,
+            client_id: "client-id".into(),
+            tenant: None,
+            tokens: Oauth2Tokens {
+                access_token: "ya29.secret".into(),
+                refresh_token: Some("1//refresh".into()),
+                expires_at: None,
+            },
+        });
+        let redacted = config.without_secrets();
+        let tokens = &redacted.oauth2.as_ref().unwrap().tokens;
+        assert!(tokens.access_token.is_empty());
+        assert!(tokens.refresh_token.is_none());
+        assert_eq!(redacted.oauth2.as_ref().unwrap().client_id, "client-id");
+        let json = serde_json::to_string(&redacted).unwrap();
+        assert!(!json.contains("ya29.secret"), "{json}");
+        assert!(!json.contains("1//refresh"), "{json}");
     }
 
     #[test]

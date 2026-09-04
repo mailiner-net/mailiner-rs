@@ -25,6 +25,7 @@ pub mod message;
 pub mod message_list_filter;
 pub mod message_loader;
 pub mod notifications;
+pub mod oauth;
 pub mod object_cache;
 pub mod offline_cache;
 pub mod outbox_store;

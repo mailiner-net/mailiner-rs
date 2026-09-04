@@ -1,7 +1,6 @@
 //! Structure → parse → selective FETCH → TE decode pipeline.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use mailiner_core::connector::EmailConnector;
@@ -9,7 +8,6 @@ use mailiner_core::error::{MailinerError, Result};
 use mailiner_core::ids::{FolderId, MessageId};
 use mailiner_core::models::{LoadedMessage, MessageContent, MessagePart};
 use mailiner_mime::{MessageParser, decode_part_content};
-use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Skip prefetch when BODYSTRUCTURE size exceeds this (wire octets).
 pub(crate) const MAX_PREFETCH_OCTETS: u64 = 2 * 1024 * 1024;
@@ -132,15 +130,11 @@ impl LoadedMessageCache {
 }
 
 /// Load a message: BODYSTRUCTURE → parse parts → FETCH content sections → decode.
-pub async fn load_message<S, C>(
+pub async fn load_message<C: EmailConnector>(
     connector: &C,
     folder_id: &FolderId,
     message_id: &MessageId,
-) -> Result<LoadedMessage>
-where
-    C: EmailConnector<S>,
-    S: AsyncRead + AsyncWrite + Unpin + Debug + Send + Sync,
-{
+) -> Result<LoadedMessage> {
     let structure = connector.get_body_structure(folder_id, message_id).await?;
     let parser = MessageParser::with_defaults();
     let mut parts = parser.parse(message_id, &structure);
@@ -210,38 +204,6 @@ mod tests {
     use super::*;
     use mailiner_core::connector::MockConnector;
     use mailiner_core::models::PartKind;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use tokio::io::ReadBuf;
-
-    #[derive(Debug)]
-    struct NullStream;
-
-    impl AsyncRead for NullStream {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    impl AsyncWrite for NullStream {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
-            Poll::Ready(Ok(buf.len()))
-        }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
@@ -255,7 +217,7 @@ mod tests {
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
         let msg = MessageId::new(folder.clone(), "1");
-        let loaded = block_on(load_message::<NullStream, _>(&connector, &folder, &msg)).unwrap();
+        let loaded = block_on(load_message(&connector, &folder, &msg)).unwrap();
 
         assert_eq!(loaded.envelope_id, msg);
         // Prefetched content: plain + html (not the pdf attachment).
@@ -282,7 +244,7 @@ mod tests {
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
         let msg = MessageId::new(folder.clone(), "42");
-        let loaded = block_on(load_message::<NullStream, _>(&connector, &folder, &msg)).unwrap();
+        let loaded = block_on(load_message(&connector, &folder, &msg)).unwrap();
 
         for p in loaded.attachments() {
             assert!(matches!(p.content, MessageContent::Empty));

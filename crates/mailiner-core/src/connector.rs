@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -7,7 +6,6 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::stream::{self, Stream};
-use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::body::{BodyPart, ContentDisposition};
 use crate::error::Result;
@@ -27,12 +25,12 @@ const MOCK_FOLDER_DELIMITER: &str = "/";
 /// Stream of transfer-encoded part chunks (attachment download).
 pub type PartStream = Pin<Box<dyn Stream<Item = Result<PartChunk>> + Send>>;
 
+/// Live mail session: folders, envelopes, FETCH.
+///
+/// Not generic on the transport. `connect(stream)` lives on the concrete
+/// connector (`ImapConnector::connect`) so list/fetch/stream do not carry `S`.
 #[async_trait]
-pub trait EmailConnector<S>: Send + Sync
-where
-    S: AsyncRead + AsyncWrite + Unpin + Debug + Send + Sync,
-{
-    async fn connect(&self, stream: S) -> Result<()>;
+pub trait EmailConnector: Send + Sync {
     async fn disconnect(&self) -> Result<()>;
 
     // Account operations
@@ -368,14 +366,7 @@ impl Default for MockConnector {
 }
 
 #[async_trait]
-impl<S> EmailConnector<S> for MockConnector
-where
-    S: AsyncRead + AsyncWrite + Unpin + Debug + Send + Sync + 'static,
-{
-    async fn connect(&self, _stream: S) -> Result<()> {
-        Ok(())
-    }
-
+impl EmailConnector for MockConnector {
     async fn disconnect(&self) -> Result<()> {
         Ok(())
     }
@@ -689,38 +680,6 @@ pub fn mock_text_part(envelope_id: MessageId, part_id: &str, text: &str) -> Mess
 mod tests {
     use super::*;
     use crate::models::LoadedMessage;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-    #[derive(Debug)]
-    struct NoopStream;
-
-    impl AsyncRead for NoopStream {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-            _: &mut ReadBuf<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    impl AsyncWrite for NoopStream {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<std::io::Result<usize>> {
-            Poll::Ready(Ok(buf.len()))
-        }
-        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-    }
 
     fn mock() -> MockConnector {
         MockConnector::new()
@@ -730,13 +689,9 @@ mod tests {
     fn mock_create_folder_joins_parent() {
         let account = AccountId::new("mock-account-1");
         let parent = FolderId::new("INBOX");
-        let folder = futures::executor::block_on(EmailConnector::<NoopStream>::create_folder(
-            &mock(),
-            &account,
-            "Work",
-            Some(&parent),
-        ))
-        .unwrap();
+        let folder =
+            futures::executor::block_on(mock().create_folder(&account, "Work", Some(&parent)))
+                .unwrap();
         assert_eq!(folder.id.as_str(), "INBOX/Work");
         assert_eq!(folder.name, "Work");
         assert_eq!(
@@ -749,23 +704,16 @@ mod tests {
     #[test]
     fn mock_create_folder_rejects_delimiter() {
         let account = AccountId::new("mock-account-1");
-        let err = futures::executor::block_on(EmailConnector::<NoopStream>::create_folder(
-            &mock(),
-            &account,
-            "foo/bar",
-            None,
-        ))
-        .unwrap_err();
+        let err = futures::executor::block_on(mock().create_folder(&account, "foo/bar", None))
+            .unwrap_err();
         assert!(err.to_string().contains("hierarchy separator"));
     }
 
     #[test]
     fn mock_rename_folder_replaces_leaf() {
-        let folder = futures::executor::block_on(EmailConnector::<NoopStream>::rename_folder(
-            &mock(),
-            &FolderId::new("INBOX/Work"),
-            "Archive",
-        ))
+        let folder = futures::executor::block_on(
+            mock().rename_folder(&FolderId::new("INBOX/Work"), "Archive"),
+        )
         .unwrap();
         assert_eq!(folder.id.as_str(), "INBOX/Archive");
         assert_eq!(folder.name, "Archive");
@@ -777,85 +725,34 @@ mod tests {
 
     #[test]
     fn mock_rename_folder_refuses_inbox_target() {
-        let err = futures::executor::block_on(EmailConnector::<NoopStream>::rename_folder(
-            &mock(),
-            &FolderId::new("Archive"),
-            "INBOX",
-        ))
-        .unwrap_err();
+        let err =
+            futures::executor::block_on(mock().rename_folder(&FolderId::new("Archive"), "INBOX"))
+                .unwrap_err();
         assert!(err.to_string().contains("Inbox"));
     }
 
     #[test]
     fn mock_delete_folder_refuses_inbox() {
-        let err = futures::executor::block_on(EmailConnector::<NoopStream>::delete_folder(
-            &mock(),
-            &FolderId::new("INBOX"),
-        ))
-        .unwrap_err();
+        let err =
+            futures::executor::block_on(mock().delete_folder(&FolderId::new("INBOX"))).unwrap_err();
         assert!(err.to_string().contains("Inbox"));
         assert!(
-            futures::executor::block_on(EmailConnector::<NoopStream>::delete_folder(
-                &mock(),
-                &FolderId::new("Archive"),
-            ))
-            .is_ok()
+            futures::executor::block_on(mock().delete_folder(&FolderId::new("Archive"))).is_ok()
         );
     }
 
     #[test]
     fn mock_set_folder_subscribed_succeeds() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-        #[derive(Debug)]
-        struct NoopStream;
-
-        impl AsyncRead for NoopStream {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                _: &mut ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
-        impl AsyncWrite for NoopStream {
-            fn poll_write(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                buf: &[u8],
-            ) -> Poll<std::io::Result<usize>> {
-                Poll::Ready(Ok(buf.len()))
-            }
-            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-            fn poll_shutdown(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
         let connector = MockConnector::new();
         let folder = FolderId::new("lists");
-        let result = futures::executor::block_on(
-            EmailConnector::<NoopStream>::set_folder_subscribed(&connector, &folder, false),
-        );
+        let result = futures::executor::block_on(connector.set_folder_subscribed(&folder, false));
         assert!(result.is_ok());
     }
 
     #[test]
     fn mock_empty_folder_succeeds() {
         let folder = FolderId::new("trash");
-        let result = futures::executor::block_on(EmailConnector::<NoopStream>::empty_folder(
-            &mock(),
-            &folder,
-        ));
+        let result = futures::executor::block_on(mock().empty_folder(&folder));
         assert!(result.is_ok());
     }
 
@@ -865,10 +762,8 @@ mod tests {
         let from = FolderId::new("inbox");
         let to = FolderId::new("archive");
         let ids = [MessageId::new(from.clone(), "1")];
-        let dest = futures::executor::block_on(EmailConnector::<NoopStream>::copy_messages(
-            &connector, &from, &ids, &to,
-        ))
-        .expect("copy");
+        let dest =
+            futures::executor::block_on(connector.copy_messages(&from, &ids, &to)).expect("copy");
         assert!(dest.is_empty());
     }
 
@@ -877,10 +772,7 @@ mod tests {
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
         let id = MessageId::new(folder.clone(), "1");
-        let bytes = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_raw_message(
-            &connector, &folder, &id,
-        ))
-        .unwrap();
+        let bytes = futures::executor::block_on(connector.fetch_raw_message(&folder, &id)).unwrap();
         assert_eq!(bytes, mock_rfc822());
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("Subject: Test Message"));
@@ -898,50 +790,12 @@ mod tests {
 
     #[test]
     fn mock_header_section_is_rfc5322() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-        #[derive(Debug)]
-        struct NoopStream;
-
-        impl AsyncRead for NoopStream {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                _: &mut ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
-        impl AsyncWrite for NoopStream {
-            fn poll_write(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                buf: &[u8],
-            ) -> Poll<std::io::Result<usize>> {
-                Poll::Ready(Ok(buf.len()))
-            }
-            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-            fn poll_shutdown(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
         let msg = MessageId::new(folder.clone(), "test-message-1");
         let sections = ["HEADER".to_string()];
-        let map = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_raw_parts(
-            &connector, &folder, &msg, &sections,
-        ))
-        .unwrap();
+        let map = futures::executor::block_on(connector.fetch_raw_parts(&folder, &msg, &sections))
+            .unwrap();
         let bytes = map.get("HEADER").expect("HEADER section");
         assert_eq!(bytes.as_slice(), MOCK_RFC822_HEADERS);
         let text = std::str::from_utf8(bytes).unwrap();
@@ -959,52 +813,14 @@ mod tests {
 
     #[test]
     fn mock_text_prefixes_are_first_plain_part() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-        #[derive(Debug)]
-        struct NoopStream;
-
-        impl AsyncRead for NoopStream {
-            fn poll_read(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                _: &mut ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
-        impl AsyncWrite for NoopStream {
-            fn poll_write(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-                buf: &[u8],
-            ) -> Poll<std::io::Result<usize>> {
-                Poll::Ready(Ok(buf.len()))
-            }
-            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-            fn poll_shutdown(
-                self: Pin<&mut Self>,
-                _: &mut Context<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                Poll::Ready(Ok(()))
-            }
-        }
-
         let connector = MockConnector::new();
         let folder = FolderId::new("inbox");
         let ids = vec![
             MessageId::new(folder.clone(), "1"),
             MessageId::new(folder.clone(), "2"),
         ];
-        let map = futures::executor::block_on(EmailConnector::<NoopStream>::fetch_text_prefixes(
-            &connector, &folder, &ids, 16,
-        ))
-        .unwrap();
+        let map =
+            futures::executor::block_on(connector.fetch_text_prefixes(&folder, &ids, 16)).unwrap();
         assert_eq!(map.len(), 2);
         assert_eq!(map[&ids[0]].text, "Hello plain text");
         assert!(!map[&ids[0]].is_html);

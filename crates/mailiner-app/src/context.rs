@@ -68,6 +68,30 @@ impl Default for MessageViewState {
     }
 }
 
+/// Full RFC 822 dump for the open “View source” dialog.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum MessageSourceState {
+    #[default]
+    Closed,
+    Loading {
+        account_id: AccountId,
+        message_id: MessageId,
+        request_id: u64,
+    },
+    Ready {
+        account_id: AccountId,
+        message_id: MessageId,
+        request_id: u64,
+        text: String,
+    },
+    Error {
+        account_id: AccountId,
+        message_id: MessageId,
+        request_id: u64,
+        message: String,
+    },
+}
+
 #[derive(Clone)]
 pub struct AppContext {
     /// UI accounts only (`id` / `name` / `email`) — **never** passwords or proxy tokens.
@@ -100,6 +124,8 @@ pub struct AppContext {
     pub message_bodies: Rc<RefCell<LoadedMessageCache>>,
     /// Full header block dialog (`Closed` = hidden).
     pub message_headers: Signal<MessageHeadersState>,
+    /// Full message source dialog (`Closed` = hidden).
+    pub message_source: Signal<MessageSourceState>,
     /// Per-section attachment download progress (section path → status).
     pub download_status: Signal<HashMap<String, DownloadStatus>>,
     /// Per-account connection lifecycle (no secrets).
@@ -170,6 +196,7 @@ impl AppContext {
         self.selection.set(MessageSelection::default());
         self.message_view.set(MessageViewState::Empty);
         self.message_headers.set(MessageHeadersState::Closed);
+        self.message_source.set(MessageSourceState::Closed);
         self.download_status.write().clear();
         self.connection_states.write().clear();
         self.send_status.write().clear();

@@ -1,4 +1,5 @@
 mod bodystructure;
+mod fetch_chunk;
 mod quota;
 mod section_path;
 mod sent;
@@ -811,9 +812,6 @@ where
         }
     }
 
-    /// Partial FETCH window. Larger = fewer FETCH RTTs per download; smaller =
-    /// lower peak memory. 512 KiB is a pragmatic default until adaptive sizing.
-    const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
     async fn stream_raw_part_chunked(
@@ -822,6 +820,20 @@ where
         message_id: &MessageId,
         section: &str,
         chunk_size: usize,
+    ) -> MailinerResult<PartStream>
+    where
+        S: Sync + 'static,
+    {
+        self.stream_raw_part_inner(folder_id, message_id, section, Some(chunk_size))
+            .await
+    }
+
+    async fn stream_raw_part_inner(
+        &self,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+        section: &str,
+        fixed_chunk: Option<usize>,
     ) -> MailinerResult<PartStream>
     where
         S: Sync + 'static,
@@ -857,11 +869,19 @@ where
         let message_id = message_id.as_uid().to_string();
         let section = section.to_string();
         let max_download = Self::MAX_DOWNLOAD;
+        let (chunk_size, sizer) = match fixed_chunk {
+            Some(n) => (n, None),
+            None => {
+                let sizer = fetch_chunk::FetchChunkSizer::new();
+                (sizer.size(), Some(sizer))
+            }
+        };
 
         // Progressive partial FETCH: each poll issues
         //   UID FETCH uid (BODY.PEEK[section]<offset.chunk_size>)
         // so peak memory stays ~one chunk, not the full part. async-imap still
         // buffers each literal fully, but that literal is now only `chunk_size`.
+        // Production streams start small and grow/shrink from observed FETCH time.
         // SELECT is issued only when this session is not already on `folder_id`.
         Ok(Box::pin(futures::stream::unfold(
             PartialFetchState {
@@ -872,6 +892,7 @@ where
                 section,
                 offset: 0u64,
                 chunk_size,
+                sizer,
                 max_download,
                 total_hint,
                 done: false,
@@ -928,6 +949,7 @@ where
                 let remaining_cap = (state.max_download - state.offset) as usize;
                 let req_len = state.chunk_size.min(remaining_cap);
 
+                let started = fetch_chunk::fetch_now();
                 let fetch_result = {
                     let mut guard = state.imap.lock().await;
                     match &mut *guard {
@@ -950,6 +972,23 @@ where
                 match fetch_result {
                     Ok(bytes) if bytes.is_empty() => None,
                     Ok(bytes) => {
+                        // Short/EOF windows are not a full sample of this size.
+                        if bytes.len() == req_len {
+                            if let Some(sizer) = state.sizer.as_mut() {
+                                let prev = sizer.size();
+                                sizer.record(bytes.len(), started.elapsed());
+                                let next = sizer.size();
+                                if next != prev {
+                                    tracing::debug!(
+                                        from = prev,
+                                        to = next,
+                                        bytes = bytes.len(),
+                                        "adaptive FETCH chunk"
+                                    );
+                                }
+                                state.chunk_size = next;
+                            }
+                        }
                         let n = bytes.len() as u64;
                         state.offset = state.offset.saturating_add(n);
                         // Cap without relying solely on BODYSTRUCTURE size.
@@ -2380,7 +2419,7 @@ where
         message_id: &MessageId,
         section: &str,
     ) -> MailinerResult<PartStream> {
-        self.stream_raw_part_chunked(folder_id, message_id, section, Self::STREAM_CHUNK)
+        self.stream_raw_part_inner(folder_id, message_id, section, None)
             .await
     }
 
@@ -2451,6 +2490,7 @@ where
     section: String,
     offset: u64,
     chunk_size: usize,
+    sizer: Option<fetch_chunk::FetchChunkSizer>,
     max_download: u64,
     total_hint: Option<u64>,
     done: bool,
@@ -3083,9 +3123,7 @@ Received-SPF: pass\r\n\
             .unwrap();
         assert_eq!(collect_part(&mut stream).await, SENT_BODY);
 
-        EmailConnector::<tokio::io::DuplexStream>::disconnect(&conn)
-            .await
-            .unwrap();
+        EmailConnector::disconnect(&conn).await.unwrap();
 
         let cmds = server_task.await.unwrap();
         assert_eq!(

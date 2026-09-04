@@ -1,4 +1,4 @@
-//! General settings home: appearance, composer defaults, address book, privacy, shortcuts.
+//! General settings home: appearance, composer, filters, vacation, address book, privacy, shortcuts.
 
 use dioxus::prelude::*;
 
@@ -17,6 +17,7 @@ use crate::ui_prefs::{
     ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity, MessageListView,
     ShortcutMapBlob,
 };
+use crate::vacation::{self, VacationSettings};
 use mailiner_core::ImapKeyword;
 
 fn account_from_label(account: &Account) -> String {
@@ -65,7 +66,7 @@ pub fn SettingsPage() -> Element {
                 h1 { class: "bootstrap-title", "Settings" }
                 p {
                     class: "bootstrap-muted",
-                    "Appearance, composer, filters, contacts, privacy, and shortcut preferences are stored in this browser."
+                    "Appearance, composer, filters, vacation, contacts, privacy, and shortcut preferences are stored in this browser."
                 }
 
                 section {
@@ -244,6 +245,8 @@ pub fn SettingsPage() -> Element {
                 }
 
                 FiltersSection {}
+
+                VacationSection {}
 
                 AddressBookSection {}
 
@@ -705,6 +708,282 @@ fn FiltersSection() -> Element {
             }
         }
     }
+}
+
+/// Local out-of-office auto-reply (not ManageSieve).
+#[component]
+fn VacationSection() -> Element {
+    let ctx = use_context::<AppContext>();
+    let mut accounts: Vec<_> = ctx.accounts.read().values().cloned().collect();
+    accounts.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
+    let selected = ctx.selected_account.read().clone();
+    let mut account_id = use_signal(|| selected.clone());
+    let current = account_id
+        .read()
+        .as_ref()
+        .filter(|id| accounts.iter().any(|a| &a.id == *id))
+        .cloned()
+        .or_else(|| selected.clone())
+        .or_else(|| accounts.first().map(|a| a.id.clone()));
+    let loaded = current
+        .as_ref()
+        .map(vacation::load_settings)
+        .unwrap_or_default();
+    let mut enabled = use_signal(|| loaded.enabled);
+    let mut start = use_signal(|| {
+        loaded
+            .start
+            .map(vacation::format_datetime_local)
+            .unwrap_or_default()
+    });
+    let mut end = use_signal(|| {
+        loaded
+            .end
+            .map(vacation::format_datetime_local)
+            .unwrap_or_default()
+    });
+    let mut subject = use_signal(|| loaded.subject.clone());
+    let mut body = use_signal(|| loaded.body.clone());
+    let mut status = use_signal(|| None::<Result<String, String>>);
+    let persist_acc_toggle = current.clone();
+    let persist_acc_save = current.clone();
+
+    rsx! {
+        section {
+            class: "settings-section",
+            h2 { "Vacation" }
+            p {
+                class: "bootstrap-muted settings-hint",
+                "Out of office is local to this browser. Mailiner sends a reply over SMTP when new mail arrives (folder open / IDLE / NOOP). This is not a server Sieve script — the app must be open. Each sender is replied to once per vacation period."
+            }
+            if accounts.is_empty() {
+                p { class: "bootstrap-muted", "Add an account to configure vacation." }
+            } else {
+                if accounts.len() > 1 {
+                    div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-vacation-account", "Account" }
+                        select {
+                            id: "settings-vacation-account",
+                            value: "{current.as_ref().map(|id| id.as_str()).unwrap_or(\"\")}",
+                            onchange: move |evt| {
+                                let id = AccountId::new(evt.value());
+                                account_id.set(Some(id.clone()));
+                                apply_vacation_form(
+                                    vacation::load_settings(&id),
+                                    enabled,
+                                    start,
+                                    end,
+                                    subject,
+                                    body,
+                                );
+                                status.set(None);
+                            },
+                            for account in accounts.iter() {
+                                option {
+                                    value: "{account.id.as_str()}",
+                                    selected: current.as_ref() == Some(&account.id),
+                                    "{account_from_label(account)}"
+                                }
+                            }
+                        }
+                    }
+                }
+                div {
+                    class: "onboarding-checkbox-field",
+                    label {
+                        class: "onboarding-checkbox-label",
+                        input {
+                            r#type: "checkbox",
+                            checked: enabled(),
+                            onchange: move |evt| {
+                                enabled.set(evt.checked());
+                                let Some(acc) = persist_acc_toggle.clone() else {
+                                    return;
+                                };
+                                match persist_vacation(
+                                    acc,
+                                    evt.checked(),
+                                    &start(),
+                                    &end(),
+                                    subject(),
+                                    body(),
+                                ) {
+                                    Ok(saved) => {
+                                        apply_vacation_form(
+                                            saved, enabled, start, end, subject, body,
+                                        );
+                                        status.set(Some(Ok("Vacation settings saved.".into())));
+                                    }
+                                    Err(msg) => status.set(Some(Err(msg))),
+                                }
+                            },
+                        }
+                        "Enabled"
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-vacation-start", "Start (optional)" }
+                    input {
+                        id: "settings-vacation-start",
+                        r#type: "datetime-local",
+                        value: "{start}",
+                        oninput: move |evt| start.set(evt.value()),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-vacation-end", "End (optional)" }
+                    input {
+                        id: "settings-vacation-end",
+                        r#type: "datetime-local",
+                        value: "{end}",
+                        oninput: move |evt| end.set(evt.value()),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-vacation-subject", "Subject" }
+                    input {
+                        id: "settings-vacation-subject",
+                        r#type: "text",
+                        value: "{subject}",
+                        placeholder: "Out of office",
+                        oninput: move |evt| subject.set(evt.value()),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-vacation-body", "Message" }
+                    textarea {
+                        id: "settings-vacation-body",
+                        value: "{body}",
+                        placeholder: "I am currently away and will reply when I return.",
+                        rows: "5",
+                        oninput: move |evt| body.set(evt.value()),
+                    }
+                }
+                p {
+                    class: "bootstrap-muted settings-hint",
+                    "Reply once per sender is always on for the current start/end window."
+                }
+                div {
+                    class: "settings-actions",
+                    button {
+                        r#type: "button",
+                        class: "onboarding-btn onboarding-btn-primary accounts-btn-sm",
+                        disabled: current.is_none(),
+                        onclick: move |_| {
+                            let Some(acc) = persist_acc_save.clone() else {
+                                return;
+                            };
+                            match persist_vacation(
+                                acc,
+                                enabled(),
+                                &start(),
+                                &end(),
+                                subject(),
+                                body(),
+                            ) {
+                                Ok(saved) => {
+                                    apply_vacation_form(
+                                        saved, enabled, start, end, subject, body,
+                                    );
+                                    status.set(Some(Ok("Vacation settings saved.".into())));
+                                }
+                                Err(msg) => status.set(Some(Err(msg))),
+                            }
+                        },
+                        "Save vacation"
+                    }
+                }
+                if let Some(result) = status() {
+                    match result {
+                        Ok(msg) => rsx! {
+                            p { class: "bootstrap-muted settings-reset-note", "{msg}" }
+                        },
+                        Err(msg) => rsx! {
+                            p {
+                                class: "onboarding-status onboarding-status-error",
+                                role: "alert",
+                                "{msg}"
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply_vacation_form(
+    next: VacationSettings,
+    mut enabled: Signal<bool>,
+    mut start: Signal<String>,
+    mut end: Signal<String>,
+    mut subject: Signal<String>,
+    mut body: Signal<String>,
+) {
+    enabled.set(next.enabled);
+    start.set(
+        next.start
+            .map(vacation::format_datetime_local)
+            .unwrap_or_default(),
+    );
+    end.set(
+        next.end
+            .map(vacation::format_datetime_local)
+            .unwrap_or_default(),
+    );
+    subject.set(next.subject);
+    body.set(next.body);
+}
+
+fn persist_vacation(
+    acc: AccountId,
+    enabled: bool,
+    start: &str,
+    end: &str,
+    subject: String,
+    body: String,
+) -> Result<VacationSettings, String> {
+    let parsed_start = if start.trim().is_empty() {
+        None
+    } else {
+        Some(
+            vacation::parse_datetime_local(start)
+                .ok_or_else(|| "Start time is not a valid date.".to_string())?,
+        )
+    };
+    let parsed_end = if end.trim().is_empty() {
+        None
+    } else {
+        Some(
+            vacation::parse_datetime_local(end)
+                .ok_or_else(|| "End time is not a valid date.".to_string())?,
+        )
+    };
+    if let (Some(s), Some(e)) = (parsed_start, parsed_end)
+        && s > e
+    {
+        return Err("Start must be before the end of the vacation window.".into());
+    }
+    Ok(vacation::save_settings(
+        acc,
+        VacationSettings {
+            enabled,
+            start: parsed_start,
+            end: parsed_end,
+            subject,
+            body,
+            armed_at: None,
+        },
+    ))
 }
 
 #[component]

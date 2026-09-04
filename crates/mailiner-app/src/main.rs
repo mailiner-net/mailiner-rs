@@ -71,6 +71,7 @@ mod snooze;
 mod source;
 mod toast;
 mod ui_prefs;
+mod vacation;
 mod websocket_stream;
 
 /// UI bootstrap state machine (store open → onboarding vs main).

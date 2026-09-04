@@ -3286,6 +3286,7 @@ fn sync_inbox_unread(ctx: &AppContext, event: crate::notifications::InboxCountEv
     else {
         return;
     };
+    ctx.announce(crate::notifications::notification_body(added));
     let viewing_inbox = ctx.selected_mailbox.read().as_ref() == Some(&inbox_id);
     if crate::notifications::should_show_desktop_notification(
         *ctx.notify_inbox.peek(),

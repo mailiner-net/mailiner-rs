@@ -1,4 +1,5 @@
 //! Library surface for unit tests (formatters, loaders, download, account config).
+pub mod a11y;
 pub mod account;
 pub mod account_config;
 pub mod account_store;

@@ -52,6 +52,7 @@ fn FolderSubscribeDialog() -> Element {
     };
 
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "picker-backdrop",
             onclick: move |_| close(()),

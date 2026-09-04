@@ -51,7 +51,7 @@ pub fn SettingsPage() -> Element {
         .unwrap_or_default();
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card settings-card",

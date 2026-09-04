@@ -166,8 +166,9 @@ pub fn IconButton(
     rsx! {
         button {
             class: class.unwrap_or_default(),
-            title: title.unwrap_or_default(),
+            title: title.clone().unwrap_or_default(),
             r#type: "button",
+            aria_label: title.filter(|s| !s.is_empty()),
             aria_pressed: aria_pressed.map(|pressed| if pressed { "true" } else { "false" }),
             onclick: move |evt| onclick.call(evt),
             Icon { icon, size }

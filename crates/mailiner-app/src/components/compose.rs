@@ -1592,7 +1592,9 @@ pub fn ComposeOverlay() -> Element {
         if !open {
             button {
                 class: "compose-fab",
+                r#type: "button",
                 title: "Compose",
+                aria_label: "Compose",
                 disabled: no_account,
                 onclick: {
                     let mut ctx = ctx.clone();
@@ -1604,6 +1606,7 @@ pub fn ComposeOverlay() -> Element {
         }
 
         if open {
+            crate::a11y::RestoreFocus {}
             div {
                 class: if docked { "compose-dock" } else { "compose-backdrop" },
                 onclick: move |_| {

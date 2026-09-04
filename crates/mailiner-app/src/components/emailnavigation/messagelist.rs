@@ -128,9 +128,10 @@ pub fn MessageList() -> Element {
     };
 
     rsx! {
-        section {
+        aside {
             id: "messagelist",
             class: "{density.css_class()}",
+            aria_label: "Message list",
 
             NavigationHeader {
                 mode: Mode::MessageList,
@@ -282,6 +283,9 @@ pub fn MessageList() -> Element {
 
             div {
                 class: "message-list-body",
+                role: "listbox",
+                aria_label: "Messages",
+                aria_multiselectable: "true",
 
                 if selected_mailbox.is_none() {
                     div {
@@ -386,7 +390,9 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
             class: if !message.is_read { "unread" },
             class: if is_dragging { "dragging" },
             class: if is_pinned { "is-pinned" },
+            role: "option",
             aria_selected: if is_selected { "true" } else { "false" },
+            aria_label: "{message.from_preview()}, {message.subject}",
             draggable: "true",
 
             onmousedown: move |evt: MouseEvent| {

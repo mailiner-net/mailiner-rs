@@ -18,6 +18,7 @@ pub fn OutboxPanel() -> Element {
     rsx! {
         section {
             class: "outbox-panel",
+            aria_label: "Outbox",
             h3 { "Outbox ({items.len()})" }
             ul {
                 class: "outbox-list",
@@ -42,6 +43,8 @@ pub fn OutboxPanel() -> Element {
                         div {
                             class: "outbox-actions",
                             button {
+                                r#type: "button",
+                                aria_label: "Retry {item.subject}",
                                 onclick: {
                                     let id = item.id.clone();
                                     move |_| {
@@ -51,6 +54,8 @@ pub fn OutboxPanel() -> Element {
                                 "Retry"
                             }
                             button {
+                                r#type: "button",
+                                aria_label: "Delete {item.subject}",
                                 onclick: {
                                     let id = item.id.clone();
                                     move |_| {

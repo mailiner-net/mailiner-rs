@@ -22,6 +22,7 @@ use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
 use crate::message_loader::LoadedMessageCache;
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 
+mod a11y;
 mod account;
 mod account_config;
 mod account_store;
@@ -398,6 +399,7 @@ fn App() -> Element {
     let folder_subscribe_open = use_signal(|| false);
     let show_all_folders = use_signal(crate::ui_prefs::load_show_all_folders);
     let pinned_uids = use_signal(Vec::new);
+    let sr_status = use_signal(String::new);
 
     let ctx = AppContext {
         accounts,
@@ -445,6 +447,7 @@ fn App() -> Element {
         folder_subscribe_open,
         show_all_folders,
         pinned_uids,
+        sr_status,
     };
     let ctx_clone = ctx.clone();
 
@@ -563,7 +566,7 @@ fn AppShell() -> Element {
 
     match bootstrap() {
         AppBootstrapState::LoadingStore => rsx! {
-            div {
+            main {
                 class: "bootstrap-shell",
                 div {
                     class: "bootstrap-card",
@@ -573,7 +576,7 @@ fn AppShell() -> Element {
             }
         },
         AppBootstrapState::StoreError { message } => rsx! {
-            div {
+            main {
                 class: "bootstrap-shell",
                 div {
                     class: "bootstrap-card bootstrap-error",
@@ -616,6 +619,15 @@ fn MainView() -> Element {
     rsx! {
         div {
             class: "mail-shell",
+            a {
+                class: "skip-link",
+                href: "#{crate::a11y::SKIP_TO_MESSAGE_ID}",
+                onclick: move |evt| {
+                    evt.prevent_default();
+                    crate::a11y::focus_element_by_id(crate::a11y::SKIP_TO_MESSAGE_ID);
+                },
+                "Skip to message"
+            }
             div {
                 id: "app",
                 class: "{mail_layout.css_class()} {mobile_pane.css_class()}",
@@ -642,6 +654,7 @@ fn MainView() -> Element {
             ComposeOverlay {}
         }
 
+        LiveStatus {}
         ToastHost {}
         MailboxPickerHost {}
         MessageHeadersHost {}
@@ -662,9 +675,25 @@ fn OnboardingView() -> Element {
 /// Minimal shell while deep-link guards redirect away from settings/main.
 fn redirecting_shell() -> Element {
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell",
             p { class: "bootstrap-muted", "Redirecting…" }
+        }
+    }
+}
+
+/// Polite live region for new-mail announcements (toasts have their own status).
+#[component]
+fn LiveStatus() -> Element {
+    let ctx = use_context::<AppContext>();
+    let text = ctx.sr_status.read().clone();
+    rsx! {
+        div {
+            class: "sr-only",
+            role: "status",
+            aria_live: "polite",
+            aria_atomic: "true",
+            "{text}"
         }
     }
 }

@@ -325,7 +325,7 @@ pub fn OnboardingForm() -> Element {
     };
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",

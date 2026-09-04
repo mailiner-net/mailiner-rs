@@ -168,18 +168,31 @@ impl AddressBookBlob {
 
     /// Rejects blobs whose `schema_version` is greater than
     /// [`ADDRESS_BOOK_SCHEMA_VERSION`] so a future format is not rewritten as v1.
+    ///
+    /// The envelope is decoded first; each contact row is parsed on its own so
+    /// one malformed row cannot hide the rest of the book.
     pub fn decode(json: &str) -> Result<Self, AddressBookError> {
-        let mut blob: Self = serde_json::from_str(json)
+        let raw: RawAddressBookBlob = serde_json::from_str(json)
             .map_err(|e| AddressBookError::Serialization(e.to_string()))?;
-        if blob.schema_version > ADDRESS_BOOK_SCHEMA_VERSION {
+        if raw.schema_version > ADDRESS_BOOK_SCHEMA_VERSION {
             return Err(AddressBookError::Serialization(format!(
                 "unsupported address book schema_version {} (max supported {})",
-                blob.schema_version, ADDRESS_BOOK_SCHEMA_VERSION
+                raw.schema_version, ADDRESS_BOOK_SCHEMA_VERSION
             )));
         }
-        sanitize_contacts(&mut blob.contacts);
-        blob.schema_version = ADDRESS_BOOK_SCHEMA_VERSION;
-        Ok(blob)
+        let mut contacts = match raw.contacts {
+            serde_json::Value::Null => Vec::new(),
+            serde_json::Value::Array(rows) => rows
+                .into_iter()
+                .filter_map(|row| serde_json::from_value::<Contact>(row).ok())
+                .collect(),
+            _ => Vec::new(),
+        };
+        sanitize_contacts(&mut contacts);
+        Ok(Self {
+            schema_version: ADDRESS_BOOK_SCHEMA_VERSION,
+            contacts,
+        })
     }
 
     pub fn find_email(&self, email: &str) -> Option<&Contact> {
@@ -211,6 +224,14 @@ impl AddressBookBlob {
             false
         }
     }
+}
+
+/// Envelope only. Contact rows are parsed one-by-one in [`AddressBookBlob::decode`].
+#[derive(Debug, Deserialize)]
+struct RawAddressBookBlob {
+    schema_version: u32,
+    #[serde(default)]
+    contacts: serde_json::Value,
 }
 
 fn sanitize_contacts(contacts: &mut Vec<Contact>) {
@@ -286,10 +307,18 @@ pub fn suggest_contacts<'a>(
     if needle.is_empty() || limit == 0 {
         return Vec::new();
     }
-    let mut ranked: Vec<(SuggestRank, &Contact)> = contacts
-        .iter()
-        .filter_map(|c| suggest_rank(c, &needle).map(|rank| (rank, c)))
-        .collect();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut ranked: Vec<(SuggestRank, &Contact)> = Vec::new();
+    for contact in contacts {
+        if seen.iter().any(|email| emails_equal(email, &contact.email)) {
+            continue;
+        }
+        let Some(rank) = suggest_rank(contact, &needle) else {
+            continue;
+        };
+        seen.push(contact.email.as_str());
+        ranked.push((rank, contact));
+    }
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| {
@@ -505,12 +534,21 @@ mod tests {
                 {"name":"Ada","email":"ada@example.com"},
                 {"name":"Dup","email":"ADA@example.com"},
                 {"name":"Bad","email":"nope"},
+                {"name":"Missing email"},
+                {"email":1},
+                "not-an-object",
                 {"name":"Bob","email":"bob@example.com"}
             ]
         }"#;
         let blob = AddressBookBlob::decode(json).unwrap();
         let emails: Vec<_> = blob.contacts.iter().map(|c| c.email.as_str()).collect();
         assert_eq!(emails, ["ada@example.com", "bob@example.com"]);
+    }
+
+    #[test]
+    fn blob_decode_keeps_valid_rows_when_contacts_is_not_an_array() {
+        let blob = AddressBookBlob::decode(r#"{"schema_version":1,"contacts":{}}"#).unwrap();
+        assert!(blob.contacts.is_empty());
     }
 
     #[test]
@@ -591,6 +629,14 @@ mod tests {
         assert!(suggest_contacts(&contacts, "  ", 8).is_empty());
         assert!(suggest_contacts(&contacts, "ada", 0).is_empty());
         assert_eq!(suggest_contacts(&contacts, "a", 1).len(), 1);
+
+        let dups = vec![
+            sample("Ada", "ada@example.com"),
+            sample("Ada Copy", "ADA@example.com"),
+        ];
+        let unique = suggest_contacts(&dups, "ada", 8);
+        assert_eq!(unique.len(), 1);
+        assert_eq!(unique[0].email, "ada@example.com");
     }
 
     #[test]

@@ -257,7 +257,7 @@ fn AddressBookSection() -> Element {
             h2 { "Address book" }
             p {
                 class: "bootstrap-muted settings-hint",
-                "Contacts stay in this browser. They will be used to suggest recipients when composing."
+                "Contacts stay in this browser."
             }
             if let Some(err) = storage_error {
                 p {

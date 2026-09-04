@@ -48,6 +48,10 @@ pub fn size_to_human(bytes: u64) -> String {
 
 /// Download-status key for the full-message `.eml` export.
 pub const EML_DOWNLOAD_KEY: &str = "EML";
+/// Download-status key for multi-message export (zip / mbox).
+pub const MAIL_EXPORT_KEY: &str = "EXPORT";
+/// Progress key while IMAP APPEND of imported files is running.
+pub const MAIL_IMPORT_KEY: &str = "IMPORT";
 
 /// Max length of the filename stem (before `.eml`).
 const MAX_EML_STEM: usize = 120;
@@ -196,6 +200,11 @@ pub fn content_binary_cap() -> usize {
 
 /// Trigger a browser download of `text` (JSON export, etc.).
 pub fn save_text_download(filename: &str, mime: &str, text: &str) -> Result<(), String> {
+    save_bytes_download(filename, mime, text.as_bytes())
+}
+
+/// Trigger a browser download of raw `bytes`.
+pub fn save_bytes_download(filename: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
@@ -212,7 +221,6 @@ pub fn save_text_download(filename: &str, mime: &str, text: &str) -> Result<(), 
         };
         props.set_type(ct);
 
-        let bytes = text.as_bytes();
         let u8 = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
         u8.copy_from(bytes);
         let parts = js_sys::Array::new();
@@ -238,7 +246,7 @@ pub fn save_text_download(filename: &str, mime: &str, text: &str) -> Result<(), 
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = (filename, mime, text);
+        let _ = (filename, mime, bytes);
         Ok(())
     }
 }
@@ -478,6 +486,7 @@ mod tests {
     #[test]
     fn save_text_download_host_is_ok() {
         save_text_download("mailiner-accounts.json", "application/json", "{}").unwrap();
+        save_bytes_download("messages.zip", "application/zip", b"PK").unwrap();
     }
 
     #[test]

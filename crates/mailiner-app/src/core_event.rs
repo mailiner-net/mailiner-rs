@@ -35,13 +35,16 @@ use crate::context::{
     AppContext, AttachmentPreview, MessageHeadersState, MessageSourceState, MessageViewState,
 };
 use crate::download::{
-    DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAX_DOWNLOAD_BYTES,
-    StreamingBlobDownload, is_previewable_content_type,
+    DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAIL_EXPORT_KEY, MAIL_IMPORT_KEY,
+    MAX_DOWNLOAD_BYTES, StreamingBlobDownload, is_previewable_content_type, save_bytes_download,
 };
 use crate::layout::MobilePane;
 use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
     hydrate_account,
+};
+use crate::mail_file::{
+    ExportMessageItem, MAX_EXPORT_MESSAGES, MailExportFormat, Rfc822Message, pack_export_named,
 };
 use crate::mailbox::{MailboxId, apply_live_folder_state, live_refresh_end};
 use crate::message::{Message, MessageId, next_flag_value};
@@ -256,6 +259,20 @@ pub enum CoreEvent {
         message_id: MessageId,
         filename: String,
         size_hint: Option<u64>,
+    },
+    /// FETCH selected messages and download them as a zip of `.eml` files or one mbox.
+    ExportMessages {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        items: Vec<crate::mail_file::ExportMessageItem>,
+        format: crate::mail_file::MailExportFormat,
+        folder_label: String,
+    },
+    /// IMAP APPEND parsed `.eml` / mbox messages into the current folder.
+    ImportMessages {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        messages: Vec<crate::mail_file::Rfc822Message>,
     },
     /// Fetch pending forwarded file bytes into the open compose draft.
     FetchComposeAttachments {
@@ -840,6 +857,31 @@ pub async fn core_loop(
                     &manager, &mut ctx, account_id, mailbox_id, message_id, filename, size_hint,
                 )
                 .await;
+            }
+            CoreEvent::ExportMessages {
+                account_id,
+                mailbox_id,
+                items,
+                format,
+                folder_label,
+            } => {
+                handle_export_messages(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    items,
+                    format,
+                    folder_label,
+                )
+                .await;
+            }
+            CoreEvent::ImportMessages {
+                account_id,
+                mailbox_id,
+                messages,
+            } => {
+                handle_import_messages(&manager, &mut ctx, account_id, mailbox_id, messages).await;
             }
             CoreEvent::FetchComposeAttachments {
                 draft_id,
@@ -5408,6 +5450,264 @@ async fn handle_save_message_eml(
     ctx.download_status
         .write()
         .insert(EML_DOWNLOAD_KEY.into(), DownloadStatus::Finished);
+}
+
+fn mail_xfer_busy(ctx: &AppContext, key: &str) -> bool {
+    matches!(
+        ctx.download_status.read().get(key),
+        Some(DownloadStatus::InProgress { .. } | DownloadStatus::Queued)
+    )
+}
+
+async fn handle_export_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    items: Vec<ExportMessageItem>,
+    format: MailExportFormat,
+    folder_label: String,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    if mail_xfer_busy(ctx, MAIL_EXPORT_KEY) || mail_xfer_busy(ctx, EML_DOWNLOAD_KEY) {
+        return;
+    }
+    if items.is_empty() {
+        ctx.show_toast(ToastAction::error("Select messages to export"));
+        return;
+    }
+    if items.len() > MAX_EXPORT_MESSAGES {
+        ctx.show_toast(ToastAction::error(format!(
+            "Export is limited to {MAX_EXPORT_MESSAGES} messages"
+        )));
+        return;
+    }
+    if items.iter().any(|item| {
+        item.size_hint
+            .is_some_and(|s| s > MAX_DOWNLOAD_BYTES as u64)
+    }) {
+        ctx.show_toast(ToastAction::error(format!(
+            "A selected message is too large to export (max {} bytes)",
+            MAX_DOWNLOAD_BYTES
+        )));
+        return;
+    }
+
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let total = items.len() as u64;
+    ctx.download_status.write().insert(
+        MAIL_EXPORT_KEY.into(),
+        DownloadStatus::InProgress {
+            received: 0,
+            total: Some(total),
+        },
+    );
+    ctx.show_toast(ToastAction::info(if items.len() == 1 {
+        "Exporting message…".into()
+    } else {
+        format!("Exporting {} messages…", items.len())
+    }));
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let mut fetched = Vec::with_capacity(items.len());
+    for (i, item) in items.into_iter().enumerate() {
+        if !selected_account_is(ctx, &account_id)
+            || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+        {
+            ctx.download_status.write().remove(MAIL_EXPORT_KEY);
+            return;
+        }
+        match connector
+            .fetch_raw_message(&folder_id, &item.message_id)
+            .await
+        {
+            Ok(bytes) => {
+                fetched.push(Rfc822Message {
+                    filename: item.filename,
+                    bytes,
+                });
+            }
+            Err(e) => {
+                error!("export fetch failed: {}", e);
+                if selected_account_is(ctx, &account_id)
+                    && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
+                {
+                    ctx.download_status
+                        .write()
+                        .insert(MAIL_EXPORT_KEY.into(), DownloadStatus::Error(e.to_string()));
+                    ctx.show_toast(ToastAction::error(format!(
+                        "Could not export messages: {e}"
+                    )));
+                } else {
+                    ctx.download_status.write().remove(MAIL_EXPORT_KEY);
+                }
+                return;
+            }
+        }
+        ctx.download_status.write().insert(
+            MAIL_EXPORT_KEY.into(),
+            DownloadStatus::InProgress {
+                received: (i as u64) + 1,
+                total: Some(total),
+            },
+        );
+    }
+
+    if !selected_account_is(ctx, &account_id)
+        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+    {
+        ctx.download_status.write().remove(MAIL_EXPORT_KEY);
+        return;
+    }
+
+    match pack_export_named(&fetched, format, &folder_label) {
+        Ok((filename, mime, bytes)) => {
+            if let Err(e) = save_bytes_download(&filename, mime, &bytes) {
+                error!("export save failed: {}", e);
+                ctx.download_status
+                    .write()
+                    .insert(MAIL_EXPORT_KEY.into(), DownloadStatus::Error(e.clone()));
+                ctx.show_toast(ToastAction::error(format!(
+                    "Could not export messages: {e}"
+                )));
+                return;
+            }
+            ctx.download_status
+                .write()
+                .insert(MAIL_EXPORT_KEY.into(), DownloadStatus::Finished);
+        }
+        Err(e) => {
+            error!("export pack failed: {}", e);
+            ctx.download_status
+                .write()
+                .insert(MAIL_EXPORT_KEY.into(), DownloadStatus::Error(e.clone()));
+            ctx.show_toast(ToastAction::error(format!(
+                "Could not export messages: {e}"
+            )));
+        }
+    }
+}
+
+async fn handle_import_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    messages: Vec<Rfc822Message>,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    if mail_xfer_busy(ctx, MAIL_IMPORT_KEY) {
+        return;
+    }
+    if messages.is_empty() {
+        ctx.show_toast(ToastAction::error("No messages to import"));
+        return;
+    }
+    if messages.iter().any(|m| m.bytes.len() > MAX_DOWNLOAD_BYTES) {
+        ctx.show_toast(ToastAction::error(format!(
+            "A message is too large to import (max {} bytes)",
+            MAX_DOWNLOAD_BYTES
+        )));
+        return;
+    }
+
+    let selectable = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(|n| n.selectable);
+    if !selectable {
+        ctx.show_toast(ToastAction::error("This folder cannot receive messages"));
+        return;
+    }
+
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let total = messages.len() as u64;
+    ctx.download_status.write().insert(
+        MAIL_IMPORT_KEY.into(),
+        DownloadStatus::InProgress {
+            received: 0,
+            total: Some(total),
+        },
+    );
+    ctx.show_toast(ToastAction::info(if messages.len() == 1 {
+        "Importing message…".into()
+    } else {
+        format!("Importing {} messages…", messages.len())
+    }));
+
+    let mailbox = mailbox_id.to_string();
+    let mut imported = 0usize;
+    for (i, msg) in messages.iter().enumerate() {
+        if !selected_account_is(ctx, &account_id)
+            || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+        {
+            ctx.download_status.write().remove(MAIL_IMPORT_KEY);
+            return;
+        }
+        if let Err(e) = connector.append_rfc822(&mailbox, &msg.bytes).await {
+            error!("import APPEND failed: {}", e);
+            manager.note_imap_error_msg(&account_id, &e.to_string());
+            if selected_account_is(ctx, &account_id)
+                && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
+            {
+                ctx.download_status
+                    .write()
+                    .insert(MAIL_IMPORT_KEY.into(), DownloadStatus::Error(e.to_string()));
+                let extra = if imported == 0 {
+                    String::new()
+                } else {
+                    format!(" ({imported} imported before the error)")
+                };
+                ctx.show_toast(ToastAction::error(format!(
+                    "Could not import {}: {e}{extra}",
+                    msg.filename
+                )));
+            } else {
+                ctx.download_status.write().remove(MAIL_IMPORT_KEY);
+            }
+            if imported > 0 {
+                refresh_if_viewing_mailbox(manager, ctx, &account_id, &mailbox).await;
+            }
+            return;
+        }
+        imported += 1;
+        ctx.download_status.write().insert(
+            MAIL_IMPORT_KEY.into(),
+            DownloadStatus::InProgress {
+                received: (i as u64) + 1,
+                total: Some(total),
+            },
+        );
+    }
+
+    ctx.download_status
+        .write()
+        .insert(MAIL_IMPORT_KEY.into(), DownloadStatus::Finished);
+    refresh_if_viewing_mailbox(manager, ctx, &account_id, &mailbox).await;
+    ctx.show_toast(ToastAction::info(if imported == 1 {
+        "Imported 1 message".into()
+    } else {
+        format!("Imported {imported} messages")
+    }));
 }
 
 struct PendingForwardFetch {

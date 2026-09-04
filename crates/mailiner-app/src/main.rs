@@ -41,6 +41,7 @@ mod keywords;
 mod layout;
 mod local_data;
 mod mail_cache;
+mod mail_file;
 mod mailbox;
 mod message;
 mod message_list_filter;

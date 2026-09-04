@@ -447,7 +447,8 @@ where
 
     /// APPEND `rfc822` to `mailbox` with `\Seen`. Does not change the selected folder.
     pub async fn append_rfc822_seen(&self, mailbox: &str, rfc822: &[u8]) -> Result<(), ImapError> {
-        self.append_rfc822(mailbox, r"(\Seen)", rfc822).await?;
+        self.append_rfc822_flags(mailbox, r"(\Seen)", rfc822)
+            .await?;
         Ok(())
     }
 
@@ -459,11 +460,20 @@ where
         mailbox: &str,
         rfc822: &[u8],
     ) -> Result<Option<MessageId>, ImapError> {
-        self.append_rfc822(mailbox, r"(\Draft)", rfc822).await
+        self.append_rfc822_flags(mailbox, r"(\Draft)", rfc822).await
+    }
+
+    /// APPEND `rfc822` with no flags (unread). Does not change the selected folder.
+    pub async fn append_rfc822(
+        &self,
+        mailbox: &str,
+        rfc822: &[u8],
+    ) -> Result<Option<MessageId>, ImapError> {
+        self.append_rfc822_flags(mailbox, "()", rfc822).await
     }
 
     /// APPEND `rfc822` with `flags`. Parses `APPENDUID` when the server sends it.
-    async fn append_rfc822(
+    async fn append_rfc822_flags(
         &self,
         mailbox: &str,
         flags: &str,

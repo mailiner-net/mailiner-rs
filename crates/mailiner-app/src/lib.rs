@@ -2,6 +2,7 @@
 pub mod account;
 pub mod account_config;
 pub mod account_store;
+pub mod address_book;
 pub mod download;
 pub mod formatter;
 pub mod headers;

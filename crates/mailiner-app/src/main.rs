@@ -23,6 +23,7 @@ use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 mod account;
 mod account_config;
 mod account_store;
+mod address_book;
 mod components;
 mod connection;
 mod context;

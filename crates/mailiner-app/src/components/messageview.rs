@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
 
 use mailiner_core::MailboxRole;
-use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
+use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, MessagePart, PartKind};
 use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword};
 
 use crate::account::AccountId;
@@ -19,7 +19,7 @@ use crate::context::{
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
-use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
+use crate::formatter::{FormatOptions, MessageFormatter, retain_cid_payloads_in_scope};
 use crate::keywords::{MessageKeywordChips, has_visible_keywords, keyword_tone};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
@@ -213,6 +213,43 @@ fn view_message_key(state: &MessageViewState) -> Option<String> {
     }
 }
 
+fn view_scope_key(state: &MessageViewState, nested_in: Option<&str>) -> Option<String> {
+    let key = view_message_key(state)?;
+    match nested_in {
+        Some(section) => Some(format!("{key}#{section}")),
+        None => Some(key),
+    }
+}
+
+fn nested_sender_email(
+    loaded: &mailiner_core::models::LoadedMessage,
+    nested_in: Option<&str>,
+) -> Option<String> {
+    first_address_email(
+        loaded
+            .rfc822_part(nested_in?)
+            .and_then(|p| p.nested_headers.as_ref())
+            .and_then(|h| h.from.as_ref()),
+    )
+}
+
+fn first_address_email(addr: Option<&EmailAddress>) -> Option<String> {
+    match addr? {
+        EmailAddress::List(list) => list.iter().find_map(|a| {
+            a.email
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        }),
+        EmailAddress::Group(groups) => groups.iter().flat_map(|g| g.members.iter()).find_map(|a| {
+            a.email
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        }),
+    }
+}
+
 #[component]
 pub fn MessageView() -> Element {
     let ctx = use_context::<AppContext>();
@@ -235,16 +272,23 @@ pub fn MessageView() -> Element {
             let view = ctx.message_view.read().clone();
             let allow = *allow_remote.read();
             let prefer = *prefer_plain.read();
-            let key = view_message_key(&view);
+            let nested_in = ctx.nested_rfc822.read().last().cloned();
+            let key = view_scope_key(&view, nested_in.as_deref());
 
-            // Reset per-message toggles when the selected message changes.
+            // Reset per-message toggles when the selected message or nested
+            // rfc822 changes.
             if *last_msg_key.borrow() != key {
                 *last_msg_key.borrow_mut() = key.clone();
                 html_cache.borrow_mut().reset();
                 had_remote.set(false);
                 let sender = match &view {
-                    MessageViewState::Ready { message_id, .. }
-                    | MessageViewState::Loading { message_id }
+                    MessageViewState::Ready {
+                        message_id, loaded, ..
+                    } => nested_sender_email(loaded.as_ref(), nested_in.as_deref()).or_else(|| {
+                        find_envelope(&ctx, message_id)
+                            .and_then(|m| m.sender_email().map(str::to_string))
+                    }),
+                    MessageViewState::Loading { message_id }
                     | MessageViewState::Error { message_id, .. } => find_envelope(&ctx, message_id)
                         .and_then(|m| m.sender_email().map(str::to_string)),
                     MessageViewState::Empty => None,
@@ -292,7 +336,7 @@ pub fn MessageView() -> Element {
                 allow_remote_resources: allow,
                 prefer_plain: prefer,
             });
-            if let Some(result) = fmt.format(&loaded.parts) {
+            if let Some(result) = fmt.format_scope(&loaded.parts, nested_in.as_deref()) {
                 let inlined = result.inlined_part_ids.clone();
                 let prevented = result.prevented_remote_resources;
                 let html = result.html;
@@ -311,7 +355,7 @@ pub fn MessageView() -> Element {
                             allow_remote_resources: true,
                             prefer_plain: false,
                         })
-                        .format(&loaded.parts)
+                        .format_scope(&loaded.parts, nested_in.as_deref())
                         .map(|r| r.html)
                     } else {
                         None
@@ -327,7 +371,7 @@ pub fn MessageView() -> Element {
                 }
 
                 drop(loaded);
-                apply_cid_payload_retention(&mut ctx, &message_id, &inlined);
+                apply_cid_payload_retention(&mut ctx, &message_id, &inlined, nested_in.as_deref());
             } else {
                 prevented_remote.set(false);
                 let fallback =
@@ -345,9 +389,21 @@ pub fn MessageView() -> Element {
         | MessageViewState::Error { message_id, .. } => find_envelope(&ctx, message_id),
         MessageViewState::Empty => None,
     };
-    let from_email = envelope
+    let nested_section = ctx.nested_rfc822.read().last().cloned();
+    let nested_part = match (&view, nested_section.as_deref()) {
+        (MessageViewState::Ready { loaded, .. }, Some(section)) => {
+            loaded.rfc822_part(section).cloned()
+        }
+        _ => None,
+    };
+    let from_email = nested_part
         .as_ref()
-        .and_then(|m| m.sender_email().map(str::to_string));
+        .and_then(|p| first_address_email(p.nested_headers.as_ref().and_then(|h| h.from.as_ref())))
+        .or_else(|| {
+            envelope
+                .as_ref()
+                .and_then(|m| m.sender_email().map(str::to_string))
+        });
     rsx! {
         section {
             id: "messageview",
@@ -377,8 +433,18 @@ pub fn MessageView() -> Element {
                         "Failed to load message: {message}"
                     }
                 },
-                MessageViewState::Ready { .. } => rsx! {
-                    if let Some(env) = envelope {
+                MessageViewState::Ready { loaded, .. } => rsx! {
+                    if let Some(part) = nested_part {
+                        NestedRfc822Header {
+                            part: part.clone(),
+                            prefer_plain,
+                            formatted_html,
+                            show_plain_toggle: has_html_and_plain(
+                                &loaded.parts,
+                                Some(part.section().as_str()),
+                            ),
+                        }
+                    } else if let Some(env) = envelope {
                         MessageHeader { message: env, prefer_plain, formatted_html }
                     }
 
@@ -436,6 +502,7 @@ fn apply_cid_payload_retention(
     ctx: &mut AppContext,
     message_id: &MessageId,
     referenced: &[String],
+    nested_in: Option<&str>,
 ) {
     let mut view = ctx.message_view.write();
     let MessageViewState::Ready {
@@ -449,20 +516,26 @@ fn apply_cid_payload_retention(
     if id != message_id {
         return;
     }
-    retain_reply_cid_payloads(&mut Arc::make_mut(loaded).parts, referenced);
+    retain_cid_payloads_in_scope(&mut Arc::make_mut(loaded).parts, referenced, nested_in);
 }
 
 fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {
     matches!(part.content, MessageContent::Text(_))
 }
 
-fn has_html_and_plain(parts: &[mailiner_core::models::MessagePart]) -> bool {
-    let has_html = parts
-        .iter()
-        .any(|p| !p.is_hidden && p.kind == PartKind::TextHtml && has_decoded_text(p));
-    let has_plain = parts
-        .iter()
-        .any(|p| !p.is_hidden && p.kind == PartKind::TextPlain && has_decoded_text(p));
+fn has_html_and_plain(
+    parts: &[mailiner_core::models::MessagePart],
+    nested_in: Option<&str>,
+) -> bool {
+    let has_html = parts.iter().any(|p| {
+        p.in_scope(nested_in) && !p.is_hidden && p.kind == PartKind::TextHtml && has_decoded_text(p)
+    });
+    let has_plain = parts.iter().any(|p| {
+        p.in_scope(nested_in)
+            && !p.is_hidden
+            && p.kind == PartKind::TextPlain
+            && has_decoded_text(p)
+    });
     has_html && has_plain
 }
 
@@ -734,6 +807,158 @@ fn RemotePrivacyBanner(
 }
 
 #[component]
+fn NestedRfc822Header(
+    part: MessagePart,
+    mut prefer_plain: Signal<bool>,
+    formatted_html: Signal<String>,
+    show_plain_toggle: bool,
+) -> Element {
+    let ctx = use_context::<AppContext>();
+    let headers = part.nested_headers.clone().unwrap_or_default();
+    let subject = headers
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            part.filename
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Forwarded message".into());
+    let date = headers.date.as_ref().map(format_date);
+    let from_fallback = headers
+        .from
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let to_fallback = headers
+        .to
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let cc_fallback = headers
+        .cc
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+
+    rsx! {
+        header {
+            class: "message-view-header nested-rfc822-header",
+            div {
+                class: "nested-rfc822-bar",
+                button {
+                    class: "ui-btn ui-btn-secondary nested-rfc822-back",
+                    r#type: "button",
+                    title: "Back to parent message",
+                    onclick: {
+                        let ctx = ctx.clone();
+                        move |_| ctx.close_nested_rfc822()
+                    },
+                    "Back"
+                }
+                span { class: "nested-rfc822-label", "Forwarded message" }
+                if show_plain_toggle {
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        r#type: "button",
+                        title: if prefer_plain() { "Show HTML" } else { "Plain text" },
+                        onclick: move |_| prefer_plain.set(!prefer_plain()),
+                        if prefer_plain() { "Show HTML" } else { "Plain text" }
+                    }
+                }
+                button {
+                    class: "ui-btn ui-btn-secondary",
+                    r#type: "button",
+                    title: "Print",
+                    onclick: {
+                        let ctx = ctx.clone();
+                        let subject = subject.clone();
+                        let from = from_fallback.clone();
+                        let to = to_fallback.clone();
+                        let cc = headers.cc.as_ref().map(ToString::to_string);
+                        let printed_date = date.clone().unwrap_or_default();
+                        move |_| {
+                            print_nested_message(
+                                &ctx,
+                                &PrintHeaders {
+                                    from: &from,
+                                    to: &to,
+                                    cc: cc.as_deref(),
+                                    subject: &subject,
+                                    date: &printed_date,
+                                },
+                                &formatted_html.peek(),
+                            );
+                        }
+                    },
+                    "Print"
+                }
+            }
+            div {
+                class: "message-view-headline",
+                h2 {
+                    class: "message-view-subject",
+                    title: "{subject}",
+                    if subject.trim().is_empty() {
+                        span { class: "message-subject-empty", "(no subject)" }
+                    } else {
+                        "{subject}"
+                    }
+                }
+            }
+            div {
+                class: "message-view-meta",
+                HeaderAddressRow {
+                    label: "From",
+                    addresses: header_addresses(headers.from.as_ref()),
+                    fallback: from_fallback.clone(),
+                    always: true,
+                }
+                HeaderAddressRow {
+                    label: "To",
+                    addresses: header_addresses(headers.to.as_ref()),
+                    fallback: to_fallback.clone(),
+                    always: false,
+                }
+                HeaderAddressRow {
+                    label: "Cc",
+                    addresses: header_addresses(headers.cc.as_ref()),
+                    fallback: cc_fallback,
+                    always: false,
+                }
+                if let Some(date) = date.as_deref() {
+                    span {
+                        class: "message-view-meta-item",
+                        span { class: "message-view-meta-k", "Date" }
+                        " {date}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn print_nested_message(ctx: &AppContext, headers: &PrintHeaders<'_>, body_html: &str) {
+    let html = build_print_document(headers, body_html);
+    let ctx = ctx.clone();
+    open_print_document(&html, move |err| match err {
+        PrintError::PopupBlocked => {
+            ctx.show_toast(ToastAction::info(
+                "Pop-up blocked. Allow pop-ups to print this message.",
+            ));
+        }
+        PrintError::Failed => {
+            ctx.show_toast(ToastAction::error("Could not open print preview."));
+        }
+    });
+}
+
+#[component]
 fn MessageHeader(
     message: Arc<Message>,
     mut prefer_plain: Signal<bool>,
@@ -747,7 +972,7 @@ fn MessageHeader(
     let actions_ready = loaded.is_some();
     let show_plain_toggle = loaded
         .as_ref()
-        .is_some_and(|loaded| has_html_and_plain(&loaded.parts));
+        .is_some_and(|loaded| has_html_and_plain(&loaded.parts, None));
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()

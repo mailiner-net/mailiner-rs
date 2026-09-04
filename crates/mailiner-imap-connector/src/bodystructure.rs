@@ -2,8 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use imap_proto::types::{BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentEncoding};
+use chrono::{DateTime, Utc};
+use imap_proto::types::{
+    Address, BodyContentCommon, BodyContentSinglePart, BodyStructure, ContentEncoding, Envelope,
+};
 use mailiner_core::body::{BodyPart, ContentDisposition};
+use mailiner_core::models::{EmailAddr, EmailAddress, NestedMessageHeaders};
 use mailiner_mime::params::normalize_params;
 
 pub fn convert_body_structure(bs: &BodyStructure<'_>) -> BodyPart {
@@ -13,11 +17,13 @@ pub fn convert_body_structure(bs: &BodyStructure<'_>) -> BodyPart {
         BodyStructure::Message {
             common,
             other,
+            envelope,
             body,
             ..
         } => {
             let mut part = single_part(common, other);
             part.nested_message = Some(Box::new(convert_body_structure(body)));
+            part.nested_headers = Some(convert_nested_envelope(envelope));
             part
         }
         BodyStructure::Multipart { common, bodies, .. } => BodyPart {
@@ -33,6 +39,7 @@ pub fn convert_body_structure(bs: &BodyStructure<'_>) -> BodyPart {
             location: common.location.as_ref().map(|s| s.to_string()),
             subparts: bodies.iter().map(convert_body_structure).collect(),
             nested_message: None,
+            nested_headers: None,
         },
     }
 }
@@ -51,7 +58,85 @@ fn single_part(common: &BodyContentCommon<'_>, other: &BodyContentSinglePart<'_>
         location: common.location.as_ref().map(|s| s.to_string()),
         subparts: vec![],
         nested_message: None,
+        nested_headers: None,
     }
+}
+
+fn convert_nested_envelope(envelope: &Envelope<'_>) -> NestedMessageHeaders {
+    NestedMessageHeaders {
+        subject: envelope.subject.as_ref().map(|b| envelope_bytes_to_text(b)),
+        from: convert_envelope_addresses(envelope.from.as_deref()),
+        to: convert_envelope_addresses(envelope.to.as_deref()),
+        cc: convert_envelope_addresses(envelope.cc.as_deref()),
+        date: envelope
+            .date
+            .as_ref()
+            .and_then(|b| parse_envelope_date(&envelope_bytes_to_text(b))),
+    }
+}
+
+fn envelope_bytes_to_text(bytes: &[u8]) -> String {
+    let raw = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    };
+    mailiner_mime::mime_words_decode(raw.trim())
+}
+
+fn convert_envelope_addresses(addrs: Option<&[Address<'_>]>) -> Option<EmailAddress> {
+    let addrs = addrs?;
+    let list: Vec<EmailAddr> = addrs.iter().filter_map(convert_envelope_address).collect();
+    if list.is_empty() {
+        None
+    } else {
+        Some(EmailAddress::List(list))
+    }
+}
+
+fn convert_envelope_address(addr: &Address<'_>) -> Option<EmailAddr> {
+    let name = addr
+        .name
+        .as_ref()
+        .map(|b| envelope_bytes_to_text(b))
+        .filter(|s| !s.is_empty());
+    let mailbox = addr
+        .mailbox
+        .as_ref()
+        .map(|b| envelope_bytes_to_text(b))
+        .filter(|s| !s.is_empty());
+    let host = addr
+        .host
+        .as_ref()
+        .map(|b| envelope_bytes_to_text(b))
+        .filter(|s| !s.is_empty());
+    let email = match (mailbox, host) {
+        (Some(local), Some(domain)) => Some(format!("{local}@{domain}")),
+        (Some(local), None) => Some(local),
+        (None, Some(domain)) => Some(domain),
+        (None, None) => None,
+    };
+    if name.is_none() && email.is_none() {
+        None
+    } else {
+        Some(EmailAddr { name, email })
+    }
+}
+
+fn parse_envelope_date(raw: &str) -> Option<DateTime<Utc>> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc2822(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Some(idx) = s.rfind('(') {
+        let trimmed = s[..idx].trim();
+        if let Ok(dt) = DateTime::parse_from_rfc2822(trimmed) {
+            return Some(dt.with_timezone(&Utc));
+        }
+    }
+    None
 }
 
 fn disposition_from_common(common: &BodyContentCommon<'_>) -> Option<ContentDisposition> {
@@ -93,7 +178,12 @@ pub fn structure_has_attachments(part: &BodyPart) -> bool {
     if mailiner_mime::is_attachment(part) {
         return true;
     }
-    part.subparts.iter().any(structure_has_attachments)
+    if part.subparts.iter().any(structure_has_attachments) {
+        return true;
+    }
+    part.nested_message
+        .as_deref()
+        .is_some_and(structure_has_attachments)
 }
 
 /// First display text part for a list snippet. Prefers `text/plain` over HTML.
@@ -278,5 +368,72 @@ mod tests {
         let preview = first_preview_text(&root).expect("html after attachment");
         assert_eq!(preview.section, "2");
         assert_eq!(preview.part.subtype, "html");
+    }
+
+    #[test]
+    fn converts_message_rfc822_envelope() {
+        use std::borrow::Cow;
+
+        use imap_proto::types::{Address, Envelope};
+
+        let nested = text_plain_bs();
+        let bs = BodyStructure::Message {
+            common: BodyContentCommon {
+                ty: ContentType {
+                    ty: "MESSAGE".into(),
+                    subtype: "RFC822".into(),
+                    params: Some(vec![("NAME".into(), "note.eml".into())]),
+                },
+                disposition: None,
+                language: None,
+                location: None,
+            },
+            other: BodyContentSinglePart {
+                id: None,
+                md5: None,
+                description: None,
+                transfer_encoding: ContentEncoding::SevenBit,
+                octets: 120,
+            },
+            envelope: Envelope {
+                date: Some(Cow::Borrowed(b"Wed, 01 Jan 2020 00:00:00 +0000")),
+                subject: Some(Cow::Borrowed(b"Inner subject")),
+                from: Some(vec![Address {
+                    name: Some(Cow::Borrowed(b"Ada")),
+                    adl: None,
+                    mailbox: Some(Cow::Borrowed(b"ada")),
+                    host: Some(Cow::Borrowed(b"example.com")),
+                }]),
+                sender: None,
+                reply_to: None,
+                to: Some(vec![Address {
+                    name: None,
+                    adl: None,
+                    mailbox: Some(Cow::Borrowed(b"bob")),
+                    host: Some(Cow::Borrowed(b"example.com")),
+                }]),
+                cc: None,
+                bcc: None,
+                in_reply_to: None,
+                message_id: Some(Cow::Borrowed(b"<inner@example.com>")),
+            },
+            body: Box::new(nested),
+            lines: 4,
+            extension: None,
+        };
+        let bp = convert_body_structure(&bs);
+        assert!(bp.is_rfc822());
+        assert!(bp.nested_message.is_some());
+        let headers = bp.nested_headers.expect("envelope");
+        assert_eq!(headers.subject.as_deref(), Some("Inner subject"));
+        assert_eq!(
+            headers.from.map(|a| a.to_string()).as_deref(),
+            Some("Ada <ada@example.com>")
+        );
+        assert_eq!(
+            headers.to.map(|a| a.to_string()).as_deref(),
+            Some("bob@example.com")
+        );
+        assert!(headers.date.is_some());
     }
 }

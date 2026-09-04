@@ -1552,6 +1552,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.message_bodies.borrow_mut().clear();
     ctx.message_headers.set(MessageHeadersState::Closed);
     ctx.message_source.set(MessageSourceState::Closed);
+    ctx.clear_nested_rfc822();
     ctx.download_status.set(HashMap::new());
     ctx.clear_attachment_downloads();
     ctx.mailbox_nodes.set(HashMap::new());
@@ -1868,6 +1869,7 @@ async fn handle_select_mailbox(
         ctx.message_view.set(MessageViewState::Empty);
         ctx.message_headers.set(MessageHeadersState::Closed);
         ctx.message_source.set(MessageSourceState::Closed);
+        ctx.clear_nested_rfc822();
         ctx.download_status.set(HashMap::new());
         ctx.clear_attachment_downloads();
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
@@ -2266,6 +2268,7 @@ async fn handle_select_known(
 
     let Some(focus) = ctx.selection.read().focus().cloned() else {
         ctx.message_view.set(MessageViewState::Empty);
+        ctx.clear_nested_rfc822();
         ctx.download_status.set(HashMap::new());
         return;
     };
@@ -2570,6 +2573,7 @@ async fn handle_select_message(
     ctx.download_status.set(HashMap::new());
     ctx.message_headers.set(MessageHeadersState::Closed);
     ctx.message_source.set(MessageSourceState::Closed);
+    ctx.clear_nested_rfc822();
 
     let cached = ctx.message_bodies.borrow_mut().get(&message_id);
     if let Some(loaded) = cached {
@@ -2935,6 +2939,7 @@ fn take_messages_from_ui(
         ctx.message_view.set(MessageViewState::Empty);
         ctx.message_headers.set(MessageHeadersState::Closed);
         ctx.message_source.set(MessageSourceState::Closed);
+        ctx.clear_nested_rfc822();
         ctx.download_status.set(HashMap::new());
         ctx.clear_attachment_downloads();
     }
@@ -3658,6 +3663,7 @@ async fn handle_empty_trash(
             ctx.message_bodies.borrow_mut().clear();
             ctx.message_headers.set(MessageHeadersState::Closed);
             ctx.message_source.set(MessageSourceState::Closed);
+            ctx.clear_nested_rfc822();
             ctx.download_status.set(HashMap::new());
             ctx.clear_attachment_downloads();
             if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mailbox_id) {

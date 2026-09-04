@@ -67,7 +67,9 @@ pub fn format_html(
 
                 if lower.starts_with("cid:") {
                     let cid = vtrim[4..].trim();
-                    if let Some((data_url, part_id)) = resolve_cid(cid, all_parts) {
+                    if let Some((data_url, part_id)) =
+                        resolve_cid(cid, all_parts, part.nested_in.as_deref())
+                    {
                         inlined.push(part_id);
                         return format!("{prefix}{q}{data_url}{q2}");
                     }
@@ -112,20 +114,26 @@ fn is_safe_data_image(lower: &str) -> bool {
         .any(|t| lower.starts_with(&format!("data:{t}")))
 }
 
-fn resolve_cid(cid: &str, parts: &[MessagePart]) -> Option<(String, String)> {
+fn resolve_cid(
+    cid: &str,
+    parts: &[MessagePart],
+    nested_in: Option<&str>,
+) -> Option<(String, String)> {
     let cid_norm = cid.trim().trim_matches(|c| c == '<' || c == '>');
     let part = parts.iter().find(|p| {
-        p.content_id
-            .as_deref()
-            .map(|id| {
-                let id = id.trim().trim_matches(|c| c == '<' || c == '>');
-                id.eq_ignore_ascii_case(cid_norm)
-            })
-            .unwrap_or(false)
-            || p.description
+        p.in_scope(nested_in)
+            && (p
+                .content_id
                 .as_deref()
-                .map(|d| d.trim().trim_matches(|c| c == '<' || c == '>') == cid_norm)
+                .map(|id| {
+                    let id = id.trim().trim_matches(|c| c == '<' || c == '>');
+                    id.eq_ignore_ascii_case(cid_norm)
+                })
                 .unwrap_or(false)
+                || p.description
+                    .as_deref()
+                    .map(|d| d.trim().trim_matches(|c| c == '<' || c == '>') == cid_norm)
+                    .unwrap_or(false))
     })?;
 
     let ct = part.content_type.to_ascii_lowercase();
@@ -243,6 +251,8 @@ mod tests {
             size: html.len() as u64,
             is_attachment: false,
             is_hidden: false,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Text(html.into()),
             created_at: now,
             updated_at: now,
@@ -266,6 +276,8 @@ mod tests {
             size: bytes.len() as u64,
             is_attachment: true,
             is_hidden: true,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Binary(bytes.to_vec()),
             created_at: now,
             updated_at: now,
@@ -310,12 +322,24 @@ mod tests {
             size: 10,
             is_attachment: true,
             is_hidden: true,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Text("<svg onload=alert(1)>".into()),
             created_at: now,
             updated_at: now,
         };
         let r = format_html(&html, &[html.clone(), svg], &FormatOptions::default()).unwrap();
         assert!(!r.html.contains("data:image/svg"));
+    }
+
+    #[test]
+    fn cid_does_not_cross_rfc822_scope() {
+        let html = html_part(r#"<img src="cid:logo@x">"#);
+        let mut foreign = png_part("<logo@x>", b"\x89PNG");
+        foreign.nested_in = Some("2".into());
+        let r = format_html(&html, &[html.clone(), foreign], &FormatOptions::default()).unwrap();
+        assert!(!r.html.contains("data:image/png;base64,"));
+        assert!(r.inlined_part_ids.is_empty());
     }
 
     #[test]

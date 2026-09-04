@@ -58,7 +58,12 @@ impl PartParser for MultipartMixedParser {
             let mut sub_path = path.to_vec();
             sub_path.push((i + 1).to_string());
             let sub_id = format!("{part_id}.mixed.{i}");
-            if is_attachment(sub) {
+            if sub.is_rfc822() {
+                out.extend(
+                    ctx.registry
+                        .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+                );
+            } else if is_attachment(sub) {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,
                     sub,
@@ -95,8 +100,10 @@ impl PartParser for MultipartRelatedParser {
             let mut sub_path = path.to_vec();
             sub_path.push((i + 1).to_string());
             let sub_id = format!("{part_id}.related.{i}");
-            // Attachment only if is_attachment && (!cid || !has_rich)
-            let force_att = is_attachment(sub) && (sub.id.is_none() || !has_rich);
+            // Attachment only if is_attachment && (!cid || !has_rich).
+            // message/rfc822 is always parsed so the nested body can be opened.
+            let force_att =
+                !sub.is_rfc822() && is_attachment(sub) && (sub.id.is_none() || !has_rich);
             if force_att {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,

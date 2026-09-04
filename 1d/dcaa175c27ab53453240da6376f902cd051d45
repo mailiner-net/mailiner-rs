@@ -1,0 +1,45 @@
+crates/mailiner-app/src/components/compose.rs
+  s_b64ac0c269c1b0::t_7721d6938c5fd1 33
+  s_b64ac0c269c1b0::t_f2001d7201d697 328
+  s_b64ac0c269c1b0::t_77d3699c5fd976 361-363
+  s_b64ac0c269c1b0::t_27192e31744ffc 395,398
+  s_b64ac0c269c1b0::t_63b0b9c1516a1b 466,468-474
+  s_b64ac0c269c1b0::t_931d52eeea8755 1245,1281,1291,1298-1302,1307
+  s_b64ac0c269c1b0::t_507e47ff6c5348 1304-1305
+  s_b64ac0c269c1b0::t_69198b8fffccb9 1595,1597,1601,1606-1614,1620,1622-1623,1628,1630-1632,1642
+  s_b64ac0c269c1b0::t_fe364cea6de2f8 2021
+  s_b64ac0c269c1b0::t_d30f2d91bc44d7 407-409
+  s_d584d9a97bb8a3::t_42983d315d09c9 21
+  s_d584d9a97bb8a3::t_d9a3a93b470dc1 32,394,396-397
+crates/mailiner-app/src/send.rs
+  s_b64ac0c269c1b0::t_e267b2fccb9c20 11-12
+  s_b64ac0c269c1b0::t_548fc6f29dc0f4 58-140,145-148,152,154,156,164,207-236,242-246,260,263,266-267,272-279,159,190,192,205,182,184
+  s_b64ac0c269c1b0::t_6c7f42be0bb847 157,165-166,141,143-144,149-151,153,155,158,160-162,186-189,191,194-204,545,552,580,587-604,606-612
+  s_b64ac0c269c1b0::t_c50d76665bed01 471-541,616-654,163,193,206,544,546-551,555-556,579,581-586,605,613-615,185,562-564,566-571,577-578
+  s_d584d9a97bb8a3::t_aef193ecc16765 142,4,7,167-181,183
+  s_d584d9a97bb8a3::t_ea57c038846b2f 553-554,557-561,565,572-576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1ddcaa175c27ab53453240da6376f902cd051d45",
+  "prompts": {},
+  "sessions": {
+    "s_b64ac0c269c1b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a46-3d9c-7b62-9bce-d9b2f0bd1d04",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    },
+    "s_d584d9a97bb8a3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a5c-e82d-72a1-8c3b-b3375dfc392d",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

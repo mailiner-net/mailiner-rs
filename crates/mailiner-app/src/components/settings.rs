@@ -8,7 +8,7 @@ use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::layout::reset_saved_layout;
 use crate::shortcuts::{ShortcutGroup, shortcuts_in_group};
-use crate::ui_prefs::{ComposeBodyMode, ComposePlacement, MessageListDensity};
+use crate::ui_prefs::{ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity};
 
 fn account_from_label(account: &Account) -> String {
     if account.name.is_empty() {
@@ -24,6 +24,8 @@ pub fn SettingsPage() -> Element {
     let ctx = use_context::<AppContext>();
     let mut density = ctx.message_list_density;
     let current_density = *density.read();
+    let mut mail_layout = ctx.mail_layout;
+    let current_layout = *mail_layout.read();
     let mut body_mode = use_signal(crate::ui_prefs::load_compose_body_mode);
     let mut compose_placement = ctx.compose_placement;
     let mut default_from = use_signal(crate::ui_prefs::load_default_from_account);
@@ -59,7 +61,7 @@ pub fn SettingsPage() -> Element {
                     h2 { "Appearance" }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "List density applies immediately. Pane sizes reset the next time you open mail."
+                        "List density and mail layout apply immediately. Pane sizes reset the next time you open mail."
                     }
                     div {
                         class: "onboarding-field",
@@ -83,6 +85,27 @@ pub fn SettingsPage() -> Element {
                         }
                     }
                     div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-mail-layout", "Mail layout" }
+                        select {
+                            id: "settings-mail-layout",
+                            value: "{current_layout.as_key()}",
+                            onchange: move |evt| {
+                                if let Some(next) = MailLayout::from_key(&evt.value()) {
+                                    crate::ui_prefs::save_mail_layout(next);
+                                    mail_layout.set(next);
+                                }
+                            },
+                            for option in MailLayout::ALL {
+                                option {
+                                    value: "{option.as_key()}",
+                                    selected: option == current_layout,
+                                    "{option.label()}"
+                                }
+                            }
+                        }
+                    }
+                    div {
                         class: "settings-actions",
                         button {
                             r#type: "button",
@@ -97,7 +120,7 @@ pub fn SettingsPage() -> Element {
                     if layout_reset() {
                         p {
                             class: "bootstrap-muted settings-reset-note",
-                            "Folder width and message-list height will use the defaults when you return to mail."
+                            "Folder width and message-list size will use the defaults when you return to mail."
                         }
                     }
                 }

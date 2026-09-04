@@ -3,27 +3,30 @@
 use dioxus::prelude::*;
 
 use crate::layout::{
-    clamp_folder_width_px, clamp_list_height_pct, persist_layout, reset_folder_width,
-    reset_list_height, set_folder_width_px, set_list_height_pct,
+    clamp_folder_width_px, clamp_list_height_pct, clamp_list_width_px, persist_layout,
+    reset_folder_width, reset_list_height, reset_list_width, set_folder_width_px,
+    set_list_height_pct, set_list_width_px,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SplitAxis {
     /// Folder tree vs list/viewer (vertical bar, col-resize).
     Folder,
-    /// Message list vs viewer (horizontal bar, row-resize).
+    /// Message list vs viewer, stacked (horizontal bar, row-resize).
     List,
+    /// Message list vs viewer, classic three columns (vertical bar, col-resize).
+    ListWidth,
 }
 
 #[component]
 pub fn SplitHandle(axis: SplitAxis) -> Element {
     let mut dragging = use_signal(|| false);
     let class = match axis {
-        SplitAxis::Folder => "split-handle split-handle-col",
+        SplitAxis::Folder | SplitAxis::ListWidth => "split-handle split-handle-col",
         SplitAxis::List => "split-handle split-handle-row",
     };
     let orientation = match axis {
-        SplitAxis::Folder => "vertical",
+        SplitAxis::Folder | SplitAxis::ListWidth => "vertical",
         SplitAxis::List => "horizontal",
     };
 
@@ -35,7 +38,7 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
     // `col-resize` / `row-resize` are stripped from `main.css` by the Dioxus
     // asset pipeline; set them inline so hover still shows the right cursor.
     let cursor = match axis {
-        SplitAxis::Folder => "cursor: col-resize;",
+        SplitAxis::Folder | SplitAxis::ListWidth => "cursor: col-resize;",
         SplitAxis::List => "cursor: row-resize;",
     };
     let mut handle_el = use_signal(|| None::<web_sys::Element>);
@@ -72,6 +75,7 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
                         set_folder_width_px(clamp_folder_width_px(pt.x));
                     }
                     SplitAxis::List => apply_list_drag(pt.y),
+                    SplitAxis::ListWidth => apply_list_width_drag(pt.x),
                 }
             },
             onpointerup: move |_| {
@@ -92,9 +96,32 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
                 match axis {
                     SplitAxis::Folder => reset_folder_width(),
                     SplitAxis::List => reset_list_height(),
+                    SplitAxis::ListWidth => reset_list_width(),
                 }
             },
         }
+    }
+}
+
+fn apply_list_width_drag(client_x: f64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let Some(list) = document.get_element_by_id("messagelist") else {
+            return;
+        };
+        let list_left = list.get_bounding_client_rect().x();
+        let px = clamp_list_width_px(client_x - list_left);
+        set_list_width_px(px);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = client_x;
     }
 }
 

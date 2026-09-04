@@ -66,6 +66,7 @@
 
     --folder-pane-width: 240px;
     --message-list-height: 40%;
+    --message-list-width: 340px;
     --message-avatar-size: 32px;
 }
 
@@ -1169,6 +1170,53 @@ a.accounts-link-btn {
 .split-handle-row:focus-visible,
 .split-handle-row.is-dragging {
     background: var(--item-accent);
+}
+
+/* Classic three-column: banner and outbox span the content area; list | viewer
+   sit in the middle row. Standalone so the asset pipeline keeps display/grid.
+   List and folder shrink before the viewer so a narrow window cannot collapse
+   the message pane to zero. */
+#app.layout-classic #emailnavigation {
+    flex: 0 1 var(--folder-pane-width);
+    min-width: 0;
+}
+
+#app.layout-classic #content {
+    display: grid;
+    grid-template-columns: minmax(0, var(--message-list-width)) 6px minmax(12rem, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+#app.layout-classic #content > .connection-banner {
+    grid-column: 1 / -1;
+    grid-row: 1;
+}
+
+#app.layout-classic #content > #messagelist {
+    grid-column: 1;
+    grid-row: 2;
+    flex: none;
+    min-height: 0;
+    border-bottom: none;
+    border-right: 1px solid var(--sidebar-border);
+}
+
+#app.layout-classic #content > .split-handle {
+    grid-column: 2;
+    grid-row: 2;
+    width: auto;
+    align-self: stretch;
+}
+
+#app.layout-classic #content > #messageview {
+    grid-column: 3;
+    grid-row: 2;
+    min-width: 0;
+}
+
+#app.layout-classic #content > .outbox-panel {
+    grid-column: 1 / -1;
+    grid-row: 3;
 }
 
 /* —— Shared UI primitives (keep above the nested #app block) —— */

@@ -399,6 +399,8 @@ pub enum CoreEvent {
         account_id: AccountId,
         mailbox_id: MailboxId,
     },
+    /// Periodic `STATUS` of non-selected connected accounts (unread badges).
+    BackgroundStatusPoll,
 }
 
 /// Background BODY.PEEK of list neighbors after the focused message is Ready.
@@ -464,6 +466,8 @@ pub async fn core_loop(
         .await;
         queue_adjacent_prefetch(&ctx, &mut pending_prefetch);
     }
+
+    schedule_background_status(smtp_tx.clone());
 
     loop {
         if pending_event.is_none() {
@@ -1012,6 +1016,10 @@ pub async fn core_loop(
             } => {
                 handle_mailbox_activity(&manager, &mut ctx, account_id, mailbox_id).await;
             }
+            CoreEvent::BackgroundStatusPoll => {
+                handle_background_status_poll(&manager, &mut ctx).await;
+                schedule_background_status(smtp_tx.clone());
+            }
         }
 
         for id in manager.take_session_deaths() {
@@ -1330,6 +1338,13 @@ fn schedule_auto_reconnect(
     });
 }
 
+fn schedule_background_status(event_tx: UnboundedSender<CoreEvent>) {
+    spawn_reconnect_timer(async move {
+        TimeoutFuture::new(crate::background_sync::BACKGROUND_STATUS_INTERVAL_MS).await;
+        let _ = event_tx.unbounded_send(CoreEvent::BackgroundStatusPoll);
+    });
+}
+
 fn spawn_reconnect_timer(fut: impl std::future::Future<Output = ()> + 'static) {
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(fut);
@@ -1390,7 +1405,7 @@ async fn handle_commit_new_account(
     }
 
     // KeepActiveUntilReady: prior *other* active session stays up through connect **and**
-    // store writes. disconnect_others only after full commit success when we activate.
+    // store writes. Apply the connection cap only after full commit success when we activate.
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::KeepActiveUntilReady)
         .await
@@ -1446,7 +1461,8 @@ async fn handle_commit_new_account(
                     return;
                 }
 
-                manager.disconnect_others(Some(&account_id), ctx).await;
+                manager.touch_recency(&account_id);
+                manager.evict_over_cap(&account_id, ctx).await;
                 ctx.selected_account.set(Some(account_id.clone()));
                 set_connection_state(ctx, &account_id, ConnectionState::Ready);
                 list_folders_soft(manager, ctx, &account_id).await;
@@ -1800,6 +1816,57 @@ pub(crate) async fn hydrate_account_into(
         Err(e) => {
             warn!("mail cache hydrate failed for {account_id}: {e}");
             false
+        }
+    }
+}
+
+async fn handle_background_status_poll(manager: &AccountConnectionManager, ctx: &mut AppContext) {
+    let selected = ctx.selected_account.read().clone();
+    let ids: Vec<AccountId> = manager
+        .connector_account_ids()
+        .into_iter()
+        .filter(|id| Some(id) != selected.as_ref())
+        .filter(|id| {
+            ctx.connection_states
+                .read()
+                .get(id)
+                .is_some_and(|s| matches!(s, ConnectionState::Ready))
+        })
+        .collect();
+    for id in ids {
+        poll_background_account(manager, &id).await;
+    }
+}
+
+/// `STATUS` subscribed folders on a non-selected account; persist unread only.
+async fn poll_background_account(manager: &AccountConnectionManager, account_id: &AccountId) {
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+    let targets = match manager.cache().load_folders(account_id).await {
+        Ok(Some(tree)) => crate::background_sync::background_status_targets(&tree),
+        Ok(None) => vec![FolderId::new("INBOX")],
+        Err(e) => {
+            warn!("background status: cache load failed for {account_id}: {e}");
+            vec![FolderId::new("INBOX")]
+        }
+    };
+    match connector.folder_counts(&targets).await {
+        Ok(counts) if !counts.is_empty() => {
+            if let Err(e) = crate::background_sync::merge_status_into_cache(
+                manager.cache(),
+                account_id,
+                &counts,
+            )
+            .await
+            {
+                warn!("background status: cache save failed for {account_id}: {e}");
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("background STATUS failed for {account_id}: {e}");
+            manager.note_imap_error(account_id, &e);
         }
     }
 }

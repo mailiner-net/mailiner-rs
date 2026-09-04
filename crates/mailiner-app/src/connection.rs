@@ -9,6 +9,10 @@
 //! if connect is ever made concurrent (or if a disconnect bumps generation mid-attempt).
 //! Rapid `SelectAccount` switches are serialized: the second waits for the first to finish
 //! (up to [`CONNECT_TIMEOUT_MS`]), then runs with a fresh generation — not a mid-flight cancel.
+//!
+//! Switching accounts keeps other live IMAP sessions (up to
+//! [`crate::background_sync::MAX_CONNECTED_ACCOUNTS`]); the least-recently used
+//! session is released when the cap is exceeded.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -25,10 +29,13 @@ use mailiner_imap_connector::ImapConnector;
 
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
+use crate::background_sync::{MAX_CONNECTED_ACCOUNTS, accounts_to_evict};
 use crate::context::AppContext;
 use crate::mail_cache::MailCache;
 use crate::reconnect::{is_session_death, is_session_death_message};
 use crate::websocket_stream::{WebSocketStream, WsDeathWatch};
+
+pub use crate::background_sync::EnsureConnectedMode;
 
 /// Overall connect budget: WS open + TLS + LOGIN (wall clock).
 pub const CONNECT_TIMEOUT_MS: u32 = 20_000;
@@ -140,20 +147,6 @@ impl From<ConnectError> for ConnectionState {
     }
 }
 
-/// How `ensure_connected` treats other active sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EnsureConnectedMode {
-    /// Active-only switch: tear down other sessions **before** connecting
-    /// (`SelectAccount`, `ConnectExisting`, `Bootstrap`, `Reconnect`).
-    Switch,
-    /// Trial / first-save connect: never tears down other sessions.
-    ///
-    /// Callers (e.g. `CommitNewAccount`) must call [`AccountConnectionManager::disconnect_others`]
-    /// only after **full** success (connect Ready **and** store upsert + set_active_id).
-    /// On connect or store failure the prior active session remains intact.
-    KeepActiveUntilReady,
-}
-
 /// Classify connector / I/O failures into UI-facing kinds.
 pub fn classify_mailiner_error(err: &MailinerError) -> ConnectError {
     let text = err.to_string();
@@ -234,6 +227,9 @@ pub struct AccountConnectionManager {
     reconnect_attempts: HashMap<AccountId, u32>,
     /// Transport deaths noted from IMAP command errors (drained by `core_loop`).
     session_deaths: RefCell<HashSet<AccountId>>,
+    /// Monotonic recency for live connectors (higher = more recently used).
+    last_used: HashMap<AccountId, u64>,
+    next_used_seq: u64,
     store: Rc<dyn AccountStore>,
     cache: Rc<dyn MailCache>,
 }
@@ -248,6 +244,8 @@ impl AccountConnectionManager {
             ws_watches: HashMap::new(),
             reconnect_attempts: HashMap::new(),
             session_deaths: RefCell::new(HashSet::new()),
+            last_used: HashMap::new(),
+            next_used_seq: 0,
             store,
             cache,
         }
@@ -408,7 +406,46 @@ impl AccountConnectionManager {
         self.connectors.remove(account_id);
         self.ws_watches.remove(account_id);
         self.session_deaths.borrow_mut().remove(account_id);
+        self.last_used.remove(account_id);
         self.bump_generation(account_id);
+    }
+
+    /// Mark `account_id` as the most recently used live session.
+    pub fn touch_recency(&mut self, account_id: &AccountId) {
+        self.next_used_seq = self.next_used_seq.saturating_add(1);
+        self.last_used
+            .insert(account_id.clone(), self.next_used_seq);
+    }
+
+    /// LOGOUT and drop the live session; keep cached config for a later switch.
+    pub async fn release_connector(&mut self, account_id: &AccountId, ctx: &mut AppContext) {
+        if let Some(connector) = self.connectors.remove(account_id)
+            && let Err(e) = connector.disconnect().await
+        {
+            warn!("release failed for {account_id}: {e}");
+        }
+        self.ws_watches.remove(account_id);
+        self.reconnect_attempts.remove(account_id);
+        self.session_deaths.borrow_mut().remove(account_id);
+        self.last_used.remove(account_id);
+        self.bump_generation(account_id);
+        set_connection_state(ctx, account_id, ConnectionState::Disconnected);
+    }
+
+    /// Drop least-recently used sessions so at most [`MAX_CONNECTED_ACCOUNTS`] remain.
+    ///
+    /// Never releases `keep` (the account just selected / connected).
+    pub async fn evict_over_cap(&mut self, keep: &AccountId, ctx: &mut AppContext) {
+        let evict = accounts_to_evict(
+            self.connectors.keys().cloned(),
+            &self.last_used,
+            MAX_CONNECTED_ACCOUNTS,
+            keep,
+        );
+        for id in evict {
+            info!("Evicting LRU account {id} (max {MAX_CONNECTED_ACCOUNTS} connections)");
+            self.release_connector(&id, ctx).await;
+        }
     }
 
     /// Remove a death watch without bumping generation (avoids a closed-watch busy loop).
@@ -454,6 +491,7 @@ impl AccountConnectionManager {
         self.connectors.clear();
         self.configs.clear();
         self.memory_only.clear();
+        self.last_used.clear();
         ctx.connection_states.write().clear();
 
         for (id, connector) in connectors {
@@ -485,6 +523,7 @@ impl AccountConnectionManager {
         self.ws_watches.remove(account_id);
         self.reconnect_attempts.remove(account_id);
         self.session_deaths.borrow_mut().remove(account_id);
+        self.last_used.remove(account_id);
         // Bump generation so any in-flight connect / auto-reconnect is ignored.
         self.bump_generation(account_id);
         set_connection_state(ctx, account_id, ConnectionState::Disconnected);
@@ -509,6 +548,10 @@ impl AccountConnectionManager {
                 .get(account_id)
                 .is_some_and(|s| matches!(s, ConnectionState::Ready));
             if already_ready {
+                self.touch_recency(account_id);
+                if mode.evicts_over_cap() {
+                    self.evict_over_cap(account_id, ctx).await;
+                }
                 return Ok(());
             }
             // Connector present but not Ready — drop and reconnect.
@@ -518,15 +561,8 @@ impl AccountConnectionManager {
             self.ws_watches.remove(account_id);
         }
 
-        match mode {
-            EnsureConnectedMode::Switch => {
-                // Intentional account switch: tear down other sessions first.
-                self.disconnect_others(Some(account_id), ctx).await;
-            }
-            EnsureConnectedMode::KeepActiveUntilReady => {
-                // Trial / first-save: leave existing active session alone until Ready.
-            }
-        }
+        // Switch no longer tears down other live sessions. LRU eviction runs
+        // after this connect reaches Ready (see `evicts_over_cap`).
 
         let my_gen = self.bump_generation(account_id);
         // Cache for the attempt; may be dropped on failure if not store-backed (see below).
@@ -549,11 +585,15 @@ impl AccountConnectionManager {
 
         match connect_result {
             Ok((connector, watch)) => {
-                // KeepActiveUntilReady deliberately does **not** disconnect others here.
-                // Callers switch active-only only after full commit (store writes) succeed.
+                // KeepActiveUntilReady deliberately does **not** evict here.
+                // Callers apply the cap only after full commit (store writes) succeed.
                 self.connectors.insert(account_id.clone(), connector);
                 self.ws_watches.insert(account_id.clone(), watch);
                 self.reconnect_attempts.remove(account_id);
+                self.touch_recency(account_id);
+                if mode.evicts_over_cap() {
+                    self.evict_over_cap(account_id, ctx).await;
+                }
                 set_connection_state(ctx, account_id, ConnectionState::Ready);
                 info!("Account {} connected and authenticated", account_id);
                 Ok(())

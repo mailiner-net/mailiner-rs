@@ -6,6 +6,7 @@ pub mod account_store;
 pub mod account_vault;
 pub mod address_book;
 pub mod autodiscover;
+pub mod background_sync;
 pub mod download;
 pub mod draft_store;
 pub mod formatter;

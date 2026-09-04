@@ -1,0 +1,55 @@
+crates/mailiner-app/src/snippet.rs
+  s_2700195d744e28::t_a7331fedacd521 1-8,12-24,29,38-54,61-67,70-166,168-174,176,180-183,187-195,197-201,203-208,212-215,217-220,225-226
+  s_2700195d744e28::t_4c55b38735f42d 55-60
+  s_2700195d744e28::t_44bb3b9ae49e1d 177-179
+  s_2700195d744e28::t_25ca15e893af9e 185-186
+  s_2700195d744e28::t_167e6a1b0889c6 221,223-224
+crates/mailiner-app/src/lib.rs
+  s_2700195d744e28::t_c4caacbb32f41d 27
+crates/mailiner-core/src/models.rs
+  s_2700195d744e28::t_a6e38097c2f101 374-376
+crates/mailiner-app/src/core_event.rs
+  s_2700195d744e28::t_544774945bc55f 1638-1660,1663,1665,1667-1668,1674-1720,1723-1729
+  s_2700195d744e28::t_bf77604a00ccac 1923
+  s_2700195d744e28::t_0a2ce2e55ebea8 2072
+crates/mailiner-app/src/message.rs
+  s_2700195d744e28::t_699a0014a0da6e 26-27,347
+  s_2700195d744e28::t_2fb0338518138e 188,244,250
+crates/mailiner-app/src/toast.rs
+  s_2700195d744e28::t_9806570a0a46d9 215
+crates/mailiner-composer/src/reply/prefill.rs
+  s_2700195d744e28::t_5688c47802d2d5 468
+crates/mailiner-imap-connector/src/bodystructure.rs
+  s_2700195d744e28::t_ccd703fb2828a1 99-125,127-141,203-217,220-245
+  s_2700195d744e28::t_9785d08caf9f7d 218-219
+crates/mailiner-imap-connector/src/lib.rs
+  s_2700195d744e28::t_21047b5274b50a 513
+  s_2700195d744e28::t_d97ae9debd14ad 879-897
+  s_2700195d744e28::t_e54919c2ef0e0a 1770-1774,1776-1787,1791,1793-1798,1802,1804-1809,1811-1830,1832-1865,1867-1877
+crates/mailiner-app/assets/main.css
+  s_2700195d744e28::t_6f260fcf4a08f2 2646-2656,2659
+crates/mailiner-app/src/mail_cache.rs
+  s_2700195d744e28::t_4470099628c427 746
+  s_2700195d744e28::t_164017c466eefb 1146-1161,1163,1169-1175
+  s_2700195d744e28::t_4dba53613bb407 1162,1164-1168
+crates/mailiner-core/src/connector.rs
+  s_2700195d744e28::t_803e986b01c10e 145-147,149-153,155,213
+  s_2700195d744e28::t_c9f3e909b79055 580-584,586-591,593-596
+  s_2700195d744e28::t_9dd4508a6c7ca9 924-971,974-975
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "54057d7051320c3e5652243df9e7f7462d40a4db",
+  "prompts": {},
+  "sessions": {
+    "s_2700195d744e28": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06939-1b37-7420-8f7b-c10f53f97626",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

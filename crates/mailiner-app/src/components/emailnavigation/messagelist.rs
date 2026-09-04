@@ -4,17 +4,47 @@ use std::sync::Arc;
 use dioxus::html::Key;
 use dioxus::prelude::*;
 
+use crate::account::AccountId;
 use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
 use crate::components::icons::{Icon, IconKind};
 use crate::components::virtual_scroll::{SparseList, VirtualScroll};
 use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
+use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, MAIL_EXPORT_KEY};
 use crate::keywords::MessageKeywordChips;
+use crate::mail_file::{MailExportFormat, export_items_from};
 use crate::mailbox::MailboxId;
 use crate::message::Message;
 use crate::message_list_filter::message_matches_filter;
-use crate::selection::drag_message_ids;
+use crate::selection::{drag_message_ids, export_selection};
 use chrono::{DateTime, Utc};
+
+fn send_export(
+    ctx: &AppContext,
+    core_tx: &Coroutine<CoreEvent>,
+    account_id: Option<AccountId>,
+    mailbox_id: Option<MailboxId>,
+    folder_label: String,
+    format: MailExportFormat,
+) {
+    let (Some(account_id), Some(mailbox_id)) = (account_id, mailbox_id) else {
+        return;
+    };
+    let items = export_items_from(export_selection(
+        &ctx.selection.read(),
+        ctx.messages.read().iter().map(|m| m.as_ref()),
+    ));
+    if items.is_empty() {
+        return;
+    }
+    let _ = core_tx.send(CoreEvent::ExportMessages {
+        account_id,
+        mailbox_id,
+        items,
+        format,
+        folder_label,
+    });
+}
 
 fn list_date(dt: &DateTime<Utc>) -> String {
     let now = Utc::now();
@@ -42,6 +72,23 @@ pub fn MessageList() -> Element {
     let cached = ctx.messages.read().cached_count();
     let fully_loaded = cached >= total;
     let selected_n = ctx.selection.read().len();
+    let export_busy = matches!(
+        ctx.download_status.read().get(MAIL_EXPORT_KEY),
+        Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
+    ) || matches!(
+        ctx.download_status.read().get(EML_DOWNLOAD_KEY),
+        Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
+    );
+    let selected_account = ctx.selected_account.read().clone();
+    let export_folder_label = selected_mailbox
+        .as_ref()
+        .and_then(|id| {
+            ctx.mailbox_nodes
+                .read()
+                .get(id)
+                .map(|n| n.title().to_string())
+        })
+        .unwrap_or_else(|| "mailbox".into());
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
     let search_query = ctx.list_search_query.read().clone();
@@ -276,6 +323,56 @@ pub fn MessageList() -> Element {
                             class: "message-list-selected-count",
                             aria_live: "polite",
                             "{selected_n} selected"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "message-list-select-action",
+                            title: if selected_n == 1 {
+                                "Download selected message as .eml"
+                            } else {
+                                "Download selected messages as a zip of .eml files"
+                            },
+                            disabled: export_busy || selected_account.is_none(),
+                            onclick: {
+                                let mailbox_id = selected_mailbox.clone();
+                                let account_id = selected_account.clone();
+                                let folder_label = export_folder_label.clone();
+                                let ctx = ctx.clone();
+                                move |_| {
+                                    send_export(
+                                        &ctx,
+                                        &core_tx,
+                                        account_id.clone(),
+                                        mailbox_id.clone(),
+                                        folder_label.clone(),
+                                        MailExportFormat::EmlZip,
+                                    );
+                                }
+                            },
+                            if export_busy { "Exporting…" } else if selected_n == 1 { "Export .eml" } else { "Export .eml zip" }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "message-list-select-action",
+                            title: "Download selected messages as mbox",
+                            disabled: export_busy || selected_account.is_none(),
+                            onclick: {
+                                let mailbox_id = selected_mailbox.clone();
+                                let account_id = selected_account.clone();
+                                let folder_label = export_folder_label.clone();
+                                let ctx = ctx.clone();
+                                move |_| {
+                                    send_export(
+                                        &ctx,
+                                        &core_tx,
+                                        account_id.clone(),
+                                        mailbox_id.clone(),
+                                        folder_label.clone(),
+                                        MailExportFormat::Mbox,
+                                    );
+                                }
+                            },
+                            "Export mbox"
                         }
                     }
                 }

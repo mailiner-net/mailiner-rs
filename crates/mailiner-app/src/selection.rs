@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::message::MessageId;
+use crate::message::{Message, MessageId};
 
 /// Current list selection. Single-select is just `ids.len() == 1`.
 ///
@@ -236,6 +236,30 @@ pub fn drag_message_ids(selection: &MessageSelection, dragged: &MessageId) -> Ve
     }
 }
 
+/// Selected messages in `messages` order, then any selected ids not in that list.
+pub fn export_selection<'a, I>(
+    selection: &MessageSelection,
+    messages: I,
+) -> Vec<(MessageId, String, Option<u64>)>
+where
+    I: IntoIterator<Item = &'a Message>,
+{
+    let mut out = Vec::with_capacity(selection.len());
+    let mut seen = HashSet::new();
+    for msg in messages {
+        if selection.contains(&msg.id) {
+            seen.insert(msg.id.clone());
+            out.push((msg.id.clone(), msg.subject.clone(), msg.envelope.size));
+        }
+    }
+    for id in selection.ids() {
+        if !seen.contains(id) {
+            out.push((id.clone(), String::new(), None));
+        }
+    }
+    out
+}
+
 /// Auto-mark `\Seen` only when opening a single message.
 ///
 /// `requested` is the caller's intent (plain click / arrow, or Unread-first
@@ -383,6 +407,47 @@ mod tests {
         assert_eq!(s.focus(), Some(&id("a")));
         assert_eq!(s.focus_at_index(), None);
         assert_eq!(s.anchor_index(), None);
+    }
+
+    #[test]
+    fn export_selection_preserves_list_order() {
+        fn msg(uid: &str, subject: &str) -> Message {
+            Message::from(mailiner_core::Envelope {
+                id: id(uid),
+                account_id: mailiner_core::AccountId::new("acc"),
+                folder_id: mailiner_core::FolderId::new("INBOX"),
+                subject: Some(subject.into()),
+                from: None,
+                to: None,
+                cc: None,
+                bcc: None,
+                reply_to: None,
+                rfc_message_id: None,
+                in_reply_to: None,
+                references: vec![],
+                date: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                is_read: false,
+                is_answered: false,
+                is_starred: false,
+                is_flagged: false,
+                is_draft: false,
+                is_deleted: false,
+                keywords: vec![],
+                has_attachments: false,
+                size: None,
+                snippet: None,
+                auth_results: Default::default(),
+            })
+        }
+        let mut s = MessageSelection::default();
+        s.select_all([id("c"), id("a")]);
+        s.toggle(id("b"), Some(1));
+        let listed = [msg("a", "A"), msg("b", "B")];
+        let got = export_selection(&s, listed.iter());
+        assert_eq!(got[0].0, id("a"));
+        assert_eq!(got[1].0, id("b"));
+        assert_eq!(got[2].0, id("c"));
+        assert_eq!(got[0].1, "A");
     }
 
     #[test]

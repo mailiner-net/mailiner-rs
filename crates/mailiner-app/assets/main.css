@@ -1213,6 +1213,15 @@ a.accounts-link-btn {
     background: var(--item-hover-background);
 }
 
+.mail-import {
+    position: relative;
+}
+
+.mail-import.is-disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .pane-header-settings {
     display: inline-flex;
     align-items: center;

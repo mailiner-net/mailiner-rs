@@ -7,10 +7,51 @@ use super::super::theme::ThemeSelect;
 use super::mailboxtreeview::prompt_folder_name;
 
 use crate::Route;
+use crate::account::AccountId;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
-use crate::mailbox::can_empty_trash;
+use crate::download::{DownloadStatus, MAIL_IMPORT_KEY, MAX_DOWNLOAD_BYTES};
+use crate::mail_file::parse_import_files;
+use crate::mailbox::{MailboxId, can_empty_trash};
+use crate::toast::ToastAction;
 use crate::ui_prefs::MessageListDensity;
+
+async fn import_selected_files(
+    ctx: AppContext,
+    core_tx: Coroutine<CoreEvent>,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    files: Vec<dioxus::html::FileData>,
+) {
+    let mut raw = Vec::new();
+    for file in files {
+        let filename = file.name();
+        if file.size() > MAX_DOWNLOAD_BYTES as u64 {
+            ctx.show_toast(ToastAction::error(format!(
+                "\"{filename}\" is too large to import (max {} bytes)",
+                MAX_DOWNLOAD_BYTES
+            )));
+            return;
+        }
+        match file.read_bytes().await {
+            Ok(bytes) => raw.push((filename, bytes.to_vec())),
+            Err(_) => {
+                ctx.show_toast(ToastAction::error(format!("Could not read \"{filename}\"")));
+                return;
+            }
+        }
+    }
+    match parse_import_files(raw) {
+        Ok(messages) => {
+            let _ = core_tx.send(CoreEvent::ImportMessages {
+                account_id,
+                mailbox_id,
+                messages,
+            });
+        }
+        Err(e) => ctx.show_toast(ToastAction::error(e)),
+    }
+}
 
 /// Confirm before permanently emptying Trash. Non-web builds fail closed.
 fn confirm_empty_trash() -> bool {
@@ -83,6 +124,15 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let show_empty_trash = props.mode == Mode::MessageList
         && current_mailbox.is_some_and(can_empty_trash)
         && message_total > 0;
+    let import_busy = matches!(
+        ctx.download_status.read().get(MAIL_IMPORT_KEY),
+        Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
+    );
+    let can_import = props.mode == Mode::MessageList
+        && current_account_id.is_some()
+        && current_mailbox.is_some_and(|n| n.selectable)
+        && !import_busy;
+    let mut import_input_gen = use_signal(|| 0u32);
     rsx! {
         header {
             class: "pane-header",
@@ -217,6 +267,53 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             },
                             "{option.label()}"
                         }
+                    }
+                }
+            }
+
+            if props.mode == Mode::MessageList {
+                if let (Some(mailbox_id), Some(account_id)) =
+                    (current_mailbox_id.clone(), current_account_id.clone())
+                {
+                    label {
+                        class: if can_import {
+                            "folder-new mail-import"
+                        } else {
+                            "folder-new mail-import is-disabled"
+                        },
+                        title: "Import .eml or mbox into this folder",
+                        input {
+                            key: "{import_input_gen()}",
+                            class: "compose-attach-input",
+                            r#type: "file",
+                            multiple: true,
+                            accept: ".eml,.mbox,message/rfc822,application/mbox",
+                            disabled: !can_import,
+                            aria_label: "Import .eml or mbox",
+                            onchange: {
+                                let ctx = ctx.clone();
+                                let mailbox_id = mailbox_id.clone();
+                                let account_id = account_id.clone();
+                                move |evt: FormEvent| {
+                                    if !can_import {
+                                        return;
+                                    }
+                                    let files = evt.files();
+                                    import_input_gen.set(import_input_gen() + 1);
+                                    if files.is_empty() {
+                                        return;
+                                    }
+                                    spawn(import_selected_files(
+                                        ctx.clone(),
+                                        core_tx,
+                                        account_id.clone(),
+                                        mailbox_id.clone(),
+                                        files,
+                                    ));
+                                }
+                            },
+                        }
+                        if import_busy { "Importing…" } else { "Import" }
                     }
                 }
             }

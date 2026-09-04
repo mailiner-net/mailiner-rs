@@ -14,6 +14,7 @@ pub mod keywords;
 pub mod layout;
 pub mod local_data;
 pub mod mail_cache;
+pub mod mail_file;
 pub mod mailbox;
 pub mod message;
 pub mod message_list_filter;

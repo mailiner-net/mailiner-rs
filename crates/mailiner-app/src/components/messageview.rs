@@ -19,14 +19,16 @@ use crate::context::{
     AppContext, MailboxPickerMode, MessageHeadersState, MessageSourceState, MessageViewState,
 };
 use crate::core_event::CoreEvent;
-use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
+use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, MAIL_EXPORT_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, retain_cid_payloads_in_scope};
 use crate::keywords::{MessageKeywordChips, has_visible_keywords, keyword_tone};
+use crate::mail_file::{MailExportFormat, export_items_from};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::phishing::{self, SenderCue};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
+use crate::selection::export_selection;
 use crate::snooze::SnoozePreset;
 use crate::toast::ToastAction;
 
@@ -1055,8 +1057,20 @@ fn MessageHeader(
     };
     let eml_busy = matches!(
         ctx.download_status.read().get(EML_DOWNLOAD_KEY),
-        Some(DownloadStatus::InProgress { .. })
+        Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
+    ) || matches!(
+        ctx.download_status.read().get(MAIL_EXPORT_KEY),
+        Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
     );
+    let export_folder_label = mailbox_id
+        .as_ref()
+        .and_then(|id| {
+            ctx.mailbox_nodes
+                .read()
+                .get(id)
+                .map(|n| n.title().to_string())
+        })
+        .unwrap_or_else(|| "mailbox".into());
     let all_selected_starred = {
         let list = ctx.messages.read();
         !selected_ids.is_empty()
@@ -1465,11 +1479,16 @@ fn MessageHeader(
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: eml_busy || mailbox_id.is_none() || ctx.selected_account.read().is_none(),
-                        title: "Save as .eml",
+                        title: if selected_n > 1 {
+                            "Download selected messages as a zip of .eml files"
+                        } else {
+                            "Save as .eml"
+                        },
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
                             let message = message.clone();
                             let account_id = ctx.selected_account.read().clone();
+                            let folder_label = export_folder_label.clone();
                             move |_| {
                                 let Some(mailbox_id) = mailbox_id.clone() else {
                                     return;
@@ -1477,6 +1496,23 @@ fn MessageHeader(
                                 let Some(account_id) = account_id.clone() else {
                                     return;
                                 };
+                                if ctx.selection.read().len() > 1 {
+                                    let items = export_items_from(export_selection(
+                                        &ctx.selection.read(),
+                                        ctx.messages.read().iter().map(|m| m.as_ref()),
+                                    ));
+                                    if items.is_empty() {
+                                        return;
+                                    }
+                                    let _ = core_tx.send(CoreEvent::ExportMessages {
+                                        account_id,
+                                        mailbox_id,
+                                        items,
+                                        format: MailExportFormat::EmlZip,
+                                        folder_label: folder_label.clone(),
+                                    });
+                                    return;
+                                }
                                 let _ = core_tx.send(CoreEvent::SaveMessageEml {
                                     account_id,
                                     mailbox_id,
@@ -1486,7 +1522,48 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        if eml_busy { "Saving…" } else { "Save as .eml" }
+                        if eml_busy && selected_n > 1 {
+                            "Exporting…"
+                        } else if eml_busy {
+                            "Saving…"
+                        } else if selected_n > 1 {
+                            "Export .eml"
+                        } else {
+                            "Save as .eml"
+                        }
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        disabled: eml_busy || mailbox_id.is_none() || ctx.selected_account.read().is_none() || selected_n == 0,
+                        title: "Download selected messages as mbox",
+                        onclick: {
+                            let mailbox_id = mailbox_id.clone();
+                            let account_id = ctx.selected_account.read().clone();
+                            let folder_label = export_folder_label.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let Some(account_id) = account_id.clone() else {
+                                    return;
+                                };
+                                let items = export_items_from(export_selection(
+                                    &ctx.selection.read(),
+                                    ctx.messages.read().iter().map(|m| m.as_ref()),
+                                ));
+                                if items.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::ExportMessages {
+                                    account_id,
+                                    mailbox_id,
+                                    items,
+                                    format: MailExportFormat::Mbox,
+                                    folder_label: folder_label.clone(),
+                                });
+                            }
+                        },
+                        "Export mbox"
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",

@@ -1,15 +1,17 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use dioxus::html::Key;
 use dioxus::prelude::*;
 
 use crate::components::emailnavigation::navigationheader::{Mode, NavigationHeader};
 use crate::components::icons::{Icon, IconKind};
-use crate::components::virtual_scroll::VirtualScroll;
+use crate::components::virtual_scroll::{SparseList, VirtualScroll};
 use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 use crate::message::Message;
+use crate::message_list_filter::{message_matches_text_filter, text_filter_is_active};
 use crate::selection::drag_message_ids;
 use chrono::{DateTime, Utc};
 
@@ -37,7 +39,37 @@ pub fn MessageList() -> Element {
     let density = *ctx.message_list_density.read();
     let cached = ctx.messages.read().cached_count();
     let selected_n = ctx.selection.read().len();
-    let has_known = cached > 0;
+    let mut list_text_filter = ctx.list_text_filter;
+    let filter_query = list_text_filter.read().clone();
+    let filtering = text_filter_is_active(&filter_query);
+    let filtered_matches: Vec<Arc<Message>> = if filtering {
+        ctx.messages
+            .read()
+            .iter()
+            .filter(|m| message_matches_text_filter(m, &filter_query))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let match_count = filtered_matches.len();
+    let has_known = if filtering {
+        match_count > 0
+    } else {
+        cached > 0
+    };
+    let no_loaded_matches = filtering && match_count == 0;
+
+    let mut filtered_items = use_signal(|| SparseList::<Arc<Message>>::new(0));
+    if filtering {
+        let mut next = SparseList::new(filtered_matches.len());
+        next.insert_batch(0, filtered_matches);
+        if *filtered_items.peek() != next {
+            filtered_items.set(next);
+        }
+    } else if filtered_items.peek().total_count() != 0 {
+        filtered_items.set(SparseList::new(0));
+    }
 
     let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
@@ -47,177 +79,17 @@ pub fn MessageList() -> Element {
 
     let render_item = move |args: (usize, Arc<Message>)| -> Element {
         let (index, message) = args;
-        let core_tx = use_coroutine_handle::<CoreEvent>();
-        let ctx = use_context::<AppContext>();
-        let mut message_drag = ctx.message_drag;
-        let selection = ctx.selection.read();
-        let is_selected = selection.contains(&message.id);
-        let is_focused = selection.focus() == Some(&message.id);
-        let is_dragging = message_drag
+        rsx! { MessageListItem { index, message } }
+    };
+
+    let render_filtered_item = move |args: (usize, Arc<Message>)| -> Element {
+        let message = args.1;
+        let index = ctx
+            .messages
             .read()
-            .as_ref()
-            .is_some_and(|d| d.message_ids.contains(&message.id));
-        let avatar = message.avatar_color();
-        let message_id = message.id.clone();
-        let star_id = message.id.clone();
-        let flag_id = message.id.clone();
-        let click_id = message.id.clone();
-        let drag_id = message.id.clone();
-        let row_account = ctx.selected_account.peek().clone();
-        let row_mailbox = MailboxId::from(message.id.folder_id().clone());
-        let star_account = row_account.clone();
-        let flag_account = row_account;
-        let star_mailbox = row_mailbox.clone();
-        let flag_mailbox = row_mailbox;
-        let is_starred = message.is_starred;
-        let is_flagged = message.is_flagged;
-
-        rsx! {
-            div {
-                class: "message-list-item",
-                class: if is_selected { "selected" },
-                class: if is_focused { "focused" },
-                class: if !message.is_read { "unread" },
-                class: if is_dragging { "dragging" },
-                aria_selected: if is_selected { "true" } else { "false" },
-                draggable: "true",
-
-                onmousedown: move |evt: MouseEvent| {
-                    if evt.modifiers().shift() || evt.modifiers().ctrl() || evt.modifiers().meta() {
-                        evt.prevent_default();
-                    }
-                },
-
-                onclick: move |evt: MouseEvent| {
-                    evt.prevent_default();
-                    let _ = core_tx.send(CoreEvent::SelectListClick {
-                        message_id: click_id.clone(),
-                        index,
-                        extend: evt.modifiers().shift(),
-                        toggle: evt.modifiers().ctrl() || evt.modifiers().meta(),
-                    });
-                },
-
-                ondragstart: move |evt: DragEvent| {
-                    let Some(source_mailbox) = ctx.selected_mailbox.peek().clone() else {
-                        return;
-                    };
-                    let ids = drag_message_ids(&ctx.selection.peek(), &drag_id);
-                    let dt = evt.data_transfer();
-                    let _ = dt.set_data("text/plain", "mailiner-messages");
-                    dt.set_effect_allowed("move");
-                    message_drag.set(Some(MessageDrag {
-                        message_ids: ids,
-                        source_mailbox,
-                        over: None,
-                    }));
-                },
-
-                ondragend: move |_| {
-                    message_drag.set(None);
-                },
-
-                div {
-                    class: "message-avatar",
-                    style: "background-color: {avatar}",
-                    aria_hidden: "true",
-                }
-
-                div {
-                    class: "message-list-item-content",
-
-                    div {
-                        class: "message-list-item-top",
-                        div {
-                            class: "message-from",
-                            "{message.from_preview()}"
-                        }
-                        div {
-                            class: "message-list-item-meta",
-                            if message.is_answered {
-                                span {
-                                    class: "message-answered-indicator",
-                                    role: "img",
-                                    aria_label: "Replied",
-                                    title: "Replied",
-                                    Icon { size: 14, icon: IconKind::ArrowUturnLeft }
-                                }
-                            }
-                            button {
-                                class: "message-star-indicator",
-                                class: if is_starred { "is-on" },
-                                r#type: "button",
-                                aria_pressed: if is_starred { "true" } else { "false" },
-                                aria_label: if is_starred { "Unstar" } else { "Star" },
-                                title: if is_starred { "Unstar" } else { "Star" },
-                                onmousedown: move |evt: MouseEvent| {
-                                    evt.stop_propagation();
-                                },
-                                onclick: move |evt: MouseEvent| {
-                                    evt.stop_propagation();
-                                    evt.prevent_default();
-                                    let Some(account_id) = star_account.clone() else {
-                                        return;
-                                    };
-                                    let _ = core_tx.send(CoreEvent::ToggleStar {
-                                        account_id,
-                                        mailbox_id: star_mailbox.clone(),
-                                        message_ids: vec![star_id.clone()],
-                                    });
-                                },
-                                Icon { size: 14, icon: IconKind::Star }
-                            }
-                            button {
-                                class: "message-flag-indicator",
-                                class: if is_flagged { "is-on" },
-                                r#type: "button",
-                                aria_pressed: if is_flagged { "true" } else { "false" },
-                                aria_label: if is_flagged { "Unflag" } else { "Flag" },
-                                title: if is_flagged { "Unflag" } else { "Flag" },
-                                onmousedown: move |evt: MouseEvent| {
-                                    evt.stop_propagation();
-                                },
-                                onclick: move |evt: MouseEvent| {
-                                    evt.stop_propagation();
-                                    evt.prevent_default();
-                                    let Some(account_id) = flag_account.clone() else {
-                                        return;
-                                    };
-                                    let _ = core_tx.send(CoreEvent::ToggleFlag {
-                                        account_id,
-                                        mailbox_id: flag_mailbox.clone(),
-                                        message_ids: vec![flag_id.clone()],
-                                    });
-                                },
-                                Icon { size: 14, icon: IconKind::Flag }
-                            }
-                            if message.has_attachments {
-                                span {
-                                    class: "message-attachment-indicator",
-                                    role: "img",
-                                    aria_label: "Has attachments",
-                                    title: "Has attachments",
-                                    Icon { size: 14, icon: IconKind::PaperClip }
-                                }
-                            }
-                            div {
-                                class: "message-date",
-                                "{list_date(&message.date)}"
-                            }
-                        }
-                    }
-
-                    div {
-                        class: "message-subject",
-                        if message.subject.trim().is_empty() {
-                            span { class: "message-subject-empty", "(no subject)" }
-                        } else {
-                            "{message.subject}"
-                        }
-                    }
-                }
-            }
-        }
+            .position(|m| m.id == message.id)
+            .unwrap_or(0);
+        rsx! { MessageListItem { index, message } }
     };
 
     rsx! {
@@ -229,13 +101,47 @@ pub fn MessageList() -> Element {
                 mode: Mode::MessageList,
             }
 
+            if selected_mailbox.is_some() {
+                div {
+                    class: "message-list-filter",
+                    input {
+                        class: "ui-input",
+                        r#type: "search",
+                        value: "{filter_query}",
+                        placeholder: "Filter subject or from",
+                        aria_label: "Filter loaded messages by subject or from",
+                        title: "Filter loaded messages by subject or from (no server search)",
+                        autocomplete: "off",
+                        spellcheck: false,
+                        oninput: move |evt| list_text_filter.set(evt.value()),
+                        onkeydown: move |evt: KeyboardEvent| {
+                            if evt.key() == Key::Escape && !list_text_filter.peek().is_empty() {
+                                evt.prevent_default();
+                                list_text_filter.set(String::new());
+                            }
+                        },
+                    }
+                    if filtering {
+                        span {
+                            class: "message-list-filter-count",
+                            aria_live: "polite",
+                            "{match_count} of {cached} loaded"
+                        }
+                    }
+                }
+            }
+
             if selected_mailbox.is_some() && !loading && total > 0 {
                 div {
                     class: "message-list-selection",
                     button {
                         r#type: "button",
                         class: "message-list-select-action",
-                        title: "Select all loaded messages (Ctrl+A)",
+                        title: if filtering {
+                            "Select all matching loaded messages (Ctrl+A)"
+                        } else {
+                            "Select all loaded messages (Ctrl+A)"
+                        },
                         disabled: !has_known,
                         onclick: move |_| {
                             let _ = core_tx.send(CoreEvent::SelectAllKnown);
@@ -245,7 +151,11 @@ pub fn MessageList() -> Element {
                     button {
                         r#type: "button",
                         class: "message-list-select-action",
-                        title: "Select unread loaded messages",
+                        title: if filtering {
+                            "Select unread matching loaded messages"
+                        } else {
+                            "Select unread loaded messages"
+                        },
                         disabled: !has_known,
                         onclick: move |_| {
                             let _ = core_tx.send(CoreEvent::SelectUnreadKnown);
@@ -255,7 +165,11 @@ pub fn MessageList() -> Element {
                     button {
                         r#type: "button",
                         class: "message-list-select-action",
-                        title: "Invert selection among loaded messages",
+                        title: if filtering {
+                            "Invert selection among matching loaded messages"
+                        } else {
+                            "Invert selection among loaded messages"
+                        },
                         disabled: !has_known,
                         onclick: move |_| {
                             let _ = core_tx.send(CoreEvent::InvertSelection);
@@ -290,6 +204,27 @@ pub fn MessageList() -> Element {
                         class: "message-list-empty",
                         "No messages"
                     }
+                } else if no_loaded_matches {
+                    div {
+                        class: "message-list-empty",
+                        "No matching loaded messages"
+                    }
+                } else if filtering {
+                    // Remount when the query changes so a prior scroll offset
+                    // cannot sit below the new (shorter) list.
+                    VirtualScroll {
+                        key: "{filter_query}",
+                        items: filtered_items,
+                        item_height: density.item_height(),
+                        buffer_size: BUFFER_SIZE,
+                        debounce_ms: Some(100),
+                        max_cached: None,
+                        reveal_index: ctx.selection.read().focus().and_then(|id| {
+                            filtered_items.read().position(|m| m.id == *id)
+                        }),
+                        on_need_range: move |_: Range<usize>| {},
+                        render_item: render_filtered_item,
+                    }
                 } else {
                     VirtualScroll {
                         items: ctx.messages,
@@ -302,6 +237,180 @@ pub fn MessageList() -> Element {
                         }),
                         on_need_range: on_need_range,
                         render_item: render_item,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let ctx = use_context::<AppContext>();
+    let mut message_drag = ctx.message_drag;
+    let selection = ctx.selection.read();
+    let is_selected = selection.contains(&message.id);
+    let is_focused = selection.focus() == Some(&message.id);
+    let is_dragging = message_drag
+        .read()
+        .as_ref()
+        .is_some_and(|d| d.message_ids.contains(&message.id));
+    let avatar = message.avatar_color();
+    let message_id = message.id.clone();
+    let star_id = message.id.clone();
+    let flag_id = message.id.clone();
+    let drag_id = message.id.clone();
+    let row_account = ctx.selected_account.peek().clone();
+    let row_mailbox = MailboxId::from(message.id.folder_id().clone());
+    let star_account = row_account.clone();
+    let flag_account = row_account;
+    let star_mailbox = row_mailbox.clone();
+    let flag_mailbox = row_mailbox;
+    let is_starred = message.is_starred;
+    let is_flagged = message.is_flagged;
+
+    rsx! {
+        div {
+            class: "message-list-item",
+            class: if is_selected { "selected" },
+            class: if is_focused { "focused" },
+            class: if !message.is_read { "unread" },
+            class: if is_dragging { "dragging" },
+            aria_selected: if is_selected { "true" } else { "false" },
+            draggable: "true",
+
+            onmousedown: move |evt: MouseEvent| {
+                if evt.modifiers().shift() || evt.modifiers().ctrl() || evt.modifiers().meta() {
+                    evt.prevent_default();
+                }
+            },
+
+            onclick: move |evt: MouseEvent| {
+                evt.prevent_default();
+                let _ = core_tx.send(CoreEvent::SelectListClick {
+                    message_id: message_id.clone(),
+                    index,
+                    extend: evt.modifiers().shift(),
+                    toggle: evt.modifiers().ctrl() || evt.modifiers().meta(),
+                });
+            },
+
+            ondragstart: move |evt: DragEvent| {
+                let Some(source_mailbox) = ctx.selected_mailbox.peek().clone() else {
+                    return;
+                };
+                let ids = drag_message_ids(&ctx.selection.peek(), &drag_id);
+                let dt = evt.data_transfer();
+                let _ = dt.set_data("text/plain", "mailiner-messages");
+                dt.set_effect_allowed("move");
+                message_drag.set(Some(MessageDrag {
+                    message_ids: ids,
+                    source_mailbox,
+                    over: None,
+                }));
+            },
+
+            ondragend: move |_| {
+                message_drag.set(None);
+            },
+
+            div {
+                class: "message-avatar",
+                style: "background-color: {avatar}",
+                aria_hidden: "true",
+            }
+
+            div {
+                class: "message-list-item-content",
+
+                div {
+                    class: "message-list-item-top",
+                    div {
+                        class: "message-from",
+                        "{message.from_preview()}"
+                    }
+                    div {
+                        class: "message-list-item-meta",
+                        if message.is_answered {
+                            span {
+                                class: "message-answered-indicator",
+                                role: "img",
+                                aria_label: "Replied",
+                                title: "Replied",
+                                Icon { size: 14, icon: IconKind::ArrowUturnLeft }
+                            }
+                        }
+                        button {
+                            class: "message-star-indicator",
+                            class: if is_starred { "is-on" },
+                            r#type: "button",
+                            aria_pressed: if is_starred { "true" } else { "false" },
+                            aria_label: if is_starred { "Unstar" } else { "Star" },
+                            title: if is_starred { "Unstar" } else { "Star" },
+                            onmousedown: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                            },
+                            onclick: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                                evt.prevent_default();
+                                let Some(account_id) = star_account.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::ToggleStar {
+                                    account_id,
+                                    mailbox_id: star_mailbox.clone(),
+                                    message_ids: vec![star_id.clone()],
+                                });
+                            },
+                            Icon { size: 14, icon: IconKind::Star }
+                        }
+                        button {
+                            class: "message-flag-indicator",
+                            class: if is_flagged { "is-on" },
+                            r#type: "button",
+                            aria_pressed: if is_flagged { "true" } else { "false" },
+                            aria_label: if is_flagged { "Unflag" } else { "Flag" },
+                            title: if is_flagged { "Unflag" } else { "Flag" },
+                            onmousedown: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                            },
+                            onclick: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                                evt.prevent_default();
+                                let Some(account_id) = flag_account.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                    account_id,
+                                    mailbox_id: flag_mailbox.clone(),
+                                    message_ids: vec![flag_id.clone()],
+                                });
+                            },
+                            Icon { size: 14, icon: IconKind::Flag }
+                        }
+                        if message.has_attachments {
+                            span {
+                                class: "message-attachment-indicator",
+                                role: "img",
+                                aria_label: "Has attachments",
+                                title: "Has attachments",
+                                Icon { size: 14, icon: IconKind::PaperClip }
+                            }
+                        }
+                        div {
+                            class: "message-date",
+                            "{list_date(&message.date)}"
+                        }
+                    }
+                }
+
+                div {
+                    class: "message-subject",
+                    if message.subject.trim().is_empty() {
+                        span { class: "message-subject-empty", "(no subject)" }
+                    } else {
+                        "{message.subject}"
                     }
                 }
             }

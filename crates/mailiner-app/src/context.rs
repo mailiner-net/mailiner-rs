@@ -108,6 +108,8 @@ pub struct AppContext {
     pub sign_out_error: Signal<Option<String>>,
     /// List → folder drag (`None` when idle).
     pub message_drag: Signal<Option<MessageDrag>>,
+    /// Inbox desktop notifications (off until permission is granted).
+    pub notify_inbox: Signal<bool>,
 }
 
 /// In-progress drag of list rows onto a folder.

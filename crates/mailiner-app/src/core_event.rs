@@ -14,7 +14,7 @@ use gloo_timers::future::TimeoutFuture;
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
-use mailiner_core::{EnvelopeFlag, FolderId, MailboxRole, MessageSort};
+use mailiner_core::{EnvelopeFlag, FolderCounts, FolderId, MailboxRole, MessageSort};
 
 use crate::account::AccountId;
 use crate::account_config::AccountConfig;
@@ -1294,9 +1294,12 @@ async fn list_folders_soft(
                 let one = [FolderId::new(startup_id.to_string())];
                 if let Ok(counts) = connector.folder_counts(&one).await {
                     let ack = crate::ui_prefs::load_ack_unread(account_id);
-                    let mut nodes = ctx.mailbox_nodes.write();
-                    crate::mailbox::apply_folder_counts(&mut nodes, &counts);
-                    crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                    {
+                        let mut nodes = ctx.mailbox_nodes.write();
+                        crate::mailbox::apply_folder_counts(&mut nodes, &counts);
+                        crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                    }
+                    observe_remote_counts(ctx, &counts);
                 }
             }
 
@@ -1317,9 +1320,12 @@ async fn list_folders_soft(
             for id in rest {
                 match connector.folder_counts(std::slice::from_ref(&id)).await {
                     Ok(counts) if !counts.is_empty() => {
-                        let mut nodes = ctx.mailbox_nodes.write();
-                        crate::mailbox::apply_folder_counts(&mut nodes, &counts);
-                        crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                        {
+                            let mut nodes = ctx.mailbox_nodes.write();
+                            crate::mailbox::apply_folder_counts(&mut nodes, &counts);
+                            crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                        }
+                        observe_remote_counts(ctx, &counts);
                     }
                     Ok(_) => {}
                     Err(e) => {
@@ -1401,6 +1407,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
     ctx.account_quota.set(None);
+    crate::notifications::reset_inbox_unread_baseline();
 }
 
 /// Paint a [`HydratedAccount`] onto UI signals (cache hit, no IMAP).
@@ -2436,6 +2443,7 @@ fn acknowledge_mailbox_open(
         node.unread_count
     };
     crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
+    observe_local_mailbox(ctx, mailbox_id);
 }
 
 fn bump_mailbox_unread(
@@ -2472,6 +2480,56 @@ fn bump_mailbox_unread(
         if let Some(account_id) = account_id.as_ref() {
             crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
         }
+    }
+    observe_local_mailbox(ctx, mailbox_id);
+}
+
+fn observe_remote_counts(ctx: &AppContext, counts: &HashMap<FolderId, FolderCounts>) {
+    let Some((inbox_id, _)) = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read()) else {
+        return;
+    };
+    if !counts.contains_key(&FolderId::new(inbox_id.to_string())) {
+        return;
+    }
+    sync_inbox_unread(ctx, crate::notifications::InboxCountEvent::Remote);
+}
+
+fn observe_local_mailbox(ctx: &AppContext, mailbox_id: &MailboxId) {
+    let is_inbox = ctx
+        .mailbox_nodes
+        .read()
+        .get(mailbox_id)
+        .is_some_and(|n| n.role == MailboxRole::Inbox);
+    if is_inbox {
+        sync_inbox_unread(ctx, crate::notifications::InboxCountEvent::Local);
+    }
+}
+
+fn sync_inbox_unread(ctx: &AppContext, event: crate::notifications::InboxCountEvent) {
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        return;
+    };
+    let Some((inbox_id, unread)) = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read())
+    else {
+        return;
+    };
+    let ack = crate::ui_prefs::load_ack_unread(&account_id)
+        .get(&inbox_id)
+        .copied()
+        .unwrap_or(0);
+    let Some(added) =
+        crate::notifications::observe_inbox_unread(&account_id, &inbox_id, unread, ack, event)
+    else {
+        return;
+    };
+    let viewing_inbox = ctx.selected_mailbox.read().as_ref() == Some(&inbox_id);
+    if crate::notifications::should_show_desktop_notification(
+        *ctx.notify_inbox.peek(),
+        crate::notifications::current_permission(),
+        crate::notifications::is_document_hidden(),
+        viewing_inbox,
+    ) {
+        crate::notifications::show_inbox_notification(added);
     }
 }
 
@@ -3216,6 +3274,7 @@ async fn handle_empty_trash(
                 node.has_new = false;
             }
             crate::ui_prefs::save_ack_unread(&account_id, &mailbox_id, 0);
+            observe_local_mailbox(ctx, &mailbox_id);
             persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
             ctx.show_toast(ToastAction::info("Trash emptied"));

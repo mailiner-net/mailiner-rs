@@ -11,6 +11,7 @@ pub mod mailbox;
 pub mod message;
 pub mod message_list_filter;
 pub mod message_loader;
+pub mod notifications;
 pub mod outbox_store;
 pub mod print;
 pub mod reconnect;

@@ -7,8 +7,13 @@ use crate::account::{Account, AccountId};
 use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::layout::reset_saved_layout;
-use crate::shortcuts::{ShortcutGroup, shortcuts_in_group};
-use crate::ui_prefs::{ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity};
+use crate::shortcuts::{
+    ShortcutGroup, ShortcutId, effective_shortcuts_in, remap_shortcut, reset_all_shortcuts,
+    reset_shortcut,
+};
+use crate::ui_prefs::{
+    ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity, ShortcutMapBlob,
+};
 
 fn account_from_label(account: &Account) -> String {
     if account.name.is_empty() {
@@ -53,7 +58,7 @@ pub fn SettingsPage() -> Element {
                 h1 { class: "bootstrap-title", "Settings" }
                 p {
                     class: "bootstrap-muted",
-                    "Appearance, composer, contacts, and privacy preferences are stored in this browser."
+                    "Appearance, composer, contacts, privacy, and shortcut preferences are stored in this browser."
                 }
 
                 section {
@@ -241,30 +246,7 @@ pub fn SettingsPage() -> Element {
                     }
                 }
 
-                section {
-                    class: "settings-section",
-                    h2 { "Keyboard shortcuts" }
-                    p {
-                        class: "bootstrap-muted settings-hint",
-                        "Press ? from the mail view to open this list."
-                    }
-                    for group in ShortcutGroup::ALL {
-                        section {
-                            class: "shortcut-group settings-shortcut-group",
-                            h3 { class: "shortcut-group-title", "{group.title()}" }
-                            ul {
-                                class: "shortcut-list",
-                                for shortcut in shortcuts_in_group(*group) {
-                                    li {
-                                        class: "shortcut-row",
-                                        span { class: "shortcut-desc", "{shortcut.description}" }
-                                        kbd { class: "shortcut-key", "{shortcut.label}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                ShortcutSettingsSection {}
 
                 nav {
                     class: "bootstrap-nav accounts-nav",
@@ -282,6 +264,188 @@ pub fn SettingsPage() -> Element {
             }
         }
     }
+}
+
+/// Remap a subset of [`crate::shortcuts::GLOBAL_SHORTCUTS`]; the rest stay fixed.
+#[component]
+fn ShortcutSettingsSection() -> Element {
+    let mut blob = use_signal(crate::ui_prefs::load_shortcut_map);
+    let mut capturing = use_signal(|| None::<ShortcutId>);
+    let mut action_error = use_signal(|| None::<String>);
+    let listed = effective_shortcuts_in(&blob());
+    let has_remaps = !blob().remaps.is_empty();
+
+    rsx! {
+        section {
+            class: "settings-section",
+            h2 { "Keyboard shortcuts" }
+            p {
+                class: "bootstrap-muted settings-hint",
+                "Click a key to change it. Esc cancels. Press ? from the mail view to open the help list."
+            }
+            if has_remaps {
+                div {
+                    class: "settings-actions",
+                    button {
+                        r#type: "button",
+                        class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                        onclick: move |_| {
+                            reset_all_shortcuts();
+                            blob.set(crate::ui_prefs::load_shortcut_map());
+                            capturing.set(None);
+                            action_error.set(None);
+                        },
+                        "Restore defaults"
+                    }
+                }
+            }
+            if let Some(err) = action_error() {
+                p {
+                    class: "onboarding-status onboarding-status-error",
+                    role: "alert",
+                    "{err}"
+                }
+            }
+            for group in ShortcutGroup::ALL {
+                section {
+                    class: "shortcut-group settings-shortcut-group",
+                    h3 { class: "shortcut-group-title", "{group.title()}" }
+                    ul {
+                        class: "shortcut-list",
+                        for shortcut in listed.iter().filter(|s| s.group == *group) {
+                            ShortcutSettingsRow {
+                                key: "{shortcut.id.as_key()}",
+                                id: shortcut.id,
+                                description: shortcut.description,
+                                label: shortcut.label.clone(),
+                                remappable: shortcut.id.remappable(),
+                                remapped: shortcut.remapped,
+                                blob,
+                                capturing,
+                                action_error,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ShortcutSettingsRow(
+    id: ShortcutId,
+    description: &'static str,
+    label: String,
+    remappable: bool,
+    remapped: bool,
+    mut blob: Signal<ShortcutMapBlob>,
+    mut capturing: Signal<Option<ShortcutId>>,
+    mut action_error: Signal<Option<String>>,
+) -> Element {
+    let is_capturing = capturing() == Some(id);
+    let bind_class = if is_capturing {
+        "shortcut-bind shortcut-bind-capturing"
+    } else {
+        "shortcut-bind"
+    };
+    let aria = if is_capturing {
+        format!("Press a new key for {description}")
+    } else {
+        format!("Change shortcut for {description}, currently {label}")
+    };
+
+    rsx! {
+        li {
+            class: "shortcut-row settings-shortcut-row",
+            span { class: "shortcut-desc", "{description}" }
+            div {
+                class: "settings-shortcut-actions",
+                if remappable {
+                    button {
+                        r#type: "button",
+                        class: "{bind_class}",
+                        autofocus: is_capturing,
+                        aria_label: "{aria}",
+                        aria_pressed: if is_capturing { "true" } else { "false" },
+                        onclick: move |_| {
+                            action_error.set(None);
+                            capturing.set(Some(id));
+                        },
+                        onblur: move |_| {
+                            if capturing.peek().as_ref() == Some(&id) {
+                                capturing.set(None);
+                            }
+                        },
+                        onkeydown: move |evt: KeyboardEvent| {
+                            if capturing.peek().as_ref() != Some(&id) {
+                                return;
+                            }
+                            if evt.key() == Key::Escape {
+                                evt.prevent_default();
+                                evt.stop_propagation();
+                                capturing.set(None);
+                                return;
+                            }
+                            if evt.key() == Key::Tab {
+                                return;
+                            }
+                            evt.prevent_default();
+                            evt.stop_propagation();
+                            let Some((name, shift)) = capture_key_from_event(&evt) else {
+                                return;
+                            };
+                            match remap_shortcut(id, &name, shift) {
+                                Ok(()) => {
+                                    blob.set(crate::ui_prefs::load_shortcut_map());
+                                    capturing.set(None);
+                                    action_error.set(None);
+                                }
+                                Err(e) => action_error.set(Some(e.message())),
+                            }
+                        },
+                        if is_capturing {
+                            "Press a key…"
+                        } else {
+                            kbd { class: "shortcut-key", "{label}" }
+                        }
+                    }
+                    if remapped {
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            title: "Restore default for {description}",
+                            aria_label: "Restore default for {description}",
+                            onclick: move |_| {
+                                match reset_shortcut(id) {
+                                    Ok(()) => {
+                                        blob.set(crate::ui_prefs::load_shortcut_map());
+                                        capturing.set(None);
+                                        action_error.set(None);
+                                    }
+                                    Err(e) => action_error.set(Some(e.message())),
+                                }
+                            },
+                            "Reset"
+                        }
+                    }
+                } else {
+                    kbd { class: "shortcut-key", "{label}" }
+                }
+            }
+        }
+    }
+}
+
+fn capture_key_from_event(evt: &KeyboardEvent) -> Option<(String, bool)> {
+    if evt.modifiers().ctrl() || evt.modifiers().alt() || evt.modifiers().meta() {
+        return None;
+    }
+    let name = evt.key().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, evt.modifiers().shift()))
 }
 
 /// Add/remove name+email contacts stored in origin `localStorage`.

@@ -16,7 +16,7 @@ use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
-use crate::shortcuts::{ShortcutGroup, ShortcutId, shortcut_for_key, shortcuts_in_group};
+use crate::shortcuts::{ShortcutGroup, ShortcutId, effective_shortcuts_in_group, shortcut_for_key};
 use crate::toast::ToastAction;
 
 fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
@@ -379,7 +379,7 @@ fn ShortcutHelp(onclose: EventHandler<MouseEvent>) -> Element {
                         h3 { class: "shortcut-group-title", "{group.title()}" }
                         ul {
                             class: "shortcut-list",
-                            for shortcut in shortcuts_in_group(*group) {
+                            for shortcut in effective_shortcuts_in_group(*group) {
                                 li {
                                     class: "shortcut-row",
                                     span { class: "shortcut-desc", "{shortcut.description}" }

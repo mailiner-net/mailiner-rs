@@ -175,6 +175,9 @@ where
     tls_mode: ImapTlsMode,
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
+    /// Mailbox last successfully SELECTed on this session. Chunked FETCH skips
+    /// re-SELECT while this still matches the target folder.
+    selected_mailbox: Arc<std::sync::Mutex<Option<String>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by folder + UID.
     structure_cache: Mutex<StructureCache>,
     /// RFC 5256 SORT advertised after LOGIN.
@@ -217,6 +220,7 @@ where
             username,
             tls_mode: ImapTlsMode::Implicit,
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
+            selected_mailbox: Arc::new(std::sync::Mutex::new(None)),
             structure_cache: Mutex::new(StructureCache::new()),
             has_sort: AtomicBool::new(false),
             has_quota: AtomicBool::new(false),
@@ -261,10 +265,12 @@ where
         match finish {
             watch::WatchFinish::Ready { session, outcome } => {
                 *self.imap.lock().await = ImapSession::Authenticated(session);
+                remember_selected(&self.selected_mailbox, folder_id.as_str());
                 Ok(outcome)
             }
             watch::WatchFinish::Lost(err) => {
                 *self.imap.lock().await = ImapSession::Disconnected;
+                clear_selected(&self.selected_mailbox);
                 Err(err.into())
             }
         }
@@ -667,16 +673,15 @@ where
     /// One partial `UID FETCH … BODY.PEEK[section]<offset.length>`.
     async fn fetch_partial_chunk(
         session: &mut Session<ImapIo<S>>,
+        selected: &std::sync::Mutex<Option<String>>,
         folder_id: &str,
         message_id: &str,
         section: &str,
         offset: u64,
         length: usize,
     ) -> Result<Vec<u8>, ImapError> {
-        session
-            .select(folder_id)
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        // Keep the mailbox selected across chunks; only SELECT when needed.
+        ensure_mailbox_selected(session, selected, folder_id).await?;
 
         // RFC 3501 partial fetch: BODY.PEEK[section]<origin.octet-count>
         let query = format!("(BODY.PEEK[{section}]<{offset}.{length}>)");
@@ -703,10 +708,178 @@ where
         }
     }
 
-    /// Partial FETCH window. Larger = fewer RTTs/SELECTs per download; smaller =
+    /// Partial FETCH window. Larger = fewer FETCH RTTs per download; smaller =
     /// lower peak memory. 512 KiB is a pragmatic default until adaptive sizing.
     const STREAM_CHUNK: usize = 512 * 1024;
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
+
+    async fn stream_raw_part_chunked(
+        &self,
+        folder_id: &FolderId,
+        message_id: &MessageId,
+        section: &str,
+        chunk_size: usize,
+    ) -> MailinerResult<PartStream>
+    where
+        S: Sync + 'static,
+    {
+        require_folder(folder_id, std::slice::from_ref(message_id))?;
+        // Fail fast if not authenticated (before returning a stream that would error later).
+        {
+            let imap = self.imap.lock().await;
+            if !matches!(*imap, ImapSession::Authenticated(_)) {
+                return Err(ImapError::NotAuthenticated.into());
+            }
+        }
+
+        let total_hint = self
+            .structure_cache
+            .lock()
+            .await
+            .get(&(folder_id.clone(), message_id.clone()))
+            .and_then(|root| part_size_from_structure(root, section));
+
+        if let Some(total) = total_hint {
+            if total > Self::MAX_DOWNLOAD {
+                return Err(MailinerError::Connector(format!(
+                    "attachment exceeds download limit ({total} > {})",
+                    Self::MAX_DOWNLOAD
+                )));
+            }
+        }
+
+        let imap = Arc::clone(&self.imap);
+        let selected = Arc::clone(&self.selected_mailbox);
+        let folder_id = folder_id.as_str().to_string();
+        let message_id = message_id.as_uid().to_string();
+        let section = section.to_string();
+        let max_download = Self::MAX_DOWNLOAD;
+
+        // Progressive partial FETCH: each poll issues
+        //   UID FETCH uid (BODY.PEEK[section]<offset.chunk_size>)
+        // so peak memory stays ~one chunk, not the full part. async-imap still
+        // buffers each literal fully, but that literal is now only `chunk_size`.
+        // SELECT is issued only when this session is not already on `folder_id`.
+        Ok(Box::pin(futures::stream::unfold(
+            PartialFetchState {
+                imap,
+                selected,
+                folder_id,
+                message_id,
+                section,
+                offset: 0u64,
+                chunk_size,
+                max_download,
+                total_hint,
+                done: false,
+            },
+            |mut state| async move {
+                if state.done {
+                    return None;
+                }
+
+                if state.offset >= state.max_download {
+                    state.done = true;
+                    if state.offset > state.max_download {
+                        return Some((
+                            Err(MailinerError::Connector(format!(
+                                "attachment exceeds download limit (> {})",
+                                state.max_download
+                            ))),
+                            state,
+                        ));
+                    }
+                    // Exact limit: probe one extra byte so MAX-sized parts succeed
+                    // and MAX+1 is still rejected.
+                    let probe = {
+                        let mut guard = state.imap.lock().await;
+                        match &mut *guard {
+                            ImapSession::Authenticated(session) => {
+                                Self::fetch_partial_chunk(
+                                    session,
+                                    &state.selected,
+                                    &state.folder_id,
+                                    &state.message_id,
+                                    &state.section,
+                                    state.offset,
+                                    1,
+                                )
+                                .await
+                            }
+                            _ => Err(ImapError::NotAuthenticated),
+                        }
+                    };
+                    return match probe {
+                        Ok(bytes) if bytes.is_empty() => None,
+                        Ok(_) => Some((
+                            Err(MailinerError::Connector(format!(
+                                "attachment exceeds download limit (> {})",
+                                state.max_download
+                            ))),
+                            state,
+                        )),
+                        Err(e) => Some((Err(e.into()), state)),
+                    };
+                }
+
+                let remaining_cap = (state.max_download - state.offset) as usize;
+                let req_len = state.chunk_size.min(remaining_cap);
+
+                let fetch_result = {
+                    let mut guard = state.imap.lock().await;
+                    match &mut *guard {
+                        ImapSession::Authenticated(session) => {
+                            Self::fetch_partial_chunk(
+                                session,
+                                &state.selected,
+                                &state.folder_id,
+                                &state.message_id,
+                                &state.section,
+                                state.offset,
+                                req_len,
+                            )
+                            .await
+                        }
+                        _ => Err(ImapError::NotAuthenticated),
+                    }
+                };
+
+                match fetch_result {
+                    Ok(bytes) if bytes.is_empty() => None,
+                    Ok(bytes) => {
+                        let n = bytes.len() as u64;
+                        state.offset = state.offset.saturating_add(n);
+                        // Cap without relying solely on BODYSTRUCTURE size.
+                        if state.offset > state.max_download {
+                            state.done = true;
+                            return Some((
+                                Err(MailinerError::Connector(format!(
+                                    "attachment exceeds download limit (> {})",
+                                    state.max_download
+                                ))),
+                                state,
+                            ));
+                        }
+                        // Short read ⇒ last chunk.
+                        if bytes.len() < req_len {
+                            state.done = true;
+                        }
+                        Some((
+                            Ok(PartChunk {
+                                data: bytes,
+                                total_hint: state.total_hint,
+                            }),
+                            state,
+                        ))
+                    }
+                    Err(e) => {
+                        state.done = true;
+                        Some((Err(e.into()), state))
+                    }
+                }
+            },
+        )))
+    }
 
     async fn probe_capabilities(
         session: &mut Session<ImapIo<S>>,
@@ -735,16 +908,14 @@ where
 
     async fn build_list_index(
         session: &mut Session<ImapIo<S>>,
+        selected: &std::sync::Mutex<Option<String>>,
         folder_id: &str,
         requested: MessageSort,
         has_sort: bool,
         filter: MessageListFilter,
         search: &str,
     ) -> Result<ListIndex, ImapError> {
-        let mailbox = session
-            .select(folder_id)
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        let mailbox = select_mailbox(session, selected, folder_id).await?;
         let exists = mailbox.exists as usize;
         let sort = sort::apply_sort_or_fallback(requested, has_sort);
         let compiled = compile_list_search(filter, search);
@@ -1078,9 +1249,59 @@ fn mailbox_is_self_or_descendant(name: &str, ancestor: &str, delimiter: Option<&
     }
 }
 
+fn remember_selected(selected: &std::sync::Mutex<Option<String>>, folder_id: &str) {
+    *selected.lock().unwrap_or_else(|e| e.into_inner()) = Some(folder_id.to_string());
+}
+
+fn clear_selected(selected: &std::sync::Mutex<Option<String>>) {
+    *selected.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+fn mailbox_is_selected(selected: &std::sync::Mutex<Option<String>>, folder_id: &str) -> bool {
+    selected
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_deref()
+        == Some(folder_id)
+}
+
+/// SELECT `folder_id` and record it as the session's selected mailbox.
+async fn select_mailbox<S>(
+    session: &mut Session<ImapIo<S>>,
+    selected: &std::sync::Mutex<Option<String>>,
+    folder_id: &str,
+) -> Result<async_imap::types::Mailbox, ImapError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let mailbox = session
+        .select(folder_id)
+        .await
+        .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+    remember_selected(selected, folder_id);
+    Ok(mailbox)
+}
+
+/// SELECT only when `folder_id` is not already the selected mailbox.
+async fn ensure_mailbox_selected<S>(
+    session: &mut Session<ImapIo<S>>,
+    selected: &std::sync::Mutex<Option<String>>,
+    folder_id: &str,
+) -> Result<(), ImapError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    if mailbox_is_selected(selected, folder_id) {
+        return Ok(());
+    }
+    select_mailbox(session, selected, folder_id).await?;
+    Ok(())
+}
+
 /// SELECT INBOX so DELETE/RENAME is not run against the currently selected mailbox.
 async fn select_inbox_before_mutate<S>(
     session: &mut Session<ImapIo<S>>,
+    selected: &std::sync::Mutex<Option<String>>,
     folder_id: &str,
 ) -> Result<(), ImapError>
 where
@@ -1093,6 +1314,7 @@ where
         .select("INBOX")
         .await
         .map_err(|e| ImapError::Imap(format!("Failed to select INBOX: {e}")))?;
+    remember_selected(selected, "INBOX");
     Ok(())
 }
 
@@ -1242,6 +1464,7 @@ where
 
     async fn disconnect(&self) -> MailinerResult<()> {
         *self.list_index.lock().await = None;
+        clear_selected(&self.selected_mailbox);
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
             session
@@ -1265,6 +1488,7 @@ where
                 *imap = ImapSession::Authenticated(authenticated.map_err(|(e, _)| {
                     ImapError::Authentication(format!("Failed to login: {}", e))
                 })?);
+                clear_selected(&self.selected_mailbox);
                 if let ImapSession::Authenticated(session) = &mut *imap {
                     Self::probe_capabilities(
                         session,
@@ -1390,9 +1614,16 @@ where
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
         };
-        let index =
-            Self::build_list_index(session, folder_id.as_str(), sort, has_sort, filter, search)
-                .await?;
+        let index = Self::build_list_index(
+            session,
+            &self.selected_mailbox,
+            folder_id.as_str(),
+            sort,
+            has_sort,
+            filter,
+            search,
+        )
+        .await?;
         let state = FolderListState {
             total: index.total,
             folder_total: index.exists,
@@ -1417,10 +1648,8 @@ where
             };
 
             let has_sort = self.has_sort.load(Ordering::Relaxed);
-            let mailbox = session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            let mailbox =
+                select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
             let exists = mailbox.exists as usize;
             let mut index_slot = self.list_index.lock().await;
             let stale = index_slot
@@ -1439,6 +1668,7 @@ where
                 *index_slot = Some(
                     Self::build_list_index(
                         session,
+                        &self.selected_mailbox,
                         folder_id.as_str(),
                         requested,
                         has_sort,
@@ -1543,10 +1773,7 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         for (flag, value) in flags {
             let atom = imap_flag_atom(*flag);
@@ -1651,10 +1878,7 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         if let Ok(dest_uids) =
             run_copyuid_command(session, dest_folder_id, &format!("UID MOVE {uids} {dest}")).await
@@ -1695,10 +1919,7 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         // UID COPY only — originals stay, no `\Deleted`.
         run_copyuid_command(session, dest_folder_id, &format!("UID COPY {uids} {dest}")).await
@@ -1718,10 +1939,7 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
         delete_selected_uids(session, &uids).await?;
         drop(imap);
         self.forget_messages(folder_id, message_ids).await;
@@ -1735,10 +1953,8 @@ where
                 return Err(ImapError::NotAuthenticated.into());
             };
 
-            let mailbox = session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            let mailbox =
+                select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
             // Empty folder is success. `UID STORE 1:*` would be invalid with EXISTS 0.
             if mailbox.exists > 0 {
                 delete_selected_uids(session, ALL_UIDS).await?;
@@ -1806,7 +2022,7 @@ where
             let ImapSession::Authenticated(session) = &mut *imap else {
                 return Err(ImapError::NotAuthenticated.into());
             };
-            select_inbox_before_mutate(session, folder_id.as_str()).await?;
+            select_inbox_before_mutate(session, &self.selected_mailbox, folder_id.as_str()).await?;
             session
                 .rename(folder_id.as_str(), &full_name)
                 .await
@@ -1839,7 +2055,7 @@ where
             let ImapSession::Authenticated(session) = &mut *imap else {
                 return Err(ImapError::NotAuthenticated.into());
             };
-            select_inbox_before_mutate(session, folder_id.as_str()).await?;
+            select_inbox_before_mutate(session, &self.selected_mailbox, folder_id.as_str()).await?;
             session
                 .delete(folder_id.as_str())
                 .await
@@ -1868,10 +2084,7 @@ where
                 return Err(ImapError::NotAuthenticated.into());
             };
 
-            session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+            select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
             let mut fetch = session
                 .uid_fetch(message_id.as_uid(), "(BODYSTRUCTURE)")
@@ -1916,10 +2129,7 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
 
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {}", e)))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         let mut fetch = session
             .uid_fetch(message_id.as_uid(), &query)
@@ -1999,10 +2209,7 @@ where
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
         };
-        session
-            .select(folder_id.as_str())
-            .await
-            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+        select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         for (section, group) in by_section {
             let uids = group
@@ -2062,158 +2269,8 @@ where
         message_id: &MessageId,
         section: &str,
     ) -> MailinerResult<PartStream> {
-        require_folder(folder_id, std::slice::from_ref(message_id))?;
-        // Fail fast if not authenticated (before returning a stream that would error later).
-        {
-            let imap = self.imap.lock().await;
-            if !matches!(*imap, ImapSession::Authenticated(_)) {
-                return Err(ImapError::NotAuthenticated.into());
-            }
-        }
-
-        let total_hint = self
-            .structure_cache
-            .lock()
+        self.stream_raw_part_chunked(folder_id, message_id, section, Self::STREAM_CHUNK)
             .await
-            .get(&(folder_id.clone(), message_id.clone()))
-            .and_then(|root| part_size_from_structure(root, section));
-
-        if let Some(total) = total_hint {
-            if total > Self::MAX_DOWNLOAD {
-                return Err(MailinerError::Connector(format!(
-                    "attachment exceeds download limit ({total} > {})",
-                    Self::MAX_DOWNLOAD
-                )));
-            }
-        }
-
-        let imap = Arc::clone(&self.imap);
-        let folder_id = folder_id.as_str().to_string();
-        let message_id = message_id.as_uid().to_string();
-        let section = section.to_string();
-        let chunk_size = Self::STREAM_CHUNK;
-        let max_download = Self::MAX_DOWNLOAD;
-
-        // Progressive partial FETCH: each poll issues
-        //   UID FETCH uid (BODY.PEEK[section]<offset.chunk_size>)
-        // so peak memory stays ~one chunk, not the full part. async-imap still
-        // buffers each literal fully, but that literal is now only `chunk_size`.
-        Ok(Box::pin(futures::stream::unfold(
-            PartialFetchState {
-                imap,
-                folder_id,
-                message_id,
-                section,
-                offset: 0u64,
-                chunk_size,
-                max_download,
-                total_hint,
-                done: false,
-            },
-            |mut state| async move {
-                if state.done {
-                    return None;
-                }
-
-                if state.offset >= state.max_download {
-                    state.done = true;
-                    if state.offset > state.max_download {
-                        return Some((
-                            Err(MailinerError::Connector(format!(
-                                "attachment exceeds download limit (> {})",
-                                state.max_download
-                            ))),
-                            state,
-                        ));
-                    }
-                    // Exact limit: probe one extra byte so MAX-sized parts succeed
-                    // and MAX+1 is still rejected.
-                    let probe = {
-                        let mut guard = state.imap.lock().await;
-                        match &mut *guard {
-                            ImapSession::Authenticated(session) => {
-                                Self::fetch_partial_chunk(
-                                    session,
-                                    &state.folder_id,
-                                    &state.message_id,
-                                    &state.section,
-                                    state.offset,
-                                    1,
-                                )
-                                .await
-                            }
-                            _ => Err(ImapError::NotAuthenticated),
-                        }
-                    };
-                    return match probe {
-                        Ok(bytes) if bytes.is_empty() => None,
-                        Ok(_) => Some((
-                            Err(MailinerError::Connector(format!(
-                                "attachment exceeds download limit (> {})",
-                                state.max_download
-                            ))),
-                            state,
-                        )),
-                        Err(e) => Some((Err(e.into()), state)),
-                    };
-                }
-
-                let remaining_cap = (state.max_download - state.offset) as usize;
-                let req_len = state.chunk_size.min(remaining_cap);
-
-                let fetch_result = {
-                    let mut guard = state.imap.lock().await;
-                    match &mut *guard {
-                        ImapSession::Authenticated(session) => {
-                            Self::fetch_partial_chunk(
-                                session,
-                                &state.folder_id,
-                                &state.message_id,
-                                &state.section,
-                                state.offset,
-                                req_len,
-                            )
-                            .await
-                        }
-                        _ => Err(ImapError::NotAuthenticated),
-                    }
-                };
-
-                match fetch_result {
-                    Ok(bytes) if bytes.is_empty() => None,
-                    Ok(bytes) => {
-                        let n = bytes.len() as u64;
-                        state.offset = state.offset.saturating_add(n);
-                        // Cap without relying solely on BODYSTRUCTURE size.
-                        if state.offset > state.max_download {
-                            state.done = true;
-                            return Some((
-                                Err(MailinerError::Connector(format!(
-                                    "attachment exceeds download limit (> {})",
-                                    state.max_download
-                                ))),
-                                state,
-                            ));
-                        }
-                        // Short read ⇒ last chunk.
-                        if bytes.len() < req_len {
-                            state.done = true;
-                        }
-                        Some((
-                            Ok(PartChunk {
-                                data: bytes,
-                                total_hint: state.total_hint,
-                            }),
-                            state,
-                        ))
-                    }
-                    Err(e) => {
-                        state.done = true;
-                        Some((Err(e.into()), state))
-                    }
-                }
-            },
-        )))
     }
 
     async fn fetch_raw_message(
@@ -2229,10 +2286,7 @@ where
                 return Err(ImapError::NotAuthenticated.into());
             };
 
-            session
-                .select(folder_id.as_str())
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+            select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
             let mut fetch = session
                 .uid_fetch(message_id.as_uid(), "(RFC822.SIZE)")
@@ -2280,6 +2334,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Debug,
 {
     imap: Arc<Mutex<ImapSession<S>>>,
+    selected: Arc<std::sync::Mutex<Option<String>>>,
     folder_id: String,
     message_id: String,
     section: String,
@@ -2770,5 +2825,175 @@ Received-SPF: pass\r\n\
             .unwrap();
         assert_eq!(outcome, MailboxWatchOutcome::TimedOut);
         server_task.await.unwrap();
+    }
+
+    #[test]
+    fn selected_mailbox_tracks_skip_and_switch() {
+        let selected = std::sync::Mutex::new(None);
+        assert!(!mailbox_is_selected(&selected, "INBOX"));
+        remember_selected(&selected, "INBOX");
+        assert!(mailbox_is_selected(&selected, "INBOX"));
+        assert!(!mailbox_is_selected(&selected, "Sent"));
+        remember_selected(&selected, "Sent");
+        assert!(mailbox_is_selected(&selected, "Sent"));
+        clear_selected(&selected);
+        assert!(!mailbox_is_selected(&selected, "Sent"));
+    }
+
+    fn classify_imap_cmd(cmd: &str) -> String {
+        let upper = cmd.to_ascii_uppercase();
+        if upper.contains("SELECT") {
+            let name = cmd
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .trim_matches('"');
+            format!("SELECT {name}")
+        } else if upper.contains("UID FETCH") {
+            "UID FETCH".into()
+        } else if upper.contains("LOGOUT") {
+            "LOGOUT".into()
+        } else {
+            cmd.trim().to_string()
+        }
+    }
+
+    fn parse_partial_window(cmd: &str) -> (u64, usize) {
+        let start = cmd.find('<').expect(cmd);
+        let end = cmd[start + 1..].find('>').expect(cmd);
+        let inner = &cmd[start + 1..start + 1 + end];
+        let (off, len) = inner.split_once('.').expect(cmd);
+        (off.parse().expect(cmd), len.parse().expect(cmd))
+    }
+
+    async fn write_partial_fetch(
+        server: &mut tokio::io::DuplexStream,
+        tag: &str,
+        section: &str,
+        offset: u64,
+        data: &[u8],
+    ) {
+        let header = format!(
+            "* 1 FETCH (UID 1 BODY[{section}]<{offset}> {{{}}}\r\n",
+            data.len()
+        );
+        write_all(server, &header).await;
+        tokio::io::AsyncWriteExt::write_all(server, data)
+            .await
+            .unwrap();
+        write_all(server, &format!(")\r\n{tag} OK FETCH completed\r\n")).await;
+    }
+
+    async fn collect_part(stream: &mut PartStream) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            out.extend_from_slice(&item.unwrap().data);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn stream_raw_part_selects_only_when_folder_changes() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+        const CHUNK: usize = 4;
+        const INBOX_BODY: &[u8] = b"0123456789";
+        const SENT_BODY: &[u8] = b"xyz";
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let login = read_cmd(&mut server, &mut buf).await;
+            let tag = login.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+
+            let mut cmds = Vec::new();
+            let mut selected = String::new();
+            loop {
+                let cmd = read_cmd(&mut server, &mut buf).await;
+                if cmd.is_empty() {
+                    break;
+                }
+                cmds.push(classify_imap_cmd(&cmd));
+                let tag = cmd.split_whitespace().next().unwrap();
+                let upper = cmd.to_ascii_uppercase();
+                if upper.contains("SELECT") {
+                    selected = cmd
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("")
+                        .trim_matches('"')
+                        .to_string();
+                    write_all(&mut server, &reply_select(tag)).await;
+                } else if upper.contains("UID FETCH") && upper.contains("BODY.PEEK") {
+                    let (offset, len) = parse_partial_window(&cmd);
+                    let body = if selected.eq_ignore_ascii_case("INBOX") {
+                        INBOX_BODY
+                    } else {
+                        SENT_BODY
+                    };
+                    let start = offset as usize;
+                    let slice = body.get(start..).unwrap_or(&[]);
+                    let slice = &slice[..slice.len().min(len)];
+                    write_partial_fetch(&mut server, tag, "1", offset, slice).await;
+                } else if upper.contains("LOGOUT") {
+                    write_all(&mut server, &format!("{tag} OK logged out\r\n")).await;
+                    break;
+                } else {
+                    panic!("unexpected IMAP command: {cmd}");
+                }
+            }
+            cmds
+        });
+
+        login_plain(&conn, client).await;
+        let inbox = FolderId::new("INBOX");
+        let sent = FolderId::new("Sent");
+        let uid = MessageId::new(inbox.clone(), "1");
+
+        let mut stream = conn
+            .stream_raw_part_chunked(&inbox, &uid, "1", CHUNK)
+            .await
+            .unwrap();
+        assert_eq!(collect_part(&mut stream).await, INBOX_BODY);
+
+        // Same folder still selected — further chunks must not re-SELECT.
+        let mut stream = conn
+            .stream_raw_part_chunked(&inbox, &uid, "1", CHUNK)
+            .await
+            .unwrap();
+        assert_eq!(collect_part(&mut stream).await, INBOX_BODY);
+
+        let sent_uid = MessageId::new(sent.clone(), "1");
+        let mut stream = conn
+            .stream_raw_part_chunked(&sent, &sent_uid, "1", CHUNK)
+            .await
+            .unwrap();
+        assert_eq!(collect_part(&mut stream).await, SENT_BODY);
+
+        EmailConnector::<tokio::io::DuplexStream>::disconnect(&conn)
+            .await
+            .unwrap();
+
+        let cmds = server_task.await.unwrap();
+        assert_eq!(
+            cmds,
+            [
+                "SELECT INBOX",
+                "UID FETCH",
+                "UID FETCH",
+                "UID FETCH",
+                "UID FETCH",
+                "UID FETCH",
+                "UID FETCH",
+                "SELECT Sent",
+                "UID FETCH",
+                "LOGOUT",
+            ]
+        );
     }
 }

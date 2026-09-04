@@ -1,0 +1,34 @@
+crates/mailiner-app/src/main.rs
+  s_1c9c21c574687c::t_ea72c6df09f08a 42
+crates/mailiner-app/src/lib.rs
+  s_1c9c21c574687c::t_5b9e041cd8a649 17
+crates/mailiner-app/src/phishing.rs
+  s_1c9c21c574687c::t_898dba9ed77778 1-18,23-29,33-35,37-87,92,104-111,116-182,187-235,248-371,374-376,383-386,390-458,481-485,489-526,528-616,618-619,637-646,649-666,670-689,691-777
+  s_1c9c21c574687c::t_816d6db3e0770b 19-22,30-32,36,387-389,486-488,527,630-631,636,647-648,667-669,690
+  s_1c9c21c574687c::t_be34fa26940385 88-91,93-102,112-115,183-186
+  s_1c9c21c574687c::t_effcf759ee3eca 103,236-247
+  s_1c9c21c574687c::t_d3af9c9ceff024 372-373,377-382
+  s_1c9c21c574687c::t_22ed290cfcfa25 459-480
+  s_1c9c21c574687c::t_0f42196a4ad69b 617,620-629,632-635
+crates/mailiner-app/assets/main.css
+  s_1c9c21c574687c::t_05810152815e10 1675-1693
+crates/mailiner-app/src/components/messageview.rs
+  s_1c9c21c574687c::t_c12da383a6c8fd 21,823-829,1223,1257-1274
+  s_1c9c21c574687c::t_b9f3a7ddfa20ed 820-822
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "99517a394635255bf264a6bae7b6577f3d08013d",
+  "prompts": {},
+  "sessions": {
+    "s_1c9c21c574687c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a069f7-b459-7513-9e06-bffdbd736bfc",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

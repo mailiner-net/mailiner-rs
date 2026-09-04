@@ -7,6 +7,7 @@ mod section_path;
 mod sent;
 mod sort;
 mod structure_cache;
+mod sync;
 mod tls;
 mod watch;
 
@@ -286,8 +287,14 @@ where
     has_idle: AtomicBool,
     /// RFC 4978 `COMPRESS DEFLATE` is active on this session.
     has_compress: AtomicBool,
+    /// RFC 7162 CONDSTORE advertised after LOGIN (`QRESYNC` implies this).
+    has_condstore: AtomicBool,
+    /// RFC 7162 `ENABLE QRESYNC` succeeded on this session.
+    has_qresync: AtomicBool,
     /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
+    /// Per-folder UIDVALIDITY + HIGHESTMODSEQ + UID set for incremental SELECT.
+    folder_sync: Mutex<HashMap<String, sync::FolderSyncState>>,
 }
 
 struct ListIndex {
@@ -305,6 +312,25 @@ struct ListIndex {
     unread: Option<usize>,
     /// Whole-folder `UNSEEN` for the mailbox badge.
     folder_unread: Option<usize>,
+    uidvalidity: Option<u32>,
+    highestmodseq: Option<u64>,
+}
+
+struct FolderListReq<'a> {
+    folder_id: &'a str,
+    requested: MessageSort,
+    filter: MessageListFilter,
+    search: &'a str,
+}
+
+struct IndexBuild<'a> {
+    folder_id: &'a str,
+    sort: MessageSort,
+    filter: MessageListFilter,
+    search: &'a str,
+    exists: usize,
+    uidvalidity: Option<u32>,
+    highestmodseq: Option<u64>,
 }
 
 impl<S> ImapConnector<S>
@@ -330,7 +356,10 @@ where
             has_quota: AtomicBool::new(false),
             has_idle: AtomicBool::new(false),
             has_compress: AtomicBool::new(false),
+            has_condstore: AtomicBool::new(false),
+            has_qresync: AtomicBool::new(false),
             list_index: Mutex::new(None),
+            folder_sync: Mutex::new(HashMap::new()),
         }
     }
 
@@ -342,6 +371,16 @@ where
     /// True when `COMPRESS DEFLATE` is active on this session.
     pub fn supports_compress(&self) -> bool {
         self.has_compress.load(Ordering::Relaxed)
+    }
+
+    /// True when the server advertised CONDSTORE or QRESYNC after LOGIN.
+    pub fn supports_condstore(&self) -> bool {
+        self.has_condstore.load(Ordering::Relaxed)
+    }
+
+    /// True when `ENABLE QRESYNC` succeeded on this session.
+    pub fn supports_qresync(&self) -> bool {
+        self.has_qresync.load(Ordering::Relaxed)
     }
 
     /// Watch `folder_id` until it changes, `cancel` resolves, or `timeout` resolves.
@@ -609,6 +648,10 @@ where
         }) {
             *slot = None;
         }
+        self.folder_sync
+            .lock()
+            .await
+            .retain(|name, _| !mailbox_is_self_or_descendant(name, folder_id.as_str(), delimiter));
     }
 
     async fn list_all_mailboxes(&self) -> Result<Vec<ListedMailbox>, ImapError> {
@@ -815,6 +858,7 @@ where
         {
             *slot = None;
         }
+        self.folder_sync.lock().await.remove(folder_id.as_str());
     }
 
     /// Drop cached BODYSTRUCTURE rows and the list index entries for these UIDs.
@@ -840,8 +884,13 @@ where
                 .collect();
             uids.retain(|u| !gone.contains(u));
             idx.total = uids.len();
+            if let Some(state) = self.folder_sync.lock().await.get_mut(folder_id.as_str()) {
+                state.uids.retain(|u| !gone.contains(u));
+                state.exists = state.exists.saturating_sub(gone.len());
+            }
         } else {
             *slot = None;
+            self.folder_sync.lock().await.remove(folder_id.as_str());
         }
     }
 
@@ -1148,6 +1197,8 @@ where
         has_sort: &AtomicBool,
         has_quota: &AtomicBool,
         has_idle: &AtomicBool,
+        has_condstore: &AtomicBool,
+        has_qresync: &AtomicBool,
     ) -> bool {
         match session.capabilities().await {
             Ok(caps) => {
@@ -1155,19 +1206,26 @@ where
                 let quota = caps.has_str("QUOTA");
                 let idle = caps.has_str("IDLE");
                 let compress = compress::advertises_deflate(&caps);
+                let (condstore, qresync) = sync::sync_caps_from(&caps);
                 has_sort.store(sort, Ordering::Relaxed);
                 has_quota.store(quota, Ordering::Relaxed);
                 has_idle.store(idle, Ordering::Relaxed);
+                has_condstore.store(condstore, Ordering::Relaxed);
+                has_qresync.store(qresync, Ordering::Relaxed);
                 info!(
-                    "IMAP capabilities: SORT={sort} QUOTA={quota} IDLE={idle} COMPRESS={compress}"
+                    "IMAP capabilities: SORT={sort} QUOTA={quota} IDLE={idle} COMPRESS={compress} CONDSTORE={condstore} QRESYNC={qresync}"
                 );
                 compress
             }
             Err(e) => {
-                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA/IDLE/COMPRESS");
+                tracing::warn!(
+                    "CAPABILITY failed ({e}); assuming no SORT/QUOTA/IDLE/COMPRESS/CONDSTORE"
+                );
                 has_sort.store(false, Ordering::Relaxed);
                 has_quota.store(false, Ordering::Relaxed);
                 has_idle.store(false, Ordering::Relaxed);
+                has_condstore.store(false, Ordering::Relaxed);
+                has_qresync.store(false, Ordering::Relaxed);
                 false
             }
         }
@@ -1192,44 +1250,75 @@ where
     async fn build_list_index(
         session: &mut Session<ImapIo<S>>,
         selected: &std::sync::Mutex<Option<String>>,
-        folder_id: &str,
-        requested: MessageSort,
+        req: &FolderListReq<'_>,
         has_sort: bool,
-        filter: MessageListFilter,
-        search: &str,
+        caps: sync::SyncCaps,
+        prior: Option<&sync::FolderSyncState>,
     ) -> Result<ListIndex, ImapError> {
-        let mailbox = select_mailbox(session, selected, folder_id).await?;
-        let exists = mailbox.exists as usize;
-        let sort = sort::apply_sort_or_fallback(requested, has_sort);
-        let compiled = compile_list_search(filter, search);
-        let search_q = compiled.uid_search_query();
-        let sort_q = compiled.sort_query();
+        let sort = sort::apply_sort_or_fallback(req.requested, has_sort);
+        let mode = select_mode_for(caps, prior, req.folder_id, sort, req.filter, req.search);
+        let outcome = match sync::select_sync(session, req.folder_id, mode).await {
+            Ok(outcome) => outcome,
+            Err(e) if caps.qresync && prior.is_some() => {
+                tracing::warn!("QRESYNC SELECT failed ({e}); retrying without QRESYNC");
+                let fallback = if caps.condstore {
+                    sync::SelectMode::Condstore
+                } else {
+                    sync::SelectMode::Plain
+                };
+                sync::select_sync(session, req.folder_id, fallback).await?
+            }
+            Err(e) => return Err(e),
+        };
+        remember_selected(selected, req.folder_id);
+        let mailbox = &outcome.mailbox;
+        let build = IndexBuild {
+            folder_id: req.folder_id,
+            sort,
+            filter: req.filter,
+            search: req.search,
+            exists: mailbox.exists as usize,
+            uidvalidity: mailbox.uid_validity,
+            highestmodseq: mailbox.highest_modseq,
+        };
 
-        if exists == 0 {
+        if build.exists == 0 {
             return Ok(ListIndex {
-                folder: folder_id.to_string(),
-                sort,
-                filter,
-                search: search.to_string(),
-                exists,
+                folder: build.folder_id.to_string(),
+                sort: build.sort,
+                filter: build.filter,
+                search: build.search.to_string(),
+                exists: 0,
                 uids: Some(Vec::new()),
                 total: 0,
                 unread: Some(0),
                 folder_unread: Some(0),
+                uidvalidity: build.uidvalidity,
+                highestmodseq: build.highestmodseq,
             });
         }
 
+        if let Some(index) =
+            Self::try_incremental_index(session, &build, prior, &outcome, caps).await?
+        {
+            return Ok(index);
+        }
+
+        let compiled = compile_list_search(build.filter, build.search);
+        let search_q = compiled.uid_search_query();
+        let sort_q = compiled.sort_query();
+
         let mut unread = None;
-        let uids = match sort {
+        let uids = match build.sort {
             MessageSort::Arrival => Some(Self::search_uids(session, &search_q).await?),
             MessageSort::Date => {
                 Some(Self::search_date_uids(session, has_sort, &search_q, sort_q).await?)
             }
             MessageSort::Unread => {
-                let extra = compile_unread_sort_extra(search);
-                let parsed = mailiner_core::MailboxSearch::parse(search);
-                let flagged = filter.flagged || parsed.has_flagged();
-                let drop_seen = filter.unread || parsed.has_unread();
+                let extra = compile_unread_sort_extra(build.search);
+                let parsed = mailiner_core::MailboxSearch::parse(build.search);
+                let flagged = build.filter.flagged || parsed.has_flagged();
+                let drop_seen = build.filter.unread || parsed.has_unread();
                 let unseen_q = join_search_keys(&[
                     "UNSEEN",
                     if flagged { "FLAGGED" } else { "" },
@@ -1283,7 +1372,7 @@ where
                 }
             }
             MessageSort::Size | MessageSort::Sender => {
-                let criteria = sort::sort_criteria(sort).expect("size/sender have SORT");
+                let criteria = sort::sort_criteria(build.sort).expect("size/sender have SORT");
                 match sort::uid_sort(session, criteria, sort_q).await {
                     Ok(uids) => Some(uids),
                     Err(e) => {
@@ -1291,15 +1380,17 @@ where
                         let folder_unread = Self::search_unseen_count(session).await;
                         let uids = Self::search_uids(session, &search_q).await?;
                         return Ok(ListIndex {
-                            folder: folder_id.to_string(),
+                            folder: build.folder_id.to_string(),
                             sort: MessageSort::Arrival,
-                            filter,
-                            search: search.to_string(),
-                            exists,
+                            filter: build.filter,
+                            search: build.search.to_string(),
+                            exists: build.exists,
                             uids: Some(uids.clone()),
                             total: uids.len(),
                             unread: folder_unread,
                             folder_unread,
+                            uidvalidity: build.uidvalidity,
+                            highestmodseq: build.highestmodseq,
                         });
                     }
                 }
@@ -1311,18 +1402,168 @@ where
             unread = folder_unread;
         }
 
-        let total = uids.as_ref().map(|u| u.len()).unwrap_or(exists);
+        let total = uids.as_ref().map(|u| u.len()).unwrap_or(build.exists);
         Ok(ListIndex {
-            folder: folder_id.to_string(),
-            sort,
-            filter,
-            search: search.to_string(),
-            exists,
+            folder: build.folder_id.to_string(),
+            sort: build.sort,
+            filter: build.filter,
+            search: build.search.to_string(),
+            exists: build.exists,
             uids,
             total,
             unread,
             folder_unread,
+            uidvalidity: build.uidvalidity,
+            highestmodseq: build.highestmodseq,
         })
+    }
+
+    async fn try_incremental_index(
+        session: &mut Session<ImapIo<S>>,
+        build: &IndexBuild<'_>,
+        prior: Option<&sync::FolderSyncState>,
+        outcome: &sync::SelectOutcome,
+        caps: sync::SyncCaps,
+    ) -> Result<Option<ListIndex>, ImapError> {
+        if !caps.condstore {
+            return Ok(None);
+        }
+        let Some(prior) = prior else {
+            return Ok(None);
+        };
+        let Some(uv) = build.uidvalidity else {
+            return Ok(None);
+        };
+        if prior.uidvalidity != uv {
+            return Ok(None);
+        }
+        if !prior.can_refresh(build.folder_id, build.sort, build.filter, build.search) {
+            return Ok(None);
+        }
+
+        let mut updates = outcome.flag_updates.clone();
+        let vanished = outcome.vanished.clone();
+        if !outcome.from_qresync {
+            match sync::fetch_changed_since(session, prior.highestmodseq).await {
+                Ok(changed) => updates.extend(changed),
+                Err(e) => {
+                    tracing::warn!("CHANGEDSINCE failed ({e}); falling back to SEARCH ALL");
+                    return Ok(None);
+                }
+            }
+        }
+
+        let prior_set: std::collections::HashSet<u32> = prior.uids.iter().copied().collect();
+        let vanished_set: std::collections::HashSet<u32> = vanished.iter().copied().collect();
+        let new_from_updates: Vec<u32> = updates
+            .iter()
+            .map(|u| u.uid)
+            .filter(|u| !prior_set.contains(u) && !vanished_set.contains(u))
+            .collect();
+        let vanished_known = prior
+            .uids
+            .iter()
+            .filter(|u| vanished_set.contains(u))
+            .count();
+
+        let mut extra_new = Vec::new();
+        match sync::exists_gap(
+            prior.uids.len(),
+            vanished_known,
+            new_from_updates.len(),
+            build.exists,
+        ) {
+            sync::ExistsGap::Match => {}
+            sync::ExistsGap::MissingExpunge => {
+                match sync::search_uid_set(session, &prior.uids).await {
+                    Ok(still) => {
+                        let gone: Vec<u32> = prior
+                            .uids
+                            .iter()
+                            .copied()
+                            .filter(|u| !still.contains(u) && !vanished_set.contains(u))
+                            .collect();
+                        let mut vanished = vanished;
+                        vanished.extend(gone);
+                        return Self::finish_incremental(
+                            session,
+                            build,
+                            prior,
+                            &vanished,
+                            &updates,
+                            &[],
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("UID SEARCH for expunges failed ({e}); full rebuild");
+                        return Ok(None);
+                    }
+                }
+            }
+            sync::ExistsGap::MissingNew => {
+                let from = prior
+                    .uids
+                    .iter()
+                    .copied()
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                match sync::search_uids_from(session, from).await {
+                    Ok(found) => extra_new = found,
+                    Err(e) => {
+                        tracing::warn!("UID SEARCH for new UIDs failed ({e}); full rebuild");
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
+        Self::finish_incremental(session, build, prior, &vanished, &updates, &extra_new).await
+    }
+
+    async fn finish_incremental(
+        session: &mut Session<ImapIo<S>>,
+        build: &IndexBuild<'_>,
+        prior: &sync::FolderSyncState,
+        vanished: &[u32],
+        updates: &[sync::FlagUpdate],
+        extra_new: &[u32],
+    ) -> Result<Option<ListIndex>, ImapError> {
+        let Some(uids) = sync::merge_uid_list(prior, build.exists, vanished, updates, extra_new)
+        else {
+            return Ok(None);
+        };
+        let folder_unread = Self::search_unseen_count(session).await;
+        let unread = match build.sort {
+            MessageSort::Unread => {
+                let vanished: std::collections::HashSet<u32> = vanished.iter().copied().collect();
+                let mut unread = prior.unread.unwrap_or(0);
+                unread = unread.saturating_sub(
+                    prior
+                        .uids
+                        .iter()
+                        .take(prior.unread.unwrap_or(0))
+                        .filter(|u| vanished.contains(u))
+                        .count(),
+                );
+                Some(unread.min(uids.len()))
+            }
+            _ => folder_unread,
+        };
+        Ok(Some(ListIndex {
+            folder: build.folder_id.to_string(),
+            sort: build.sort,
+            filter: build.filter,
+            search: build.search.to_string(),
+            exists: build.exists,
+            total: uids.len(),
+            uids: Some(uids),
+            unread,
+            folder_unread,
+            uidvalidity: build.uidvalidity,
+            highestmodseq: build.highestmodseq,
+        }))
     }
 
     async fn search_unseen_count(session: &mut Session<ImapIo<S>>) -> Option<usize> {
@@ -1434,7 +1675,7 @@ struct ParsedFlags {
     keywords: Vec<String>,
 }
 
-fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> ParsedFlags {
+pub(crate) fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> ParsedFlags {
     let mut parsed = ParsedFlags {
         is_read: false,
         is_answered: false,
@@ -1516,8 +1757,68 @@ fn uid_set(folder_id: &FolderId, ids: &[MessageId]) -> Result<String, ImapError>
         .join(","))
 }
 
-fn quote_mailbox(name: &str) -> String {
+pub(crate) fn quote_mailbox(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn select_mode_for<'a>(
+    caps: sync::SyncCaps,
+    prior: Option<&'a sync::FolderSyncState>,
+    folder_id: &str,
+    sort: MessageSort,
+    filter: MessageListFilter,
+    search: &str,
+) -> sync::SelectMode<'a> {
+    if caps.qresync {
+        if let Some(prior) = prior {
+            if prior.can_refresh(folder_id, sort, filter, search) {
+                return sync::SelectMode::Qresync {
+                    uidvalidity: prior.uidvalidity,
+                    modseq: prior.highestmodseq,
+                    known: &prior.uids,
+                };
+            }
+        }
+    }
+    if caps.condstore {
+        sync::SelectMode::Condstore
+    } else {
+        sync::SelectMode::Plain
+    }
+}
+
+fn sync_caps_from_connector<S>(conn: &ImapConnector<S>) -> sync::SyncCaps
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
+{
+    sync::SyncCaps {
+        condstore: conn.has_condstore.load(Ordering::Relaxed),
+        qresync: conn.has_qresync.load(Ordering::Relaxed),
+    }
+}
+
+fn folder_sync_from_index(index: &ListIndex) -> Option<sync::FolderSyncState> {
+    Some(sync::FolderSyncState {
+        folder: index.folder.clone(),
+        uidvalidity: index.uidvalidity?,
+        highestmodseq: index.highestmodseq?,
+        sort: index.sort,
+        filter: index.filter,
+        search: index.search.clone(),
+        exists: index.exists,
+        uids: index.uids.clone()?,
+        unread: index.unread,
+        folder_unread: index.folder_unread,
+    })
+}
+
+async fn remember_folder_sync(
+    folder_sync: &Mutex<HashMap<String, sync::FolderSyncState>>,
+    index: &ListIndex,
+) {
+    if let Some(state) = folder_sync_from_index(index) {
+        folder_sync.lock().await.insert(state.folder.clone(), state);
+    }
 }
 
 fn mailbox_is_self_or_descendant(name: &str, ancestor: &str, delimiter: Option<&str>) -> bool {
@@ -1755,6 +2056,7 @@ where
 {
     async fn disconnect(&self) -> MailinerResult<()> {
         *self.list_index.lock().await = None;
+        self.folder_sync.lock().await.clear();
         clear_selected(&self.selected_mailbox);
         let mut imap = self.imap.lock().await;
         if let ImapSession::Authenticated(session) = &mut *imap {
@@ -1814,8 +2116,20 @@ where
                         &self.has_sort,
                         &self.has_quota,
                         &self.has_idle,
+                        &self.has_condstore,
+                        &self.has_qresync,
                     )
                     .await;
+                    let want_qresync = self.has_qresync.load(Ordering::Relaxed);
+                    let want_condstore = self.has_condstore.load(Ordering::Relaxed);
+                    if want_qresync || want_condstore {
+                        let enabled =
+                            sync::enable_sync_extensions(session, want_qresync, want_condstore)
+                                .await;
+                        self.has_condstore
+                            .store(enabled.condstore, Ordering::Relaxed);
+                        self.has_qresync.store(enabled.qresync, Ordering::Relaxed);
+                    }
                     if try_compress {
                         Self::maybe_enable_compress(session, &self.has_compress).await;
                     } else {
@@ -1934,6 +2248,13 @@ where
         search: &str,
     ) -> MailinerResult<FolderListState> {
         let has_sort = self.has_sort.load(Ordering::Relaxed);
+        let caps = sync_caps_from_connector(self);
+        let prior = self
+            .folder_sync
+            .lock()
+            .await
+            .get(folder_id.as_str())
+            .cloned();
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated.into());
@@ -1941,11 +2262,15 @@ where
         let index = Self::build_list_index(
             session,
             &self.selected_mailbox,
-            folder_id.as_str(),
-            sort,
+            &FolderListReq {
+                folder_id: folder_id.as_str(),
+                requested: sort,
+                filter,
+                search,
+            },
             has_sort,
-            filter,
-            search,
+            caps,
+            prior.as_ref(),
         )
         .await?;
         let state = FolderListState {
@@ -1955,6 +2280,7 @@ where
             sort: index.sort,
             supports_size_sender: has_sort,
         };
+        remember_folder_sync(&self.folder_sync, &index).await;
         *self.list_index.lock().await = Some(index);
         Ok(state)
     }
@@ -1972,6 +2298,10 @@ where
             };
 
             let has_sort = self.has_sort.load(Ordering::Relaxed);
+            let caps = sync::SyncCaps {
+                condstore: self.has_condstore.load(Ordering::Relaxed),
+                qresync: self.has_qresync.load(Ordering::Relaxed),
+            };
             let mailbox =
                 select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
             let exists = mailbox.exists as usize;
@@ -1989,18 +2319,28 @@ where
                         MessageListFilter::default(),
                         String::new(),
                     ));
-                *index_slot = Some(
-                    Self::build_list_index(
-                        session,
-                        &self.selected_mailbox,
-                        folder_id.as_str(),
+                let prior = self
+                    .folder_sync
+                    .lock()
+                    .await
+                    .get(folder_id.as_str())
+                    .cloned();
+                let index = Self::build_list_index(
+                    session,
+                    &self.selected_mailbox,
+                    &FolderListReq {
+                        folder_id: folder_id.as_str(),
                         requested,
-                        has_sort,
                         filter,
-                        &search,
-                    )
-                    .await?,
-                );
+                        search: &search,
+                    },
+                    has_sort,
+                    caps,
+                    prior.as_ref(),
+                )
+                .await?;
+                remember_folder_sync(&self.folder_sync, &index).await;
+                *index_slot = Some(index);
             }
             let index = index_slot.as_ref().expect("index just set");
             let total = index.total;
@@ -2110,6 +2450,9 @@ where
         }
         drop(imap);
         drop_mismatched_search_uids(&self.list_index, message_ids, flags).await;
+        if let Some(index) = self.list_index.lock().await.as_ref() {
+            remember_folder_sync(&self.folder_sync, index).await;
+        }
 
         Ok(())
     }
@@ -3585,5 +3928,249 @@ Received-SPF: pass\r\n\
         assert!(!conn.supports_compress());
         conn.disconnect().await.unwrap();
         server_task.await.unwrap();
+    }
+
+    fn reply_select_sync(tag: &str, exists: u32, uidvalidity: u32, highestmodseq: u64) -> String {
+        format!(
+            "* {exists} EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY {uidvalidity}] UIDs valid\r\n* OK [HIGHESTMODSEQ {highestmodseq}] Highest\r\n{tag} OK [READ-WRITE] SELECT\r\n"
+        )
+    }
+
+    fn reply_search(tag: &str, uids: &str) -> String {
+        if uids.is_empty() {
+            format!("* SEARCH\r\n{tag} OK SEARCH\r\n")
+        } else {
+            format!("* SEARCH {uids}\r\n{tag} OK SEARCH\r\n")
+        }
+    }
+
+    async fn prepare_inbox(conn: &ImapConnector<tokio::io::DuplexStream>) {
+        conn.prepare_folder_list(
+            &FolderId::new("INBOX"),
+            MessageSort::Arrival,
+            MessageListFilter::default(),
+            "",
+        )
+        .await
+        .expect("prepare_folder_list");
+    }
+
+    /// Login + two `prepare_folder_list` calls. `second_uidvalidity` overrides the
+    /// second SELECT's UIDVALIDITY when set.
+    async fn serve_two_prepares(
+        mut server: tokio::io::DuplexStream,
+        extra_caps: &str,
+        first_uidvalidity: u32,
+        second_uidvalidity: u32,
+    ) -> Vec<String> {
+        write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+        let mut buf = Vec::new();
+        expect_capability_then_login(&mut server, &mut buf).await;
+
+        let post = read_cmd(&mut server, &mut buf).await;
+        assert!(post.to_ascii_uppercase().contains("CAPABILITY"), "{post}");
+        let tag = post.split_whitespace().next().unwrap();
+        write_all(&mut server, &reply_capability(tag, extra_caps)).await;
+
+        let mut cmds = Vec::new();
+        let mut selects = 0u32;
+        loop {
+            let cmd = read_cmd(&mut server, &mut buf).await;
+            if cmd.is_empty() {
+                break;
+            }
+            let upper = cmd.to_ascii_uppercase();
+            let tag = cmd.split_whitespace().next().unwrap();
+            cmds.push(cmd.trim().to_string());
+            if upper.contains("ENABLE") {
+                write_all(&mut server, &format!("{tag} OK ENABLED\r\n")).await;
+            } else if upper.contains("SELECT") {
+                selects += 1;
+                let uv = if selects == 1 {
+                    first_uidvalidity
+                } else {
+                    second_uidvalidity
+                };
+                write_all(&mut server, &reply_select_sync(tag, 3, uv, 100)).await;
+            } else if upper.contains("UID FETCH") && upper.contains("CHANGEDSINCE") {
+                write_all(&mut server, &format!("{tag} OK FETCH completed\r\n")).await;
+            } else if upper.contains("UID SEARCH") {
+                if upper.contains("UNSEEN") {
+                    write_all(&mut server, &reply_search(tag, "1")).await;
+                } else {
+                    write_all(&mut server, &reply_search(tag, "1 2 3")).await;
+                }
+            } else if upper.contains("LOGOUT") {
+                write_all(&mut server, &format!("{tag} OK logged out\r\n")).await;
+                break;
+            } else {
+                panic!("unexpected IMAP command: {cmd}");
+            }
+        }
+        cmds
+    }
+
+    #[tokio::test]
+    async fn condstore_not_used_without_capability() {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+        let server_task = tokio::spawn(serve_two_prepares(server, "", 1, 1));
+
+        login_plain(&conn, client).await;
+        assert!(!conn.supports_condstore());
+        assert!(!conn.supports_qresync());
+        prepare_inbox(&conn).await;
+        prepare_inbox(&conn).await;
+        EmailConnector::disconnect(&conn).await.unwrap();
+
+        let cmds = server_task.await.unwrap();
+        let joined = cmds.join("\n").to_ascii_uppercase();
+        assert!(
+            !joined.contains("ENABLE"),
+            "ENABLE must not be sent without CONDSTORE: {cmds:?}"
+        );
+        assert!(
+            !joined.contains("CHANGEDSINCE"),
+            "CHANGEDSINCE must not be sent without CONDSTORE: {cmds:?}"
+        );
+        assert!(
+            !joined.contains("MODSEQ"),
+            "MODSEQ must not be sent without CONDSTORE: {cmds:?}"
+        );
+        let search_all = cmds
+            .iter()
+            .filter(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("UID SEARCH") && u.contains("ALL")
+            })
+            .count();
+        assert!(
+            search_all >= 2,
+            "expected full SEARCH ALL on both opens, got {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn condstore_incremental_on_second_select() {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+        let server_task = tokio::spawn(serve_two_prepares(server, " CONDSTORE", 1, 1));
+
+        login_plain(&conn, client).await;
+        assert!(conn.supports_condstore());
+        assert!(!conn.supports_qresync());
+        prepare_inbox(&conn).await;
+        prepare_inbox(&conn).await;
+        EmailConnector::disconnect(&conn).await.unwrap();
+
+        let cmds = server_task.await.unwrap();
+        let joined = cmds.join("\n").to_ascii_uppercase();
+        assert!(
+            joined.contains("ENABLE CONDSTORE"),
+            "expected ENABLE CONDSTORE after LOGIN: {cmds:?}"
+        );
+        let search_all: Vec<_> = cmds
+            .iter()
+            .filter(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("UID SEARCH") && u.contains("ALL")
+            })
+            .collect();
+        assert_eq!(
+            search_all.len(),
+            1,
+            "SEARCH ALL only on first open, got {cmds:?}"
+        );
+        let changed: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.to_ascii_uppercase().contains("CHANGEDSINCE"))
+            .collect();
+        assert_eq!(
+            changed.len(),
+            1,
+            "CHANGEDSINCE on second open only, got {cmds:?}"
+        );
+        assert!(
+            changed[0].to_ascii_uppercase().contains("CHANGEDSINCE 100"),
+            "CHANGEDSINCE should use stored HIGHESTMODSEQ: {changed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn condstore_uidvalidity_change_rebuilds() {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+        let server_task = tokio::spawn(serve_two_prepares(server, " CONDSTORE", 1, 99));
+
+        login_plain(&conn, client).await;
+        prepare_inbox(&conn).await;
+        prepare_inbox(&conn).await;
+        EmailConnector::disconnect(&conn).await.unwrap();
+
+        let cmds = server_task.await.unwrap();
+        let joined = cmds.join("\n").to_ascii_uppercase();
+        assert!(
+            joined.contains("ENABLE CONDSTORE"),
+            "expected ENABLE CONDSTORE: {cmds:?}"
+        );
+        assert!(
+            !joined.contains("CHANGEDSINCE"),
+            "UIDVALIDITY change must not CHANGEDSINCE: {cmds:?}"
+        );
+        let search_all = cmds
+            .iter()
+            .filter(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("UID SEARCH") && u.contains("ALL")
+            })
+            .count();
+        assert!(
+            search_all >= 2,
+            "UIDVALIDITY change must SEARCH ALL again, got {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn qresync_select_on_second_open() {
+        let (client, server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+        let server_task = tokio::spawn(serve_two_prepares(server, " QRESYNC CONDSTORE", 1, 1));
+
+        login_plain(&conn, client).await;
+        assert!(conn.supports_qresync());
+        prepare_inbox(&conn).await;
+        prepare_inbox(&conn).await;
+        EmailConnector::disconnect(&conn).await.unwrap();
+
+        let cmds = server_task.await.unwrap();
+        let joined = cmds.join("\n").to_ascii_uppercase();
+        assert!(
+            joined.contains("ENABLE QRESYNC"),
+            "expected ENABLE QRESYNC: {cmds:?}"
+        );
+        let qresync_select = cmds
+            .iter()
+            .filter(|c| c.to_ascii_uppercase().contains("QRESYNC"))
+            .filter(|c| c.to_ascii_uppercase().contains("SELECT"))
+            .count();
+        assert_eq!(
+            qresync_select, 1,
+            "QRESYNC SELECT on second open only, got {cmds:?}"
+        );
+        assert!(
+            !joined.contains("CHANGEDSINCE"),
+            "QRESYNC SELECT should not also CHANGEDSINCE: {cmds:?}"
+        );
+        let search_all = cmds
+            .iter()
+            .filter(|c| {
+                let u = c.to_ascii_uppercase();
+                u.contains("UID SEARCH") && u.contains("ALL")
+            })
+            .count();
+        assert_eq!(
+            search_all, 1,
+            "SEARCH ALL only on first open with QRESYNC, got {cmds:?}"
+        );
     }
 }

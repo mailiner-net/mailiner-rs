@@ -1,0 +1,19 @@
+crates/mailiner-app/src/components/emailnavigation/messagelist.rs
+  s_6c2fa23e179bef::t_7d316a7b896416 212-213,215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bd7584ff52b0c5b044dc5a457ce74059257a5b81",
+  "prompts": {},
+  "sessions": {
+    "s_6c2fa23e179bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06998-a9cf-7840-9ff3-ceb2a5c5e104",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

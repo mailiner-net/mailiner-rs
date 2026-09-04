@@ -544,6 +544,7 @@ mod tests {
         LoadedMessage {
             envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
+            pgp: Default::default(),
             parts: vec![MessagePart {
                 id: MessagePartId::new("p1"),
                 envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
@@ -603,6 +604,7 @@ mod tests {
             envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
             parts,
+            pgp: Default::default(),
         }
     }
 
@@ -834,6 +836,7 @@ mod tests {
             envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
             parts,
+            pgp: Default::default(),
         }
     }
 

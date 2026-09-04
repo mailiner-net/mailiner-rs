@@ -5,6 +5,7 @@ pub mod account_config;
 pub mod account_store;
 pub mod account_vault;
 pub mod address_book;
+pub mod autocrypt;
 pub mod autodiscover;
 pub mod background_sync;
 pub mod conversation;

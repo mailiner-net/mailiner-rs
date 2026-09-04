@@ -28,6 +28,7 @@ mod account_config;
 mod account_store;
 mod account_vault;
 mod address_book;
+mod autocrypt;
 mod autodiscover;
 mod background_sync;
 mod components;

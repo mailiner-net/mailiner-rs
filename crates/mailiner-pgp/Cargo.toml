@@ -1,0 +1,25 @@
+[package]
+name = "mailiner-pgp"
+version = "0.1.0"
+edition = "2021"
+description = "OpenPGP detect, Autocrypt parse, and WASM-safe decrypt/verify (rPGP)"
+
+[dependencies]
+base64 = "0.22"
+mailiner-core = { path = "../mailiner-core" }
+mailiner-mime = { path = "../mailiner-mime" }
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# rPGP: pure Rust OpenPGP. Default `bzip2` is native-only; WASM uses the `wasm`
+# feature (getrandom/js + web-time). Host tests use the same crate without bzip2.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pgp = { version = "0.20", default-features = false, features = ["wasm"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pgp = { version = "0.20", default-features = false }
+
+[dev-dependencies]
+rand = "0.8"
+smallvec = "1"
+chrono = { version = "0.4", features = ["serde"] }

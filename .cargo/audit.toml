@@ -1,0 +1,8 @@
+# cargo-audit config.
+#
+# RUSTSEC-2023-0071 (Marvin): timing side channel in the `rsa` crate.
+# rPGP (`pgp` 0.20) needs `rsa` 0.9 for RSA keys; 0.9.10 is the latest
+# 0.9 and still flagged. No WASM-safe OpenPGP crate avoids this.
+
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

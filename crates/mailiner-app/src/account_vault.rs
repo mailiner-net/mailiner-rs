@@ -67,9 +67,35 @@ pub struct AccountSecrets {
     pub oauth2_tokens: Option<crate::account_config::Oauth2Tokens>,
 }
 
+/// Imported OpenPGP private key (ASCII-armor + key passphrase).
+///
+/// Stored inside the same vault as IMAP/SMTP passwords. Debug redacts material.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenPgpSecret {
+    pub fingerprint: String,
+    #[serde(default)]
+    pub user_ids: Vec<String>,
+    pub armored: String,
+    pub passphrase: String,
+}
+
+impl fmt::Debug for OpenPgpSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenPgpSecret")
+            .field("fingerprint", &self.fingerprint)
+            .field("user_ids", &self.user_ids)
+            .field("armored", &"***")
+            .field("passphrase", &"***")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretsPayload {
     pub accounts: Vec<AccountSecrets>,
+    /// Absent on older vaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pgp_keys: Vec<OpenPgpSecret>,
 }
 
 /// Session key derived from the user passphrase. Never written to storage.
@@ -154,6 +180,7 @@ pub fn extract_secrets(accounts: &[AccountConfig]) -> SecretsPayload {
                 oauth2_tokens: a.oauth2.as_ref().map(|o| o.tokens.clone()),
             })
             .collect(),
+        pgp_keys: Vec::new(),
     }
 }
 

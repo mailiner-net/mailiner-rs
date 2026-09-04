@@ -839,6 +839,7 @@ mod tests {
             envelope_id: MessageId::new(FolderId::new("inbox"), "1"),
             folder_id: FolderId::new("inbox"),
             parts,
+            pgp: Default::default(),
         };
         assert_eq!(loaded.attachments().count(), 1);
         assert_eq!(loaded.content_parts().count(), 1);

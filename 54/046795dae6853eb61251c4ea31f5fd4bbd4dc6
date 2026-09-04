@@ -1,0 +1,24 @@
+crates/mailiner-app/assets/main.css
+  s_d30b5ae04b6659::t_0517aadb7c3c4e 1327,2167-2168
+crates/mailiner-app/src/components/messageview.rs
+  s_d30b5ae04b6659::t_84192bd83b7f80 24-26,551-558,560-564
+crates/mailiner-app/src/formatter/mod.rs
+  s_d30b5ae04b6659::t_5d3098c254dc9a 52-55,62-63,68,70,72-76,78-114,116-117,119-122
+  s_d30b5ae04b6659::t_98e8da468e4f67 409-410,414-423
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "54046795dae6853eb61251c4ea31f5fd4bbd4dc6",
+  "prompts": {},
+  "sessions": {
+    "s_d30b5ae04b6659": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06b7b-adc0-71b0-9cfd-a906d708bccd",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

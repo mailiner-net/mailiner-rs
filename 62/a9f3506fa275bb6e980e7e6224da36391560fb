@@ -1,0 +1,30 @@
+crates/mailiner-imap-connector/src/auth.rs
+  s_12efc256dfee0f::t_346d78424ac160 1-115,117-162
+  s_12efc256dfee0f::t_0aaebd4a2fd5ad 116
+crates/mailiner-imap-connector/Cargo.toml
+  s_12efc256dfee0f::t_0162510e1929d9 8
+crates/mailiner-imap-connector/src/lib.rs
+  s_12efc256dfee0f::t_602cdc36df8205 2823,2825-2845,2862
+  s_12efc256dfee0f::t_721de009ad41e4 3097
+  s_12efc256dfee0f::t_ae75bc958c6b60 1
+  s_12efc256dfee0f::t_5a43f8584c34ee 2909,2950
+  s_12efc256dfee0f::t_a3017a4d23dc1f 1636-1665,1668
+  s_12efc256dfee0f::t_d207f28983521f 2992
+  s_12efc256dfee0f::t_665baf15d8cf99 3186-3311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "62a9f3506fa275bb6e980e7e6224da36391560fb",
+  "prompts": {},
+  "sessions": {
+    "s_12efc256dfee0f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06aaa-a755-7670-a5e5-f39d74290ac2",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

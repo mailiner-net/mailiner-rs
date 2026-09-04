@@ -7,6 +7,8 @@ use crate::heuristics::{is_attachment, is_rich_part};
 pub struct MultipartAlternativeParser;
 pub struct MultipartMixedParser;
 pub struct MultipartRelatedParser;
+pub struct MultipartEncryptedParser;
+pub struct MultipartSignedParser;
 
 impl PartParser for MultipartAlternativeParser {
     fn mime_types(&self) -> &[&str] {
@@ -88,6 +90,101 @@ impl PartParser for MultipartMixedParser {
         }
         out
     }
+}
+
+impl PartParser for MultipartEncryptedParser {
+    fn mime_types(&self) -> &[&str] {
+        &["multipart/encrypted"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        // RFC 3156: version part + ciphertext. Hide both; hidden parts are prefetched.
+        parse_pgp_container(ctx, part, part_id, path, "encrypted")
+    }
+}
+
+impl PartParser for MultipartSignedParser {
+    fn mime_types(&self) -> &[&str] {
+        &["multipart/signed"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        // RFC 3156: signed body + detached signature. Hide only the signature.
+        let protocol = part
+            .parameters
+            .get("PROTOCOL")
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        if protocol.contains("pkcs7") {
+            return MultipartMixedParser.parse(ctx, part, part_id, path);
+        }
+        let mut out = Vec::new();
+        for (i, sub) in part.subparts.iter().enumerate() {
+            let mut sub_path = path.to_vec();
+            sub_path.push((i + 1).to_string());
+            let sub_id = format!("{part_id}.signed.{i}");
+            let ct = sub.content_type();
+            if ct.eq_ignore_ascii_case("application/pgp-signature")
+                || ct.eq_ignore_ascii_case("application/pgp-encrypted")
+            {
+                out.extend(hidden_crypto_part(ctx, sub, &sub_id, &sub_path));
+            } else {
+                out.extend(
+                    ctx.registry
+                        .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+                );
+            }
+        }
+        out
+    }
+}
+
+fn parse_pgp_container(
+    ctx: &ParseContext<'_>,
+    part: &BodyPart,
+    part_id: &str,
+    path: &[String],
+    label: &str,
+) -> Vec<MessagePart> {
+    let mut out = Vec::new();
+    for (i, sub) in part.subparts.iter().enumerate() {
+        let mut sub_path = path.to_vec();
+        sub_path.push((i + 1).to_string());
+        let sub_id = format!("{part_id}.{label}.{i}");
+        out.extend(hidden_crypto_part(ctx, sub, &sub_id, &sub_path));
+    }
+    out
+}
+
+fn hidden_crypto_part(
+    ctx: &ParseContext<'_>,
+    part: &BodyPart,
+    part_id: &str,
+    path: &[String],
+) -> Vec<MessagePart> {
+    use super::leaf_part;
+    use mailiner_core::models::PartKind;
+    vec![leaf_part(
+        ctx.envelope_id,
+        part,
+        part_id,
+        path,
+        PartKind::Attachment,
+        Some(true),
+        Some(true),
+    )]
 }
 
 impl PartParser for MultipartRelatedParser {

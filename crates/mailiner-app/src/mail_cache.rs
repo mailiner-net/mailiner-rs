@@ -132,6 +132,7 @@ pub fn loaded_message_from_parts(
         envelope_id: message_id.clone(),
         folder_id: message_id.folder_id().clone(),
         parts,
+        pgp: Default::default(),
     })
 }
 

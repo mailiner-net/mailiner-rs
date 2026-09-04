@@ -8,7 +8,7 @@ use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
 
 use mailiner_core::MailboxRole;
 use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, MessagePart, PartKind};
-use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword};
+use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword, PgpSignatureState, PgpViewState};
 
 use crate::account::AccountId;
 use crate::components::attachments::AttachmentsFooter;
@@ -459,6 +459,8 @@ pub fn MessageView() -> Element {
                     } else if let Some(env) = envelope {
                         MessageHeader { message: env, prefer_plain, formatted_html }
                     }
+
+                    PgpStatusBanner { state: loaded.pgp.clone() }
 
                     RemotePrivacyBanner {
                         allow_remote,
@@ -1945,6 +1947,49 @@ fn AuthChip(method: &'static str, verdict: AuthVerdict) -> Element {
         span {
             class: "{class}",
             "{method} {verdict.as_str()}"
+        }
+    }
+}
+
+#[component]
+fn PgpStatusBanner(state: PgpViewState) -> Element {
+    if !state.is_active() {
+        return rsx! {};
+    }
+    let mut chips = Vec::new();
+    if state.encrypted {
+        chips.push(("Encrypted", "is-encrypted"));
+    }
+    if state.need_private_key {
+        chips.push(("Need key", "is-need"));
+    }
+    if state.signed {
+        chips.push(("Signed", "is-signed"));
+        match state.signature {
+            PgpSignatureState::Valid => chips.push(("Signature valid", "is-pass")),
+            PgpSignatureState::Invalid => chips.push(("Signature failed", "is-fail")),
+            PgpSignatureState::NeedKey => chips.push(("Need key", "is-need")),
+            PgpSignatureState::None => {}
+        }
+    }
+    let signer = state.signer.clone().unwrap_or_default();
+    let tone = if state.need_private_key || state.signature == PgpSignatureState::Invalid {
+        "is-warn"
+    } else if state.signature == PgpSignatureState::Valid {
+        "is-ok"
+    } else {
+        ""
+    };
+    rsx! {
+        div {
+            class: "message-pgp-banner {tone}",
+            role: "status",
+            for (label, class) in chips {
+                span { class: "message-pgp-chip {class}", "{label}" }
+            }
+            if !signer.is_empty() && state.signature == PgpSignatureState::Valid {
+                span { class: "message-pgp-signer", "{signer}" }
+            }
         }
     }
 }

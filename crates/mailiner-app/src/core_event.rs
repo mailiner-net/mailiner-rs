@@ -53,7 +53,7 @@ use crate::mail_file::{
 use crate::mailbox::{MailboxId, apply_live_folder_state, live_refresh_end};
 use crate::message::{Message, MessageId, next_flag_value};
 use crate::message_list_filter::message_matches_filter;
-use crate::message_loader::{adjacent_neighbor_indices, load_message};
+use crate::message_loader::{adjacent_neighbor_indices, apply_openpgp, load_message};
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxId, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
     pick_oldest_queued,
@@ -3927,7 +3927,8 @@ async fn run_one_prefetch(
     };
     let folder_id = FolderId::new(job.mailbox_id.to_string());
     match load_message(connector, &folder_id, &id).await {
-        Ok(loaded) => {
+        Ok(mut loaded) => {
+            apply_openpgp(manager.store().as_ref(), &mut loaded).await;
             let loaded = Arc::new(loaded);
             persist_loaded_parts(manager.cache(), &job.account_id, &loaded).await;
             ctx.message_bodies.borrow_mut().insert(id, loaded);
@@ -4002,7 +4003,8 @@ async fn handle_select_message(
     let mailbox_id = target.mailbox_id.clone();
 
     let persisted = load_cached_loaded_message(manager.cache(), &account_id, &message_id).await;
-    if let Some(loaded) = persisted.clone() {
+    if let Some(mut loaded) = persisted.clone() {
+        apply_openpgp(manager.store().as_ref(), &mut loaded).await;
         let loaded = Arc::new(loaded);
         ctx.message_bodies
             .borrow_mut()
@@ -4042,7 +4044,8 @@ async fn handle_select_message(
     );
 
     match load_message(connector, &folder_id, &message_id).await {
-        Ok(loaded) => {
+        Ok(mut loaded) => {
+            apply_openpgp(manager.store().as_ref(), &mut loaded).await;
             let loaded = Arc::new(loaded);
             persist_loaded_parts(manager.cache(), &account_id, &loaded).await;
             ctx.message_bodies

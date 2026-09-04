@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::account_config::{ACCOUNT_STORE_SCHEMA_VERSION, AccountConfig};
 use crate::account_vault::{
-    SecretsVault, VaultKey, VaultState, apply_secrets, decode_vault_salt, decrypt_secrets,
-    encrypt_secrets, extract_secrets, validate_passphrase,
+    OpenPgpSecret, SecretsVault, VaultKey, VaultState, apply_secrets, decode_vault_salt,
+    decrypt_secrets, encrypt_secrets, extract_secrets, validate_passphrase,
 };
 
 /// `localStorage` key for the v1 account-configs blob.
@@ -87,6 +87,11 @@ pub trait AccountStore {
     async fn change_passphrase(&self, current: &str, new: &str) -> Result<(), AccountStoreError>;
     /// Decrypt and write plaintext secrets again. Requires the current passphrase.
     async fn remove_passphrase(&self, current: &str) -> Result<(), AccountStoreError>;
+
+    /// Imported OpenPGP private keys (vaulted with account passwords).
+    async fn list_pgp_keys(&self) -> Result<Vec<OpenPgpSecret>, AccountStoreError>;
+    async fn upsert_pgp_key(&self, key: &OpenPgpSecret) -> Result<(), AccountStoreError>;
+    async fn delete_pgp_key(&self, fingerprint: &str) -> Result<(), AccountStoreError>;
 }
 
 /// In-memory store for unit tests and session-only fallback.
@@ -96,6 +101,7 @@ pub trait AccountStore {
 pub struct InMemoryAccountStore {
     accounts: RefCell<HashMap<AccountId, AccountConfig>>,
     active_id: RefCell<Option<AccountId>>,
+    pgp_keys: RefCell<Vec<OpenPgpSecret>>,
 }
 
 impl InMemoryAccountStore {
@@ -173,6 +179,27 @@ impl AccountStore for InMemoryAccountStore {
             "passphrase encryption is not available for this store".into(),
         ))
     }
+
+    async fn list_pgp_keys(&self) -> Result<Vec<OpenPgpSecret>, AccountStoreError> {
+        Ok(self.pgp_keys.borrow().clone())
+    }
+
+    async fn upsert_pgp_key(&self, key: &OpenPgpSecret) -> Result<(), AccountStoreError> {
+        let mut keys = self.pgp_keys.borrow_mut();
+        if let Some(slot) = keys.iter_mut().find(|k| k.fingerprint == key.fingerprint) {
+            *slot = key.clone();
+        } else {
+            keys.push(key.clone());
+        }
+        Ok(())
+    }
+
+    async fn delete_pgp_key(&self, fingerprint: &str) -> Result<(), AccountStoreError> {
+        self.pgp_keys
+            .borrow_mut()
+            .retain(|k| k.fingerprint != fingerprint);
+        Ok(())
+    }
 }
 
 // ── Persisted blob schema (localStorage JSON v1) ────────────────────────────
@@ -191,6 +218,9 @@ pub struct AccountsStoreBlob {
     /// Serde ignores this field on older readers, so schema_version stays 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<SecretsVault>,
+    /// Plaintext OpenPGP keys when no vault is present. Empty when vaulted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pgp_keys: Vec<OpenPgpSecret>,
 }
 
 impl AccountsStoreBlob {
@@ -201,6 +231,7 @@ impl AccountsStoreBlob {
             active_account_id: None,
             accounts: Vec::new(),
             vault: None,
+            pgp_keys: Vec::new(),
         }
     }
 
@@ -405,6 +436,7 @@ impl<K: StringKvStore> BrowserAccountStore<K> {
                 .ok_or(AccountStoreError::Locked)?;
             let secrets = decrypt_secrets(&key, vault).await?;
             apply_secrets(&mut blob.accounts, &secrets);
+            blob.pgp_keys = secrets.pgp_keys;
         }
         Ok(blob)
     }
@@ -413,7 +445,8 @@ impl<K: StringKvStore> BrowserAccountStore<K> {
         let mut to_write = blob.clone();
         let session_key = self.session.borrow().clone();
         if let Some(key) = session_key {
-            let secrets = extract_secrets(&to_write.accounts);
+            let mut secrets = extract_secrets(&to_write.accounts);
+            secrets.pgp_keys = std::mem::take(&mut to_write.pgp_keys);
             for acc in &mut to_write.accounts {
                 acc.redact_secrets();
             }
@@ -580,6 +613,34 @@ impl<K: StringKvStore> AccountStore for BrowserAccountStore<K> {
             return Err(e);
         }
         Ok(())
+    }
+
+    async fn list_pgp_keys(&self) -> Result<Vec<OpenPgpSecret>, AccountStoreError> {
+        Ok(self.load_blob().await?.pgp_keys)
+    }
+
+    async fn upsert_pgp_key(&self, key: &OpenPgpSecret) -> Result<(), AccountStoreError> {
+        self.require_unlocked_for_write()?;
+        let mut blob = self.load_blob().await?;
+        if let Some(slot) = blob
+            .pgp_keys
+            .iter_mut()
+            .find(|k| k.fingerprint == key.fingerprint)
+        {
+            *slot = key.clone();
+        } else {
+            blob.pgp_keys.push(key.clone());
+        }
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        self.save_blob(&blob).await
+    }
+
+    async fn delete_pgp_key(&self, fingerprint: &str) -> Result<(), AccountStoreError> {
+        self.require_unlocked_for_write()?;
+        let mut blob = self.load_blob().await?;
+        blob.pgp_keys.retain(|k| k.fingerprint != fingerprint);
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        self.save_blob(&blob).await
     }
 }
 
@@ -1167,5 +1228,50 @@ mod tests {
         let err = block_on(store.set_passphrase("short")).unwrap_err();
         assert_eq!(err, AccountStoreError::InvalidPassphrase);
         assert_eq!(store.vault_state(), VaultState::Plaintext);
+    }
+
+    #[test]
+    fn pgp_keys_roundtrip_plaintext_and_vault() {
+        let store = BrowserAccountStore::open_memory();
+        let key = OpenPgpSecret {
+            fingerprint: "ABCD".into(),
+            user_ids: vec!["Alice <alice@example.com>".into()],
+            armored:
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----\nSECRET\n-----END PGP PRIVATE KEY BLOCK-----"
+                    .into(),
+            passphrase: "key-pass".into(),
+        };
+        block_on(async {
+            store.upsert_pgp_key(&key).await.unwrap();
+            let listed = store.list_pgp_keys().await.unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].fingerprint, "ABCD");
+            assert_eq!(listed[0].passphrase, "key-pass");
+
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+            store.set_passphrase("correct-horse").await.unwrap();
+            store.lock_session();
+            assert_eq!(
+                store.list_pgp_keys().await.unwrap_err(),
+                AccountStoreError::Locked
+            );
+            store.unlock("correct-horse").await.unwrap();
+            let listed = store.list_pgp_keys().await.unwrap();
+            assert!(listed[0].armored.contains("SECRET"));
+
+            let raw = store
+                .kv
+                .get_item(ACCOUNTS_LOCAL_STORAGE_KEY)
+                .unwrap()
+                .unwrap();
+            assert!(!raw.contains("SECRET"), "armored key leaked outside vault");
+            assert!(
+                !raw.contains("key-pass"),
+                "key passphrase leaked outside vault"
+            );
+
+            store.delete_pgp_key("ABCD").await.unwrap();
+            assert!(store.list_pgp_keys().await.unwrap().is_empty());
+        });
     }
 }

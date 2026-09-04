@@ -8,6 +8,9 @@ use mailiner_core::error::{MailinerError, Result};
 use mailiner_core::ids::{FolderId, MessageId};
 use mailiner_core::models::{LoadedMessage, MessageContent, MessagePart};
 use mailiner_mime::{MessageParser, decode_part_content};
+use mailiner_pgp::{PublicKeyInput, SecretKeyInput, process_loaded};
+
+use crate::account_store::AccountStore;
 
 /// Skip prefetch when BODYSTRUCTURE size exceeds this (wire octets).
 pub(crate) const MAX_PREFETCH_OCTETS: u64 = 2 * 1024 * 1024;
@@ -139,19 +142,18 @@ pub async fn load_message<C: EmailConnector>(
     let parser = MessageParser::with_defaults();
     let mut parts = parser.parse(message_id, &structure);
 
-    let sections = prefetch_sections(&parts);
-
-    if sections.is_empty() {
-        return Ok(LoadedMessage {
-            envelope_id: message_id.clone(),
-            folder_id: folder_id.clone(),
-            parts,
-        });
+    let mut sections = prefetch_sections(&parts);
+    if !sections.iter().any(|s| s.eq_ignore_ascii_case("HEADER")) {
+        sections.push("HEADER".into());
     }
 
     let raw = connector
         .fetch_raw_parts(folder_id, message_id, &sections)
         .await?;
+
+    if let Some(headers) = raw.get("HEADER") {
+        crate::autocrypt::remember_from_headers(headers);
+    }
 
     let mut missing = Vec::new();
     for part in &mut parts {
@@ -196,7 +198,26 @@ pub async fn load_message<C: EmailConnector>(
         envelope_id: message_id.clone(),
         folder_id: folder_id.clone(),
         parts,
+        pgp: Default::default(),
     })
+}
+
+/// Decrypt / verify with vaulted keys and Autocrypt public keys.
+pub async fn apply_openpgp(store: &dyn AccountStore, loaded: &mut LoadedMessage) {
+    let keys = store.list_pgp_keys().await.unwrap_or_default();
+    let secrets: Vec<SecretKeyInput<'_>> = keys
+        .iter()
+        .map(|k| SecretKeyInput {
+            armored: &k.armored,
+            passphrase: &k.passphrase,
+        })
+        .collect();
+    let pubs = crate::autocrypt::public_key_blobs();
+    let pub_refs: Vec<PublicKeyInput<'_>> = pubs
+        .iter()
+        .map(|d| PublicKeyInput { data: d.as_slice() })
+        .collect();
+    process_loaded(loaded, &secrets, &pub_refs);
 }
 
 #[cfg(test)]
@@ -311,6 +332,7 @@ mod tests {
             envelope_id: id,
             folder_id: folder,
             parts: vec![],
+            pgp: Default::default(),
         })
     }
 

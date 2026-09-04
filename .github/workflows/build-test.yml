@@ -52,6 +52,7 @@ jobs:
           -p mailiner-imap-connector
           -p mailiner-smtp-connector
           -p mailiner-composer
+          -p mailiner-pgp
           -- -D warnings -A dead_code
 
   check:

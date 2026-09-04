@@ -619,6 +619,37 @@ impl MessagePart {
     }
 }
 
+/// OpenPGP state after detect / decrypt / verify (no crypto material).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PgpViewState {
+    pub encrypted: bool,
+    pub signed: bool,
+    pub signature: PgpSignatureState,
+    /// User id of a valid signer, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    /// Encrypted, but no matching private key is available.
+    #[serde(default)]
+    pub need_private_key: bool,
+}
+
+impl PgpViewState {
+    pub fn is_active(&self) -> bool {
+        self.encrypted || self.signed || self.need_private_key
+    }
+}
+
+/// Local signature check for OpenPGP (not S/MIME).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PgpSignatureState {
+    #[default]
+    None,
+    Valid,
+    Invalid,
+    NeedKey,
+}
+
 /// Aggregate returned by the message load pipeline.
 #[derive(Debug, Clone)]
 pub struct LoadedMessage {
@@ -626,6 +657,8 @@ pub struct LoadedMessage {
     pub folder_id: FolderId,
     /// Full parsed part list (content + attachments + hidden inlines).
     pub parts: Vec<MessagePart>,
+    /// Detect / decrypt / verify result. Default is inactive.
+    pub pgp: PgpViewState,
 }
 
 impl LoadedMessage {

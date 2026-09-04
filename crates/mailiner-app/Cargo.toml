@@ -37,6 +37,7 @@ sha2 = "0.10"
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
 mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
 mailiner-composer = { path = "../mailiner-composer", features = ["web"] }
+mailiner-pgp = { path = "../mailiner-pgp" }
 futures-channel = "0.3"
 futures-executor = "0.3"
 wasm-bindgen-futures = "0.4"

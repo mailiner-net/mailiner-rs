@@ -45,6 +45,8 @@ impl MessageParser {
         p.add(Box::new(text::TextCalendarParser));
         p.add(Box::new(multipart::MultipartAlternativeParser));
         p.add(Box::new(multipart::MultipartRelatedParser));
+        p.add(Box::new(multipart::MultipartEncryptedParser));
+        p.add(Box::new(multipart::MultipartSignedParser));
         p.add(Box::new(multipart::MultipartMixedParser));
         p.add(Box::new(image::ImageParser));
         p.add(Box::new(rfc822::MessageRfc822Parser));

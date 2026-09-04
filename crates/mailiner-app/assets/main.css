@@ -924,6 +924,41 @@ a.accounts-link-btn {
     align-items: center;
 }
 
+.settings-pgp-list {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.settings-pgp-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.settings-pgp-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.15rem;
+}
+
+.settings-pgp-meta span {
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+}
+
+.settings-pgp-armor {
+    width: 100%;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-sm);
+}
+
 .settings-reset-note {
     margin: 0.5rem 0 0;
 }
@@ -3569,6 +3604,61 @@ body:has(.compose-dock) .toast {
 
         .message-view-header {
             flex-shrink: 0;
+        }
+
+        .message-pgp-banner {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 24px;
+            background: var(--info-bg);
+            border-bottom: 1px solid var(--info-border);
+            color: var(--info-fg);
+            font-size: 0.9rem;
+            flex-shrink: 0;
+
+            &.is-ok {
+                background: var(--success-bg);
+                border-bottom-color: var(--success-fg);
+                color: var(--success-fg);
+            }
+
+            &.is-warn {
+                background: var(--warning-bg);
+                border-bottom-color: var(--warning-border);
+                color: var(--warning-fg);
+            }
+        }
+
+        .message-pgp-chip {
+            display: inline-block;
+            padding: 0.05rem 0.45rem;
+            border-radius: var(--radius-pill);
+            font-size: var(--text-xs);
+            font-weight: 600;
+            background: var(--muted-chip-bg);
+            color: inherit;
+        }
+
+        .message-pgp-chip.is-pass {
+            background: var(--success-bg);
+            color: var(--success-fg);
+        }
+
+        .message-pgp-chip.is-fail {
+            background: var(--danger-soft);
+            color: var(--danger);
+        }
+
+        .message-pgp-chip.is-need {
+            background: var(--warning-bg);
+            color: var(--warning-fg);
+        }
+
+        .message-pgp-signer {
+            font-size: var(--text-sm);
+            opacity: 0.9;
         }
 
         .message-privacy-banner {

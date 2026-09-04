@@ -2,8 +2,10 @@
 
 use dioxus::prelude::*;
 
+use crate::AccountStoreContext;
 use crate::Route;
 use crate::account::{Account, AccountId};
+use crate::account_vault::OpenPgpSecret;
 use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::i18n::{self, UiLocale, t, t_args};
@@ -307,6 +309,8 @@ pub fn SettingsPage() -> Element {
                     }
                 }
 
+                OpenPgpSection {}
+
                 ShortcutSettingsSection {}
 
                 nav {
@@ -321,6 +325,160 @@ pub fn SettingsPage() -> Element {
                         class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
                         {t("settings.back_to_mail")}
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Import an ASCII-armored OpenPGP private key into the account vault.
+#[component]
+fn OpenPgpSection() -> Element {
+    let store_ctx = use_context::<Signal<Option<AccountStoreContext>>>();
+    let mut keys = use_signal(Vec::<OpenPgpSecret>::new);
+    let mut armored = use_signal(String::new);
+    let mut passphrase = use_signal(String::new);
+    let mut action_error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+
+    use_future(move || {
+        let store_ctx = store_ctx;
+        async move {
+            let Some(store) = store_ctx() else {
+                return;
+            };
+            if let Ok(listed) = store.0.list_pgp_keys().await {
+                keys.set(listed);
+            }
+        }
+    });
+
+    let listed = keys();
+    rsx! {
+        section {
+            class: "settings-section",
+            h2 { "OpenPGP" }
+            p {
+                class: "bootstrap-muted settings-hint",
+                "Import a private key (ASCII-armor) to decrypt and verify OpenPGP mail. The key and its passphrase are stored with your account secrets in this browser."
+            }
+            if listed.is_empty() {
+                p { class: "bootstrap-muted", "No private keys imported yet." }
+            } else {
+                ul {
+                    class: "settings-pgp-list",
+                    for key in listed.iter() {
+                        {
+                            let fp = key.fingerprint.clone();
+                            let label = key
+                                .user_ids
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| fp.clone());
+                            rsx! {
+                                li {
+                                    class: "settings-pgp-item",
+                                    div {
+                                        class: "settings-pgp-meta",
+                                        strong { "{label}" }
+                                        span { class: "bootstrap-muted", "{fp}" }
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                                        onclick: move |_| {
+                                            let fp = fp.clone();
+                                            let store_ctx = store_ctx;
+                                            spawn(async move {
+                                                let Some(store) = store_ctx() else {
+                                                    return;
+                                                };
+                                                if store.0.delete_pgp_key(&fp).await.is_ok()
+                                                    && let Ok(listed) = store.0.list_pgp_keys().await
+                                                {
+                                                    keys.set(listed);
+                                                }
+                                            });
+                                        },
+                                        "Remove"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-pgp-armor", "Private key (ASCII-armor)" }
+                textarea {
+                    id: "settings-pgp-armor",
+                    class: "settings-pgp-armor",
+                    rows: "6",
+                    value: "{armored}",
+                    placeholder: "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+                    oninput: move |evt| armored.set(evt.value()),
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-pgp-pass", "Key passphrase" }
+                input {
+                    id: "settings-pgp-pass",
+                    r#type: "password",
+                    value: "{passphrase}",
+                    autocomplete: "off",
+                    oninput: move |evt| passphrase.set(evt.value()),
+                }
+            }
+            if let Some(err) = action_error() {
+                p { class: "onboarding-error", "{err}" }
+            }
+            div {
+                class: "settings-actions",
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-primary",
+                    disabled: busy() || armored().trim().is_empty(),
+                    onclick: move |_| {
+                        let store_ctx = store_ctx;
+                        let raw = armored();
+                        let pass = passphrase();
+                        busy.set(true);
+                        action_error.set(None);
+                        spawn(async move {
+                            match mailiner_pgp::inspect_secret_key(&raw, &pass) {
+                                Ok(info) => {
+                                    let Some(store) = store_ctx() else {
+                                        action_error.set(Some(
+                                            "Account storage is not available.".into(),
+                                        ));
+                                        busy.set(false);
+                                        return;
+                                    };
+                                    let secret = OpenPgpSecret {
+                                        fingerprint: info.fingerprint,
+                                        user_ids: info.user_ids,
+                                        armored: raw,
+                                        passphrase: pass,
+                                    };
+                                    match store.0.upsert_pgp_key(&secret).await {
+                                        Ok(()) => {
+                                            if let Ok(listed) = store.0.list_pgp_keys().await {
+                                                keys.set(listed);
+                                            }
+                                            armored.set(String::new());
+                                            passphrase.set(String::new());
+                                        }
+                                        Err(e) => action_error.set(Some(e.to_string())),
+                                    }
+                                }
+                                Err(e) => action_error.set(Some(e.to_string())),
+                            }
+                            busy.set(false);
+                        });
+                    },
+                    if busy() { "Importing…" } else { "Import key" }
                 }
             }
         }

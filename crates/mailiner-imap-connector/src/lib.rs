@@ -1,3 +1,4 @@
+mod auth;
 mod bodystructure;
 mod fetch_chunk;
 mod quota;
@@ -1632,11 +1633,39 @@ where
             // Temporarily transition to Authenticating state and consume the imap session,
             // that we know is in Unauthenticated state.
             let unauth_imap = std::mem::replace(&mut *imap, ImapSession::Authenticating);
-            if let ImapSession::Unauthenticated(client) = unauth_imap {
-                let authenticated = client.login(&self.username, credentials).await;
+            if let ImapSession::Unauthenticated(mut client) = unauth_imap {
+                let choice = match auth::query_preauth_caps(&mut client).await {
+                    Ok(caps) => caps.choice(),
+                    Err(e) => {
+                        tracing::warn!("pre-auth CAPABILITY failed ({e}); falling back to LOGIN");
+                        auth::AuthChoice::Login
+                    }
+                };
+                let authenticated = match choice {
+                    auth::AuthChoice::Plain => {
+                        info!("IMAP AUTHENTICATE PLAIN");
+                        let sasl = auth::SaslPlain {
+                            username: &self.username,
+                            password: credentials,
+                        };
+                        client.authenticate("PLAIN", sasl).await
+                    }
+                    auth::AuthChoice::Login => {
+                        info!("IMAP LOGIN");
+                        client.login(&self.username, credentials).await
+                    }
+                    auth::AuthChoice::None => {
+                        *imap = ImapSession::Unauthenticated(client);
+                        return Err(ImapError::Authentication(
+                            "Server advertised no supported IMAP auth mechanism (PLAIN/LOGIN)."
+                                .into(),
+                        )
+                        .into());
+                    }
+                };
                 // Transition from the temporary Authenticating state to the Authenticated state.
                 *imap = ImapSession::Authenticated(authenticated.map_err(|(e, _)| {
-                    ImapError::Authentication(format!("Failed to login: {}", e))
+                    ImapError::Authentication(format!("Failed to authenticate: {e}"))
                 })?);
                 clear_selected(&self.selected_mailbox);
                 if let ImapSession::Authenticated(session) = &mut *imap {
@@ -2791,6 +2820,29 @@ Received-SPF: pass\r\n\
         format!("* CAPABILITY IMAP4rev1{extra}\r\n{tag} OK CAPABILITY\r\n")
     }
 
+    /// Pre-auth CAPABILITY (no AUTH=PLAIN) then IMAP LOGIN. Post-auth CAPABILITY is separate.
+    async fn expect_capability_then_login(server: &mut tokio::io::DuplexStream, buf: &mut Vec<u8>) {
+        let cap = read_cmd(server, buf).await;
+        assert!(
+            cap.to_ascii_uppercase().contains("CAPABILITY"),
+            "expected pre-auth CAPABILITY, got {cap}"
+        );
+        let tag = cap.split_whitespace().next().unwrap();
+        write_all(server, &reply_capability(tag, "")).await;
+
+        let login = read_cmd(server, buf).await;
+        assert!(
+            login.to_ascii_uppercase().contains("LOGIN"),
+            "expected LOGIN fallback, got {login}"
+        );
+        assert!(
+            !login.to_ascii_uppercase().contains("AUTHENTICATE"),
+            "LOGIN fallback must not use AUTHENTICATE: {login}"
+        );
+        let tag = login.split_whitespace().next().unwrap();
+        write_all(server, &format!("{tag} OK logged in\r\n")).await;
+    }
+
     async fn login_plain(
         conn: &ImapConnector<tokio::io::DuplexStream>,
         stream: tokio::io::DuplexStream,
@@ -2807,10 +2859,7 @@ Received-SPF: pass\r\n\
         let server_task = tokio::spawn(async move {
             write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
             let mut buf = Vec::new();
-            let login = read_cmd(&mut server, &mut buf).await;
-            assert!(login.to_ascii_uppercase().contains("LOGIN"), "{login}");
-            let tag = login.split_whitespace().next().unwrap();
-            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+            expect_capability_then_login(&mut server, &mut buf).await;
 
             let cap = read_cmd(&mut server, &mut buf).await;
             assert!(cap.to_ascii_uppercase().contains("CAPABILITY"), "{cap}");
@@ -2857,9 +2906,7 @@ Received-SPF: pass\r\n\
         let server_task = tokio::spawn(async move {
             write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
             let mut buf = Vec::new();
-            let login = read_cmd(&mut server, &mut buf).await;
-            let tag = login.split_whitespace().next().unwrap();
-            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+            expect_capability_then_login(&mut server, &mut buf).await;
 
             let cap = read_cmd(&mut server, &mut buf).await;
             let tag = cap.split_whitespace().next().unwrap();
@@ -2900,9 +2947,7 @@ Received-SPF: pass\r\n\
         let server_task = tokio::spawn(async move {
             write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
             let mut buf = Vec::new();
-            let login = read_cmd(&mut server, &mut buf).await;
-            let tag = login.split_whitespace().next().unwrap();
-            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+            expect_capability_then_login(&mut server, &mut buf).await;
 
             let cap = read_cmd(&mut server, &mut buf).await;
             let tag = cap.split_whitespace().next().unwrap();
@@ -2944,9 +2989,7 @@ Received-SPF: pass\r\n\
         let server_task = tokio::spawn(async move {
             write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
             let mut buf = Vec::new();
-            let login = read_cmd(&mut server, &mut buf).await;
-            let tag = login.split_whitespace().next().unwrap();
-            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+            expect_capability_then_login(&mut server, &mut buf).await;
 
             let cap = read_cmd(&mut server, &mut buf).await;
             let tag = cap.split_whitespace().next().unwrap();
@@ -3051,9 +3094,7 @@ Received-SPF: pass\r\n\
         let server_task = tokio::spawn(async move {
             write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
             let mut buf = Vec::new();
-            let login = read_cmd(&mut server, &mut buf).await;
-            let tag = login.split_whitespace().next().unwrap();
-            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+            expect_capability_then_login(&mut server, &mut buf).await;
 
             let cap = read_cmd(&mut server, &mut buf).await;
             let tag = cap.split_whitespace().next().unwrap();
@@ -3141,5 +3182,131 @@ Received-SPF: pass\r\n\
                 "LOGOUT",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn authenticate_uses_sasl_plain_when_advertised() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cap = read_cmd(&mut server, &mut buf).await;
+            assert!(cap.to_ascii_uppercase().contains("CAPABILITY"), "{cap}");
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(
+                &mut server,
+                &reply_capability(tag, " AUTH=PLAIN AUTH=XOAUTH2"),
+            )
+            .await;
+
+            let auth = read_cmd(&mut server, &mut buf).await;
+            let upper = auth.to_ascii_uppercase();
+            assert!(upper.contains("AUTHENTICATE PLAIN"), "{auth}");
+            assert!(!upper.contains("XOAUTH2"), "{auth}");
+            assert!(!upper.contains("LOGIN"), "{auth}");
+            write_all(&mut server, "+\r\n").await;
+
+            let payload = read_cmd(&mut server, &mut buf).await;
+            let decoded = mailiner_mime::base64_decode(payload.trim().as_bytes()).unwrap();
+            assert_eq!(decoded, b"\0user@example.com\0secret");
+            let tag = auth.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let post = read_cmd(&mut server, &mut buf).await;
+            assert!(post.to_ascii_uppercase().contains("CAPABILITY"), "{post}");
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+        });
+
+        login_plain(&conn, client).await;
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticate_falls_back_to_login_without_plain() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            expect_capability_then_login(&mut server, &mut buf).await;
+            let post = read_cmd(&mut server, &mut buf).await;
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+        });
+
+        login_plain(&conn, client).await;
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticate_errors_when_no_plain_and_login_disabled() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(
+                &mut server,
+                &reply_capability(tag, " LOGINDISABLED AUTH=XOAUTH2"),
+            )
+            .await;
+        });
+
+        conn.connect(client).await.unwrap();
+        let err = conn.authenticate("secret").await.unwrap_err();
+        match err {
+            MailinerError::Auth(msg) => {
+                assert!(
+                    msg.contains("PLAIN/LOGIN"),
+                    "expected no-mechanism Auth, got {msg}"
+                );
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn authenticate_plain_failure_does_not_retry_login() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " AUTH=PLAIN")).await;
+
+            let auth = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                auth.to_ascii_uppercase().contains("AUTHENTICATE PLAIN"),
+                "{auth}"
+            );
+            write_all(&mut server, "+\r\n").await;
+            let _payload = read_cmd(&mut server, &mut buf).await;
+            let tag = auth.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} NO [AUTHENTICATIONFAILED]\r\n")).await;
+        });
+
+        conn.connect(client).await.unwrap();
+        let err = conn.authenticate("wrong").await.unwrap_err();
+        match err {
+            MailinerError::Auth(msg) => {
+                assert!(
+                    !msg.contains("PLAIN/LOGIN"),
+                    "failed PLAIN must not look like missing mechanism: {msg}"
+                );
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
+        let _ = server_task.await;
     }
 }

@@ -3371,6 +3371,7 @@ name = "mailiner-imap-connector"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.3.1",
  "async-imap",
  "async-trait",
  "chrono",

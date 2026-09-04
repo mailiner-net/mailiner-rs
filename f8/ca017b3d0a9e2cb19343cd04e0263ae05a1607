@@ -1,0 +1,19 @@
+crates/mailiner-app/src/components/onboarding.rs
+  s_b9f77368777300::t_885fc285c9a722 94,98-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f8ca017b3d0a9e2cb19343cd04e0263ae05a1607",
+  "prompts": {},
+  "sessions": {
+    "s_b9f77368777300": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a73-e9ea-7261-8191-e79521fc93d0",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

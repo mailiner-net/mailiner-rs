@@ -33,6 +33,7 @@ pub enum ShortcutId {
     SelectAll,
     ToggleStar,
     ToggleFlag,
+    TogglePin,
     ShowHelp,
 }
 
@@ -65,6 +66,7 @@ impl ShortcutId {
                 | Self::PrevUnread
                 | Self::ToggleStar
                 | Self::ToggleFlag
+                | Self::TogglePin
                 | Self::ShowHelp
         )
     }
@@ -97,6 +99,7 @@ impl ShortcutId {
             Self::SelectAll => "select_all",
             Self::ToggleStar => "toggle_star",
             Self::ToggleFlag => "toggle_flag",
+            Self::TogglePin => "toggle_pin",
             Self::ShowHelp => "show_help",
         }
     }
@@ -129,6 +132,7 @@ impl ShortcutId {
             "select_all" => Some(Self::SelectAll),
             "toggle_star" => Some(Self::ToggleStar),
             "toggle_flag" => Some(Self::ToggleFlag),
+            "toggle_pin" => Some(Self::TogglePin),
             "show_help" => Some(Self::ShowHelp),
             _ => None,
         }
@@ -349,6 +353,15 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: false,
         label: "I",
         description: "Flag or unflag message",
+        group: ShortcutGroup::Mail,
+    },
+    // B is bookmark / pin; P is previous unread.
+    Shortcut {
+        id: ShortcutId::TogglePin,
+        keys: &["b", "B"],
+        require_shift: false,
+        label: "B",
+        description: "Pin or unpin message",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -759,6 +772,9 @@ mod tests {
         assert_eq!(lookup("S", true), Some(ShortcutId::ToggleStar));
         assert_eq!(lookup("i", false), Some(ShortcutId::ToggleFlag));
         assert_eq!(lookup("f", false), Some(ShortcutId::Forward));
+        assert_eq!(lookup("b", false), Some(ShortcutId::TogglePin));
+        assert_eq!(lookup("B", true), Some(ShortcutId::TogglePin));
+        assert_eq!(lookup("p", false), Some(ShortcutId::PrevUnread));
     }
 
     #[test]

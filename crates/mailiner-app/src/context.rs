@@ -182,6 +182,8 @@ pub struct AppContext {
     pub folder_subscribe_open: Signal<bool>,
     /// Show unsubscribed folders in the tree and pickers.
     pub show_all_folders: Signal<bool>,
+    /// Pinned IMAP UIDs for the open account+mailbox (local overlay, pin order).
+    pub pinned_uids: Signal<Vec<String>>,
 }
 
 /// In-progress drag of list rows onto a folder.
@@ -316,6 +318,7 @@ impl AppContext {
         self.toast.set(None);
         self.compose_draft.set(None);
         self.mailbox_picker.set(None);
+        self.pinned_uids.set(Vec::new());
         self.mobile_pane.set(MobilePane::default());
     }
 

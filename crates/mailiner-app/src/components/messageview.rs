@@ -1080,6 +1080,16 @@ fn MessageHeader(
     } else {
         message.is_flagged
     };
+    let pinned_uids = ctx.pinned_uids.read().clone();
+    let all_selected_pinned = !selected_ids.is_empty()
+        && selected_ids
+            .iter()
+            .all(|id| pinned_uids.iter().any(|uid| uid == id.as_uid()));
+    let is_pinned = if selected_n > 1 {
+        all_selected_pinned
+    } else {
+        pinned_uids.iter().any(|uid| uid == message.id.as_uid())
+    };
     let selected_keywords = {
         let list = ctx.messages.read();
         ImapKeyword::ALL.map(|keyword| {
@@ -1182,6 +1192,37 @@ fn MessageHeader(
                                     return;
                                 }
                                 let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                    account_id,
+                                    mailbox_id,
+                                    message_ids: ids.clone(),
+                                });
+                            }
+                        },
+                    }
+                    IconButton {
+                        class: if is_pinned {
+                            "ui-btn ui-btn-secondary message-pin-btn is-on"
+                        } else {
+                            "ui-btn ui-btn-secondary message-pin-btn"
+                        },
+                        title: if is_pinned { "Unpin" } else { "Pin" },
+                        size: 16,
+                        icon: IconKind::Pin,
+                        aria_pressed: Some(is_pinned),
+                        onclick: {
+                            let account_id = account_id.clone();
+                            let mailbox_id = mailbox_id.clone();
+                            let ids = selected_ids.clone();
+                            move |_| {
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
+                                    return;
+                                };
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::TogglePin {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),

@@ -135,6 +135,12 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Toggle the local pin overlay for the given messages (keep at top).
+    TogglePin {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Toggle a built-in custom IMAP keyword on the given messages.
     ToggleKeyword {
         account_id: AccountId,
@@ -623,6 +629,13 @@ pub async fn core_loop(
                     EnvelopeFlag::Flagged,
                 )
                 .await;
+            }
+            CoreEvent::TogglePin {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_toggle_pin(&mut ctx, account_id, mailbox_id, message_ids);
             }
             CoreEvent::ToggleKeyword {
                 account_id,
@@ -1465,6 +1478,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     crate::ui_prefs::retain_saved_searches(&known);
     ctx.saved_searches
         .set(crate::ui_prefs::load_saved_searches());
+    crate::ui_prefs::retain_pinned_messages(&known);
     crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
@@ -1666,11 +1680,13 @@ pub(crate) fn apply_hydrated(ctx: &mut AppContext, hydrated: HydratedAccount) {
     if let Some(mailbox_id) = hydrated.selected_mailbox {
         ctx.selected_mailbox.set(Some(mailbox_id));
     }
+    sync_pinned_uids(ctx);
     match hydrated.messages {
         Some(msgs) => {
             let mut list = SparseList::new(msgs.total);
             list.insert_batch(0, msgs.prefix);
             ctx.messages.set(list);
+            apply_pins_to_messages(ctx);
             ctx.messages_loading.set(false);
         }
         None => {
@@ -1687,6 +1703,7 @@ fn apply_cached_message_list(ctx: &mut AppContext, cached: &CachedMessageList) {
     let mut list = SparseList::new(ui.total);
     list.insert_batch(0, ui.prefix);
     ctx.messages.set(list);
+    apply_pins_to_messages(ctx);
     ctx.messages_loading.set(false);
 }
 
@@ -1990,6 +2007,7 @@ async fn select_mailbox(
         ctx.download_status.set(HashMap::new());
         ctx.clear_attachment_downloads();
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+        sync_pinned_uids(ctx);
         let sort = *ctx.message_sort.peek();
         let account = ctx.selected_account.read().clone();
         // Cached prefixes are unfiltered; skip them when SEARCH is narrowing the folder.
@@ -2016,6 +2034,8 @@ async fn select_mailbox(
         }
     } else {
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
+        sync_pinned_uids(ctx);
+        apply_pins_to_messages(ctx);
         ctx.messages_loading.set(false);
     }
 
@@ -2076,6 +2096,7 @@ async fn select_mailbox(
                     let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
                     list.insert_batch(0, batch);
                     ctx.messages.set(list);
+                    apply_pins_to_messages(ctx);
                     ctx.messages_loading.set(false);
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2209,6 +2230,7 @@ async fn handle_mailbox_activity(
             let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             list.insert_batch(0, batch);
             ctx.messages.set(list);
+            apply_pins_to_messages(ctx);
             prune_selection_after_refresh(ctx, &old_ids, &new_ids);
             persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2538,6 +2560,7 @@ async fn handle_fetch_message_range(
             let prefix_before = contiguous_loaded_prefix_len(&ctx.messages.read());
             let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             ctx.messages.write().insert_batch(range.start, batch);
+            apply_pins_to_messages(ctx);
             // Only rewrite localStorage when the contiguous cached prefix grew.
             let prefix_grew = contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before;
             if prefix_grew {
@@ -3518,6 +3541,93 @@ async fn handle_toggle_flag(
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
 }
 
+fn sync_pinned_uids(ctx: &mut AppContext) {
+    let pins = match (
+        ctx.selected_account.peek().as_ref(),
+        ctx.selected_mailbox.peek().as_ref(),
+    ) {
+        (Some(account_id), Some(mailbox_id)) => {
+            crate::ui_prefs::load_pinned_uids(account_id, mailbox_id)
+        }
+        _ => Vec::new(),
+    };
+    ctx.pinned_uids.set(pins);
+}
+
+fn apply_pins_to_messages(ctx: &mut AppContext) {
+    let pins = ctx.pinned_uids.peek().clone();
+    if pins.is_empty() {
+        return;
+    }
+    let focus = ctx.selection.read().focus().cloned();
+    let prefix_len = contiguous_loaded_prefix_len(&ctx.messages.read());
+    if prefix_len < 2 {
+        return;
+    }
+    let mut prefix: Vec<Arc<Message>> = {
+        let list = ctx.messages.read();
+        (0..prefix_len)
+            .filter_map(|i| list.get(i).cloned())
+            .collect()
+    };
+    if prefix.len() != prefix_len {
+        return;
+    }
+    if !crate::pin::sort_pinned_first(&mut prefix, &pins, |m| m.id.as_uid()) {
+        return;
+    }
+    {
+        let mut list = ctx.messages.write();
+        for (i, msg) in prefix.into_iter().enumerate() {
+            list.insert(i, msg);
+        }
+    }
+    if let Some(id) = focus
+        && let Some(idx) = ctx.messages.read().position(|m| m.id == id)
+    {
+        ctx.selection.write().note_focus(id, Some(idx));
+    }
+}
+
+fn handle_toggle_pin(
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty()
+        || message_ids
+            .iter()
+            .any(|id| id.folder_id().as_str() != mailbox_id.as_str())
+    {
+        return;
+    }
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
+        return;
+    }
+    let current = ctx.pinned_uids.peek().clone();
+    let pin = !crate::pin::all_pinned(message_ids.iter().map(|id| id.as_uid()), &current);
+    let mut ordered: Vec<String> = Vec::new();
+    {
+        let list = ctx.messages.read();
+        for msg in list.iter() {
+            if message_ids.iter().any(|id| id == &msg.id)
+                && !ordered.iter().any(|uid| uid == msg.id.as_uid())
+            {
+                ordered.push(msg.id.as_uid().to_string());
+            }
+        }
+    }
+    for id in &message_ids {
+        if !ordered.iter().any(|uid| uid == id.as_uid()) {
+            ordered.push(id.as_uid().to_string());
+        }
+    }
+    let next = crate::ui_prefs::toggle_pinned_uids(&account_id, &mailbox_id, &ordered, pin);
+    ctx.pinned_uids.set(next);
+    apply_pins_to_messages(ctx);
+}
+
 fn same_mail_session(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) -> bool {
     selected_account_is(ctx, account_id) && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
 }
@@ -3675,6 +3785,8 @@ async fn relocate_unread_sort_rows(
             for (from, to) in moves {
                 list.relocate(from, to);
             }
+            drop(list);
+            apply_pins_to_messages(ctx);
         }
         Err(e) => {
             warn!("unread-sort relocate failed: {e}");

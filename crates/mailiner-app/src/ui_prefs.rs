@@ -85,6 +85,9 @@ pub const THEME_KEY: &str = "mailiner.ui.theme";
 /// `localStorage` key for the default composer body mode.
 pub const COMPOSE_BODY_MODE_KEY: &str = "mailiner.ui.composeBodyMode";
 
+/// `localStorage` key for composer placement (`modal` | `docked`).
+pub const COMPOSE_PLACEMENT_KEY: &str = "mailiner.ui.composePlacement";
+
 /// `localStorage` key for the preferred compose From account.
 pub const DEFAULT_FROM_ACCOUNT_KEY: &str = "mailiner.ui.defaultFromAccount";
 
@@ -179,6 +182,47 @@ impl ComposeBodyMode {
             Self::Plain => "Plain text",
             Self::Rich => "Rich text",
         }
+    }
+}
+
+/// Where the composer is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ComposePlacement {
+    /// Centered modal dialog (covers the mailbox).
+    #[default]
+    Modal,
+    /// In-flow pane at the bottom of the mail chrome.
+    Docked,
+}
+
+impl ComposePlacement {
+    pub const ALL: [Self; 2] = [Self::Modal, Self::Docked];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Modal => "modal",
+            Self::Docked => "docked",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "modal" => Some(Self::Modal),
+            "docked" => Some(Self::Docked),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Modal => "Dialog",
+            Self::Docked => "Docked to bottom",
+        }
+    }
+
+    /// Modal compose covers the mailbox; docked leaves mail shortcuts usable.
+    pub fn blocks_mail_shortcuts(self, compose_open: bool) -> bool {
+        compose_open && matches!(self, Self::Modal)
     }
 }
 
@@ -618,6 +662,21 @@ pub fn load_compose_body_mode() -> ComposeBodyMode {
 
 pub fn save_compose_body_mode(mode: ComposeBodyMode) {
     let _ = with_kv(|kv| kv.set_item(COMPOSE_BODY_MODE_KEY, mode.as_key()));
+}
+
+pub fn load_compose_placement() -> ComposePlacement {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(COMPOSE_PLACEMENT_KEY)?
+            .as_deref()
+            .and_then(ComposePlacement::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_compose_placement(placement: ComposePlacement) {
+    let _ = with_kv(|kv| kv.set_item(COMPOSE_PLACEMENT_KEY, placement.as_key()));
 }
 
 /// Preferred compose From account, if one was saved.
@@ -1104,6 +1163,39 @@ mod tests {
                 .expect("set unknown compose mode");
         });
         assert_eq!(load_compose_body_mode(), ComposeBodyMode::Plain);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn compose_placement_encode_decode_roundtrip() {
+        for placement in ComposePlacement::ALL {
+            assert_eq!(
+                ComposePlacement::from_key(placement.as_key()),
+                Some(placement)
+            );
+        }
+        assert_eq!(ComposePlacement::from_key("side"), None);
+        assert_eq!(ComposePlacement::default(), ComposePlacement::Modal);
+        assert_eq!(ComposePlacement::Modal.label(), "Dialog");
+        assert_eq!(ComposePlacement::Docked.label(), "Docked to bottom");
+        assert!(ComposePlacement::Modal.blocks_mail_shortcuts(true));
+        assert!(!ComposePlacement::Docked.blocks_mail_shortcuts(true));
+        assert!(!ComposePlacement::Modal.blocks_mail_shortcuts(false));
+    }
+
+    #[test]
+    fn compose_placement_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_compose_placement(), ComposePlacement::Modal);
+        save_compose_placement(ComposePlacement::Docked);
+        assert_eq!(load_compose_placement(), ComposePlacement::Docked);
+        save_compose_placement(ComposePlacement::Modal);
+        assert_eq!(load_compose_placement(), ComposePlacement::Modal);
+        host_kv::with(|kv| {
+            kv.set_item(COMPOSE_PLACEMENT_KEY, "nope")
+                .expect("set unknown compose placement");
+        });
+        assert_eq!(load_compose_placement(), ComposePlacement::Modal);
         host_kv::reset();
     }
 

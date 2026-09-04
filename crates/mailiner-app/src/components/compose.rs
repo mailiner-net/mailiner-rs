@@ -1,4 +1,4 @@
-//! Plain-text compose overlay (v1 send).
+//! Plain-text compose overlay (modal dialog or docked bottom pane).
 
 use dioxus::html::Key;
 use dioxus::prelude::*;
@@ -30,7 +30,7 @@ use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
-use crate::ui_prefs::ComposeBodyMode;
+use crate::ui_prefs::{ComposeBodyMode, ComposePlacement};
 
 fn looks_like_email(s: &str) -> bool {
     let s = s.trim();
@@ -1416,6 +1416,8 @@ pub fn ComposeOverlay() -> Element {
 
     let no_account = ctx.accounts.read().is_empty();
     let mut compose_draft = ctx.compose_draft;
+    let mut compose_placement = ctx.compose_placement;
+    let docked = *compose_placement.read() == ComposePlacement::Docked;
     let close = move |_| {
         close_keeping_draft(
             save_gen,
@@ -1435,30 +1437,46 @@ pub fn ComposeOverlay() -> Element {
     };
 
     rsx! {
-        button {
-            class: "compose-fab",
-            title: "Compose",
-            disabled: no_account,
-            onclick: {
-                let mut ctx = ctx.clone();
-                move |_| open_new_message(&mut ctx)
-            },
-            Icon { size: 18, icon: IconKind::PencilSquare }
-            "Compose"
+        if !open {
+            button {
+                class: "compose-fab",
+                title: "Compose",
+                disabled: no_account,
+                onclick: {
+                    let mut ctx = ctx.clone();
+                    move |_| open_new_message(&mut ctx)
+                },
+                Icon { size: 18, icon: IconKind::PencilSquare }
+                "Compose"
+            }
         }
 
         if open {
             div {
-                class: "compose-backdrop",
-                onclick: close,
+                class: if docked { "compose-dock" } else { "compose-backdrop" },
+                onclick: move |_| {
+                    if !docked {
+                        compose_draft.set(None);
+                    }
+                },
                 div {
-                    class: "ui-dialog compose-dialog",
-                    role: "dialog",
+                    class: if docked {
+                        "ui-dialog compose-dialog compose-dialog-docked"
+                    } else {
+                        "ui-dialog compose-dialog"
+                    },
+                    role: if docked { "region" } else { "dialog" },
+                    aria_modal: if docked { "false" } else { "true" },
                     aria_label: "{title}",
                     onclick: move |evt| evt.stop_propagation(),
                     onkeydown: {
                         let ctx = ctx.clone();
                         move |evt: KeyboardEvent| {
+                            if matches!(evt.key(), Key::Escape) && !docked {
+                                evt.prevent_default();
+                                compose_draft.set(None);
+                                return;
+                            }
                             if matches!(evt.key(), Key::Enter)
                                 && (evt.modifiers().ctrl() || evt.modifiers().meta())
                             {
@@ -1509,12 +1527,34 @@ pub fn ComposeOverlay() -> Element {
                     div {
                         class: "ui-dialog-head",
                         h2 { class: "ui-dialog-title", "{title}" }
-                        IconButton {
-                            class: "flat ui-icon-btn",
-                            title: "Close",
-                            size: 20,
-                            icon: IconKind::XMark,
-                            onclick: close,
+                        div {
+                            class: "compose-head-actions",
+                            IconButton {
+                                class: "flat ui-icon-btn",
+                                title: if docked { "Open as dialog" } else { "Dock to bottom" },
+                                size: 20,
+                                icon: if docked {
+                                    IconKind::ArrowsPointingOut
+                                } else {
+                                    IconKind::ArrowsPointingIn
+                                },
+                                aria_pressed: Some(docked),
+                                onclick: move |_| {
+                                    let next = match *compose_placement.peek() {
+                                        ComposePlacement::Modal => ComposePlacement::Docked,
+                                        ComposePlacement::Docked => ComposePlacement::Modal,
+                                    };
+                                    compose_placement.set(next);
+                                    crate::ui_prefs::save_compose_placement(next);
+                                },
+                            }
+                            IconButton {
+                                class: "flat ui-icon-btn",
+                                title: "Close",
+                                size: 20,
+                                icon: IconKind::XMark,
+                                onclick: move |_| compose_draft.set(None),
+                            }
                         }
                     }
                     label {

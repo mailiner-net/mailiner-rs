@@ -34,6 +34,13 @@ fn is_select_all_chord(evt: &web_sys::KeyboardEvent) -> bool {
     evt.key().eq_ignore_ascii_case("a")
 }
 
+/// Modal compose covers the mailbox; docked compose leaves mail shortcuts usable.
+fn compose_blocks_mail_shortcuts(ctx: &AppContext) -> bool {
+    ctx.compose_placement
+        .peek()
+        .blocks_mail_shortcuts(ctx.compose_draft.peek().is_some())
+}
+
 fn event_target_is_editable(evt: &web_sys::KeyboardEvent) -> bool {
     let Some(target) = evt.target() else {
         return false;
@@ -270,7 +277,7 @@ pub fn ShortcutsHost() -> Element {
             if evt.ctrl_key() || evt.meta_key() || evt.alt_key() {
                 if is_select_all_chord(&evt)
                     && !event_target_is_editable(&evt)
-                    && ctx.compose_draft.peek().is_none()
+                    && !compose_blocks_mail_shortcuts(&ctx)
                     && ctx.mailbox_picker.peek().is_none()
                 {
                     claim_shortcut(&evt);
@@ -283,7 +290,7 @@ pub fn ShortcutsHost() -> Element {
             if event_target_is_editable(&evt) {
                 return;
             }
-            if ctx.compose_draft.peek().is_some() {
+            if compose_blocks_mail_shortcuts(&ctx) {
                 return;
             }
 
@@ -316,6 +323,9 @@ pub fn ShortcutsHost() -> Element {
             let Some(shortcut) = shortcut_for_key(&evt.key(), evt.shift_key()) else {
                 return;
             };
+            if ctx.compose_draft.peek().is_some() && shortcut.id.replaces_open_draft() {
+                return;
+            }
             claim_shortcut(&evt);
             run_shortcut(shortcut.id, &mut ctx, core, &mut help_open);
         }) as Box<dyn FnMut(_)>);

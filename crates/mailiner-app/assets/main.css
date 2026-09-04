@@ -190,11 +190,20 @@ button.flat {
 }
 
 /* Standalone so the asset pipeline keeps these (nested-only blocks drop them). */
+.mail-shell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+}
+
 #app {
     display: flex;
     flex-direction: row;
     width: 100%;
-    height: 100vh;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
 }
 
@@ -1349,6 +1358,59 @@ textarea.ui-input {
 
 .compose-dialog {
     width: min(40rem, 94vw);
+}
+
+.compose-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    flex: 0 0 auto;
+}
+
+.compose-dock {
+    flex: 0 1 auto;
+    height: min(22rem, 45vh);
+    min-height: 0;
+    max-height: 55vh;
+    min-width: 0;
+    overflow: hidden;
+    border-top: 1px solid var(--sidebar-border);
+    background: var(--surface);
+    z-index: 15;
+    display: flex;
+    flex-direction: column;
+}
+
+.compose-dialog-docked {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
+    border-radius: 0;
+    box-shadow: none;
+    padding: var(--space-3) var(--space-5);
+}
+
+.compose-dialog-docked .ui-field-grow .ui-input,
+.compose-dialog-docked textarea.ui-input {
+    min-height: 4rem;
+    resize: none;
+}
+
+.compose-dialog-docked .ui-dialog-actions {
+    position: sticky;
+    bottom: 0;
+    flex-shrink: 0;
+    margin-top: auto;
+    padding-top: var(--space-2);
+    background: var(--surface);
+}
+
+body:has(.compose-dock) .toast {
+    bottom: auto;
+    top: 1.5rem;
 }
 
 .compose-from {

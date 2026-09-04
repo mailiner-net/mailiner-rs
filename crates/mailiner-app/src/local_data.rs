@@ -10,7 +10,7 @@ use crate::address_book::ADDRESS_BOOK_LOCAL_STORAGE_KEY;
 use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY};
 use crate::mail_cache::MAIL_CACHE_LOCAL_STORAGE_KEY;
 use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
-use crate::ui_prefs::{ACK_UNREAD_KEY, LAST_MAILBOX_KEY, MESSAGE_SORT_KEY};
+use crate::ui_prefs::{ACK_UNREAD_KEY, COMPOSE_PLACEMENT_KEY, LAST_MAILBOX_KEY, MESSAGE_SORT_KEY};
 
 /// Prefix of every Mailiner-owned `localStorage` key.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
@@ -29,6 +29,7 @@ pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     MESSAGE_SORT_KEY,
     LAST_MAILBOX_KEY,
     ACK_UNREAD_KEY,
+    COMPOSE_PLACEMENT_KEY,
     FOLDER_WIDTH_KEY,
     LIST_HEIGHT_KEY,
 ];
@@ -265,6 +266,7 @@ mod tests {
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LAST_MAILBOX_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ACK_UNREAD_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MESSAGE_SORT_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&COMPOSE_PLACEMENT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&FOLDER_WIDTH_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_HEIGHT_KEY));
     }

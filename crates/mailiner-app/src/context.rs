@@ -10,6 +10,7 @@ use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
 use crate::download::{DownloadStatus, revoke_object_url};
+use crate::layout::MobilePane;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
 use crate::message_loader::LoadedMessageCache;
@@ -157,6 +158,8 @@ pub struct AppContext {
     pub compose_placement: Signal<ComposePlacement>,
     /// Stacked list-above-viewer vs classic three columns.
     pub mail_layout: Signal<MailLayout>,
+    /// Full-screen pane on narrow viewports (CSS no-ops on desktop).
+    pub mobile_pane: Signal<MobilePane>,
     /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
     /// Bumped after a successful `ClearLocalData` wipe.
@@ -307,6 +310,20 @@ impl AppContext {
         self.toast.set(None);
         self.compose_draft.set(None);
         self.mailbox_picker.set(None);
+        self.mobile_pane.set(MobilePane::default());
+    }
+
+    /// Show `pane` on narrow viewports. Desktop chrome ignores the class.
+    pub fn set_mobile_pane(&self, pane: MobilePane) {
+        let mut mobile_pane = self.mobile_pane;
+        mobile_pane.set(pane);
+    }
+
+    /// Step back folders ← list ← viewer.
+    pub fn mobile_back(&self) {
+        let mut mobile_pane = self.mobile_pane;
+        let next = mobile_pane.peek().back();
+        mobile_pane.set(next);
     }
 
     /// Record composer send progress for one account without clobbering others.

@@ -352,6 +352,7 @@ fn App() -> Element {
     let compose_draft = use_signal(|| None);
     let compose_placement = use_signal(crate::ui_prefs::load_compose_placement);
     let mail_layout = use_signal(crate::ui_prefs::load_mail_layout);
+    let mobile_pane = use_signal(crate::layout::MobilePane::default);
     let mailbox_picker = use_signal(|| None);
     let theme = use_signal(|| {
         let pref = crate::ui_prefs::load_theme();
@@ -400,6 +401,7 @@ fn App() -> Element {
         compose_draft,
         compose_placement,
         mail_layout,
+        mobile_pane,
         mailbox_picker,
         sign_out_epoch,
         sign_out_pending,
@@ -443,6 +445,10 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Meta {
+            name: "viewport",
+            content: "width=device-width, initial-scale=1",
+        }
         document::Meta {
             http_equiv: "Content-Security-Policy",
             content: CONTENT_SECURITY_POLICY,
@@ -556,6 +562,7 @@ fn MainView() -> Element {
     let bootstrap = use_context::<Signal<AppBootstrapState>>();
     let ctx = use_context::<AppContext>();
     let mail_layout = *ctx.mail_layout.read();
+    let mobile_pane = *ctx.mobile_pane.read();
     let list_axis = match mail_layout {
         crate::ui_prefs::MailLayout::Stacked => SplitAxis::List,
         crate::ui_prefs::MailLayout::Classic => SplitAxis::ListWidth,
@@ -571,7 +578,7 @@ fn MainView() -> Element {
             class: "mail-shell",
             div {
                 id: "app",
-                class: "{mail_layout.css_class()}",
+                class: "{mail_layout.css_class()} {mobile_pane.css_class()}",
                 onmounted: move |_| {
                     crate::layout::apply_saved_layout();
                 },

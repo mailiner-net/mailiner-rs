@@ -6,7 +6,7 @@ mod navigationheader;
 
 pub use mailboxtreeview::MailboxTreeView;
 pub use messagelist::MessageList;
-pub use navigationheader::NavigationHeader;
+pub use navigationheader::{MobileBackButton, NavigationHeader};
 
 use crate::components::emailnavigation::navigationheader::Mode;
 

@@ -13,6 +13,32 @@ test('empty store shows first-run onboarding', async ({ page }) => {
   await expect(page.locator('#app')).toHaveCount(0);
 });
 
+test('viewport meta enables device-width media queries', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    'content',
+    /width=device-width/,
+  );
+});
+
+for (const viewport of [
+  { name: 'phone', width: 390, height: 844 },
+  { name: 'tablet', width: 768, height: 1024 },
+] as const) {
+  test(`${viewport.name} viewport keeps first-run onboarding usable`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
+    const noHorizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    );
+    expect(noHorizontalOverflow).toBe(true);
+  });
+}
+
 test('encrypted store shows unlock instead of mail chrome', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(

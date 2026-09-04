@@ -32,8 +32,9 @@ use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
 use mailiner_core::{
-    is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, AccountId,
-    AuthResults, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
+    compile_list_search, compile_unread_sort_extra, is_inbox_mailbox, join_mailbox_path,
+    join_search_keys, mailbox_parent_and_leaf, rename_mailbox_path, AccountId, AuthResults,
+    BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
     MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult, TextPrefix,
 };
@@ -182,6 +183,8 @@ struct ListIndex {
     folder: String,
     sort: MessageSort,
     filter: MessageListFilter,
+    /// Applied mailbox search box (empty = no text criteria).
+    search: String,
     /// SELECT EXISTS when this index was built (not the filtered list length).
     exists: usize,
     /// UID order for paging. `None` only if `UID SEARCH ALL` failed (sequence fallback).
@@ -678,6 +681,7 @@ where
         requested: MessageSort,
         has_sort: bool,
         filter: MessageListFilter,
+        search: &str,
     ) -> Result<ListIndex, ImapError> {
         let mailbox = session
             .select(folder_id)
@@ -685,13 +689,16 @@ where
             .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
         let exists = mailbox.exists as usize;
         let sort = sort::apply_sort_or_fallback(requested, has_sort);
-        let search = filter.imap_search_query().unwrap_or("ALL");
+        let compiled = compile_list_search(filter, search);
+        let search_q = compiled.uid_search_query();
+        let sort_q = compiled.sort_query();
 
         if exists == 0 {
             return Ok(ListIndex {
                 folder: folder_id.to_string(),
                 sort,
                 filter,
+                search: search.to_string(),
                 exists,
                 uids: Some(Vec::new()),
                 total: 0,
@@ -702,42 +709,61 @@ where
 
         let mut unread = None;
         let uids = match sort {
-            MessageSort::Arrival => Some(Self::search_uids(session, search).await?),
-            MessageSort::Date => Some(Self::search_date_uids(session, has_sort, search).await?),
+            MessageSort::Arrival => Some(Self::search_uids(session, &search_q).await?),
+            MessageSort::Date => {
+                Some(Self::search_date_uids(session, has_sort, &search_q, sort_q).await?)
+            }
             MessageSort::Unread => {
-                let unseen_q = if filter.flagged {
-                    "UNSEEN FLAGGED"
-                } else {
-                    "UNSEEN"
-                };
-                // Unread filter drops the seen group (the list is unseen-only).
-                let seen_q = if filter.unread {
+                let extra = compile_unread_sort_extra(search);
+                let parsed = mailiner_core::MailboxSearch::parse(search);
+                let flagged = filter.flagged || parsed.has_flagged();
+                let drop_seen = filter.unread || parsed.has_unread();
+                let unseen_q = join_search_keys(&[
+                    "UNSEEN",
+                    if flagged { "FLAGGED" } else { "" },
+                    extra.sort_query(),
+                ]);
+                // Unread filter / is:unread drops the seen group (the list is unseen-only).
+                let seen_q = if drop_seen {
                     None
-                } else if filter.flagged {
-                    Some("SEEN FLAGGED")
                 } else {
-                    Some("SEEN")
+                    Some(join_search_keys(&[
+                        "SEEN",
+                        if flagged { "FLAGGED" } else { "" },
+                        extra.sort_query(),
+                    ]))
                 };
+                let unseen_search = if extra.needs_utf8 {
+                    format!("CHARSET UTF-8 {unseen_q}")
+                } else {
+                    unseen_q.clone()
+                };
+                let seen_search = seen_q.as_ref().map(|q| {
+                    if extra.needs_utf8 {
+                        format!("CHARSET UTF-8 {q}")
+                    } else {
+                        q.clone()
+                    }
+                });
                 if has_sort {
-                    let unseen = sort::uid_sort(session, "REVERSE DATE", unseen_q).await?;
+                    let unseen = sort::uid_sort(session, "REVERSE DATE", &unseen_q).await?;
                     unread = Some(unseen.len());
                     let mut all = unseen;
-                    if let Some(seen_q) = seen_q {
+                    if let Some(seen_q) = seen_q.as_deref() {
                         let seen = sort::uid_sort(session, "REVERSE DATE", seen_q).await?;
                         all.extend(seen);
                     }
                     Some(all)
                 } else {
                     let unseen = session
-                        .uid_search(unseen_q)
+                        .uid_search(&unseen_search)
                         .await
-                        .map_err(|e| ImapError::Imap(format!("UID SEARCH {unseen_q}: {e}")))?;
+                        .map_err(|e| ImapError::Imap(format!("UID SEARCH {unseen_search}: {e}")))?;
                     unread = Some(unseen.len());
-                    let seen = if let Some(seen_q) = seen_q {
-                        session
-                            .uid_search(seen_q)
-                            .await
-                            .map_err(|e| ImapError::Imap(format!("UID SEARCH {seen_q}: {e}")))?
+                    let seen = if let Some(seen_search) = seen_search.as_deref() {
+                        session.uid_search(seen_search).await.map_err(|e| {
+                            ImapError::Imap(format!("UID SEARCH {seen_search}: {e}"))
+                        })?
                     } else {
                         Default::default()
                     };
@@ -746,16 +772,17 @@ where
             }
             MessageSort::Size | MessageSort::Sender => {
                 let criteria = sort::sort_criteria(sort).expect("size/sender have SORT");
-                match sort::uid_sort(session, criteria, search).await {
+                match sort::uid_sort(session, criteria, sort_q).await {
                     Ok(uids) => Some(uids),
                     Err(e) => {
                         tracing::warn!("UID SORT {criteria} failed ({e}); falling back to Arrival");
                         let folder_unread = Self::search_unseen_count(session).await;
-                        let uids = Self::search_uids(session, search).await?;
+                        let uids = Self::search_uids(session, &search_q).await?;
                         return Ok(ListIndex {
                             folder: folder_id.to_string(),
                             sort: MessageSort::Arrival,
                             filter,
+                            search: search.to_string(),
                             exists,
                             uids: Some(uids.clone()),
                             total: uids.len(),
@@ -777,6 +804,7 @@ where
             folder: folder_id.to_string(),
             sort,
             filter,
+            search: search.to_string(),
             exists,
             uids,
             total,
@@ -814,12 +842,13 @@ where
     async fn search_date_uids(
         session: &mut Session<ImapIo<S>>,
         has_sort: bool,
-        query: &str,
+        search_q: &str,
+        sort_q: &str,
     ) -> Result<Vec<u32>, ImapError> {
         if has_sort {
             let (criteria, _) =
                 sort::sort_command(MessageSort::Date).expect("Date has SORT criteria");
-            match sort::uid_sort(session, criteria, query).await {
+            match sort::uid_sort(session, criteria, sort_q).await {
                 Ok(uids) => return Ok(uids),
                 Err(e) => {
                     tracing::warn!(
@@ -828,7 +857,7 @@ where
                 }
             }
         }
-        Self::search_uids(session, query).await
+        Self::search_uids(session, search_q).await
     }
 }
 
@@ -845,6 +874,42 @@ fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
         EnvelopeFlag::Starred => "\\Starred",
         EnvelopeFlag::Keyword(keyword) => keyword.atom(),
     }
+}
+
+async fn drop_mismatched_search_uids(
+    list_index: &Mutex<Option<ListIndex>>,
+    message_ids: &[MessageId],
+    flags: &[(EnvelopeFlag, bool)],
+) {
+    let mut slot = list_index.lock().await;
+    let Some(index) = slot.as_mut() else {
+        return;
+    };
+    let parsed = mailiner_core::MailboxSearch::parse(&index.search);
+    let drop = flags.iter().any(|(flag, value)| match flag {
+        EnvelopeFlag::Read => parsed.drops_on_read_change(index.filter, *value),
+        EnvelopeFlag::Flagged => parsed.drops_on_flagged_change(index.filter, *value),
+        _ => false,
+    });
+    if !drop {
+        return;
+    }
+    let Some(uids) = index.uids.as_mut() else {
+        return;
+    };
+    for id in message_ids {
+        let Ok(uid) = id.as_uid().parse::<u32>() else {
+            continue;
+        };
+        if let Some(from) = uids.iter().position(|&u| u == uid) {
+            uids.remove(from);
+            if index.unread.is_some_and(|n| from < n) {
+                index.unread = Some(index.unread.unwrap_or(0).saturating_sub(1));
+            }
+        }
+    }
+    let total = uids.len();
+    index.total = total;
 }
 
 struct ParsedFlags {
@@ -1254,6 +1319,7 @@ where
         folder_id: &FolderId,
         sort: MessageSort,
         filter: MessageListFilter,
+        search: &str,
     ) -> MailinerResult<FolderListState> {
         let has_sort = self.has_sort.load(Ordering::Relaxed);
         let mut imap = self.imap.lock().await;
@@ -1261,7 +1327,8 @@ where
             return Err(ImapError::NotAuthenticated.into());
         };
         let index =
-            Self::build_list_index(session, folder_id.as_str(), sort, has_sort, filter).await?;
+            Self::build_list_index(session, folder_id.as_str(), sort, has_sort, filter, search)
+                .await?;
         let state = FolderListState {
             total: index.total,
             folder_total: index.exists,
@@ -1296,11 +1363,15 @@ where
                 .as_ref()
                 .is_none_or(|idx| idx.folder != folder_id.as_str() || idx.exists != exists);
             if stale {
-                let (requested, filter) = index_slot
+                let (requested, filter, search) = index_slot
                     .as_ref()
                     .filter(|idx| idx.folder == folder_id.as_str())
-                    .map(|idx| (idx.sort, idx.filter))
-                    .unwrap_or((MessageSort::Arrival, MessageListFilter::default()));
+                    .map(|idx| (idx.sort, idx.filter, idx.search.clone()))
+                    .unwrap_or((
+                        MessageSort::Arrival,
+                        MessageListFilter::default(),
+                        String::new(),
+                    ));
                 *index_slot = Some(
                     Self::build_list_index(
                         session,
@@ -1308,6 +1379,7 @@ where
                         requested,
                         has_sort,
                         filter,
+                        &search,
                     )
                     .await?,
                 );
@@ -1426,6 +1498,8 @@ where
             };
             drain_uid_store(session, &uids, &query).await?;
         }
+        drop(imap);
+        drop_mismatched_search_uids(&self.list_index, message_ids, flags).await;
 
         Ok(())
     }
@@ -1442,7 +1516,9 @@ where
         let Some(uids) = index.uids.as_mut() else {
             return Ok(Vec::new());
         };
-        if index.filter.unread {
+        let parsed = mailiner_core::MailboxSearch::parse(&index.search);
+        let unseen_only = index.filter.unread || parsed.has_unread();
+        if unseen_only {
             // Unseen-only SEARCH list: drop read UIDs; insert unread at the unseen prefix.
             for id in message_ids {
                 let Ok(uid) = id.as_uid().parse::<u32>() else {
@@ -1463,6 +1539,21 @@ where
                         .unwrap_or(dest_end);
                     uids.insert(to, uid);
                     index.unread = Some(index.unread.unwrap_or(0).saturating_add(1));
+                }
+            }
+            index.total = uids.len();
+            return Ok(Vec::new());
+        }
+        if parsed.has_read() && !now_read {
+            for id in message_ids {
+                let Ok(uid) = id.as_uid().parse::<u32>() else {
+                    continue;
+                };
+                if let Some(from) = uids.iter().position(|&u| u == uid) {
+                    uids.remove(from);
+                    if index.unread.is_some_and(|n| from < n) {
+                        index.unread = Some(index.unread.unwrap_or(0).saturating_sub(1));
+                    }
                 }
             }
             index.total = uids.len();

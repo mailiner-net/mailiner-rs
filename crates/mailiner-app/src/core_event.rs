@@ -44,10 +44,6 @@ use crate::mail_cache::{
 };
 use crate::mailbox::MailboxId;
 use crate::message::{Message, MessageId, next_flag_value};
-use crate::message_list_filter::{
-    adjacent_matching_index, matching_ids_in_filtered_range, matching_loaded_messages,
-    text_filter_is_active,
-};
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxId, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
@@ -72,6 +68,10 @@ pub enum CoreEvent {
         unread: bool,
         flagged: bool,
         has_attachment: bool,
+    },
+    /// Run IMAP SEARCH for the open folder (`query` empty = clear).
+    ApplyMailboxSearch {
+        query: String,
     },
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
@@ -482,6 +482,9 @@ pub async fn core_loop(
                     has_attachment,
                 )
                 .await;
+            }
+            CoreEvent::ApplyMailboxSearch { query } => {
+                handle_apply_mailbox_search(&manager, &mut ctx, query).await;
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -1541,6 +1544,7 @@ async fn restore_mailbox(
 fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.selected_mailbox.set(None);
     ctx.list_text_filter.set(String::new());
+    ctx.list_search_query.set(String::new());
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(false);
     ctx.selection.write().clear();
@@ -1633,7 +1637,9 @@ async fn persist_selected_messages(
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         return;
     };
-    if ctx.message_list_filter.peek().imap_search_query().is_some() {
+    if ctx.message_list_filter.peek().imap_search_query().is_some()
+        || mailiner_core::mailbox_search_is_active(ctx.list_search_query.peek().as_str())
+    {
         return;
     }
     let sort = *ctx.message_sort.peek();
@@ -1852,6 +1858,7 @@ async fn handle_select_mailbox(
 
     if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
         ctx.list_text_filter.set(String::new());
+        ctx.list_search_query.set(String::new());
     }
 
     let already_showing = ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
@@ -1867,7 +1874,8 @@ async fn handle_select_mailbox(
         let sort = *ctx.message_sort.peek();
         let account = ctx.selected_account.read().clone();
         // Cached prefixes are unfiltered; skip them when SEARCH is narrowing the folder.
-        let use_cache = ctx.message_list_filter.peek().imap_search_query().is_none();
+        let use_cache = ctx.message_list_filter.peek().imap_search_query().is_none()
+            && !mailiner_core::mailbox_search_is_active(ctx.list_search_query.peek().as_str());
         let hydrated = if use_cache {
             match account {
                 Some(account_id) => manager
@@ -1906,8 +1914,9 @@ async fn handle_select_mailbox(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let requested = *ctx.message_sort.peek();
     let filter = *ctx.message_list_filter.peek();
+    let search = ctx.list_search_query.peek().clone();
     match connector
-        .prepare_folder_list(&folder_id, requested, filter)
+        .prepare_folder_list(&folder_id, requested, filter, &search)
         .await
     {
         Ok(state) => {
@@ -1981,7 +1990,9 @@ async fn handle_select_mailbox(
                 if let Some(id) = first_id {
                     // Unread-first / unread filter: selecting the top row would
                     // immediately consume the message the user just asked to see.
-                    let auto_mark = state.sort != MessageSort::Unread && !filter.unread;
+                    let auto_mark = state.sort != MessageSort::Unread
+                        && !filter.unread
+                        && !mailiner_core::MailboxSearch::parse(&search).has_unread();
                     handle_select_message(manager, ctx, id, auto_mark, true).await;
                 }
             }
@@ -2038,6 +2049,25 @@ async fn handle_toggle_message_list_filter(
         return;
     };
     // Drop the previous SEARCH result so we don't treat it as a cache hit.
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
+    handle_select_mailbox(manager, ctx, mailbox_id, true).await;
+}
+
+async fn handle_apply_mailbox_search(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    query: String,
+) {
+    let query = query.trim().to_string();
+    ctx.list_text_filter.set(query.clone());
+    if ctx.list_search_query.peek().as_str() == query {
+        return;
+    }
+    ctx.list_search_query.set(query);
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        return;
+    };
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(true);
     handle_select_mailbox(manager, ctx, mailbox_id, true).await;
@@ -2151,11 +2181,7 @@ async fn handle_select_adjacent(
     if *ctx.messages_loading.peek() {
         return;
     }
-    let query = ctx.list_text_filter.peek().clone();
-    if text_filter_is_active(&query) {
-        handle_select_adjacent_filtered(manager, ctx, delta, extend, &query).await;
-        return;
-    }
+    // Server SEARCH already narrowed the list; only attachment stays client-side.
     let total = ctx.messages.read().total_count();
     let filter = *ctx.message_list_filter.peek();
     let current = current_list_index(ctx);
@@ -2195,43 +2221,6 @@ async fn handle_select_adjacent(
     select_list_index(manager, ctx, index, !extend, !extend).await;
 }
 
-async fn handle_select_adjacent_filtered(
-    manager: &AccountConnectionManager,
-    ctx: &mut AppContext,
-    delta: i32,
-    extend: bool,
-    query: &str,
-) {
-    let matching = matching_source_ids(ctx, query);
-    if matching.is_empty() {
-        return;
-    }
-    // Resolve the live focused id — `focus_at_index` can be stale after an
-    // unread-sort relocate, and that old slot may hold another match.
-    let current = ctx
-        .selection
-        .read()
-        .focus()
-        .cloned()
-        .and_then(|id| matching.iter().find(|(_, mid)| *mid == id).map(|(i, _)| *i));
-    let indices: Vec<usize> = matching.iter().map(|(i, _)| *i).collect();
-    let Some(index) = adjacent_matching_index(&indices, current, delta) else {
-        return;
-    };
-    if extend {
-        apply_index_range_selection(manager, ctx, index).await;
-    }
-    // Matching rows are already loaded; skip FetchMessageRange.
-    let Some(message_id) = matching
-        .iter()
-        .find(|(i, _)| *i == index)
-        .map(|(_, id)| id.clone())
-    else {
-        return;
-    };
-    handle_select_message(manager, ctx, message_id, !extend, !extend).await;
-}
-
 enum KnownSelect {
     All,
     Unread,
@@ -2251,8 +2240,7 @@ async fn handle_select_known(
         return;
     }
 
-    let query = ctx.list_text_filter.peek().clone();
-    let rows: Vec<(MessageId, bool)> = matching_source_unread(ctx, &query);
+    let rows: Vec<(MessageId, bool)> = matching_source_unread(ctx);
     if rows.is_empty() {
         return;
     }
@@ -2368,11 +2356,6 @@ async fn apply_index_range_selection(
     ctx: &mut AppContext,
     end_index: usize,
 ) {
-    let query = ctx.list_text_filter.peek().clone();
-    if text_filter_is_active(&query) {
-        apply_filtered_range_selection(ctx, end_index, &query);
-        return;
-    }
     let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
     let start = anchor.min(end_index);
     let end = anchor.max(end_index);
@@ -2391,33 +2374,12 @@ async fn apply_index_range_selection(
     }
 }
 
-fn matching_source_ids(ctx: &AppContext, query: &str) -> Vec<(usize, MessageId)> {
-    let list = ctx.messages.read();
-    matching_loaded_messages(list.iter_indexed().map(|(i, m)| (i, m.as_ref())), query)
-        .into_iter()
-        .map(|(i, m)| (i, m.id.clone()))
-        .collect()
-}
-
-fn matching_source_unread(ctx: &AppContext, query: &str) -> Vec<(MessageId, bool)> {
-    let list = ctx.messages.read();
-    matching_loaded_messages(list.iter_indexed().map(|(i, m)| (i, m.as_ref())), query)
-        .into_iter()
-        .map(|(_, m)| (m.id.clone(), !m.is_read))
-        .collect()
-}
-
-fn apply_filtered_range_selection(ctx: &mut AppContext, end_index: usize, query: &str) {
-    let matching = matching_source_ids(ctx, query);
-    let anchor = ctx.selection.read().anchor_index().unwrap_or(end_index);
-    let ids = matching_ids_in_filtered_range(&matching, anchor, end_index);
-    let focus = matching
+fn matching_source_unread(ctx: &AppContext) -> Vec<(MessageId, bool)> {
+    ctx.messages
+        .read()
         .iter()
-        .find(|(i, _)| *i == end_index)
-        .map(|(_, id)| id.clone());
-    if let Some(focus) = focus {
-        ctx.selection.write().set_range(ids, focus, Some(end_index));
-    }
+        .map(|m| (m.id.clone(), !m.is_read))
+        .collect()
 }
 
 fn cached_ids_in_range(ctx: &AppContext, start: usize, end_inclusive: usize) -> Vec<MessageId> {
@@ -3071,20 +3033,7 @@ async fn handle_mark_read(
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
     if filter_dropped_read_rows(ctx, is_read) {
-        let focus = ctx.selection.read().focus().cloned();
-        let gone = focus
-            .as_ref()
-            .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
-        if gone {
-            let idx = ctx.selection.read().focus_at_index();
-            ctx.selection.write().clear();
-            ctx.message_view.set(MessageViewState::Empty);
-            ctx.download_status.set(HashMap::new());
-            select_after_removed_row_mark(manager, ctx, idx, false).await;
-        } else {
-            let gone: HashSet<_> = message_ids.iter().cloned().collect();
-            ctx.selection.write().remove_ids(&gone);
-        }
+        clear_selection_if_focus_gone(manager, ctx, &message_ids).await;
     }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
     persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -3143,6 +3092,13 @@ async fn handle_toggle_flag(
             flag_label(flag)
         )));
         return;
+    }
+    if flag == EnvelopeFlag::Flagged && filter_dropped_flagged_rows(ctx, value) {
+        let idset: std::collections::HashSet<&MessageId> = message_ids.iter().collect();
+        ctx.messages
+            .write()
+            .remove_matching(|m| idset.contains(&m.id));
+        clear_selection_if_focus_gone(manager, ctx, &message_ids).await;
     }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
 }
@@ -3238,8 +3194,37 @@ fn apply_toggleable_flag(ctx: &mut AppContext, ids: &[MessageId], flag: Envelope
     }
 }
 
+fn active_mailbox_search(ctx: &AppContext) -> mailiner_core::MailboxSearch {
+    mailiner_core::MailboxSearch::parse(ctx.list_search_query.peek().as_str())
+}
+
 fn filter_dropped_read_rows(ctx: &AppContext, now_read: bool) -> bool {
-    now_read && ctx.message_list_filter.peek().unread
+    active_mailbox_search(ctx).drops_on_read_change(*ctx.message_list_filter.peek(), now_read)
+}
+
+fn filter_dropped_flagged_rows(ctx: &AppContext, now_flagged: bool) -> bool {
+    active_mailbox_search(ctx).drops_on_flagged_change(*ctx.message_list_filter.peek(), now_flagged)
+}
+
+async fn clear_selection_if_focus_gone(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_ids: &[MessageId],
+) {
+    let focus = ctx.selection.read().focus().cloned();
+    let gone = focus
+        .as_ref()
+        .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
+    if gone {
+        let idx = ctx.selection.read().focus_at_index();
+        ctx.selection.write().clear();
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
+        select_after_removed_row_mark(manager, ctx, idx, false).await;
+    } else {
+        let gone: HashSet<_> = message_ids.iter().cloned().collect();
+        ctx.selection.write().remove_ids(&gone);
+    }
 }
 
 /// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.
@@ -3250,10 +3235,11 @@ async fn relocate_unread_sort_rows(
     now_read: bool,
 ) {
     let filter = *ctx.message_list_filter.peek();
-    if filter.unread && now_read {
+    let search = active_mailbox_search(ctx);
+    if search.drops_on_read_change(filter, now_read) {
         let core_ids = core_message_ids(message_ids);
-        if let Err(e) = connector.sync_unread_sort_index(&core_ids, true).await {
-            warn!("unread-filter index drop failed: {e}");
+        if let Err(e) = connector.sync_unread_sort_index(&core_ids, now_read).await {
+            warn!("search-filter index drop failed: {e}");
         }
         let idset: std::collections::HashSet<&MessageId> = message_ids.iter().collect();
         ctx.messages

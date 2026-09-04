@@ -4,6 +4,7 @@ pub mod connector;
 pub mod error;
 pub mod folder_name;
 pub mod ids;
+pub mod imap_search;
 pub mod models;
 pub mod submit;
 
@@ -19,6 +20,10 @@ pub use folder_name::{
     validate_folder_name, FolderNameError,
 };
 pub use ids::{AccountId, EmptyMessageId, FolderId, MessageId, MessagePartId};
+pub use imap_search::{
+    compile_list_search, compile_unread_sort_extra, join_search_keys, mailbox_search_is_active,
+    CompiledSearch, MailboxSearch, SearchTerm,
+};
 pub use models::{
     EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group,
     ImapKeyword, LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessageListFilter,

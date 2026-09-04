@@ -1,7 +1,7 @@
 //! Client-side list-filter helpers.
 //!
-//! Complements IMAP SEARCH (Unread/Flagged chips) and inspects the sparse
-//! list cache for text query and attachment (no portable IMAP SEARCH).
+//! Complements IMAP SEARCH (Unread/Flagged chips and the search box) and
+//! inspects the sparse list cache for attachment (no portable SEARCH key).
 
 use mailiner_core::MessageListFilter;
 

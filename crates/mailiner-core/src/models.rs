@@ -80,8 +80,10 @@ impl MessageSort {
 
 /// Quick list narrowing for the current folder. Active flags combine with AND.
 ///
-/// `unread` / `flagged` map to IMAP `SEARCH UNSEEN` / `FLAGGED`. Attachment has
-/// no portable SEARCH key, so it is applied client-side on known envelopes.
+/// `unread` / `flagged` map to IMAP `SEARCH UNSEEN` / `FLAGGED` and combine with
+/// the mailbox search box. Attachment has no portable SEARCH key, so the chip
+/// is applied client-side on known envelopes (`has:attachment` uses a HEADER
+/// heuristic server-side).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MessageListFilter {

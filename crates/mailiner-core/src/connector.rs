@@ -15,6 +15,7 @@ use crate::folder_name::{
     is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path,
 };
 use crate::ids::{AccountId, FolderId, MessageId};
+use crate::imap_search::{mailbox_search_is_active, MailboxSearch};
 use crate::models::{
     Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
     MessageListFilter, MessagePart, MessageSort, PartChunk, PartKind, TextPrefix, TransferEncoding,
@@ -49,12 +50,15 @@ where
     /// RFC 2087 `GETQUOTAROOT` for `folder_id`. `None` if the server has no QUOTA
     /// capability, no STORAGE resource, or no finite limit.
     async fn folder_quota(&self, folder_id: &FolderId) -> Result<Option<MailboxQuota>>;
-    /// SELECT the folder, build the sort/filter index, and return the list length.
+    /// SELECT the folder, build the sort/filter/search index, and return the list length.
+    ///
+    /// `search` is the mailbox search box (IMAP `SEARCH`; empty = no text criteria).
     async fn prepare_folder_list(
         &self,
         folder_id: &FolderId,
         sort: MessageSort,
         filter: MessageListFilter,
+        search: &str,
     ) -> Result<FolderListState>;
 
     /// Fetch envelopes for a UI index range `[start, end)`.
@@ -239,6 +243,22 @@ fn mock_folder_totals(folder_id: &FolderId) -> (u64, u64) {
     (all.len() as u64, unread)
 }
 
+/// Server-side list: chips (except attachment) + parsed search box.
+fn mock_filtered(all: &[Envelope], filter: MessageListFilter, search: &str) -> Vec<Envelope> {
+    let server = MessageListFilter {
+        has_attachment: false,
+        ..filter
+    };
+    let parsed = MailboxSearch::parse(search);
+    all.iter()
+        .filter(|e| {
+            server.matches(e.is_read, e.is_flagged, e.has_attachments)
+                && (!mailbox_search_is_active(search) || parsed.matches_envelope(e))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Realistic multipart fixture used by MockConnector and UI development.
 pub fn mock_multipart_structure() -> BodyPart {
     BodyPart {
@@ -329,12 +349,14 @@ fn mock_section_bytes(section: &str) -> Vec<u8> {
 /// Loader / UI fixture. Not a faithful IMAP session (no sort index, no dest UIDs).
 pub struct MockConnector {
     list_filter: Mutex<MessageListFilter>,
+    list_search: Mutex<String>,
 }
 
 impl MockConnector {
     pub fn new() -> Self {
         Self {
             list_filter: Mutex::new(MessageListFilter::default()),
+            list_search: Mutex::new(String::new()),
         }
     }
 }
@@ -419,19 +441,13 @@ where
         folder_id: &FolderId,
         sort: MessageSort,
         filter: MessageListFilter,
+        search: &str,
     ) -> Result<FolderListState> {
         *self.list_filter.lock().expect("mock filter") = filter;
+        *self.list_search.lock().expect("mock search") = search.to_string();
         let all = mock_envelopes(folder_id, 0..100)?;
         let (_, folder_unread) = mock_folder_totals(folder_id);
-        // Attachment is client-side only (no IMAP SEARCH key).
-        let server = MessageListFilter {
-            has_attachment: false,
-            ..filter
-        };
-        let total = all
-            .iter()
-            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
-            .count();
+        let total = mock_filtered(&all, filter, search).len();
         Ok(FolderListState {
             total,
             folder_total: all.len(),
@@ -447,15 +463,9 @@ where
         range: Range<usize>,
     ) -> Result<Vec<Envelope>> {
         let filter = *self.list_filter.lock().expect("mock filter");
+        let search = self.list_search.lock().expect("mock search").clone();
         let all = mock_envelopes(folder_id, 0..100)?;
-        let server = MessageListFilter {
-            has_attachment: false,
-            ..filter
-        };
-        let filtered: Vec<_> = all
-            .into_iter()
-            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
-            .collect();
+        let filtered = mock_filtered(&all, filter, &search);
         let end = range.end.min(filtered.len());
         let start = range.start.min(end);
         Ok(filtered[start..end].to_vec())

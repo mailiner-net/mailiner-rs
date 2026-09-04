@@ -384,12 +384,16 @@ fn leading_letter_swap(a: &str, b: &str) -> bool {
 
 fn domain_is_homograph(domain: &str) -> bool {
     let d = domain.trim_end_matches('.');
-    if d.split('.')
-        .any(|label| label.len() >= 4 && label[..4].eq_ignore_ascii_case("xn--"))
-    {
+    if d.split('.').any(is_punycode_label) {
         return true;
     }
     mixed_scripts(d)
+}
+
+/// ACE prefix is ASCII; slice by bytes so a 3-byte UTF-8 label cannot panic.
+fn is_punycode_label(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    bytes.len() >= 4 && bytes[..4].eq_ignore_ascii_case(b"xn--")
 }
 
 fn mixed_scripts(domain: &str) -> bool {
@@ -693,6 +697,16 @@ mod tests {
                 .any(|c| matches!(c, SenderCue::HomographDomain { domain } if domain == "xn--pypal-4ve.com")),
             "{cues:?}"
         );
+    }
+
+    #[test]
+    fn multibyte_label_does_not_panic_on_punycode_check() {
+        // Two 3-byte Cyrillic letters: 6 bytes, so byte index 4 is mid-char.
+        // The old `label[..4]` slice panicked here.
+        let cues = analyze_from(Some(&list(None, Some("help@пример.example"))), None);
+        let _ = cues;
+        assert!(!is_punycode_label("пример"));
+        assert!(is_punycode_label("XN--pypal-4ve"));
     }
 
     #[test]

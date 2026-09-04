@@ -1,0 +1,50 @@
+crates/mailiner-app/assets/main.css
+  s_fb3502e4e6710d::t_23e82de4d0314c 199,235
+  s_fb3502e4e6710d::t_2caf7201ec8340 2846-2851,2853-2937
+  s_fb3502e4e6710d::t_1cb870f54559d2 2852
+crates/mailiner-app/src/components/icons.rs
+  s_fb3502e4e6710d::t_63acbc6b3e0414 15,60-61
+crates/mailiner-app/src/components/emailnavigation.rs
+  s_fb3502e4e6710d::t_3fbb76565015d3 9
+crates/mailiner-app/src/main.rs
+  s_fb3502e4e6710d::t_abd3eea7518b6e 581
+  s_fb3502e4e6710d::t_41ae192dd667c7 355,404,448-451,565
+crates/mailiner-app/src/components/emailnavigation/navigationheader.rs
+  s_fb3502e4e6710d::t_258985a1ee636f 44-63,90-92
+crates/mailiner-app/src/core_event.rs
+  s_fb3502e4e6710d::t_8cc1a136a82af8 1926
+  s_fb3502e4e6710d::t_46f27c45e3029b 532,541,546,559,1927
+crates/mailiner-app/src/layout.rs
+  s_fb3502e4e6710d::t_664955b9ca3f34 40,45,280-281
+  s_fb3502e4e6710d::t_2f0a13eaf9a81a 3-39,41-44,46-54
+  s_fb3502e4e6710d::t_af50d312288e9a 259-279,282
+crates/mailiner-app/src/components/messageview.rs
+  s_fb3502e4e6710d::t_8a41b4508ebe47 414,424,435
+  s_fb3502e4e6710d::t_e920072e85b71a 15,423,434,860
+  s_fb3502e4e6710d::t_cac38f1f67d1e3 1110
+e2e/tests/app.spec.ts
+  s_fb3502e4e6710d::t_61baf3c2851b03 16-41
+crates/mailiner-app/src/components/settings.rs
+  s_fb3502e4e6710d::t_1f07752ff298ae 69
+crates/mailiner-app/src/context.rs
+  s_fb3502e4e6710d::t_1ae11533c15807 161-162
+  s_fb3502e4e6710d::t_88178eac88e537 13
+  s_fb3502e4e6710d::t_0a727209aea525 313-324
+  s_fb3502e4e6710d::t_72ab229f7d9135 325-326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e857d7c86692cfed4c1ae3a310f937c3ae1416e5",
+  "prompts": {},
+  "sessions": {
+    "s_fb3502e4e6710d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06aaa-a755-7670-a5e5-f3836b00281b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

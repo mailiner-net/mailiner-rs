@@ -1,0 +1,62 @@
+crates/mailiner-app/src/components/icons.rs
+  s_7561354a0b14a6::t_a6b119978b466c 26
+  s_7561354a0b14a6::t_6fff44a2f03035 106-109
+crates/mailiner-app/src/local_data.rs
+  s_7561354a0b14a6::t_36d370fe4c1ab8 41,285
+crates/mailiner-app/src/shortcuts.rs
+  s_7561354a0b14a6::t_56a35567ed4ceb 36,69,102
+  s_7561354a0b14a6::t_7977f8aa2bc400 135,358-366,775-777
+crates/mailiner-app/src/components/emailnavigation/messagelist.rs
+  s_7561354a0b14a6::t_6b03545d5e9364 51
+  s_7561354a0b14a6::t_5fc60b504fdb19 52-53,58-60,363,368-369,371-372,375-379
+  s_7561354a0b14a6::t_b3c44f7baeaa1c 388,501-523
+crates/mailiner-app/src/core_event.rs
+  s_7561354a0b14a6::t_3021141ffb5108 138-143,633-639,1481
+  s_7561354a0b14a6::t_baba8fea3575bf 1683,1689
+  s_7561354a0b14a6::t_91b8e2f6820cd7 1706
+  s_7561354a0b14a6::t_fa99deeb04f00e 2010
+  s_7561354a0b14a6::t_ec6bd3e6d07e7f 2037-2038
+  s_7561354a0b14a6::t_ba351ee6d4c05d 2099,2233
+  s_7561354a0b14a6::t_e8acf3786f5bee 2563
+  s_7561354a0b14a6::t_070ee25228c7a2 3544-3630
+  s_7561354a0b14a6::t_6b8b6056f24596 3788-3789
+crates/mailiner-app/src/pin.rs
+  s_7561354a0b14a6::t_265b2f044fc78e 1-5,7-15,17-24,26-27,29-32,34-35,41-42,44-106
+  s_7561354a0b14a6::t_0740da3f30604c 6,16,25,28,33,43
+  s_7561354a0b14a6::t_d84ab7190fc3b7 36-40
+crates/mailiner-app/src/ui_prefs.rs
+  s_7561354a0b14a6::t_1533d4eb141d90 509-515
+  s_7561354a0b14a6::t_852d7ee1c1b2ab 828-912,914-915,917-926
+  s_7561354a0b14a6::t_2118b4934bcc0a 913,916
+  s_7561354a0b14a6::t_72494b6022048b 1295-1348,2275-2324,2329-2331
+  s_7561354a0b14a6::t_a48ed7cc1b41d8 2325-2328
+crates/mailiner-app/src/components/messageview.rs
+  s_7561354a0b14a6::t_4c8c6fcacc30e6 1083-1092,1197-1225
+crates/mailiner-app/assets/main.css
+  s_7561354a0b14a6::t_edcf9654552215 2572,2582-2583,2593-2594,2610-2615,2617-2618
+crates/mailiner-app/src/context.rs
+  s_7561354a0b14a6::t_19f502b23e22d6 185-186,321
+crates/mailiner-app/src/lib.rs
+  s_7561354a0b14a6::t_4068f8178f280a 23
+crates/mailiner-app/src/main.rs
+  s_7561354a0b14a6::t_dc4d02facb545a 50
+  s_7561354a0b14a6::t_c78ba7294c4eaf 373,420
+crates/mailiner-app/src/components/shortcuts.rs
+  s_7561354a0b14a6::t_af168ee23dcd4a 218-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "92b342cdd7815a2e2e71876b9040732607fd2a50",
+  "prompts": {},
+  "sessions": {
+    "s_7561354a0b14a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06aaa-a746-7da0-91bd-4f144efb31d1",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

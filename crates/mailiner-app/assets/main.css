@@ -860,6 +860,39 @@ a.accounts-link-btn {
     margin-top: 0.75rem;
 }
 
+.settings-shortcut-row .settings-shortcut-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.shortcut-bind {
+    font: inherit;
+    margin: 0;
+    padding: 0.1rem;
+    border: 1px dashed transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.shortcut-bind:hover,
+.shortcut-bind:focus-visible {
+    border-color: var(--sidebar-border);
+    background: var(--item-hover-background);
+}
+
+.shortcut-bind-capturing {
+    border-style: solid;
+    border-color: var(--item-accent);
+    background: var(--accent-soft);
+    color: var(--foreground);
+    font-size: var(--text-xs);
+    padding: 0.15rem 0.45rem;
+}
+
 .settings-contact-form {
     display: flex;
     flex-wrap: wrap;

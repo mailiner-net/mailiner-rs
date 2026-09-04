@@ -492,6 +492,53 @@ pub const ACK_UNREAD_SCHEMA_VERSION: u32 = 1;
 /// `localStorage` key for the Inbox desktop-notification toggle (default off).
 pub const NOTIFY_INBOX_KEY: &str = "mailiner.ui.notifyInbox";
 
+/// `localStorage` key for user shortcut remaps (missing ids keep catalog defaults).
+pub const SHORTCUT_MAP_KEY: &str = "mailiner.ui.shortcuts.v1";
+/// Schema version for [`ShortcutMapBlob`].
+pub const SHORTCUT_MAP_SCHEMA_VERSION: u32 = 1;
+
+/// One remapped binding. `key` is a `KeyboardEvent.key` value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutBinding {
+    pub key: String,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+/// Persisted remaps. Absent ids use [`crate::shortcuts::GLOBAL_SHORTCUTS`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ShortcutMapBlob {
+    pub schema_version: u32,
+    /// [`crate::shortcuts::ShortcutId::as_key`] → binding.
+    #[serde(default)]
+    pub remaps: HashMap<String, ShortcutBinding>,
+}
+
+impl ShortcutMapBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: SHORTCUT_MAP_SCHEMA_VERSION,
+            remaps: HashMap::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > SHORTCUT_MAP_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported shortcut-map schema_version {} (max supported {})",
+                blob.schema_version, SHORTCUT_MAP_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+}
+
 /// Single JSON document stored under [`LAST_MAILBOX_KEY`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LastMailboxBlob {
@@ -980,6 +1027,25 @@ pub fn load_notify_inbox() -> bool {
 
 pub fn save_notify_inbox(enabled: bool) {
     let _ = with_kv(|kv| kv.set_item(NOTIFY_INBOX_KEY, if enabled { "1" } else { "0" }));
+}
+
+fn load_shortcut_map_blob(kv: &dyn StringKvStore) -> Result<ShortcutMapBlob, AccountStoreError> {
+    match kv.get_item(SHORTCUT_MAP_KEY)? {
+        None => Ok(ShortcutMapBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(ShortcutMapBlob::empty()),
+        Some(s) => ShortcutMapBlob::decode(&s),
+    }
+}
+
+/// User remaps, or an empty map (catalog defaults).
+pub fn load_shortcut_map() -> ShortcutMapBlob {
+    with_kv(load_shortcut_map_blob).unwrap_or_else(ShortcutMapBlob::empty)
+}
+
+pub fn save_shortcut_map(blob: &ShortcutMapBlob) {
+    let mut stored = blob.clone();
+    stored.schema_version = SHORTCUT_MAP_SCHEMA_VERSION;
+    let _ = with_kv(|kv| kv.set_item(SHORTCUT_MAP_KEY, &stored.encode()?));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1565,6 +1631,89 @@ mod tests {
         assert!(load_notify_inbox());
         save_notify_inbox(false);
         assert!(!load_notify_inbox());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn shortcut_map_key_is_versioned() {
+        assert_eq!(SHORTCUT_MAP_KEY, "mailiner.ui.shortcuts.v1");
+        assert_eq!(SHORTCUT_MAP_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn shortcut_map_encode_decode_roundtrip() {
+        let mut blob = ShortcutMapBlob::empty();
+        blob.remaps.insert(
+            "compose".into(),
+            ShortcutBinding {
+                key: "x".into(),
+                shift: false,
+            },
+        );
+        blob.remaps.insert(
+            "copy_to_folder".into(),
+            ShortcutBinding {
+                key: "y".into(),
+                shift: true,
+            },
+        );
+        let json = blob.encode().expect("encode");
+        assert!(json.contains("\"schema_version\":1"), "json={json}");
+        assert!(json.contains("compose"), "json={json}");
+        let back = ShortcutMapBlob::decode(&json).expect("decode");
+        assert_eq!(back, blob);
+    }
+
+    #[test]
+    fn shortcut_map_decode_rejects_future_schema() {
+        let json = r#"{"schema_version":99,"remaps":{}}"#;
+        let err = ShortcutMapBlob::decode(json).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shortcut_map_decode_defaults_missing_shift() {
+        let json = r#"{"schema_version":1,"remaps":{"compose":{"key":"n"}}}"#;
+        let blob = ShortcutMapBlob::decode(json).expect("decode");
+        let binding = blob.remaps.get("compose").expect("compose");
+        assert_eq!(binding.key, "n");
+        assert!(!binding.shift);
+    }
+
+    #[test]
+    fn shortcut_map_load_save_roundtrip() {
+        host_kv::reset();
+        assert!(load_shortcut_map().remaps.is_empty());
+        let mut blob = ShortcutMapBlob::empty();
+        blob.remaps.insert(
+            "archive".into(),
+            ShortcutBinding {
+                key: "e".into(),
+                shift: true,
+            },
+        );
+        save_shortcut_map(&blob);
+        assert_eq!(load_shortcut_map(), blob);
+
+        host_kv::with(|kv| {
+            kv.set_item(SHORTCUT_MAP_KEY, "not-json")
+                .expect("set garbage");
+        });
+        assert!(load_shortcut_map().remaps.is_empty());
+
+        host_kv::with(|kv| {
+            kv.set_item(SHORTCUT_MAP_KEY, r#"{"schema_version":99,"remaps":{}}"#)
+                .expect("set future");
+        });
+        assert!(load_shortcut_map().remaps.is_empty());
         host_kv::reset();
     }
 }

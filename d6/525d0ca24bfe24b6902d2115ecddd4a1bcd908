@@ -1,0 +1,31 @@
+crates/mailiner-app/src/vacation.rs
+  s_c4d18da2d9475f::t_2a681faa9ec8b7 1-9,13-35,37-169,176-364,366-383,385-598,600-671,673-736,744-803,805-820,828-869,871-901,908-927,932-993
+  s_c4d18da2d9475f::t_9318ac07c5ecd2 10-12,36,384,672,737-743,804,821-827,870,902-907,928-931
+  s_c4d18da2d9475f::t_a22ddf6d8199c2 170-175
+  s_c4d18da2d9475f::t_17b4581b8060f9 599
+  s_410ec24e0cc10f::t_db6065ac944a2a 365
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d6525d0ca24bfe24b6902d2115ecddd4a1bcd908",
+  "prompts": {},
+  "sessions": {
+    "s_410ec24e0cc10f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0690a-0c6a-7421-9b8d-44bb76d06c81",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    },
+    "s_c4d18da2d9475f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06aef-e04b-7011-95d0-5296eeeebb7b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

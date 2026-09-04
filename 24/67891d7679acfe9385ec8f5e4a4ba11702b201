@@ -1,0 +1,51 @@
+crates/mailiner-app/src/local_data.rs
+  s_c4d18da2d9475f::t_659c4dfeb56075 51-52,321-322
+crates/mailiner-app/src/main.rs
+  s_c4d18da2d9475f::t_e2938cb2f2d16d 74
+crates/mailiner-app/src/vacation.rs
+  s_c4d18da2d9475f::t_2a681faa9ec8b7 1-9,13-35,37-169,176-364,366-383,385-598,600-671,673-736,744-803,805-820,828-869,871-901,908-927,932-993
+  s_c4d18da2d9475f::t_9318ac07c5ecd2 10-12,36,384,672,737-743,804,821-827,870,902-907,928-931
+  s_c4d18da2d9475f::t_a22ddf6d8199c2 170-175
+  s_c4d18da2d9475f::t_17b4581b8060f9 599
+README.md
+  s_c4d18da2d9475f::t_fe2da8d25a62a4 46-49
+crates/mailiner-app/src/lib.rs
+  s_c4d18da2d9475f::t_6f6dd62d40cf4e 46
+crates/mailiner-app/src/core_event.rs
+  s_c4d18da2d9475f::t_22e2d2d7df83fc 1
+  s_c4d18da2d9475f::t_8b58de8ae58249 62,64
+  s_c4d18da2d9475f::t_1f5d136e880011 73-87
+  s_c4d18da2d9475f::t_7f11ad0a95f3f5 478
+  s_c4d18da2d9475f::t_42d851c6b71f45 1604
+  s_c4d18da2d9475f::t_7eab3ed97cf8c3 2278
+  s_c4d18da2d9475f::t_3f40af469513db 2414
+  s_c4d18da2d9475f::t_ce37cb4629a815 2436-2522
+crates/mailiner-app/src/components/settings.rs
+  s_c4d18da2d9475f::t_f4408b97a8954e 1
+  s_c4d18da2d9475f::t_31e71bd051775b 20,737-748
+  s_c4d18da2d9475f::t_56865831744095 69,249
+  s_c4d18da2d9475f::t_5b93a65dfdab5c 713-736,749-751,754-775,784-804,823-881,900-923
+  s_c4d18da2d9475f::t_4522e9158f3320 752-753,805
+  s_c4d18da2d9475f::t_82d00d73edca83 776-783
+  s_c4d18da2d9475f::t_0d1f8bc5aafb30 806-820,822
+  s_c4d18da2d9475f::t_c0fbb581db1a0e 821
+  s_c4d18da2d9475f::t_38a8f14f1a8785 882
+  s_c4d18da2d9475f::t_cadb3f5e244769 883-899
+  s_c4d18da2d9475f::t_cb046f7fa5f7cc 924-988
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2467891d7679acfe9385ec8f5e4a4ba11702b201",
+  "prompts": {},
+  "sessions": {
+    "s_c4d18da2d9475f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06aef-e04b-7011-95d0-5296eeeebb7b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

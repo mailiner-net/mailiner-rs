@@ -91,24 +91,23 @@ pub fn OnboardingForm() -> Element {
                             // Wait until core refreshed UI accounts (upsert succeeded).
                             if ctx.accounts.read().contains_key(&account_id_for_effect) {
                                 let passphrase = unlock_passphrase();
-                                if !passphrase.is_empty() {
-                                    if let Some(store) = store_ctx() {
-                                        if store.0.vault_state() == VaultState::Plaintext {
-                                            let store = store.clone();
-                                            spawn(async move {
-                                                if let Err(e) =
-                                                    store.0.set_passphrase(&passphrase).await
-                                                {
-                                                    warn!("post-commit set_passphrase failed: {e}");
-                                                }
-                                            });
-                                        }
-                                    }
-                                }
+                                let store = store_ctx();
                                 phase.set(FormPhase::Idle);
                                 save_seen_progress.set(false);
                                 status_message.set(None);
-                                bootstrap.set(AppBootstrapState::Ready);
+                                if !passphrase.is_empty()
+                                    && let Some(store) = store
+                                    && store.0.vault_state() == VaultState::Plaintext
+                                {
+                                    spawn(async move {
+                                        if let Err(e) = store.0.set_passphrase(&passphrase).await {
+                                            warn!("post-commit set_passphrase failed: {e}");
+                                        }
+                                        bootstrap.set(AppBootstrapState::Ready);
+                                    });
+                                } else {
+                                    bootstrap.set(AppBootstrapState::Ready);
+                                }
                             }
                         }
                         ConnectionState::Error { message, kind, .. } => {

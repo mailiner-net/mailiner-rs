@@ -1517,6 +1517,7 @@ where
             parent_id: parent_id.cloned(),
             role,
             selectable: true,
+            subscribed: true,
         })
     }
 
@@ -1557,6 +1558,7 @@ where
             parent_id: parent,
             role,
             selectable: true,
+            subscribed: true,
         })
     }
 

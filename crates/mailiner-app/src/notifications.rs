@@ -264,6 +264,7 @@ mod tests {
             parent_id: None,
             role,
             selectable: true,
+            subscribed: true,
         }
     }
 

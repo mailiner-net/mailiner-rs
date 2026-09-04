@@ -872,6 +872,7 @@ mod tests {
                 has_new: false,
                 role: MailboxRole::Other,
                 selectable: true,
+                subscribed: true,
             },
         );
         assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Junk");

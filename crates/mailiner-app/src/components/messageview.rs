@@ -1568,7 +1568,6 @@ fn MessageSourceDialog(state: MessageSourceState) -> Element {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

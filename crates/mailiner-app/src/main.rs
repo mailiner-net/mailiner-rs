@@ -11,9 +11,9 @@ use crate::account_store::{
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, MailboxPickerHost, MessageHeadersHost, MessageList,
-    MessageSourceHost, MessageView, OnboardingForm, OutboxPanel, SettingsPage,
-    ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
+    EmailNavigation, MailboxPickerHost, MessageHeadersHost, MessageList, MessageSourceHost,
+    MessageView, OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost, SplitAxis, SplitHandle,
+    ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};

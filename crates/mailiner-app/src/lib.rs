@@ -8,6 +8,7 @@ pub mod download;
 pub mod draft_store;
 pub mod formatter;
 pub mod headers;
+pub mod keywords;
 pub mod layout;
 pub mod local_data;
 pub mod mail_cache;

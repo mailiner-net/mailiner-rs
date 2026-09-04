@@ -16,7 +16,7 @@ use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
 use mailiner_core::{
-    EnvelopeFlag, FolderCounts, FolderId, MailboxRole, MessageListFilter, MessageSort,
+    EnvelopeFlag, FolderCounts, FolderId, ImapKeyword, MailboxRole, MessageListFilter, MessageSort,
 };
 use mailiner_mime::decode_transfer_encoding;
 
@@ -117,6 +117,13 @@ pub enum CoreEvent {
         account_id: AccountId,
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
+    },
+    /// Toggle a built-in custom IMAP keyword on the given messages.
+    ToggleKeyword {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+        keyword: ImapKeyword,
     },
     MoveMessages {
         mailbox_id: MailboxId,
@@ -540,6 +547,22 @@ pub async fn core_loop(
                     mailbox_id,
                     message_ids,
                     EnvelopeFlag::Flagged,
+                )
+                .await;
+            }
+            CoreEvent::ToggleKeyword {
+                account_id,
+                mailbox_id,
+                message_ids,
+                keyword,
+            } => {
+                handle_toggle_flag(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    EnvelopeFlag::Keyword(keyword),
                 )
                 .await;
             }
@@ -3132,6 +3155,7 @@ fn flag_label(flag: EnvelopeFlag) -> &'static str {
     match flag {
         EnvelopeFlag::Starred => "star",
         EnvelopeFlag::Flagged => "flag",
+        EnvelopeFlag::Keyword(keyword) => keyword.label(),
         _ => "flag",
     }
 }
@@ -3144,6 +3168,7 @@ fn message_has_flag(msg: &crate::message::Message, flag: EnvelopeFlag) -> bool {
         EnvelopeFlag::Answered => msg.is_answered,
         EnvelopeFlag::Draft => msg.envelope.is_draft,
         EnvelopeFlag::Deleted => msg.envelope.is_deleted,
+        EnvelopeFlag::Keyword(keyword) => msg.envelope.has_keyword(keyword),
     }
 }
 
@@ -3167,6 +3192,7 @@ fn set_message_flag(msg: &mut crate::message::Message, flag: EnvelopeFlag, value
         }
         EnvelopeFlag::Draft => msg.envelope.is_draft = value,
         EnvelopeFlag::Deleted => msg.envelope.is_deleted = value,
+        EnvelopeFlag::Keyword(keyword) => msg.envelope.set_keyword(keyword, value),
     }
 }
 

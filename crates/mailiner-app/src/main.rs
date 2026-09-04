@@ -34,6 +34,7 @@ mod download;
 mod draft_store;
 mod formatter;
 mod headers;
+mod keywords;
 mod layout;
 mod local_data;
 mod mail_cache;

@@ -323,9 +323,62 @@ impl fmt::Display for EmailAddress {
     }
 }
 
+/// Small built-in set of custom IMAP keywords the UI can set and clear.
+///
+/// Atoms are `$Important`, `$Work`, `$Personal`, `$Todo`, and `$Later`.
+/// Other keywords on a message are stored on [`Envelope::keywords`] and shown
+/// read-only. Gmail label folders are out of scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImapKeyword {
+    Important,
+    Work,
+    Personal,
+    Todo,
+    Later,
+}
+
+impl ImapKeyword {
+    pub const ALL: [Self; 5] = [
+        Self::Important,
+        Self::Work,
+        Self::Personal,
+        Self::Todo,
+        Self::Later,
+    ];
+
+    /// IMAP atom written by [`crate::connector::EmailConnector::update_envelope_flags`].
+    pub fn atom(self) -> &'static str {
+        match self {
+            Self::Important => "$Important",
+            Self::Work => "$Work",
+            Self::Personal => "$Personal",
+            Self::Todo => "$Todo",
+            Self::Later => "$Later",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Important => "Important",
+            Self::Work => "Work",
+            Self::Personal => "Personal",
+            Self::Todo => "To do",
+            Self::Later => "Later",
+        }
+    }
+
+    pub fn from_atom(atom: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|keyword| keyword.atom().eq_ignore_ascii_case(atom))
+    }
+}
+
 /// IMAP flag names used by [`crate::connector::EmailConnector::update_envelope_flags`].
 ///
 /// `Starred` is the custom `\Starred` atom; `Flagged` is standard `\Flagged`.
+/// [`Self::Keyword`] is one of the built-in custom keywords.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvelopeFlag {
@@ -335,6 +388,7 @@ pub enum EnvelopeFlag {
     Draft,
     Deleted,
     Starred,
+    Keyword(ImapKeyword),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +422,9 @@ pub struct Envelope {
     pub is_flagged: bool,
     pub is_draft: bool,
     pub is_deleted: bool,
+    /// Custom IMAP keywords (not system flags or `\Starred`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     pub has_attachments: bool,
     /// RFC822.SIZE when the server sent it.
     #[serde(default)]
@@ -378,6 +435,22 @@ pub struct Envelope {
     /// SPF / DKIM / DMARC from Authentication-Results (not locally verified).
     #[serde(default, skip_serializing_if = "AuthResults::is_empty")]
     pub auth_results: AuthResults,
+}
+
+impl Envelope {
+    pub fn has_keyword(&self, keyword: ImapKeyword) -> bool {
+        self.keywords
+            .iter()
+            .any(|atom| ImapKeyword::from_atom(atom) == Some(keyword))
+    }
+
+    pub fn set_keyword(&mut self, keyword: ImapKeyword, on: bool) {
+        self.keywords
+            .retain(|atom| ImapKeyword::from_atom(atom) != Some(keyword));
+        if on {
+            self.keywords.push(keyword.atom().to_string());
+        }
+    }
 }
 
 /// MIME Content-Transfer-Encoding.
@@ -537,8 +610,8 @@ pub struct PartChunk {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_quota_bytes, EmailAddr, EmailAddress, Envelope, MailboxQuota, MailboxRole,
-        MessageListFilter, MessageSort,
+        format_quota_bytes, EmailAddr, EmailAddress, Envelope, ImapKeyword, MailboxQuota,
+        MailboxRole, MessageListFilter, MessageSort,
     };
 
     #[test]
@@ -626,6 +699,59 @@ mod tests {
         let env: Envelope = serde_json::from_str(json).expect("legacy envelope");
         assert!(!env.is_answered);
         assert!(env.auth_results.is_empty());
+        assert!(env.keywords.is_empty());
+    }
+
+    #[test]
+    fn imap_keyword_atom_roundtrip() {
+        for keyword in ImapKeyword::ALL {
+            assert_eq!(ImapKeyword::from_atom(keyword.atom()), Some(keyword));
+        }
+        assert_eq!(
+            ImapKeyword::from_atom("$important"),
+            Some(ImapKeyword::Important)
+        );
+        assert!(ImapKeyword::from_atom("$label1").is_none());
+        assert_eq!(ImapKeyword::Todo.label(), "To do");
+    }
+
+    #[test]
+    fn envelope_set_keyword_replaces_case_variant() {
+        let mut env: Envelope = serde_json::from_str(
+            r#"{
+            "id":{"folder_id":"INBOX","uid":"1"},
+            "account_id":"a",
+            "folder_id":"INBOX",
+            "subject":null,
+            "from":null,
+            "to":null,
+            "cc":null,
+            "bcc":null,
+            "date":"2026-01-01T00:00:00Z",
+            "is_read":false,
+            "is_starred":false,
+            "is_flagged":false,
+            "is_draft":false,
+            "is_deleted":false,
+            "has_attachments":false,
+            "keywords":["$important","ProjectX"]
+        }"#,
+        )
+        .expect("envelope with keywords");
+        assert!(env.has_keyword(ImapKeyword::Important));
+        assert!(!env.has_keyword(ImapKeyword::Work));
+        env.set_keyword(ImapKeyword::Important, false);
+        assert_eq!(env.keywords, vec!["ProjectX".to_string()]);
+        env.set_keyword(ImapKeyword::Work, true);
+        assert_eq!(
+            env.keywords,
+            vec!["ProjectX".to_string(), "$Work".to_string()]
+        );
+        env.set_keyword(ImapKeyword::Work, true);
+        assert_eq!(
+            env.keywords,
+            vec!["ProjectX".to_string(), "$Work".to_string()]
+        );
     }
 
     #[test]

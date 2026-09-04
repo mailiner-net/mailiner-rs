@@ -2514,6 +2514,111 @@ body:has(.compose-dock) .toast {
     font-style: italic;
 }
 
+.message-subject-line {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.message-subject-text,
+.message-subject-line .message-subject-empty {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-keyword-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.message-keyword-chips.is-compact {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.message-keyword-chip {
+    display: inline-block;
+    max-width: 7.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.message-keyword-chip.is-important {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+.message-keyword-chip.is-work {
+    background: var(--warning-bg);
+    color: var(--warning-fg);
+}
+
+.message-keyword-chip.is-personal {
+    background: var(--success-bg);
+    color: var(--success-fg);
+}
+
+.message-keyword-chip.is-todo {
+    background: var(--info-bg);
+    color: var(--info-fg);
+}
+
+.message-keyword-chip.is-later {
+    background: var(--accent-soft);
+    color: var(--item-accent);
+}
+
+.message-keyword-chip.is-other {
+    background: var(--muted-chip-bg);
+    color: var(--text-muted);
+}
+
+.message-view-labels {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: normal;
+}
+
+.message-labels-wrap {
+    position: relative;
+}
+
+.message-labels-wrap .message-labels-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    left: auto;
+}
+
+.message-labels-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.message-labels-check {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+}
+
 .message-list-empty,
 .message-view-empty,
 .message-view-loading {
@@ -2891,9 +2996,7 @@ body:has(.compose-dock) .toast {
                     color: var(--label);
                     font-size: var(--text-sm);
                     line-height: 1.2;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
+                    min-width: 0;
                 }
 
                 .message-snippet {

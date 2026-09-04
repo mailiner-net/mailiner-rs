@@ -66,7 +66,7 @@ where
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>>;
-    /// Set or clear flags. Unknown names cannot be passed (typed).
+    /// Set or clear flags, including the built-in custom [`crate::models::ImapKeyword`]s.
     async fn update_envelope_flags(
         &self,
         folder_id: &FolderId,
@@ -170,6 +170,16 @@ where
     ) -> Result<Vec<u8>>;
 }
 
+fn mock_keywords(n: usize) -> Vec<String> {
+    if n.is_multiple_of(11) {
+        vec!["$Important".into()]
+    } else if n.is_multiple_of(13) {
+        vec!["$Work".into(), "$Todo".into()]
+    } else {
+        Vec::new()
+    }
+}
+
 fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envelope>> {
     let total = 100usize;
     let end = range.end.min(total);
@@ -209,6 +219,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_flagged: n.is_multiple_of(7),
             is_draft: false,
             is_deleted: false,
+            keywords: mock_keywords(n),
             has_attachments: n.is_multiple_of(2),
             size: Some(1_000 + ((n * 37) % 97) as u64 * 100),
             snippet: None,

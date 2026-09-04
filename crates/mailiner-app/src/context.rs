@@ -22,6 +22,7 @@ use crate::toast::{Toast, ToastAction};
 use crate::ui_prefs::{
     ComposePlacement, MailLayout, MessageListDensity, MessageListView, SavedSearch, SnoozedMessage,
 };
+use crate::unified_inbox::UnifiedInboxNote;
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +198,10 @@ pub struct AppContext {
     pub snoozed_messages: Signal<Vec<SnoozedMessage>>,
     /// Viewer snooze-preset menu (also opened by the **H** shortcut).
     pub snooze_picker_open: Signal<bool>,
+    /// Inbox UNSEEN per account (selected tree + background STATUS cache).
+    pub account_inbox_unread: Signal<HashMap<AccountId, u64>>,
+    /// Muted notes for accounts served from cache or skipped in All inboxes.
+    pub unified_inbox_notes: Signal<Vec<UnifiedInboxNote>>,
 }
 
 /// In-progress drag of list rows onto a folder.
@@ -343,6 +348,8 @@ impl AppContext {
         self.snooze_picker_open.set(false);
         self.expanded_conversations.write().clear();
         self.mobile_pane.set(MobilePane::default());
+        self.account_inbox_unread.write().clear();
+        self.unified_inbox_notes.set(Vec::new());
     }
 
     /// Show `pane` on narrow viewports. Desktop chrome ignores the class.

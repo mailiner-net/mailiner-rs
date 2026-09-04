@@ -43,6 +43,7 @@ pub mod snooze;
 pub mod source;
 pub mod toast;
 pub mod ui_prefs;
+pub mod unified_inbox;
 pub mod vacation;
 
 // connection / core_loop are binary-only (Dioxus signals + WASM WebSocket).

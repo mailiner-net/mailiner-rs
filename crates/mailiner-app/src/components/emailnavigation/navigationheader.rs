@@ -15,6 +15,7 @@ use crate::mail_file::parse_import_files;
 use crate::mailbox::{MailboxId, can_empty_trash};
 use crate::toast::ToastAction;
 use crate::ui_prefs::{MessageListDensity, MessageListView};
+use crate::unified_inbox::is_unified_mailbox;
 
 async fn import_selected_files(
     ctx: AppContext,
@@ -122,9 +123,14 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let message_total = ctx.messages.read().total_count();
     let quota = *ctx.account_quota.read();
 
-    let current_mailbox = current_mailbox_id.as_ref().and_then(|id| mailboxes.get(id));
+    let unified_selected = current_mailbox_id.as_ref().is_some_and(is_unified_mailbox);
+    let current_mailbox = current_mailbox_id
+        .as_ref()
+        .filter(|id| !is_unified_mailbox(id))
+        .and_then(|id| mailboxes.get(id));
     let current_account = current_account_id.as_ref().and_then(|id| accounts.get(id));
     let show_empty_trash = props.mode == Mode::MessageList
+        && !unified_selected
         && current_mailbox.is_some_and(can_empty_trash)
         && message_total > 0;
     let import_busy = matches!(
@@ -132,6 +138,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
         Some(DownloadStatus::Queued | DownloadStatus::InProgress { .. })
     );
     let can_import = props.mode == Mode::MessageList
+        && !unified_selected
         && current_account_id.is_some()
         && current_mailbox.is_some_and(|n| n.selectable)
         && !import_busy;
@@ -152,7 +159,9 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             div {
                 class: "pane-header-title",
                 if props.mode == Mode::MessageList {
-                    if let Some(mailbox) = current_mailbox {
+                    if unified_selected {
+                        span { "All inboxes" }
+                    } else if let Some(mailbox) = current_mailbox {
                         span { "{mailbox.title()}" }
                     } else {
                         span { "Messages" }
@@ -182,7 +191,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 }
             }
 
-            if props.mode == Mode::MessageList {
+            if props.mode == Mode::MessageList && !unified_selected {
                 div {
                     class: "message-list-filters",
                     role: "group",

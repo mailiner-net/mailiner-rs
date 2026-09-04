@@ -22,6 +22,7 @@ use crate::message::Message;
 use crate::message_list_filter::message_matches_filter;
 use crate::selection::{drag_message_ids, export_selection};
 use crate::ui_prefs::MessageListView;
+use crate::unified_inbox::is_unified_mailbox;
 use chrono::{DateTime, Utc};
 
 fn send_export(
@@ -70,6 +71,7 @@ pub fn MessageList() -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let selected_mailbox = ctx.selected_mailbox.read().clone();
+    let unified_selected = selected_mailbox.as_ref().is_some_and(is_unified_mailbox);
     let loading = *ctx.messages_loading.read();
     let total = ctx.messages.read().total_count();
     let density = *ctx.message_list_density.read();
@@ -278,7 +280,7 @@ pub fn MessageList() -> Element {
                 mode: Mode::MessageList,
             }
 
-            if selected_mailbox.is_some() {
+            if selected_mailbox.is_some() && !unified_selected {
                 div {
                     class: "message-list-filter",
                     input {
@@ -372,6 +374,35 @@ pub fn MessageList() -> Element {
                             class: "message-list-filter-count",
                             aria_live: "polite",
                             "{match_count} of {cached} loaded"
+                        }
+                    }
+                }
+            }
+
+            if unified_selected && !ctx.unified_inbox_notes.read().is_empty() {
+                ul {
+                    class: "unified-inbox-notes",
+                    for note in ctx.unified_inbox_notes.read().iter() {
+                        {
+                            let label = ctx
+                                .accounts
+                                .read()
+                                .get(&note.account_id)
+                                .map(|a| {
+                                    if a.name.is_empty() {
+                                        a.email.clone()
+                                    } else {
+                                        a.name.clone()
+                                    }
+                                })
+                                .unwrap_or_else(|| note.account_id.to_string());
+                            let text = note.message(&label);
+                            rsx! {
+                                li {
+                                    class: "unified-inbox-note",
+                                    "{text}"
+                                }
+                            }
                         }
                     }
                 }
@@ -596,8 +627,32 @@ fn MessageListItem(
     let flag_id = message.id.clone();
     let pin_id = message.id.clone();
     let drag_id = message.id.clone();
-    let row_account = ctx.selected_account.peek().clone();
+    let unified_row = ctx
+        .selected_mailbox
+        .peek()
+        .as_ref()
+        .is_some_and(is_unified_mailbox);
+    let row_account = if unified_row {
+        Some(message.envelope.account_id.clone())
+    } else {
+        ctx.selected_account.peek().clone()
+    };
     let row_mailbox = MailboxId::from(message.id.folder_id().clone());
+    let account_label = if unified_row {
+        ctx.accounts
+            .read()
+            .get(&message.envelope.account_id)
+            .map(|a| {
+                if a.name.trim().is_empty() {
+                    a.email.clone()
+                } else {
+                    a.name.clone()
+                }
+            })
+            .unwrap_or_else(|| message.envelope.account_id.to_string())
+    } else {
+        String::new()
+    };
     let star_account = row_account.clone();
     let flag_account = row_account.clone();
     let pin_account = row_account;
@@ -642,7 +697,7 @@ fn MessageListItem(
             } else {
                 format!("{}, {}", message.from_preview(), message.subject)
             },
-            draggable: "true",
+            draggable: if unified_row { "false" } else { "true" },
 
             onmousedown: move |evt: MouseEvent| {
                 if evt.modifiers().shift() || evt.modifiers().ctrl() || evt.modifiers().meta() {
@@ -666,6 +721,10 @@ fn MessageListItem(
             },
 
             ondragstart: move |evt: DragEvent| {
+                if unified_row {
+                    evt.prevent_default();
+                    return;
+                }
                 let Some(source_mailbox) = ctx.selected_mailbox.peek().clone() else {
                     return;
                 };
@@ -732,6 +791,13 @@ fn MessageListItem(
                                 title: "{thread_count} messages in this conversation",
                                 "{thread_count}"
                             }
+                        }
+                    }
+                    if unified_row && !account_label.is_empty() {
+                        span {
+                            class: "message-account",
+                            title: "{account_label}",
+                            "{account_label}"
                         }
                     }
                     div {

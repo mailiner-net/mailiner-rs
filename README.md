@@ -31,8 +31,9 @@ You can use our proxy, or run your own, to prevent the email server operator fro
 tracking your location based on where you are connecting from — all traffic will
 look like it comes from the proxy.
 
-Account settings (including the IMAP password and proxy token) and the local
-address book are stored only in this browser on this device (localStorage).
+Account settings (including the IMAP password and proxy token), the local
+address book, and recent compose recipients are stored only in this browser on
+this device (localStorage).
 Mailiner has no server account. Anyone with access to this browser profile can
 read those secrets; clear site data to remove them.
 

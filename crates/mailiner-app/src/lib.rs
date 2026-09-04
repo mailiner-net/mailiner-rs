@@ -20,6 +20,7 @@ pub mod outbox_store;
 pub mod phishing;
 pub mod print;
 pub mod provider_preset;
+pub mod recipient_suggest;
 pub mod reconnect;
 pub mod selection;
 pub mod send;

@@ -29,7 +29,9 @@ use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
     set_connection_state,
 };
-use crate::context::{AppContext, AttachmentPreview, MessageHeadersState, MessageSourceState, MessageViewState};
+use crate::context::{
+    AppContext, AttachmentPreview, MessageHeadersState, MessageSourceState, MessageViewState,
+};
 use crate::download::{
     DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAX_DOWNLOAD_BYTES,
     StreamingBlobDownload, is_previewable_content_type,

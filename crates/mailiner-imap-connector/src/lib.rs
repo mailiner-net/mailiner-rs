@@ -3,6 +3,7 @@ mod quota;
 mod section_path;
 mod sent;
 mod sort;
+mod structure_cache;
 mod watch;
 
 pub use sent::{
@@ -42,6 +43,7 @@ use mailiner_core::{
 };
 use std::collections::HashMap;
 
+use structure_cache::StructureCache;
 use tokio::sync::Mutex;
 
 #[derive(Error, Debug)]
@@ -174,7 +176,7 @@ where
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
     /// Side-cache of BODYSTRUCTURE converted to BodyPart, keyed by folder + UID.
-    structure_cache: Mutex<HashMap<(FolderId, MessageId), BodyPart>>,
+    structure_cache: Mutex<StructureCache>,
     /// RFC 5256 SORT advertised after LOGIN.
     has_sort: AtomicBool,
     /// RFC 2087 QUOTA advertised after LOGIN.
@@ -215,7 +217,7 @@ where
             username,
             tls_mode: ImapTlsMode::Implicit,
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
-            structure_cache: Mutex::new(HashMap::new()),
+            structure_cache: Mutex::new(StructureCache::new()),
             has_sort: AtomicBool::new(false),
             has_quota: AtomicBool::new(false),
             has_idle: AtomicBool::new(false),
@@ -372,7 +374,7 @@ where
     async fn forget_folder_tree(&self, folder_id: &FolderId, delimiter: Option<&str>) {
         {
             let mut cache = self.structure_cache.lock().await;
-            cache.retain(|(fid, _), _| {
+            cache.retain(|(fid, _)| {
                 !mailbox_is_self_or_descendant(fid.as_str(), folder_id.as_str(), delimiter)
             });
         }
@@ -574,7 +576,7 @@ where
     async fn forget_folder(&self, folder_id: &FolderId) {
         {
             let mut cache = self.structure_cache.lock().await;
-            cache.retain(|(fid, _), _| fid != folder_id);
+            cache.retain(|(fid, _)| fid != folder_id);
         }
         let mut slot = self.list_index.lock().await;
         if slot
@@ -1521,11 +1523,6 @@ where
             let mut cache = self.structure_cache.lock().await;
             for (id, part) in structures {
                 cache.insert((folder_id.clone(), id), part);
-                if cache.len() > 500 {
-                    if let Some(k) = cache.keys().next().cloned() {
-                        cache.remove(&k);
-                    }
-                }
             }
         }
         Ok(envelopes)
@@ -1859,7 +1856,7 @@ where
     ) -> MailinerResult<BodyPart> {
         require_folder(folder_id, std::slice::from_ref(message_id))?;
         {
-            let cache = self.structure_cache.lock().await;
+            let mut cache = self.structure_cache.lock().await;
             if let Some(part) = cache.get(&(folder_id.clone(), message_id.clone())) {
                 return Ok(part.clone());
             }
@@ -1959,7 +1956,7 @@ where
         let mut missing = Vec::new();
         let mut out = HashMap::new();
         {
-            let cache = self.structure_cache.lock().await;
+            let mut cache = self.structure_cache.lock().await;
             for id in message_ids {
                 match cache.get(&(folder_id.clone(), id.clone())) {
                     Some(root) => match snippet_plan(id, root) {

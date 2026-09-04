@@ -701,11 +701,14 @@ mod tests {
 
     #[test]
     fn multibyte_label_does_not_panic_on_punycode_check() {
-        // Two 3-byte Cyrillic letters: 6 bytes, so byte index 4 is mid-char.
-        // The old `label[..4]` slice panicked here.
-        let cues = analyze_from(Some(&list(None, Some("help@пример.example"))), None);
+        // CJK ideographs are 3 bytes; two of them make byte index 4 mid-char.
+        // The old `label[..4]` slice panicked here (Cyrillic is only 2 bytes).
+        let label = "例例";
+        assert_eq!(label.len(), 6);
+        assert!(!label.is_char_boundary(4));
+        let cues = analyze_from(Some(&list(None, Some("help@例例.example"))), None);
         let _ = cues;
-        assert!(!is_punycode_label("пример"));
+        assert!(!is_punycode_label(label));
         assert!(is_punycode_label("XN--pypal-4ve"));
     }
 

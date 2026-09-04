@@ -1,0 +1,19 @@
+crates/mailiner-app/src/recipient_suggest.rs
+  s_d584d9a97bb8a3::t_9b4a4a47de3eca 428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "475f8478f65b8e3e38316cde10fb8c9ef3d5f652",
+  "prompts": {},
+  "sessions": {
+    "s_d584d9a97bb8a3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a5c-e82d-72a1-8c3b-b3375dfc392d",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

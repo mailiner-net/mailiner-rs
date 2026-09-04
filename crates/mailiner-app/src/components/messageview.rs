@@ -8,8 +8,9 @@ use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
 
 use mailiner_core::MailboxRole;
 use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
-use mailiner_core::{AuthResults, AuthVerdict};
+use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword};
 
+use crate::account::AccountId;
 use crate::components::attachments::AttachmentsFooter;
 use crate::components::icons::{IconButton, IconKind};
 use crate::context::{
@@ -19,6 +20,7 @@ use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
+use crate::keywords::{MessageKeywordChips, keyword_tone};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::phishing::{self, SenderCue};
@@ -828,6 +830,18 @@ fn MessageHeader(
     } else {
         message.is_flagged
     };
+    let selected_keywords = {
+        let list = ctx.messages.read();
+        ImapKeyword::ALL.map(|keyword| {
+            !selected_ids.is_empty()
+                && selected_ids.iter().all(|id| {
+                    list.find(|m| m.id == *id)
+                        .map(|m| m.envelope.has_keyword(keyword))
+                        .unwrap_or_else(|| message.envelope.has_keyword(keyword))
+                })
+        })
+    };
+    let mut labels_open = use_signal(|| false);
     let own_email = account_id
         .as_ref()
         .and_then(|id| ctx.accounts.read().get(id).map(|a| a.email.clone()));
@@ -916,6 +930,32 @@ fn MessageHeader(
                                 });
                             }
                         },
+                    }
+                    div {
+                        class: "message-labels-wrap",
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            class: if labels_open() { "is-open" },
+                            r#type: "button",
+                            title: "Set labels",
+                            aria_haspopup: "menu",
+                            aria_expanded: if labels_open() { "true" } else { "false" },
+                            disabled: selected_n == 0,
+                            onclick: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                                labels_open.set(!labels_open());
+                            },
+                            "Labels"
+                        }
+                        if labels_open() {
+                            LabelsMenu {
+                                account_id: account_id.clone(),
+                                mailbox_id: mailbox_id.clone(),
+                                message_ids: selected_ids.clone(),
+                                selected: selected_keywords,
+                                onclose: move |_| labels_open.set(false),
+                            }
+                        }
                     }
                     if show_plain_toggle {
                         button {
@@ -1304,8 +1344,85 @@ fn MessageHeader(
                     " {date}"
                 }
                 AuthResultsRow { auth: message.envelope.auth_results }
+                if !message.envelope.keywords.is_empty() {
+                    span {
+                        class: "message-view-meta-item message-view-labels",
+                        span { class: "message-view-meta-k", "Labels" }
+                        " "
+                        MessageKeywordChips {
+                            atoms: message.envelope.keywords.clone(),
+                            compact: false,
+                        }
+                    }
+                }
             }
             SenderCueBanner { cues: sender_cues }
+        }
+    }
+}
+
+#[component]
+fn LabelsMenu(
+    account_id: Option<AccountId>,
+    mailbox_id: Option<MailboxId>,
+    message_ids: Vec<MessageId>,
+    selected: [bool; 5],
+    onclose: EventHandler<MouseEvent>,
+) -> Element {
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    rsx! {
+        div {
+            class: "folder-menu-backdrop",
+            onclick: move |evt| onclose.call(evt),
+        }
+        div {
+            class: "folder-menu message-labels-menu",
+            role: "menu",
+            aria_label: "Labels",
+            onclick: move |evt| evt.stop_propagation(),
+            for (i, keyword) in ImapKeyword::ALL.into_iter().enumerate() {
+                {
+                    let on = selected[i];
+                    let tone = keyword_tone(Some(keyword));
+                    let account_id = account_id.clone();
+                    let mailbox_id = mailbox_id.clone();
+                    let ids = message_ids.clone();
+                    rsx! {
+                        button {
+                            class: "folder-menu-item message-labels-item",
+                            class: if on { "is-on" },
+                            r#type: "button",
+                            role: "menuitemcheckbox",
+                            aria_checked: if on { "true" } else { "false" },
+                            onclick: move |evt| {
+                                onclose.call(evt);
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
+                                    return;
+                                };
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::ToggleKeyword {
+                                    account_id,
+                                    mailbox_id,
+                                    message_ids: ids.clone(),
+                                    keyword,
+                                });
+                            },
+                            span {
+                                class: "message-keyword-chip {tone}",
+                                aria_hidden: "true",
+                                "{keyword.label()}"
+                            }
+                            if on {
+                                span { class: "message-labels-check", "✓" }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

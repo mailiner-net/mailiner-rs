@@ -21,7 +21,7 @@ pub use folder_name::{
 pub use ids::{AccountId, EmptyMessageId, FolderId, MessageId, MessagePartId};
 pub use models::{
     EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group,
-    LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessageListFilter, MessagePart,
-    MessageSort, PartChunk, PartKind, TextPrefix, TransferEncoding,
+    ImapKeyword, LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessageListFilter,
+    MessagePart, MessageSort, PartChunk, PartKind, TextPrefix, TransferEncoding,
 };
 pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};

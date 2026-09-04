@@ -463,8 +463,7 @@ where
         let header = fetch
             .header()
             .ok_or_else(|| ImapError::InvalidData("No header found".to_string()))?;
-        let (is_read, is_answered, is_starred, is_flagged, is_draft, is_deleted) =
-            parse_flags(fetch.flags());
+        let flags = parse_flags(fetch.flags());
         let uid = fetch
             .uid
             .ok_or_else(|| ImapError::InvalidData("No UID in FETCH response".to_string()))?;
@@ -502,12 +501,13 @@ where
                 .next(),
             references: Self::header_ids(parsed_headers.references()),
             date: Self::parse_date(parsed_headers.date())?,
-            is_read,
-            is_answered,
-            is_starred,
-            is_flagged,
-            is_draft,
-            is_deleted,
+            is_read: flags.is_read,
+            is_answered: flags.is_answered,
+            is_starred: flags.is_starred,
+            is_flagged: flags.is_flagged,
+            is_draft: flags.is_draft,
+            is_deleted: flags.is_deleted,
+            keywords: flags.keywords,
             has_attachments,
             size: fetch.size.map(|s| s as u64),
             snippet: None,
@@ -843,38 +843,58 @@ fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
         EnvelopeFlag::Draft => "\\Draft",
         EnvelopeFlag::Deleted => "\\Deleted",
         EnvelopeFlag::Starred => "\\Starred",
+        EnvelopeFlag::Keyword(keyword) => keyword.atom(),
     }
 }
 
-/// `(read, answered, starred, flagged, draft, deleted)`.
-fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> (bool, bool, bool, bool, bool, bool) {
-    let mut is_read = false;
-    let mut is_answered = false;
-    let mut is_starred = false;
-    let mut is_flagged = false;
-    let mut is_draft = false;
-    let mut is_deleted = false;
+struct ParsedFlags {
+    is_read: bool,
+    is_answered: bool,
+    is_starred: bool,
+    is_flagged: bool,
+    is_draft: bool,
+    is_deleted: bool,
+    keywords: Vec<String>,
+}
+
+fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> ParsedFlags {
+    let mut parsed = ParsedFlags {
+        is_read: false,
+        is_answered: false,
+        is_starred: false,
+        is_flagged: false,
+        is_draft: false,
+        is_deleted: false,
+        keywords: Vec::new(),
+    };
 
     for flag in flags {
         match flag {
-            Flag::Seen => is_read = true,
-            Flag::Answered => is_answered = true,
-            Flag::Flagged => is_flagged = true,
-            Flag::Draft => is_draft = true,
-            Flag::Deleted => is_deleted = true,
-            Flag::Custom(name) if name == "\\Starred" => is_starred = true,
+            Flag::Seen => parsed.is_read = true,
+            Flag::Answered => parsed.is_answered = true,
+            Flag::Flagged => parsed.is_flagged = true,
+            Flag::Draft => parsed.is_draft = true,
+            Flag::Deleted => parsed.is_deleted = true,
+            Flag::Custom(name) if name == "\\Starred" => parsed.is_starred = true,
+            Flag::Custom(name)
+                if is_imap_keyword(&name)
+                    && !parsed
+                        .keywords
+                        .iter()
+                        .any(|existing| existing == name.as_ref()) =>
+            {
+                parsed.keywords.push(name.into_owned());
+            }
             _ => {}
         }
     }
 
-    (
-        is_read,
-        is_answered,
-        is_starred,
-        is_flagged,
-        is_draft,
-        is_deleted,
-    )
+    parsed
+}
+
+/// Keywords are atoms that do not start with `\`.
+fn is_imap_keyword(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('\\')
 }
 
 struct SnippetPlan {
@@ -2139,6 +2159,7 @@ fn part_size_from_structure(root: &BodyPart, section: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mailiner_core::ImapKeyword;
 
     fn leaf(size: u64) -> BodyPart {
         BodyPart {
@@ -2205,18 +2226,42 @@ Received-SPF: pass\r\n\
         assert_eq!(imap_flag_atom(EnvelopeFlag::Flagged), "\\Flagged");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Deleted), "\\Deleted");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Starred), "\\Starred");
+        assert_eq!(
+            imap_flag_atom(EnvelopeFlag::Keyword(ImapKeyword::Important)),
+            "$Important"
+        );
     }
 
     #[test]
     fn parse_flags_answered() {
-        let (is_read, is_answered, is_starred, is_flagged, is_draft, is_deleted) =
-            parse_flags([Flag::Answered, Flag::Seen].into_iter());
-        assert!(is_read);
-        assert!(is_answered);
-        assert!(!is_starred);
-        assert!(!is_flagged);
-        assert!(!is_draft);
-        assert!(!is_deleted);
+        let flags = parse_flags([Flag::Answered, Flag::Seen].into_iter());
+        assert!(flags.is_read);
+        assert!(flags.is_answered);
+        assert!(!flags.is_starred);
+        assert!(!flags.is_flagged);
+        assert!(!flags.is_draft);
+        assert!(!flags.is_deleted);
+        assert!(flags.keywords.is_empty());
+    }
+
+    #[test]
+    fn parse_flags_collects_custom_keywords() {
+        let flags = parse_flags(
+            [
+                Flag::Custom("\\Starred".into()),
+                Flag::Custom("$Important".into()),
+                Flag::Custom("ProjectX".into()),
+                Flag::Custom("$Important".into()),
+                Flag::Custom("\\Something".into()),
+                Flag::Custom("".into()),
+            ]
+            .into_iter(),
+        );
+        assert!(flags.is_starred);
+        assert_eq!(
+            flags.keywords,
+            vec!["$Important".to_string(), "ProjectX".to_string()]
+        );
     }
 
     #[test]

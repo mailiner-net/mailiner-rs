@@ -183,6 +183,7 @@ mod tests {
             is_flagged: false,
             is_draft: false,
             is_deleted: false,
+            keywords: Vec::new(),
             has_attachments: false,
             size: None,
             snippet: None,
@@ -240,6 +241,7 @@ mod tests {
             is_flagged: true,
             is_draft: false,
             is_deleted: false,
+            keywords: vec!["$Important".into(), "ProjectX".into()],
             has_attachments: false,
             size: None,
             snippet: Some("Hello preview".into()),
@@ -249,6 +251,10 @@ mod tests {
         assert!(msg.is_answered);
         assert!(msg.is_starred);
         assert!(msg.is_flagged);
+        assert_eq!(
+            msg.envelope.keywords,
+            vec!["$Important".to_string(), "ProjectX".to_string()]
+        );
         assert_eq!(msg.snippet.as_deref(), Some("Hello preview"));
     }
 
@@ -314,6 +320,7 @@ mod tests {
             is_flagged: false,
             is_draft: false,
             is_deleted: false,
+            keywords: Vec::new(),
             has_attachments: false,
             size: None,
             snippet: None,

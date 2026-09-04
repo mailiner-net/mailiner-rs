@@ -2490,6 +2490,105 @@ body:has(.compose-dock) .toast {
     font-style: italic;
 }
 
+.message-subject-line {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.message-subject-text,
+.message-subject-line .message-subject-empty {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-keyword-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.message-keyword-chips.is-compact {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+}
+
+.message-keyword-chip {
+    display: inline-block;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.message-keyword-chip.is-important {
+    background: color-mix(in srgb, #d9480f 18%, transparent);
+    color: #d9480f;
+}
+
+.message-keyword-chip.is-work {
+    background: color-mix(in srgb, #e67700 18%, transparent);
+    color: #c15c00;
+}
+
+.message-keyword-chip.is-personal {
+    background: color-mix(in srgb, #2f9e44 18%, transparent);
+    color: #2b8a3e;
+}
+
+.message-keyword-chip.is-todo {
+    background: color-mix(in srgb, #1971c2 18%, transparent);
+    color: #1864ab;
+}
+
+.message-keyword-chip.is-later {
+    background: color-mix(in srgb, #7048e8 18%, transparent);
+    color: #5f3dc4;
+}
+
+.message-keyword-chip.is-other {
+    background: var(--muted-chip-bg);
+    color: var(--text-muted);
+}
+
+.message-view-labels {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: normal;
+}
+
+.message-labels-wrap {
+    position: relative;
+}
+
+.message-labels-wrap .message-labels-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    left: auto;
+}
+
+.message-labels-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.message-labels-check {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+}
+
 .message-list-empty,
 .message-view-empty,
 .message-view-loading {
@@ -2867,9 +2966,7 @@ body:has(.compose-dock) .toast {
                     color: var(--label);
                     font-size: var(--text-sm);
                     line-height: 1.2;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
+                    min-width: 0;
                 }
 
                 .message-snippet {

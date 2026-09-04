@@ -422,6 +422,7 @@ mod tests {
             is_flagged: false,
             is_draft: false,
             is_deleted: false,
+            keywords: Vec::new(),
             has_attachments: false,
             snippet: None,
             size: None,

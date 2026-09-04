@@ -9,6 +9,7 @@ use crate::components::icons::{Icon, IconKind};
 use crate::components::virtual_scroll::{SparseList, VirtualScroll};
 use crate::context::{AppContext, MessageDrag};
 use crate::core_event::CoreEvent;
+use crate::keywords::MessageKeywordChips;
 use crate::mailbox::MailboxId;
 use crate::message::Message;
 use crate::message_list_filter::{
@@ -445,10 +446,17 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
 
                 div {
                     class: "message-subject",
-                    if message.subject.trim().is_empty() {
-                        span { class: "message-subject-empty", "(no subject)" }
-                    } else {
-                        "{message.subject}"
+                    div {
+                        class: "message-subject-line",
+                        if message.subject.trim().is_empty() {
+                            span { class: "message-subject-empty", "(no subject)" }
+                        } else {
+                            span { class: "message-subject-text", "{message.subject}" }
+                        }
+                        MessageKeywordChips {
+                            atoms: message.envelope.keywords.clone(),
+                            compact: true,
+                        }
                     }
                     if let Some(snippet) = message.snippet.as_deref().filter(|s| !s.is_empty()) {
                         div {

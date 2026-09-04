@@ -67,8 +67,8 @@ pub fn AccountsSettingsPage() -> Element {
                 h1 { class: "bootstrap-title", "Accounts" }
                 p {
                     class: "bootstrap-muted",
-                    "Manage email accounts stored in this browser. Only the active account \
-                     stays connected."
+                    "Manage email accounts stored in this browser. Recently used accounts \
+                     stay connected so unread badges stay current."
                 }
 
                 fieldset {

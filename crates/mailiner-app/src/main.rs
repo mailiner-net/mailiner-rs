@@ -67,6 +67,7 @@ mod reconnect;
 mod selection;
 mod send;
 mod shortcuts;
+mod smime;
 mod smtp_inflight;
 mod smtp_session;
 mod snippet;

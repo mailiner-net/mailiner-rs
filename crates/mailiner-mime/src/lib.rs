@@ -6,6 +6,7 @@ pub mod codec;
 pub mod heuristics;
 pub mod params;
 pub mod parser;
+pub mod smime;
 pub mod writer;
 
 pub use calendar::{invites_from_parts, parse_calendar, CalendarDateTime, CalendarInvite};
@@ -17,6 +18,10 @@ pub use codec::{
 pub use heuristics::{is_attachment, is_rich_part};
 pub use params::{mime_words_decode, normalize_params};
 pub use parser::{MessageParser, ATTACHMENT_MIME};
+pub use smime::{
+    detect_smime, detect_smime_part, is_pkcs7_mime, is_pkcs7_signature, is_smime_multipart_signed,
+    is_smime_protocol, split_content_type, SmimeDetection, SmimeRole, SmimeType,
+};
 pub use writer::{
     encode_unstructured, format_disposition, format_folded_header, format_mailbox,
     generate_boundary, serialize_message, MimeBody, MimePart, WriteError,

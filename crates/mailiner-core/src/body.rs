@@ -78,4 +78,9 @@ impl BodyPart {
                 .filename()
                 .is_some_and(|n| n.to_ascii_lowercase().ends_with(".ics"))
     }
+
+    /// CMS S/MIME part (`pkcs7-mime` / `pkcs7-signature`).
+    pub fn is_smime(&self) -> bool {
+        crate::models::is_smime_mime(&self.content_type())
+    }
 }

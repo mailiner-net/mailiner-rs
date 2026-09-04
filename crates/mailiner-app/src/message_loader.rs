@@ -317,6 +317,13 @@ mod tests {
     }
 
     #[test]
+    fn prefetch_sections_includes_smime_attachment() {
+        let mut pkcs7 = part_sized("1", Some(400), true);
+        pkcs7.content_type = "application/pkcs7-mime".into();
+        assert_eq!(prefetch_sections(&[pkcs7]), vec!["1"]);
+    }
+
+    #[test]
     fn prefetch_sections_includes_calendar_attachment() {
         let mut cal = part_sized("2", Some(400), true);
         cal.kind = PartKind::Calendar;

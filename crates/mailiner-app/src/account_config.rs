@@ -312,8 +312,63 @@ pub struct AccountConfig {
     /// Not a password; stored as account data. Absent on older blobs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_ca_pems: Vec<String>,
+    /// Imported S/MIME certificate + optional private key.
+    ///
+    /// Private keys are extracted into the account vault when a passphrase is set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smime_identities: Vec<SmimeIdentity>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// User-imported S/MIME identity (certificate + optional PKCS#8 key).
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmimeIdentity {
+    /// Subject CN / email shown in settings.
+    #[serde(default)]
+    pub label: String,
+    /// PEM `CERTIFICATE` (leaf; may include extras).
+    pub cert_pem: String,
+    /// PEM PKCS#8 / PKCS#1 private key. Empty when redacted or cert-only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key_pem: String,
+}
+
+impl SmimeIdentity {
+    pub fn new(
+        label: impl Into<String>,
+        cert_pem: impl Into<String>,
+        key_pem: impl Into<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            cert_pem: cert_pem.into(),
+            key_pem: key_pem.into(),
+        }
+    }
+
+    pub fn has_private_key(&self) -> bool {
+        !self.key_pem.trim().is_empty()
+    }
+
+    /// Public material only (settings list / viewer trust).
+    pub fn public_only(&self) -> Self {
+        Self {
+            label: self.label.clone(),
+            cert_pem: self.cert_pem.clone(),
+            key_pem: String::new(),
+        }
+    }
+}
+
+impl fmt::Debug for SmimeIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SmimeIdentity")
+            .field("label", &self.label)
+            .field("cert_pem_len", &self.cert_pem.len())
+            .field("key_pem", &if self.key_pem.is_empty() { "" } else { "***" })
+            .finish()
+    }
 }
 
 /// How the IMAP session is wrapped in TLS.
@@ -785,6 +840,12 @@ impl AccountConfig {
             host: self.imap.host.clone(),
             signature: self.signature.clone(),
             identities: self.identities.clone(),
+            extra_ca_pems: self.extra_ca_pems.clone(),
+            smime_identities: self
+                .smime_identities
+                .iter()
+                .map(SmimeIdentity::public_only)
+                .collect(),
         }
     }
 
@@ -807,6 +868,12 @@ impl AccountConfig {
         Ok(self)
     }
 
+    /// Replace imported S/MIME identities (certificate + optional key).
+    pub fn with_smime_identities(mut self, identities: Vec<SmimeIdentity>) -> Self {
+        self.smime_identities = identities;
+        self
+    }
+
     /// Clear IMAP/SMTP passwords and the proxy token in place.
     ///
     /// Also strips a `token` query param and `userinfo` from `proxy.base_url`
@@ -821,6 +888,9 @@ impl AccountConfig {
         }
         self.proxy.token.clear();
         self.proxy.base_url = strip_embedded_proxy_secrets(&self.proxy.base_url);
+        for id in &mut self.smime_identities {
+            id.key_pem.clear();
+        }
     }
 
     /// True when this account authenticates with a stored OAuth2 access token.
@@ -1211,6 +1281,7 @@ mod tests {
             smtp: None,
             proxy: sample_proxy(),
             extra_ca_pems: Vec::new(),
+            smime_identities: Vec::new(),
             created_at: ts,
             updated_at: ts,
         }
@@ -1745,6 +1816,23 @@ nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].contains("BEGIN CERTIFICATE"));
         assert_eq!(extra_ca_pems_to_text(&parsed), TEST_CA_PEM);
+    }
+
+    #[test]
+    fn serde_old_config_without_smime_identities_defaults_empty() {
+        let config = sample_config();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("smime_identities"));
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.smime_identities.is_empty());
+    }
+
+    #[test]
+    fn smime_identity_debug_hides_key() {
+        let id = SmimeIdentity::new("Ada", "CERT", "SUPER-SECRET-KEY");
+        let dbg = format!("{id:?}");
+        assert!(!dbg.contains("SUPER-SECRET-KEY"), "{dbg}");
+        assert!(dbg.contains("Ada"));
     }
 
     #[test]

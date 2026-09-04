@@ -40,6 +40,7 @@ pub mod reconnect;
 pub mod selection;
 pub mod send;
 pub mod shortcuts;
+pub mod smime;
 pub mod smtp_inflight;
 pub mod snippet;
 pub mod snooze;

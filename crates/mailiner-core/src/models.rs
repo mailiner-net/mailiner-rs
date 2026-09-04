@@ -575,6 +575,15 @@ pub fn is_calendar_mime(content_type: &str) -> bool {
         || mime.eq_ignore_ascii_case("application/x-ics")
 }
 
+/// S/MIME CMS payloads (`pkcs7-mime` / `pkcs7-signature`, including `x-` aliases).
+pub fn is_smime_mime(content_type: &str) -> bool {
+    let mime = primary_mime(content_type);
+    mime.eq_ignore_ascii_case("application/pkcs7-mime")
+        || mime.eq_ignore_ascii_case("application/x-pkcs7-mime")
+        || mime.eq_ignore_ascii_case("application/pkcs7-signature")
+        || mime.eq_ignore_ascii_case("application/x-pkcs7-signature")
+}
+
 impl MessagePart {
     pub fn section(&self) -> String {
         if self.path.is_empty() {
@@ -593,6 +602,7 @@ impl MessagePart {
             || !self.is_attachment
             || self.kind == PartKind::Calendar
             || is_calendar_mime(&self.content_type)
+            || is_smime_mime(&self.content_type)
     }
 
     pub fn is_calendar(&self) -> bool {

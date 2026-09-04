@@ -667,6 +667,89 @@ mod tests {
     }
 
     #[test]
+    fn multipart_signed_smime_hides_signature() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "signed".into(),
+            parameters: [("PROTOCOL".into(), "application/pkcs7-signature".into())].into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "application".into(),
+                    subtype: "pkcs7-signature".into(),
+                    encoding: Some("BASE64".into()),
+                    size: Some(80),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].kind, PartKind::TextPlain);
+        assert!(!parts[0].is_hidden);
+        assert!(parts[1].is_hidden);
+        assert!(parts[1].should_prefetch());
+        assert!(mailiner_core::is_smime_mime(&parts[1].content_type));
+    }
+
+    #[test]
+    fn multipart_signed_pgp_is_not_smime() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "signed".into(),
+            parameters: [("PROTOCOL".into(), "application/pgp-signature".into())].into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "application".into(),
+                    subtype: "pgp-signature".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        let sig = parts
+            .iter()
+            .find(|p| p.content_type.contains("pgp-signature"))
+            .expect("pgp signature stays an attachment");
+        assert!(!sig.is_hidden);
+        assert!(!mailiner_core::is_smime_mime(&sig.content_type));
+    }
+
+    #[test]
+    fn pkcs7_mime_root_is_prefetched_attachment() {
+        let root = BodyPart {
+            type_: "application".into(),
+            subtype: "pkcs7-mime".into(),
+            encoding: Some("BASE64".into()),
+            size: Some(200),
+            parameters: [("SMIME-TYPE".into(), "signed-data".into())].into(),
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].kind, PartKind::Attachment);
+        assert!(parts[0].should_prefetch());
+        assert!(mailiner_core::is_smime_mime(&parts[0].content_type));
+    }
+
+    #[test]
     fn ics_filename_octet_stream_is_calendar() {
         let root = BodyPart {
             type_: "application".into(),

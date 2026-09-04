@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use mailiner_core::ids::AccountId;
 use serde::{Deserialize, Serialize};
 
-use crate::account_config::AccountConfig;
+use crate::account_config::{AccountConfig, SmimeIdentity};
 use crate::account_store::AccountStoreError;
 
 /// PBKDF2-HMAC-SHA-256 iteration count written by this build.
@@ -65,6 +65,8 @@ pub struct AccountSecrets {
     pub proxy_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth2_tokens: Option<crate::account_config::Oauth2Tokens>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smime_identities: Vec<SmimeIdentity>,
 }
 
 /// Imported OpenPGP private key (ASCII-armor + key passphrase).
@@ -178,6 +180,7 @@ pub fn extract_secrets(accounts: &[AccountConfig]) -> SecretsPayload {
                 smtp_password: a.smtp.as_ref().and_then(|s| s.password.clone()),
                 proxy_token: a.proxy.token.clone(),
                 oauth2_tokens: a.oauth2.as_ref().map(|o| o.tokens.clone()),
+                smime_identities: a.smime_identities.clone(),
             })
             .collect(),
         pgp_keys: Vec::new(),
@@ -197,6 +200,13 @@ pub fn apply_secrets(accounts: &mut [AccountConfig], payload: &SecretsPayload) {
                 && let Some(tokens) = s.oauth2_tokens.clone()
             {
                 oauth.tokens = tokens;
+            }
+            if !s.smime_identities.is_empty() {
+                acc.smime_identities = s.smime_identities.clone();
+            } else {
+                for id in &mut acc.smime_identities {
+                    id.key_pem.clear();
+                }
             }
         }
     }
@@ -527,6 +537,7 @@ mod tests {
                 remote_port: None,
             },
             extra_ca_pems: Vec::new(),
+            smime_identities: Vec::new(),
             created_at: ts,
             updated_at: ts,
         }
@@ -543,13 +554,22 @@ mod tests {
 
     #[test]
     fn extract_and_apply_roundtrip() {
-        let original = sample("a1", "imap-secret", Some("smtp-secret"), "proxy-token");
+        let mut original = sample("a1", "imap-secret", Some("smtp-secret"), "proxy-token");
+        original
+            .smime_identities
+            .push(crate::account_config::SmimeIdentity::new(
+                "Ada",
+                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+                "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n",
+            ));
         let payload = extract_secrets(std::slice::from_ref(&original));
         let mut restored = original.clone();
         restored.redact_secrets();
         assert!(restored.imap.password.is_empty());
+        assert!(restored.smime_identities[0].key_pem.is_empty());
         apply_secrets(std::slice::from_mut(&mut restored), &payload);
         assert_eq!(restored.imap.password, "imap-secret");
+        assert!(restored.smime_identities[0].has_private_key());
         assert_eq!(
             restored.smtp.as_ref().and_then(|s| s.password.as_deref()),
             Some("smtp-secret")

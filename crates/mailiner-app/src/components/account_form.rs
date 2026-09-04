@@ -358,6 +358,7 @@ pub fn build_config_from_form(
             remote_port,
         },
         extra_ca_pems: extra_ca_pems_from_text(extra_ca_pem)?,
+        smime_identities: Vec::new(),
         created_at,
         updated_at: now,
     };
@@ -1317,6 +1318,126 @@ pub fn AccountIdentitiesFields(
                     }
                 },
                 "Add identity"
+            }
+        }
+    }
+}
+
+/// Import S/MIME certificate + private key (PEM or PKCS#12). Stored in the vault.
+#[component]
+pub fn AccountSmimeFields(
+    id_prefix: String,
+    identities: Vec<crate::account_config::SmimeIdentity>,
+    set_identities: EventHandler<Vec<crate::account_config::SmimeIdentity>>,
+    busy: bool,
+) -> Element {
+    let mut password = use_signal(String::new);
+    let mut import_error = use_signal(|| None::<String>);
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "S/MIME" }
+            p {
+                class: "bootstrap-muted",
+                "Import a personal certificate and private key (PEM or PKCS#12) to verify \
+                 signed mail and, later, decrypt or sign. Keys are stored in this account's vault."
+            }
+            if !identities.is_empty() {
+                ul {
+                    class: "smime-identity-list",
+                    for (i, id) in identities.iter().enumerate() {
+                        li {
+                            class: "smime-identity-row",
+                            span {
+                                "{id.label}"
+                                if id.has_private_key() {
+                                    " (certificate + key)"
+                                } else {
+                                    " (certificate only)"
+                                }
+                            }
+                            button {
+                                r#type: "button",
+                                class: "onboarding-btn onboarding-btn-secondary",
+                                disabled: busy,
+                                onclick: {
+                                    let identities = identities.clone();
+                                    move |_| {
+                                        let mut next = identities.clone();
+                                        if i < next.len() {
+                                            next.remove(i);
+                                        }
+                                        set_identities.call(next);
+                                    }
+                                },
+                                "Remove"
+                            }
+                        }
+                    }
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label {
+                    r#for: "{id_prefix}-smime-password",
+                    "PKCS#12 / encrypted-key password"
+                }
+                input {
+                    id: "{id_prefix}-smime-password",
+                    name: "{id_prefix}-smime-password",
+                    r#type: "password",
+                    value: "{password}",
+                    disabled: busy,
+                    autocomplete: "off",
+                    oninput: move |e| password.set(e.value()),
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label {
+                    r#for: "{id_prefix}-smime-file",
+                    "Import certificate"
+                }
+                input {
+                    id: "{id_prefix}-smime-file",
+                    name: "{id_prefix}-smime-file",
+                    r#type: "file",
+                    accept: ".pem,.crt,.cer,.p12,.pfx,application/x-pem-file,application/x-pkcs12,application/pkcs12",
+                    disabled: busy,
+                    onchange: {
+                        let current = identities.clone();
+                        move |evt: FormEvent| {
+                            let files = evt.files();
+                            if files.is_empty() {
+                                return;
+                            }
+                            let current = current.clone();
+                            let pw = password();
+                            spawn(async move {
+                                import_error.set(None);
+                                let mut next = current;
+                                for file in files {
+                                    let bytes = match file.read_bytes().await {
+                                        Ok(b) => b,
+                                        Err(e) => {
+                                            import_error
+                                                .set(Some(format!("Could not read file: {e}")));
+                                            continue;
+                                        }
+                                    };
+                                    match crate::smime::import_smime_material(&bytes, &pw) {
+                                        Ok(id) => next.push(id),
+                                        Err(e) => import_error.set(Some(e)),
+                                    }
+                                }
+                                set_identities.call(next);
+                            });
+                        }
+                    },
+                }
+            }
+            if let Some(err) = import_error() {
+                p { class: "form-error", "{err}" }
             }
         }
     }

@@ -9,6 +9,7 @@ use crate::account_store::{ACCOUNTS_LOCAL_STORAGE_KEY, AccountStoreError};
 use crate::address_book::ADDRESS_BOOK_LOCAL_STORAGE_KEY;
 use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY, LIST_WIDTH_KEY};
 use crate::mail_cache::MAIL_CACHE_LOCAL_STORAGE_KEY;
+use crate::mail_rules::{MAIL_RULES_APPLIED_KEY, MAIL_RULES_KEY};
 use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
 use crate::recipient_suggest::RECENT_RECIPIENTS_LOCAL_STORAGE_KEY;
 use crate::ui_prefs::{
@@ -40,6 +41,8 @@ pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     SAVED_SEARCHES_KEY,
     PINNED_MESSAGES_KEY,
     SNOOZED_MESSAGES_KEY,
+    MAIL_RULES_KEY,
+    MAIL_RULES_APPLIED_KEY,
     FOLDER_WIDTH_KEY,
     LIST_HEIGHT_KEY,
     LIST_WIDTH_KEY,
@@ -286,6 +289,8 @@ mod tests {
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&SAVED_SEARCHES_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&PINNED_MESSAGES_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&SNOOZED_MESSAGES_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_RULES_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_RULES_APPLIED_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&FOLDER_WIDTH_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_HEIGHT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_WIDTH_KEY));

@@ -18,6 +18,7 @@ use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
+use crate::phishing::{self, SenderCue};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
 use crate::toast::ToastAction;
 
@@ -751,7 +752,6 @@ fn MessageHeader(
                 .map(|n| n.role == MailboxRole::Trash)
         })
         .unwrap_or(false);
-    let account_id = ctx.selected_account.read().clone();
     let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
     let show_archive = archive_id
         .as_ref()
@@ -817,6 +817,16 @@ fn MessageHeader(
     } else {
         message.is_flagged
     };
+    let own_email = account_id
+        .as_ref()
+        .and_then(|id| ctx.accounts.read().get(id).map(|a| a.email.clone()));
+    let sender_cues = phishing::analyze_from(message.envelope.from.as_ref(), own_email.as_deref());
+    let mut from_addresses = header_addresses(message.envelope.from.as_ref());
+    if !sender_cues.is_empty() {
+        for addr in &mut from_addresses {
+            addr.label = addr.title.clone();
+        }
+    }
 
     rsx! {
         header {
@@ -1210,7 +1220,7 @@ fn MessageHeader(
                 class: "message-view-meta",
                 HeaderAddressRow {
                     label: "From",
-                    addresses: header_addresses(message.envelope.from.as_ref()),
+                    addresses: from_addresses,
                     fallback: message.from.clone(),
                     always: true,
                 }
@@ -1242,6 +1252,26 @@ fn MessageHeader(
                     class: "message-view-meta-item",
                     span { class: "message-view-meta-k", "Date" }
                     " {date}"
+                }
+            }
+            SenderCueBanner { cues: sender_cues }
+        }
+    }
+}
+
+#[component]
+fn SenderCueBanner(cues: Vec<SenderCue>) -> Element {
+    if cues.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div {
+            class: "message-sender-cue",
+            role: "status",
+            for cue in cues.iter() {
+                p {
+                    class: "message-sender-cue-line",
+                    "{cue.message()}"
                 }
             }
         }

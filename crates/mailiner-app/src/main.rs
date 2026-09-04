@@ -39,6 +39,7 @@ mod message_list_filter;
 mod message_loader;
 mod notifications;
 mod outbox_store;
+mod phishing;
 mod print;
 mod provider_preset;
 mod reconnect;

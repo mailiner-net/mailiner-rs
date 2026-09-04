@@ -627,10 +627,8 @@ pub fn resolve_compose_account_id(
     selected: Option<&AccountId>,
     known: impl Fn(&AccountId) -> bool,
 ) -> Option<AccountId> {
-    if let Some(id) = preferred {
-        if known(id) {
-            return Some(id.clone());
-        }
+    if let Some(id) = preferred.filter(|id| known(id)) {
+        return Some(id.clone());
     }
     selected.filter(|id| known(id)).cloned()
 }

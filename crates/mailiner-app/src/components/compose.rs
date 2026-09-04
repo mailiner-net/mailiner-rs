@@ -21,13 +21,13 @@ use mailiner_composer::{
 };
 
 use crate::account::{Account, AccountId};
-use crate::ui_prefs::ComposeBodyMode;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
+use crate::ui_prefs::ComposeBodyMode;
 
 fn looks_like_email(s: &str) -> bool {
     let s = s.trim();

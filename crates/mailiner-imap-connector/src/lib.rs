@@ -33,7 +33,7 @@ use tracing::info;
 
 use mailiner_core::{
     is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, AccountId,
-    BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
+    AuthResults, BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
     MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult, TextPrefix,
 };
@@ -511,6 +511,7 @@ where
             has_attachments,
             size: fetch.size.map(|s| s as u64),
             snippet: None,
+            auth_results: AuthResults::from_header_bytes(header),
         })
     }
 
@@ -2178,6 +2179,23 @@ mod tests {
         assert_eq!(part_size_from_structure(&root, "2"), Some(99_000));
         assert_eq!(part_size_from_structure(&root, "1"), Some(10));
         assert_eq!(part_size_from_structure(&root, "3"), None);
+    }
+
+    #[test]
+    fn raw_header_block_feeds_auth_results() {
+        let raw = b"From: Sender <sender@example.com>\r\n\
+Subject: Hello\r\n\
+Authentication-Results: mx.example.com;\r\n\
+\tdkim=pass header.i=@example.com;\r\n\
+\tspf=fail smtp.mailfrom=sender@example.com;\r\n\
+\tdmarc=pass header.from=example.com\r\n\
+ARC-Authentication-Results: i=1; mx.example.com; dkim=fail\r\n\
+Received-SPF: pass\r\n\
+\r\n";
+        let auth = AuthResults::from_header_bytes(raw);
+        assert_eq!(auth.spf, Some(mailiner_core::AuthVerdict::Fail));
+        assert_eq!(auth.dkim, Some(mailiner_core::AuthVerdict::Pass));
+        assert_eq!(auth.dmarc, Some(mailiner_core::AuthVerdict::Pass));
     }
 
     #[test]

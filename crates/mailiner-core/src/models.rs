@@ -3,6 +3,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::AuthResults;
 use crate::ids::{AccountId, FolderId, MessageId, MessagePartId};
 
 /// How the message list is ordered for a selected folder.
@@ -374,6 +375,9 @@ pub struct Envelope {
     /// Cached list-preview snippet (not IMAP ENVELOPE). Short cleaned text.
     #[serde(default)]
     pub snippet: Option<String>,
+    /// SPF / DKIM / DMARC from Authentication-Results (not locally verified).
+    #[serde(default, skip_serializing_if = "AuthResults::is_empty")]
+    pub auth_results: AuthResults,
 }
 
 /// MIME Content-Transfer-Encoding.
@@ -621,6 +625,7 @@ mod tests {
         }"#;
         let env: Envelope = serde_json::from_str(json).expect("legacy envelope");
         assert!(!env.is_answered);
+        assert!(env.auth_results.is_empty());
     }
 
     #[test]

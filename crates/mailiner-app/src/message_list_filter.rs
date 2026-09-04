@@ -161,6 +161,7 @@ mod tests {
             has_attachments,
             size: None,
             snippet: None,
+            auth_results: Default::default(),
         };
         Message::from(envelope)
     }

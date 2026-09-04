@@ -1,5 +1,9 @@
 //! Short-lived SMTP submission over a caller-owned stream (plus rustls).
 
+mod tls;
+
+pub use tls::{add_extra_ca_pems, parse_pem_certificates, root_cert_store};
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -11,7 +15,7 @@ use async_smtp::extension::{
 use async_smtp::response::Response;
 use async_smtp::{Envelope, SendableEmail, SmtpClient, SmtpTransport};
 use mailiner_core::{AccountId, DsnRequest, SendErrorKind, SubmitReceipt, SubmitRequest};
-use rustls::{ClientConfig, RootCertStore};
+use rustls::ClientConfig;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -57,6 +61,8 @@ pub struct SmtpConnector {
     port: u16,
     username: String,
     hello_name: String,
+    /// Extra CA PEMs trusted in addition to webpki roots.
+    extra_ca_pems: Vec<String>,
 }
 
 impl SmtpConnector {
@@ -73,7 +79,14 @@ impl SmtpConnector {
             port,
             username,
             hello_name,
+            extra_ca_pems: Vec::new(),
         }
+    }
+
+    /// Extra CA PEMs trusted in addition to the webpki root store.
+    pub fn with_extra_ca_pems(mut self, extra_ca_pems: Vec<String>) -> Self {
+        self.extra_ca_pems = extra_ca_pems;
+        self
     }
 
     pub fn account_id(&self) -> &AccountId {
@@ -90,9 +103,8 @@ impl SmtpConnector {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let root_store = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
+        let root_store = root_cert_store(&self.extra_ca_pems)
+            .map_err(|e| SmtpError::classified(SendErrorKind::TlsOrSni, e))?;
         let config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();

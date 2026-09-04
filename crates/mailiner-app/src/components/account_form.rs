@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, AccountIdentity, ImapSettings, ImapTlsMode, ProxySettings, SmtpTlsMode,
-    default_port_for_tls_mode, normalize_signature, optional_smtp_from_tls_mode,
-    port_for_imap_tls_mode_change, port_for_tls_mode_change,
+    default_port_for_tls_mode, extra_ca_pems_from_text, normalize_signature,
+    optional_smtp_from_tls_mode, port_for_imap_tls_mode_change, port_for_tls_mode_change,
 };
 use crate::autodiscover::{
     DiscoverSource, DiscoveredConfig, apply_discovered, domain_from_email, lookup_servers,
@@ -268,6 +268,7 @@ pub fn build_config_from_form(
     smtp_remote_host: &str,
     smtp_remote_port: &str,
     signature: &str,
+    extra_ca_pem: &str,
     created_at: chrono::DateTime<Utc>,
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
@@ -353,6 +354,7 @@ pub fn build_config_from_form(
             remote_host,
             remote_port,
         },
+        extra_ca_pems: extra_ca_pems_from_text(extra_ca_pem)?,
         created_at,
         updated_at: now,
     };
@@ -373,6 +375,7 @@ pub fn credentials_changed(old: &AccountConfig, new: &AccountConfig) -> bool {
         || old.imap.tls_mode != new.imap.tls_mode
         || old.imap.use_tls != new.imap.use_tls
         || old.proxy != new.proxy
+        || old.extra_ca_pems != new.extra_ca_pems
 }
 
 /// Consume a terminal Test SMTP outcome for `rid` into the form banner.
@@ -1008,6 +1011,94 @@ pub fn AccountIdentitiesFields(
     }
 }
 
+/// Extra CA PEMs for IMAP/SMTP rustls (self-hosted / enterprise).
+#[component]
+pub fn AccountTlsFields(
+    id_prefix: String,
+    extra_ca_pems: String,
+    set_extra_ca_pems: EventHandler<String>,
+    busy: bool,
+) -> Element {
+    let open = !extra_ca_pems.trim().is_empty();
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "TLS certificates" }
+            p {
+                class: "bootstrap-muted",
+                "Optional extra CA certificates (PEM) trusted in addition to public roots. \
+                 Needed for self-hosted or enterprise servers with a private CA."
+            }
+            details {
+                class: "onboarding-advanced",
+                open: open,
+                summary { "Extra CA certificates (optional)" }
+                div {
+                    class: "onboarding-field",
+                    label {
+                        r#for: "{id_prefix}-extra-ca",
+                        "CA certificates (PEM)"
+                    }
+                    textarea {
+                        id: "{id_prefix}-extra-ca",
+                        name: "{id_prefix}-extra-ca",
+                        value: "{extra_ca_pems}",
+                        rows: 6,
+                        disabled: busy,
+                        spellcheck: "false",
+                        autocomplete: "off",
+                        placeholder: "-----BEGIN CERTIFICATE-----",
+                        oninput: move |e| set_extra_ca_pems.call(e.value()),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label {
+                        r#for: "{id_prefix}-extra-ca-file",
+                        "Import PEM file"
+                    }
+                    input {
+                        id: "{id_prefix}-extra-ca-file",
+                        name: "{id_prefix}-extra-ca-file",
+                        r#type: "file",
+                        accept: ".pem,.crt,.cer,.cert,application/x-pem-file,application/x-x509-ca-cert",
+                        disabled: busy,
+                        onchange: {
+                            let current = extra_ca_pems.clone();
+                            move |evt: FormEvent| {
+                                let files = evt.files();
+                                if files.is_empty() {
+                                    return;
+                                }
+                                let current = current.clone();
+                                spawn(async move {
+                                    let mut out = current;
+                                    for file in files {
+                                        if let Ok(text) = file.read_string().await {
+                                            let text = text.trim();
+                                            if text.is_empty() {
+                                                continue;
+                                            }
+                                            if !out.trim().is_empty() && !out.ends_with('\n') {
+                                                out.push('\n');
+                                            }
+                                            out.push_str(text);
+                                            if !out.ends_with('\n') {
+                                                out.push('\n');
+                                            }
+                                        }
+                                    }
+                                    set_extra_ca_pems.call(out);
+                                });
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Optional plain-text signature (new / reply / forward drafts).
 #[component]
 pub fn AccountSignatureFields(
@@ -1319,6 +1410,7 @@ mod tests {
             smtp_remote_host,
             smtp_remote_port,
             "",
+            "",
             Utc::now(),
         )
     }
@@ -1446,6 +1538,95 @@ mod tests {
         assert!(err.contains("SMTP remote port"), "{err}");
         let err = form("smtp.example.com", "", "nope").unwrap_err();
         assert!(err.contains("SMTP remote port"), "{err}");
+    }
+
+    #[test]
+    fn form_extra_ca_pem_is_persisted() {
+        let pem = "-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUO+6CL3p49lL/DAZ7JoXn3PwO/EYwDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQTWFpbGluZXIgVGVzdCBDQTAeFw0yNjA5MDQwNTE3MjBa
+Fw0zNjA5MDEwNTE3MjBaMBsxGTAXBgNVBAMMEE1haWxpbmVyIFRlc3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCxzv/LVpg7NNfe69mqiVMd3RLT
+qCRC7rtWG5p2SqSrdivyI3PiYBFkvZ6ATAKNbFfZ7hMNhllK+Piipf51AkEU96j5
+vMPKzMbzEJjsBZlr1CRRCzoaV1HqPLI/Dq0C1myKwgC7ROJRRHNDdPm6vyhbXa5d
+857z+RQcDlPcd3opdgHASZboQK+EugRYeMOQ/Cb7Qv237dlhC/29OqJh+Xt/3Z4J
+wJ9SeIJV44ZMecRFbHcKPcOiBoFa8s+xllutVE0VV9hk06SH8ShWn5Chwvys6e+y
+Iv29cPA7PdnjhG7m5XGoTVjd3LwSTT4LCElZG1doNWUpYlKV3dIk6XbKWp37AgMB
+AAGjUzBRMB0GA1UdDgQWBBSAU6I1kMQhOQ/f2asKVD50yH2jWTAfBgNVHSMEGDAW
+gBSAU6I1kMQhOQ/f2asKVD50yH2jWTAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQBU014e32DvhQmdLXw+hNpcU288m3jBB6viGfxj2qvLRo1Z5On8
+YQWgywe7vBIZ15+2zGieDQQlkahLR+ZhRmyW3SLEBL3izfUnQyJFYHKUTG/wsiNx
+HG0ysqio9/x8oMv6quNwfE6LlTbYHhZxpyZLIfL47Xbv1J5ieEUr91naa9PSeG/P
+jxqLaQgrhy4NGyFRZkLX7NtLiZfb3L1GOfKzitV7h7Sa+kLkf5oZrrjgoD7gGFCx
+13nLK36fqa7TdSarmCTjaUnk5P0oyLpkeNJSiZF+XHTejL/3jAho/l90ji0F9KxC
+nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
+-----END CERTIFICATE-----";
+        let config = build_config_from_form(
+            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
+            "Work",
+            "user@example.com",
+            "imap.example.com",
+            "993",
+            "user@example.com",
+            "secret",
+            ImapTlsMode::Implicit,
+            "ws://localhost:9400/proxy",
+            "token",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            SmtpTlsMode::Implicit,
+            "",
+            "",
+            "",
+            pem,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(config.extra_ca_pems.len(), 1);
+        assert!(config.extra_ca_pems[0].contains("BEGIN CERTIFICATE"));
+    }
+
+    #[test]
+    fn form_invalid_extra_ca_pem_is_error() {
+        let err = build_config_from_form(
+            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
+            "Work",
+            "user@example.com",
+            "imap.example.com",
+            "993",
+            "user@example.com",
+            "secret",
+            ImapTlsMode::Implicit,
+            "ws://localhost:9400/proxy",
+            "token",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            SmtpTlsMode::Implicit,
+            "",
+            "",
+            "",
+            "not a certificate",
+            Utc::now(),
+        )
+        .unwrap_err();
+        assert!(err.contains("Extra CA certificates"), "{err}");
+    }
+
+    #[test]
+    fn credentials_changed_includes_extra_ca_pems() {
+        let a = form("smtp.example.com", "", "").unwrap();
+        let mut b = a.clone();
+        assert!(!credentials_changed(&a, &b));
+        b.extra_ca_pems = vec!["-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----".into()];
+        assert!(credentials_changed(&a, &b));
     }
 
     #[test]

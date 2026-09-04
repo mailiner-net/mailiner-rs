@@ -28,6 +28,8 @@ pub enum AccountConfigError {
     InvalidProxyUrl(String),
     /// Proxy scheme is not `ws` or `wss`.
     InvalidProxyScheme(String),
+    /// Extra CA PEM could not be parsed or is not a trust anchor.
+    InvalidExtraCa(String),
 }
 
 impl fmt::Display for AccountConfigError {
@@ -38,6 +40,7 @@ impl fmt::Display for AccountConfigError {
             Self::InvalidProxyScheme(scheme) => {
                 write!(f, "proxy scheme must be ws or wss, got {scheme:?}")
             }
+            Self::InvalidExtraCa(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -168,6 +171,11 @@ pub struct AccountConfig {
     /// Optional until send is implemented; persisted for forward-compat.
     pub smtp: Option<SmtpSettings>,
     pub proxy: ProxySettings,
+    /// Extra CA certificates (PEM) trusted in addition to webpki roots for IMAP/SMTP TLS.
+    ///
+    /// Not a password; stored as account data. Absent on older blobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_ca_pems: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -699,6 +707,8 @@ impl AccountConfig {
         }
         // Ensure proxy URL can be built (also validates scheme / remote host).
         self.proxy.websocket_url(&self.imap)?;
+        extra_ca_pems_from_text(&extra_ca_pems_to_text(&self.extra_ca_pems))
+            .map_err(AccountConfigError::InvalidExtraCa)?;
         Ok(())
     }
 }
@@ -749,6 +759,29 @@ fn strip_url_userinfo(url: &str) -> String {
         Some((_, host)) => format!("{scheme}://{host}{suffix}"),
         None => url.to_string(),
     }
+}
+
+/// Join persisted extra CA PEMs for the account form textarea.
+pub fn extra_ca_pems_to_text(pems: &[String]) -> String {
+    pems.iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Parse and validate extra CA PEM text from the form.
+///
+/// Empty input → `[]`. Invalid PEM → error. Valid PEM(s) stored as one blob
+/// so comments and concatenated blocks are preserved.
+pub fn extra_ca_pems_from_text(raw: &str) -> Result<Vec<String>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    mailiner_imap_connector::parse_pem_certificates(trimmed)
+        .map_err(|e| format!("Extra CA certificates: {e}"))?;
+    Ok(vec![trimmed.to_string()])
 }
 
 /// Trim surrounding whitespace; empty / whitespace-only → `None`.
@@ -1007,6 +1040,7 @@ mod tests {
             imap: sample_imap(),
             smtp: None,
             proxy: sample_proxy(),
+            extra_ca_pems: Vec::new(),
             created_at: ts,
             updated_at: ts,
         }
@@ -1353,6 +1387,104 @@ mod tests {
         assert_eq!(back.all_identities().len(), 2);
         assert_eq!(back.all_identities()[0].email, "user@example.com");
         assert_eq!(back.all_identities()[1].email, "support@example.com");
+    }
+
+    const TEST_CA_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUO+6CL3p49lL/DAZ7JoXn3PwO/EYwDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQTWFpbGluZXIgVGVzdCBDQTAeFw0yNjA5MDQwNTE3MjBa
+Fw0zNjA5MDEwNTE3MjBaMBsxGTAXBgNVBAMMEE1haWxpbmVyIFRlc3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCxzv/LVpg7NNfe69mqiVMd3RLT
+qCRC7rtWG5p2SqSrdivyI3PiYBFkvZ6ATAKNbFfZ7hMNhllK+Piipf51AkEU96j5
+vMPKzMbzEJjsBZlr1CRRCzoaV1HqPLI/Dq0C1myKwgC7ROJRRHNDdPm6vyhbXa5d
+857z+RQcDlPcd3opdgHASZboQK+EugRYeMOQ/Cb7Qv237dlhC/29OqJh+Xt/3Z4J
+wJ9SeIJV44ZMecRFbHcKPcOiBoFa8s+xllutVE0VV9hk06SH8ShWn5Chwvys6e+y
+Iv29cPA7PdnjhG7m5XGoTVjd3LwSTT4LCElZG1doNWUpYlKV3dIk6XbKWp37AgMB
+AAGjUzBRMB0GA1UdDgQWBBSAU6I1kMQhOQ/f2asKVD50yH2jWTAfBgNVHSMEGDAW
+gBSAU6I1kMQhOQ/f2asKVD50yH2jWTAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQBU014e32DvhQmdLXw+hNpcU288m3jBB6viGfxj2qvLRo1Z5On8
+YQWgywe7vBIZ15+2zGieDQQlkahLR+ZhRmyW3SLEBL3izfUnQyJFYHKUTG/wsiNx
+HG0ysqio9/x8oMv6quNwfE6LlTbYHhZxpyZLIfL47Xbv1J5ieEUr91naa9PSeG/P
+jxqLaQgrhy4NGyFRZkLX7NtLiZfb3L1GOfKzitV7h7Sa+kLkf5oZrrjgoD7gGFCx
+13nLK36fqa7TdSarmCTjaUnk5P0oyLpkeNJSiZF+XHTejL/3jAho/l90ji0F9KxC
+nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
+-----END CERTIFICATE-----";
+
+    #[test]
+    fn serde_old_config_without_extra_ca_pems_defaults_empty() {
+        let json = serde_json::to_string(&sample_config()).unwrap();
+        assert!(
+            !json.contains("extra_ca_pems"),
+            "empty extra CAs should be omitted: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.extra_ca_pems.is_empty());
+
+        let old = r#"{
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "display_name": "Work",
+            "email": "user@example.com",
+            "imap": {
+                "host": "imap.example.com",
+                "port": 993,
+                "username": "user@example.com",
+                "password": "s3cret",
+                "use_tls": true
+            },
+            "smtp": null,
+            "proxy": {
+                "base_url": "ws://localhost:9400/proxy",
+                "token": "testtoken",
+                "remote_host": null,
+                "remote_port": null
+            },
+            "created_at": "2024-06-15T12:00:00Z",
+            "updated_at": "2024-06-15T12:00:00Z"
+        }"#;
+        let back: AccountConfig =
+            serde_json::from_str(old).expect("old blob without extra_ca_pems");
+        assert!(back.extra_ca_pems.is_empty());
+        assert!(back.validate().is_ok());
+    }
+
+    #[test]
+    fn serde_roundtrip_extra_ca_pems() {
+        let mut config = sample_config();
+        config.extra_ca_pems = vec![TEST_CA_PEM.to_string()];
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("BEGIN CERTIFICATE"),
+            "extra CA missing: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extra_ca_pems, config.extra_ca_pems);
+    }
+
+    #[test]
+    fn extra_ca_pems_from_text_empty_and_valid() {
+        assert!(extra_ca_pems_from_text("").unwrap().is_empty());
+        assert!(extra_ca_pems_from_text("  \n").unwrap().is_empty());
+        let parsed = extra_ca_pems_from_text(TEST_CA_PEM).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].contains("BEGIN CERTIFICATE"));
+        assert_eq!(extra_ca_pems_to_text(&parsed), TEST_CA_PEM);
+    }
+
+    #[test]
+    fn extra_ca_pems_from_text_rejects_invalid() {
+        let err = extra_ca_pems_from_text("not a certificate").unwrap_err();
+        assert!(err.contains("Extra CA certificates"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_extra_ca() {
+        let mut config = sample_config();
+        config.extra_ca_pems = vec!["not a certificate".into()];
+        match config.validate() {
+            Err(AccountConfigError::InvalidExtraCa(msg)) => {
+                assert!(msg.contains("Extra CA certificates"), "{msg}");
+            }
+            other => panic!("expected InvalidExtraCa, got {other:?}"),
+        }
     }
 
     #[test]

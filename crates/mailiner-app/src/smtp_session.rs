@@ -217,7 +217,8 @@ async fn open_stream(
         smtp.port,
         smtp_username(config),
         ehlo_domain(config),
-    );
+    )
+    .with_extra_ca_pems(config.extra_ca_pems.clone());
     Ok((connector, stream, smtp.tls_mode))
 }
 
@@ -280,6 +281,7 @@ mod tests {
                 remote_host: None,
                 remote_port: None,
             },
+            extra_ca_pems: Vec::new(),
             created_at: ts,
             updated_at: ts,
         }

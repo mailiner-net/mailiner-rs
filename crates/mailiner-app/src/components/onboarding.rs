@@ -1,6 +1,7 @@
 //! First-run onboarding form: connect-before-persist via `CommitNewAccount`.
 
 use chrono::Utc;
+use dioxus::logger::tracing::warn;
 use dioxus::prelude::*;
 use uuid::Uuid;
 
@@ -89,6 +90,21 @@ pub fn OnboardingForm() -> Element {
                             }
                             // Wait until core refreshed UI accounts (upsert succeeded).
                             if ctx.accounts.read().contains_key(&account_id_for_effect) {
+                                let passphrase = unlock_passphrase();
+                                if !passphrase.is_empty() {
+                                    if let Some(store) = store_ctx() {
+                                        if store.0.vault_state() == VaultState::Plaintext {
+                                            let store = store.clone();
+                                            spawn(async move {
+                                                if let Err(e) =
+                                                    store.0.set_passphrase(&passphrase).await
+                                                {
+                                                    warn!("post-commit set_passphrase failed: {e}");
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
                                 phase.set(FormPhase::Idle);
                                 save_seen_progress.set(false);
                                 status_message.set(None);
@@ -293,13 +309,6 @@ pub fn OnboardingForm() -> Element {
                         return;
                     }
                 }
-                let Some(store) = store_ctx() else {
-                    status_message.set(Some(StatusMessage::error(
-                        "Storage",
-                        "Account storage is not available.",
-                    )));
-                    return;
-                };
                 // Replace any stale Error/Ready with Connecting for this form id
                 // so a retry is not terminated by the previous attempt's state.
                 ctx.connection_states
@@ -308,21 +317,7 @@ pub fn OnboardingForm() -> Element {
                 save_seen_progress.set(true);
                 phase.set(FormPhase::Saving);
                 status_message.set(Some(StatusMessage::info("Connecting…")));
-                spawn(async move {
-                    if !passphrase.is_empty()
-                        && store.0.vault_state() == VaultState::Plaintext
-                        && let Err(e) = store.0.set_passphrase(&passphrase).await
-                    {
-                        status_message.set(Some(StatusMessage::error(
-                            "Passphrase",
-                            format!("Could not encrypt stored secrets: {e}"),
-                        )));
-                        phase.set(FormPhase::Idle);
-                        save_seen_progress.set(false);
-                        return;
-                    }
-                    core_tx.send(CoreEvent::CommitNewAccount { config });
-                });
+                core_tx.send(CoreEvent::CommitNewAccount { config });
             }
             Err(msg) => {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));

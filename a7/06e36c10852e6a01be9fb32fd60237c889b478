@@ -1,0 +1,19 @@
+crates/mailiner-mime/src/parser/mod.rs
+  s_410ec24e0cc10f::t_ed0cc63e8b6f33 729-732
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a706e36c10852e6a01be9fb32fd60237c889b478",
+  "prompts": {},
+  "sessions": {
+    "s_410ec24e0cc10f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0690a-0c6a-7421-9b8d-44bb76d06c81",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

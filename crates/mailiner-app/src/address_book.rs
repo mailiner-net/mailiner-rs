@@ -269,19 +269,19 @@ fn sort_contacts(contacts: &mut [Contact]) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum SuggestRank {
+pub(crate) enum SuggestRank {
     EmailPrefix = 0,
     NamePrefix = 1,
     EmailContains = 2,
     NameContains = 3,
 }
 
-fn suggest_rank(contact: &Contact, needle: &str) -> Option<SuggestRank> {
-    let email = contact.email.to_ascii_lowercase();
+pub(crate) fn address_suggest_rank(name: &str, email: &str, needle: &str) -> Option<SuggestRank> {
+    let email = email.to_ascii_lowercase();
     if email.starts_with(needle) {
         return Some(SuggestRank::EmailPrefix);
     }
-    let name = contact.name.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
     if !name.is_empty() && name.starts_with(needle) {
         return Some(SuggestRank::NamePrefix);
     }
@@ -292,6 +292,10 @@ fn suggest_rank(contact: &Contact, needle: &str) -> Option<SuggestRank> {
         return Some(SuggestRank::NameContains);
     }
     None
+}
+
+fn suggest_rank(contact: &Contact, needle: &str) -> Option<SuggestRank> {
+    address_suggest_rank(&contact.name, &contact.email, needle)
 }
 
 /// Prefix/substring matches for recipient autocomplete (#89).

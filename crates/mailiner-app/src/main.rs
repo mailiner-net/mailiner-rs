@@ -46,6 +46,7 @@ mod outbox_store;
 mod phishing;
 mod print;
 mod provider_preset;
+mod recipient_suggest;
 mod reconnect;
 mod selection;
 mod send;

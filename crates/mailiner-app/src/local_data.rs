@@ -10,6 +10,7 @@ use crate::address_book::ADDRESS_BOOK_LOCAL_STORAGE_KEY;
 use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY};
 use crate::mail_cache::MAIL_CACHE_LOCAL_STORAGE_KEY;
 use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
+use crate::recipient_suggest::RECENT_RECIPIENTS_LOCAL_STORAGE_KEY;
 use crate::ui_prefs::{ACK_UNREAD_KEY, COMPOSE_PLACEMENT_KEY, LAST_MAILBOX_KEY, MESSAGE_SORT_KEY};
 
 /// Prefix of every Mailiner-owned `localStorage` key.
@@ -24,6 +25,7 @@ pub const ACCOUNTS_EXPORT_FORMAT: &str = "mailiner.accounts.export";
 pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     ACCOUNTS_LOCAL_STORAGE_KEY,
     ADDRESS_BOOK_LOCAL_STORAGE_KEY,
+    RECENT_RECIPIENTS_LOCAL_STORAGE_KEY,
     MAIL_CACHE_LOCAL_STORAGE_KEY,
     OUTBOX_LOCAL_STORAGE_KEY,
     MESSAGE_SORT_KEY,
@@ -261,6 +263,7 @@ mod tests {
         }
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ACCOUNTS_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ADDRESS_BOOK_LOCAL_STORAGE_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&RECENT_RECIPIENTS_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_CACHE_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&OUTBOX_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LAST_MAILBOX_KEY));

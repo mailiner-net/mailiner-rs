@@ -26,6 +26,7 @@ use crate::account::{Account, AccountId};
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::draft_store::{self, session_has_content};
+use crate::recipient_suggest;
 use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_account, resolve_compose_account_id, set_session_from_account,
@@ -466,6 +467,13 @@ fn submit_compose(
     draft.to = form.to.take_committed();
     draft.cc = form.cc.take_committed();
     draft.bcc = form.bcc.take_committed();
+    recipient_suggest::remember_recipients(
+        draft
+            .to
+            .iter()
+            .chain(draft.cc.iter())
+            .chain(draft.bcc.iter()),
+    );
     if draft
         .attachments
         .iter()

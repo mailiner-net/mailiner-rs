@@ -144,6 +144,40 @@ impl ShortcutId {
             _ => None,
         }
     }
+
+    pub fn description_key(self) -> &'static str {
+        match self {
+            Self::Compose => "shortcuts.compose",
+            Self::Reply => "shortcuts.reply",
+            Self::ReplyAll => "shortcuts.reply_all",
+            Self::Forward => "shortcuts.forward",
+            Self::Send => "shortcuts.send",
+            Self::JumpToFolder => "shortcuts.jump",
+            Self::MoveToFolder => "shortcuts.move",
+            Self::CopyToFolder => "shortcuts.copy",
+            Self::Archive => "shortcuts.archive",
+            Self::MoveToJunk => "shortcuts.junk",
+            Self::NextMessage => "shortcuts.next",
+            Self::PrevMessage => "shortcuts.prev",
+            Self::NextUnread => "shortcuts.next_unread",
+            Self::PrevUnread => "shortcuts.prev_unread",
+            Self::ExtendNextMessage => "shortcuts.extend_next",
+            Self::ExtendPrevMessage => "shortcuts.extend_prev",
+            Self::ScrollMessageDown => "shortcuts.scroll_down",
+            Self::ScrollMessageUp => "shortcuts.scroll_up",
+            Self::PageMessageDown => "shortcuts.page_down",
+            Self::PageMessageUp => "shortcuts.page_up",
+            Self::MoveToTrash => "shortcuts.trash",
+            Self::DeletePermanently => "shortcuts.delete",
+            Self::SelectAll => "shortcuts.select_all",
+            Self::ToggleStar => "shortcuts.star",
+            Self::ToggleFlag => "shortcuts.flag",
+            Self::TogglePin => "shortcuts.pin",
+            Self::Snooze => "shortcuts.snooze",
+            Self::ShowHelp => "shortcuts.show_help",
+            Self::ToggleConversation => "shortcuts.toggle_conversation",
+        }
+    }
 }
 
 /// Help-dialog grouping (order is display order).
@@ -166,6 +200,14 @@ impl ShortcutGroup {
             ShortcutGroup::Mail => "Mail",
             ShortcutGroup::Reading => "Reading",
             ShortcutGroup::Help => "Help",
+        }
+    }
+
+    pub fn title_key(self) -> &'static str {
+        match self {
+            ShortcutGroup::Mail => "shortcuts.mail",
+            ShortcutGroup::Reading => "shortcuts.reading",
+            ShortcutGroup::Help => "shortcuts.help",
         }
     }
 }
@@ -455,10 +497,10 @@ pub enum ShortcutRemapError {
 impl ShortcutRemapError {
     pub fn message(&self) -> String {
         match self {
-            Self::NotRemappable => "This shortcut cannot be changed.".to_string(),
-            Self::InvalidKey => "That key cannot be used.".to_string(),
+            Self::NotRemappable => crate::i18n::t("shortcuts.not_remappable"),
+            Self::InvalidKey => crate::i18n::t("shortcuts.invalid_key"),
             Self::Conflict { other_description } => {
-                format!("Already used by {other_description}.")
+                crate::i18n::t_args("shortcuts.conflict", &[("other", other_description)])
             }
         }
     }

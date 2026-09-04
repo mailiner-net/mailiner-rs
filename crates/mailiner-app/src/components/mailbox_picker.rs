@@ -104,9 +104,9 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
     }
 
     let title = match mode {
-        MailboxPickerMode::Jump => "Go to folder",
-        MailboxPickerMode::Move => "Move to folder",
-        MailboxPickerMode::Copy => "Copy to folder",
+        MailboxPickerMode::Jump => crate::i18n::t("picker.jump"),
+        MailboxPickerMode::Move => crate::i18n::t("picker.move"),
+        MailboxPickerMode::Copy => crate::i18n::t("picker.copy"),
     };
 
     let accept_id = {
@@ -119,13 +119,15 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                 }
                 MailboxPickerMode::Move | MailboxPickerMode::Copy => {
                     let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
-                        ctx.show_toast(ToastAction::error("No mailbox selected"));
+                        ctx.show_toast(ToastAction::error(crate::i18n::t("picker.no_mailbox")));
                         picker.set(None);
                         return;
                     };
                     let message_ids = ctx.selected_ids();
                     if message_ids.is_empty() {
-                        ctx.show_toast(ToastAction::info("Select a message first"));
+                        ctx.show_toast(ToastAction::info(crate::i18n::t(
+                            "list.select_message_first",
+                        )));
                         picker.set(None);
                         return;
                     };
@@ -137,7 +139,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                         }
                     } else {
                         let Some(account_id) = ctx.selected_account.peek().clone() else {
-                            ctx.show_toast(ToastAction::error("No account selected"));
+                            ctx.show_toast(ToastAction::error(crate::i18n::t("picker.no_account")));
                             picker.set(None);
                             return;
                         };
@@ -208,7 +210,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                     h2 { class: "ui-dialog-title", "{title}" }
                     IconButton {
                         class: "flat ui-icon-btn",
-                        title: "Close",
+                        title: crate::i18n::t("common.close"),
                         size: 20,
                         icon: IconKind::XMark,
                         onclick: move |_| close(()),
@@ -220,8 +222,8 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                     id: "mailbox-picker-filter",
                     r#type: "text",
                     value: "{query}",
-                    placeholder: "Type to filter folders",
-                    aria_label: "Filter folders",
+                    placeholder: crate::i18n::t("folder.filter"),
+                    aria_label: crate::i18n::t("folder.filter"),
                     onmounted: move |evt| {
                         let data = evt.data();
                         spawn(async move {
@@ -243,7 +245,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                     if filtered.is_empty() {
                         li {
                             class: "picker-empty",
-                            "No matching folders"
+                            {crate::i18n::t("folder.no_match")}
                         }
                     } else {
                         for (i, entry) in filtered.iter().enumerate() {

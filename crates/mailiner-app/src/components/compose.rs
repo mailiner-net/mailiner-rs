@@ -386,7 +386,7 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
         ctx,
         ComposeSession {
             account_id: account.id,
-            title: "New message".into(),
+            title: crate::i18n::t("compose.new"),
             draft,
             reply_source: None,
             imap_draft: None,
@@ -451,9 +451,9 @@ pub fn open_reply_or_forward(
             }
             apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
             let title = match intent {
-                ComposeIntent::Forward => "Forward",
-                ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",
-                ComposeIntent::New => "New message",
+                ComposeIntent::Forward => crate::i18n::t("compose.forward"),
+                ComposeIntent::Reply | ComposeIntent::ReplyAll => crate::i18n::t("compose.reply"),
+                ComposeIntent::New => crate::i18n::t("compose.new"),
             };
             let reply_source = matches!(intent, ComposeIntent::Reply | ComposeIntent::ReplyAll)
                 .then(|| envelope.id.clone());
@@ -1461,7 +1461,7 @@ pub fn ComposeOverlay() -> Element {
             }
             None => (
                 false,
-                "New message".to_string(),
+                crate::i18n::t("compose.new"),
                 Vec::new(),
                 None,
                 None,
@@ -1667,15 +1667,15 @@ pub fn ComposeOverlay() -> Element {
             button {
                 class: "compose-fab",
                 r#type: "button",
-                title: "Compose",
-                aria_label: "Compose",
+                title: crate::i18n::t("compose.action"),
+                aria_label: crate::i18n::t("compose.action"),
                 disabled: no_account,
                 onclick: {
                     let mut ctx = ctx.clone();
                     move |_| open_new_message(&mut ctx)
                 },
                 Icon { size: 18, icon: IconKind::PencilSquare }
-                "Compose"
+                {crate::i18n::t("compose.action")}
             }
         }
 
@@ -1780,7 +1780,7 @@ pub fn ComposeOverlay() -> Element {
                             }
                             IconButton {
                                 class: "flat ui-icon-btn",
-                                title: "Close",
+                                title: crate::i18n::t("compose.close"),
                                 size: 20,
                                 icon: IconKind::XMark,
                                 onclick: close,
@@ -1795,7 +1795,7 @@ pub fn ComposeOverlay() -> Element {
                                 class: "ui-input",
                                 value: "{selected_from_key}",
                                 disabled: sending,
-                                aria_label: "From",
+                                aria_label: crate::i18n::t("compose.from"),
                                 onchange: {
                                     let ctx = ctx.clone();
                                     let mut compose_draft = ctx.compose_draft;
@@ -1840,7 +1840,7 @@ pub fn ComposeOverlay() -> Element {
                                 value: "{from_label}",
                                 disabled: true,
                                 readonly: true,
-                                aria_label: "From",
+                                aria_label: crate::i18n::t("compose.from"),
                             }
                         }
                     }
@@ -1848,9 +1848,9 @@ pub fn ComposeOverlay() -> Element {
                         class: "compose-to-row",
                         label {
                             class: "ui-field",
-                            span { "To" }
+                            span { {crate::i18n::t("compose.to")} }
                             RecipientField {
-                                label: "To",
+                                label: crate::i18n::t("compose.to"),
                                 chips: to,
                                 draft: to_draft,
                                 disabled: sending,
@@ -1859,18 +1859,22 @@ pub fn ComposeOverlay() -> Element {
                         button {
                             class: "compose-cc-toggle",
                             r#type: "button",
-                            title: if show_cc_bcc() { "Hide Cc/Bcc" } else { "Show Cc/Bcc" },
+                            title: if show_cc_bcc() {
+                                crate::i18n::t("compose.hide_cc_bcc")
+                            } else {
+                                crate::i18n::t("compose.show_cc_bcc")
+                            },
                             aria_expanded: if show_cc_bcc() { "true" } else { "false" },
                             onclick: move |_| show_cc_bcc.set(!show_cc_bcc()),
-                            "Cc/Bcc"
+                            {crate::i18n::t("compose.cc_bcc")}
                         }
                     }
                     if show_cc_bcc() {
                         label {
                             class: "ui-field",
-                            span { "Cc" }
+                            span { {crate::i18n::t("compose.cc")} }
                             RecipientField {
-                                label: "Cc",
+                                label: crate::i18n::t("compose.cc"),
                                 chips: cc,
                                 draft: cc_draft,
                                 disabled: sending,
@@ -1878,9 +1882,9 @@ pub fn ComposeOverlay() -> Element {
                         }
                         label {
                             class: "ui-field",
-                            span { "Bcc" }
+                            span { {crate::i18n::t("compose.bcc")} }
                             RecipientField {
-                                label: "Bcc",
+                                label: crate::i18n::t("compose.bcc"),
                                 chips: bcc,
                                 draft: bcc_draft,
                                 disabled: sending,
@@ -1889,7 +1893,7 @@ pub fn ComposeOverlay() -> Element {
                     }
                     label {
                         class: "ui-field",
-                        span { "Subject" }
+                        span { {crate::i18n::t("compose.subject")} }
                         input {
                             class: "ui-input",
                             spellcheck: spellcheck_attr(SpellcheckField::Subject),
@@ -1902,11 +1906,11 @@ pub fn ComposeOverlay() -> Element {
                         class: "ui-field ui-field-grow",
                         div {
                             class: "compose-body-head",
-                            span { "Message" }
+                            span { {crate::i18n::t("compose.message")} }
                             div {
                                 class: "compose-mode-toggle",
                                 role: "group",
-                                aria_label: "Message format",
+                                aria_label: crate::i18n::t("compose.format"),
                                 button {
                                     class: if !rich { "compose-mode-btn is-active" } else { "compose-mode-btn" },
                                     r#type: "button",
@@ -1921,7 +1925,7 @@ pub fn ComposeOverlay() -> Element {
                                             BodyMode::Plain,
                                         );
                                     },
-                                    "Plain"
+                                    {crate::i18n::t("compose.plain")}
                                 }
                                 button {
                                     class: if rich { "compose-mode-btn is-active" } else { "compose-mode-btn" },
@@ -1937,7 +1941,7 @@ pub fn ComposeOverlay() -> Element {
                                             BodyMode::Rich,
                                         );
                                     },
-                                    "Rich"
+                                    {crate::i18n::t("compose.rich")}
                                 }
                             }
                         }
@@ -1947,7 +1951,7 @@ pub fn ComposeOverlay() -> Element {
                                 div {
                                     class: "compose-toolbar",
                                     role: "toolbar",
-                                    aria_label: "Formatting",
+                                    aria_label: crate::i18n::t("compose.formatting"),
                                     for item in default_toolbar().iter().copied() {
                                         button {
                                             class: "compose-toolbar-btn",
@@ -1999,14 +2003,14 @@ pub fn ComposeOverlay() -> Element {
                             class: "compose-attach-actions",
                             label {
                                 class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
-                                title: "Attach files",
+                                title: crate::i18n::t("compose.attach_files"),
                                 input {
                                     key: "{attach_input_gen()}",
                                     class: "compose-attach-input",
                                     r#type: "file",
                                     multiple: true,
                                     disabled: busy,
-                                    aria_label: "Attach files",
+                                    aria_label: crate::i18n::t("compose.attach_files"),
                                     onchange: {
                                         let ctx = ctx.clone();
                                         move |evt: FormEvent| {
@@ -2041,11 +2045,11 @@ pub fn ComposeOverlay() -> Element {
                                     },
                                 }
                                 Icon { size: 16, icon: IconKind::PaperClip }
-                                "Attach"
+                                {crate::i18n::t("compose.attach")}
                             }
                             label {
                                 class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
-                                title: "Insert image",
+                                title: crate::i18n::t("compose.insert_image"),
                                 input {
                                     key: "{image_input_gen()}",
                                     class: "compose-attach-input",
@@ -2053,7 +2057,7 @@ pub fn ComposeOverlay() -> Element {
                                     multiple: true,
                                     accept: SAFE_IMAGE_ACCEPT,
                                     disabled: busy,
-                                    aria_label: "Insert image",
+                                    aria_label: crate::i18n::t("compose.insert_image"),
                                     onchange: {
                                         let ctx = ctx.clone();
                                         move |evt: FormEvent| {
@@ -2088,7 +2092,7 @@ pub fn ComposeOverlay() -> Element {
                                     },
                                 }
                                 Icon { size: 16, icon: IconKind::Photo }
-                                "Insert image"
+                                {crate::i18n::t("compose.insert_image")}
                             }
                         }
                         if has_originals {
@@ -2104,7 +2108,7 @@ pub fn ComposeOverlay() -> Element {
                                         toggle_original_attachments(compose_draft, on, body);
                                     },
                                 }
-                                "Include original attachments"
+                                {crate::i18n::t("compose.include_original")}
                             }
                         }
                         if !listed_files.is_empty() {
@@ -2129,7 +2133,7 @@ pub fn ComposeOverlay() -> Element {
                                         button {
                                             class: "compose-attachment-remove",
                                             r#type: "button",
-                                            title: "Remove",
+                                            title: crate::i18n::t("compose.remove"),
                                             disabled: sending,
                                             onclick: {
                                                 let id = id.clone();
@@ -2159,7 +2163,7 @@ pub fn ComposeOverlay() -> Element {
                     }
                     div {
                         class: "compose-dsn",
-                        title: "Requests a delivery status notification (DSN) if the server advertises it.",
+                        title: crate::i18n::t("compose.dsn_title"),
                         label {
                             class: "compose-dsn-opt",
                             input {
@@ -2168,7 +2172,7 @@ pub fn ComposeOverlay() -> Element {
                                 disabled: sending,
                                 onchange: move |e| notify_success.set(e.checked()),
                             }
-                            "Notify on successful delivery"
+                            {crate::i18n::t("compose.notify_success")}
                         }
                         label {
                             class: "compose-dsn-opt",
@@ -2178,7 +2182,7 @@ pub fn ComposeOverlay() -> Element {
                                 disabled: sending,
                                 onchange: move |e| notify_failure.set(e.checked()),
                             }
-                            "Notify on delivery failure"
+                            {crate::i18n::t("compose.notify_failure")}
                         }
                     }
                     if let Some(err) = error() {
@@ -2193,13 +2197,13 @@ pub fn ComposeOverlay() -> Element {
                             class: "ui-btn ui-btn-danger",
                             disabled: sending,
                             onclick: discard,
-                            "Discard"
+                            {crate::i18n::t("compose.discard")}
                         }
                         button {
                             class: "ui-btn ui-btn-secondary",
                             disabled: sending,
                             onclick: close,
-                            "Close"
+                            {crate::i18n::t("compose.close")}
                         }
                         button {
                             class: "ui-btn ui-btn-primary",
@@ -2221,11 +2225,11 @@ pub fn ComposeOverlay() -> Element {
                                 }
                             },
                             if sending {
-                                "Sending…"
+                                {crate::i18n::t("compose.sending")}
                             } else if attaching_now {
-                                "Attaching…"
+                                {crate::i18n::t("compose.attaching")}
                             } else {
-                                "Send"
+                                {crate::i18n::t("compose.send")}
                             }
                         }
                     }

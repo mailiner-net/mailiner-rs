@@ -107,7 +107,7 @@ pub fn ToastHost() -> Element {
                 button {
                     class: "toast-close",
                     r#type: "button",
-                    aria_label: "Dismiss",
+                    aria_label: crate::i18n::t("toast.dismiss"),
                     onclick: move |_| ctx.toast.set(None),
                     "×"
                 }

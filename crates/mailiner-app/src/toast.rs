@@ -172,17 +172,21 @@ impl ToastAction {
     pub fn message(&self) -> String {
         match self {
             Self::Info { message } | Self::Error { message } => message.clone(),
-            Self::Moved { dest_label, .. } => format!("Moved to {dest_label}"),
-            Self::Trashed { .. } => "Moved to Trash".into(),
-            Self::Deleted { .. } => "Deleted".into(),
-            Self::Sent => "Sent".into(),
-            Self::Snoozed { until_label, .. } => format!("Snoozed until {until_label}"),
+            Self::Moved { dest_label, .. } => {
+                crate::i18n::t_args("toast.moved", &[("folder", dest_label)])
+            }
+            Self::Trashed { .. } => crate::i18n::t("toast.trashed"),
+            Self::Deleted { .. } => crate::i18n::t("toast.deleted"),
+            Self::Sent => crate::i18n::t("toast.sent"),
+            Self::Snoozed { until_label, .. } => {
+                crate::i18n::t_args("toast.snoozed", &[("when", until_label)])
+            }
             Self::SnoozeEnded { subject, .. } => {
                 let subject = subject.trim();
                 if subject.is_empty() {
-                    "Snoozed message is back".into()
+                    crate::i18n::t("toast.snooze_ended_empty")
                 } else {
-                    format!("Snoozed: {subject}")
+                    crate::i18n::t_args("toast.snooze_ended", &[("subject", subject)])
                 }
             }
         }
@@ -225,10 +229,10 @@ impl ToastAction {
         }
     }
 
-    pub fn undo_label(&self) -> Option<&'static str> {
+    pub fn undo_label(&self) -> Option<String> {
         match self {
-            Self::SnoozeEnded { .. } => Some("View"),
-            _ => self.undo().map(|_| "Undo"),
+            Self::SnoozeEnded { .. } => Some(crate::i18n::t("toast.view")),
+            _ => self.undo().map(|_| crate::i18n::t("toast.undo")),
         }
     }
 
@@ -312,7 +316,7 @@ mod tests {
         };
         let a = ToastAction::moved("Trash", undo);
         assert_eq!(a.message(), "Moved to Trash");
-        assert_eq!(a.undo_label(), Some("Undo"));
+        assert_eq!(a.undo_label().as_deref(), Some("Undo"));
         assert!(matches!(a.undo(), Some(UndoRequest::ReverseMove(_))));
         assert!(a.on_dismiss().is_none());
     }
@@ -347,7 +351,7 @@ mod tests {
             },
         );
         assert_eq!(a.message(), "Snoozed until 03 Sep, 14:05");
-        assert_eq!(a.undo_label(), Some("Undo"));
+        assert_eq!(a.undo_label().as_deref(), Some("Undo"));
         assert!(matches!(a.undo(), Some(UndoRequest::Unsnooze(_))));
     }
 
@@ -360,7 +364,7 @@ mod tests {
             "Hello",
         );
         assert_eq!(a.message(), "Snoozed: Hello");
-        assert_eq!(a.undo_label(), Some("View"));
+        assert_eq!(a.undo_label().as_deref(), Some("View"));
         assert!(matches!(a.undo(), Some(UndoRequest::OpenSnoozed { .. })));
         let empty = ToastAction::snooze_ended(
             AccountId::new("a"),

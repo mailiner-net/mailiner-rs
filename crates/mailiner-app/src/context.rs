@@ -11,6 +11,7 @@ use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
 use crate::conversation::ConversationId;
 use crate::download::{DownloadStatus, revoke_object_url};
+use crate::i18n::UiLocale;
 use crate::layout::MobilePane;
 use crate::mailbox::{MailboxId, MailboxNode};
 use crate::message::{Message, MessageId};
@@ -202,6 +203,8 @@ pub struct AppContext {
     pub account_inbox_unread: Signal<HashMap<AccountId, u64>>,
     /// Muted notes for accounts served from cache or skipped in All inboxes.
     pub unified_inbox_notes: Signal<Vec<UnifiedInboxNote>>,
+    /// Selected UI language (English is the only complete catalog).
+    pub locale: Signal<UiLocale>,
 }
 
 /// In-progress drag of list rows onto a folder.

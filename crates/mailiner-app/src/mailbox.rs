@@ -51,6 +51,11 @@ impl MailboxNode {
     pub fn title(&self) -> &str {
         self.role.label().unwrap_or(self.name.as_str())
     }
+
+    /// Localized special-use title, otherwise the server name.
+    pub fn display_title(&self) -> String {
+        crate::i18n::folder_role_label(self.role).unwrap_or_else(|| self.name.clone())
+    }
 }
 
 /// Upgrade pre-Archive / pre-Junk cache rows whose leaf name is a known special folder.
@@ -446,7 +451,7 @@ pub fn collect_mailbox_entries(
         let Some(node) = nodes.get(id) else {
             return;
         };
-        let title = node.title().to_string();
+        let title = node.display_title();
         let path = if parent_path.is_empty() {
             title.clone()
         } else {
@@ -490,7 +495,7 @@ pub fn collect_all_mailbox_entries(
         let Some(node) = nodes.get(id) else {
             return;
         };
-        let title = node.title().to_string();
+        let title = node.display_title();
         let path = if parent_path.is_empty() {
             title.clone()
         } else {
@@ -611,7 +616,7 @@ pub fn flatten_mailboxes(
         };
         let indent = "\u{00a0}\u{00a0}".repeat(depth);
         if node.selectable {
-            out.push((id.clone(), format!("{indent}{}", node.title())));
+            out.push((id.clone(), format!("{indent}{}", node.display_title())));
         }
         for child in &node.children {
             walk(child, depth + 1, nodes, out);

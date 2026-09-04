@@ -99,21 +99,25 @@ fn run_shortcut(
         }
         ShortcutId::MoveToFolder => {
             if ctx.selection.peek().is_empty() {
-                ctx.show_toast(ToastAction::info("Select a message first"));
+                ctx.show_toast(ToastAction::info(crate::i18n::t(
+                    "list.select_message_first",
+                )));
                 return;
             }
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Move));
         }
         ShortcutId::CopyToFolder => {
             if ctx.selection.peek().is_empty() {
-                ctx.show_toast(ToastAction::info("Select a message first"));
+                ctx.show_toast(ToastAction::info(crate::i18n::t(
+                    "list.select_message_first",
+                )));
                 return;
             }
             ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
         }
         ShortcutId::Archive => {
             let Some(account_id) = ctx.selected_account.peek().clone() else {
-                ctx.show_toast(ToastAction::error("No account selected"));
+                ctx.show_toast(ToastAction::error(crate::i18n::t("picker.no_account")));
                 return;
             };
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
@@ -127,7 +131,7 @@ fn run_shortcut(
         }
         ShortcutId::MoveToJunk => {
             let Some(account_id) = ctx.selected_account.peek().clone() else {
-                ctx.show_toast(ToastAction::error("No account selected"));
+                ctx.show_toast(ToastAction::error(crate::i18n::t("picker.no_account")));
                 return;
             };
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
@@ -253,15 +257,19 @@ fn run_shortcut(
 
 fn reply_or_forward_from_focus(ctx: &mut AppContext, intent: ComposeIntent) {
     let Some(message_id) = ctx.selection.peek().focus().cloned() else {
-        ctx.show_toast(ToastAction::info("Select a message first"));
+        ctx.show_toast(ToastAction::info(crate::i18n::t(
+            "list.select_message_first",
+        )));
         return;
     };
     let Some(message) = find_envelope(ctx, &message_id) else {
-        ctx.show_toast(ToastAction::info("Select a message first"));
+        ctx.show_toast(ToastAction::info(crate::i18n::t(
+            "list.select_message_first",
+        )));
         return;
     };
     let Some(loaded) = ready_loaded(ctx, &message_id) else {
-        ctx.show_toast(ToastAction::info("Message still loading"));
+        ctx.show_toast(ToastAction::info(crate::i18n::t("list.message_loading")));
         return;
     };
     open_reply_or_forward(ctx, intent, &message.envelope, &loaded);
@@ -282,7 +290,9 @@ fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<Message
             Some((mailbox_id, message_ids))
         }
         _ => {
-            ctx.show_toast(ToastAction::info("Select a message first"));
+            ctx.show_toast(ToastAction::info(crate::i18n::t(
+                "list.select_message_first",
+            )));
             None
         }
     }
@@ -526,14 +536,14 @@ fn ShortcutHelp(onclose: EventHandler<MouseEvent>) -> Element {
                 class: "ui-dialog shortcut-dialog",
                 role: "dialog",
                 aria_modal: "true",
-                aria_label: "Keyboard shortcuts",
+                aria_label: crate::i18n::t("shortcuts.title"),
                 onclick: move |evt| evt.stop_propagation(),
                 div {
                     class: "ui-dialog-head",
-                    h2 { class: "ui-dialog-title", "Keyboard shortcuts" }
+                    h2 { class: "ui-dialog-title", {crate::i18n::t("shortcuts.title")} }
                     IconButton {
                         class: "flat ui-icon-btn",
-                        title: "Close",
+                        title: crate::i18n::t("common.close"),
                         size: 20,
                         icon: IconKind::XMark,
                         onclick: move |evt| onclose.call(evt),
@@ -542,13 +552,13 @@ fn ShortcutHelp(onclose: EventHandler<MouseEvent>) -> Element {
                 for group in ShortcutGroup::ALL {
                     section {
                         class: "shortcut-group",
-                        h3 { class: "shortcut-group-title", "{group.title()}" }
+                        h3 { class: "shortcut-group-title", {crate::i18n::t(group.title_key())} }
                         ul {
                             class: "shortcut-list",
                             for shortcut in effective_shortcuts_in_group(*group) {
                                 li {
                                     class: "shortcut-row",
-                                    span { class: "shortcut-desc", "{shortcut.description}" }
+                                    span { class: "shortcut-desc", {crate::i18n::t(shortcut.id.description_key())} }
                                     kbd { class: "shortcut-key", "{shortcut.label}" }
                                 }
                             }
@@ -557,7 +567,7 @@ fn ShortcutHelp(onclose: EventHandler<MouseEvent>) -> Element {
                 }
                 p {
                     class: "picker-hint",
-                    "Esc to close"
+                    {crate::i18n::t("shortcuts.esc_to_close")}
                 }
             }
         }

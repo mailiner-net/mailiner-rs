@@ -53,14 +53,7 @@ fn send_export(
 }
 
 fn list_date(dt: &DateTime<Utc>) -> String {
-    let now = Utc::now();
-    if dt.date_naive() == now.date_naive() {
-        dt.format("%H:%M").to_string()
-    } else if dt.format("%Y").to_string() == now.format("%Y").to_string() {
-        dt.format("%d %b").to_string()
-    } else {
-        dt.format("%d %b %Y").to_string()
-    }
+    crate::i18n::format_list_date(dt, &Utc::now())
 }
 
 const BUFFER_SIZE: usize = 5;
@@ -91,12 +84,7 @@ pub fn MessageList() -> Element {
     let selected_account = ctx.selected_account.read().clone();
     let export_folder_label = selected_mailbox
         .as_ref()
-        .and_then(|id| {
-            ctx.mailbox_nodes
-                .read()
-                .get(id)
-                .map(|n| n.title().to_string())
-        })
+        .and_then(|id| ctx.mailbox_nodes.read().get(id).map(|n| n.display_title()))
         .unwrap_or_else(|| "mailbox".into());
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
@@ -516,33 +504,33 @@ pub fn MessageList() -> Element {
             div {
                 class: "message-list-body",
                 role: "listbox",
-                aria_label: "Messages",
+                aria_label: crate::i18n::t("list.messages_aria"),
                 aria_multiselectable: "true",
 
                 if selected_mailbox.is_none() {
                     div {
                         class: "message-list-empty",
-                        "Select a mailbox"
+                        {crate::i18n::t("list.select_mailbox")}
                     }
                 } else if loading {
                     div {
                         class: "message-list-empty",
-                        if search_active { "Searching…" } else { "Loading…" }
+                        if search_active { {crate::i18n::t("list.searching")} } else { {crate::i18n::t("list.loading")} }
                     }
                 } else if total == 0 && filter.is_empty() && !search_active {
                     div {
                         class: "message-list-empty",
-                        "No messages"
+                        {crate::i18n::t("list.no_messages")}
                     }
                 } else if total == 0 && (search_active || !filter.is_empty()) && !filter.has_attachment {
                     div {
                         class: "message-list-empty",
-                        "No matching messages"
+                        {crate::i18n::t("list.no_match")}
                     }
                 } else if no_loaded_matches {
                     div {
                         class: "message-list-empty",
-                        "No matching loaded messages"
+                        {crate::i18n::t("list.no_loaded_match")}
                     }
                 } else if conversation_mode {
                     VirtualScroll {

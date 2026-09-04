@@ -15,7 +15,7 @@ pub fn EmailNavigation() -> Element {
     rsx! {
         nav {
             id: "emailnavigation",
-            aria_label: "Folders",
+            aria_label: crate::i18n::t("folder.folders_nav"),
 
             NavigationHeader {
                 mode: Mode::MailboxTreeView,

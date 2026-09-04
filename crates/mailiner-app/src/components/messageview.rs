@@ -36,7 +36,7 @@ use super::compose::{open_imap_draft, open_new_message_to, open_reply_or_forward
 
 /// Format a UTC date for the message header.
 fn format_date(dt: &DateTime<Utc>) -> String {
-    dt.format("%d %b %Y, %H:%M").to_string()
+    crate::i18n::format_datetime(dt, crate::i18n::DateStyle::Header)
 }
 
 /// Mount sanitized message HTML as a standalone document inside an open
@@ -413,14 +413,14 @@ pub fn MessageView() -> Element {
         main {
             id: "messageview",
             tabindex: "-1",
-            aria_label: "Message",
+            aria_label: crate::i18n::t("viewer.message"),
 
             match &view {
                 MessageViewState::Empty => rsx! {
                     MobileBackButton {}
                     div {
                         class: "message-view-empty",
-                        "Select a message"
+                        {crate::i18n::t("list.select_message")}
                     }
                 },
                 MessageViewState::Loading { .. } => rsx! {
@@ -665,7 +665,7 @@ fn resolve_header_addresses(parsed: Vec<HeaderAddress>, fallback: &str) -> Vec<H
 
 #[component]
 fn HeaderAddressRow(
-    label: &'static str,
+    label: String,
     addresses: Vec<HeaderAddress>,
     fallback: String,
     always: bool,
@@ -927,7 +927,7 @@ fn NestedRfc822Header(
                     class: "message-view-subject",
                     title: "{subject}",
                     if subject.trim().is_empty() {
-                        span { class: "message-subject-empty", "(no subject)" }
+                        span { class: "message-subject-empty", {crate::i18n::t("viewer.no_subject")} }
                     } else {
                         "{subject}"
                     }
@@ -936,19 +936,19 @@ fn NestedRfc822Header(
             div {
                 class: "message-view-meta",
                 HeaderAddressRow {
-                    label: "From",
+                    label: crate::i18n::t("viewer.from"),
                     addresses: header_addresses(headers.from.as_ref()),
                     fallback: from_fallback.clone(),
                     always: true,
                 }
                 HeaderAddressRow {
-                    label: "To",
+                    label: crate::i18n::t("viewer.to"),
                     addresses: header_addresses(headers.to.as_ref()),
                     fallback: to_fallback.clone(),
                     always: false,
                 }
                 HeaderAddressRow {
-                    label: "Cc",
+                    label: crate::i18n::t("viewer.cc"),
                     addresses: header_addresses(headers.cc.as_ref()),
                     fallback: cc_fallback,
                     always: false,
@@ -956,7 +956,7 @@ fn NestedRfc822Header(
                 if let Some(date) = date.as_deref() {
                     span {
                         class: "message-view-meta-item",
-                        span { class: "message-view-meta-k", "Date" }
+                        span { class: "message-view-meta-k", {crate::i18n::t("viewer.date")} }
                         " {date}"
                     }
                 }
@@ -1064,12 +1064,7 @@ fn MessageHeader(
     );
     let export_folder_label = mailbox_id
         .as_ref()
-        .and_then(|id| {
-            ctx.mailbox_nodes
-                .read()
-                .get(id)
-                .map(|n| n.title().to_string())
-        })
+        .and_then(|id| ctx.mailbox_nodes.read().get(id).map(|n| n.display_title()))
         .unwrap_or_else(|| "mailbox".into());
     let all_selected_starred = {
         let list = ctx.messages.read();
@@ -1150,7 +1145,7 @@ fn MessageHeader(
                     class: "message-view-subject",
                     title: "{message.subject}",
                     if message.subject.trim().is_empty() {
-                        span { class: "message-subject-empty", "(no subject)" }
+                        span { class: "message-subject-empty", {crate::i18n::t("viewer.no_subject")} }
                     } else {
                         "{message.subject}"
                     }
@@ -1338,7 +1333,7 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        "Show headers"
+                        {crate::i18n::t("viewer.show_headers")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
@@ -1377,13 +1372,13 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        "View source"
+                        {crate::i18n::t("viewer.view_source")}
                     }
                     if is_draft {
                         button {
                             class: "ui-btn ui-btn-secondary",
                             disabled: !actions_ready,
-                            title: "Edit draft",
+                            title: crate::i18n::t("viewer.edit_draft"),
                             onclick: {
                                 let message = message.clone();
                                 let mut ctx = ctx.clone();
@@ -1397,13 +1392,13 @@ fn MessageHeader(
                                     }
                                 }
                             },
-                            "Edit draft"
+                            {crate::i18n::t("viewer.edit_draft")}
                         }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
-                        title: "Reply",
+                        title: crate::i18n::t("viewer.reply"),
                         onclick: {
                             let message = message.clone();
                             let mut ctx = ctx.clone();
@@ -1418,12 +1413,12 @@ fn MessageHeader(
                                 }
                             }
                         },
-                        "Reply"
+                        {crate::i18n::t("viewer.reply")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
-                        title: "Reply all",
+                        title: crate::i18n::t("viewer.reply_all"),
                         onclick: {
                             let message = message.clone();
                             let mut ctx = ctx.clone();
@@ -1438,12 +1433,12 @@ fn MessageHeader(
                                 }
                             }
                         },
-                        "Reply All"
+                        {crate::i18n::t("viewer.reply_all")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
-                        title: "Forward",
+                        title: crate::i18n::t("viewer.forward"),
                         onclick: {
                             let message = message.clone();
                             let mut ctx = ctx.clone();
@@ -1458,12 +1453,12 @@ fn MessageHeader(
                                 }
                             }
                         },
-                        "Forward"
+                        {crate::i18n::t("viewer.forward")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
-                        title: "Print",
+                        title: crate::i18n::t("viewer.print"),
                         onclick: {
                             let message = message.clone();
                             let ctx = ctx.clone();
@@ -1474,15 +1469,15 @@ fn MessageHeader(
                                 print_loaded_message(&ctx, &message, &formatted_html.peek());
                             }
                         },
-                        "Print"
+                        {crate::i18n::t("viewer.print")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: eml_busy || mailbox_id.is_none() || ctx.selected_account.read().is_none(),
                         title: if selected_n > 1 {
-                            "Download selected messages as a zip of .eml files"
+                            crate::i18n::t("viewer.export_eml_title")
                         } else {
-                            "Save as .eml"
+                            crate::i18n::t("viewer.save_eml_title")
                         },
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
@@ -1523,19 +1518,19 @@ fn MessageHeader(
                             }
                         },
                         if eml_busy && selected_n > 1 {
-                            "Exporting…"
+                            {crate::i18n::t("viewer.exporting")}
                         } else if eml_busy {
-                            "Saving…"
+                            {crate::i18n::t("viewer.saving")}
                         } else if selected_n > 1 {
-                            "Export .eml"
+                            {crate::i18n::t("viewer.export_eml")}
                         } else {
-                            "Save as .eml"
+                            {crate::i18n::t("viewer.save_eml")}
                         }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
                         disabled: eml_busy || mailbox_id.is_none() || ctx.selected_account.read().is_none() || selected_n == 0,
-                        title: "Download selected messages as mbox",
+                        title: crate::i18n::t("list.export_mbox_title"),
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
                             let account_id = ctx.selected_account.read().clone();
@@ -1563,11 +1558,15 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        "Export mbox"
+                        {crate::i18n::t("viewer.export_mbox")}
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
-                        title: if is_read { "Mark as unread" } else { "Mark as read" },
+                        title: if is_read {
+                            crate::i18n::t("viewer.mark_unread_title")
+                        } else {
+                            crate::i18n::t("viewer.mark_read_title")
+                        },
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
                             let ids = selected_ids.clone();
@@ -1585,24 +1584,24 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        if is_read { "Mark unread" } else { "Mark read" }
+                        if is_read { {crate::i18n::t("viewer.mark_unread")} } else { {crate::i18n::t("viewer.mark_read")} }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
-                        title: "Copy to folder",
+                        title: crate::i18n::t("viewer.copy_to_title"),
                         onclick: {
                             let mut ctx = ctx.clone();
                             move |_| {
                                 ctx.mailbox_picker.set(Some(MailboxPickerMode::Copy));
                             }
                         },
-                        "Copy to…"
+                        {crate::i18n::t("viewer.copy_to")}
                     }
                     select {
                         key: "{move_seq}",
                         class: "ui-btn ui-btn-secondary message-move-select",
-                        title: "Move to folder",
-                        aria_label: "Move to folder",
+                        title: crate::i18n::t("viewer.move_to_title"),
+                        aria_label: crate::i18n::t("viewer.move_to_title"),
                         value: "",
                         onchange: {
                             let mailbox_id = mailbox_id.clone();
@@ -1630,7 +1629,7 @@ fn MessageHeader(
                             value: "",
                             disabled: true,
                             selected: true,
-                            "Move to…"
+                            {crate::i18n::t("viewer.move_to")}
                         }
                         for (id, title) in move_targets {
                             option {
@@ -1642,7 +1641,7 @@ fn MessageHeader(
                     if show_archive {
                         button {
                             class: "ui-btn ui-btn-secondary",
-                            title: "Move to Archive",
+                            title: crate::i18n::t("viewer.archive_title"),
                             onclick: {
                                 let account_id = account_id.clone();
                                 let mailbox_id = mailbox_id.clone();
@@ -1664,13 +1663,13 @@ fn MessageHeader(
                                     });
                                 }
                             },
-                            "Archive"
+                            {crate::i18n::t("viewer.archive")}
                         }
                     }
                     if show_junk {
                         button {
                             class: "ui-btn ui-btn-secondary",
-                            title: "Move to Junk",
+                            title: crate::i18n::t("viewer.junk_title"),
                             onclick: {
                                 let account_id = account_id.clone();
                                 let mailbox_id = mailbox_id.clone();
@@ -1692,12 +1691,16 @@ fn MessageHeader(
                                     });
                                 }
                             },
-                            "Junk"
+                            {crate::i18n::t("viewer.junk")}
                         }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
-                        title: if in_trash { "Delete permanently" } else { "Move to Trash" },
+                        title: if in_trash {
+                            crate::i18n::t("viewer.delete_title")
+                        } else {
+                            crate::i18n::t("viewer.trash_title")
+                        },
                         onclick: {
                             let mailbox_id = mailbox_id.clone();
                             let ids = selected_ids.clone();
@@ -1715,9 +1718,12 @@ fn MessageHeader(
                                         return;
                                     };
                                     let prompt = if n == 1 {
-                                        "Delete this message permanently?".to_string()
+                                        crate::i18n::t("viewer.delete_one")
                                     } else {
-                                        format!("Delete {n} messages permanently?")
+                                        crate::i18n::t_args(
+                                            "viewer.delete_many",
+                                            &[("n", &n.to_string())],
+                                        )
                                     };
                                     match window.confirm_with_message(&prompt) {
                                         Ok(true) => {}
@@ -1730,52 +1736,52 @@ fn MessageHeader(
                                 });
                             }
                         },
-                        if in_trash { "Delete" } else { "Trash" }
+                        if in_trash { {crate::i18n::t("viewer.delete")} } else { {crate::i18n::t("viewer.trash")} }
                     }
                 }
             }
             div {
                 class: "message-view-meta",
                 HeaderAddressRow {
-                    label: "From",
+                    label: crate::i18n::t("viewer.from"),
                     addresses: from_addresses,
                     fallback: message.from.clone(),
                     always: true,
                 }
                 HeaderAddressRow {
-                    label: "To",
+                    label: crate::i18n::t("viewer.to"),
                     addresses: header_addresses(message.envelope.to.as_ref()),
                     fallback: message.to.clone(),
                     always: false,
                 }
                 HeaderAddressRow {
-                    label: "Cc",
+                    label: crate::i18n::t("viewer.cc"),
                     addresses: header_addresses(message.envelope.cc.as_ref()),
                     fallback: message.cc.clone().unwrap_or_default(),
                     always: false,
                 }
                 HeaderAddressRow {
-                    label: "Bcc",
+                    label: crate::i18n::t("viewer.bcc"),
                     addresses: header_addresses(message.envelope.bcc.as_ref()),
                     fallback: message.bcc.clone().unwrap_or_default(),
                     always: false,
                 }
                 HeaderAddressRow {
-                    label: "Reply-To",
+                    label: crate::i18n::t("viewer.reply_to"),
                     addresses: header_addresses(message.envelope.reply_to.as_ref()),
                     fallback: reply_to.unwrap_or_default(),
                     always: false,
                 }
                 span {
                     class: "message-view-meta-item",
-                    span { class: "message-view-meta-k", "Date" }
+                    span { class: "message-view-meta-k", {crate::i18n::t("viewer.date")} }
                     " {date}"
                 }
                 AuthResultsRow { auth: message.envelope.auth_results }
                 if has_visible_keywords(&message.envelope.keywords) {
                     span {
                         class: "message-view-meta-item message-view-labels",
-                        span { class: "message-view-meta-k", "Labels" }
+                        span { class: "message-view-meta-k", {crate::i18n::t("viewer.labels")} }
                         " "
                         MessageKeywordChips {
                             atoms: message.envelope.keywords.clone(),
@@ -1805,7 +1811,7 @@ fn SnoozeMenu(
         div {
             class: "folder-menu message-snooze-menu",
             role: "menu",
-            aria_label: "Snooze",
+            aria_label: crate::i18n::t("viewer.snooze"),
             onclick: move |evt| evt.stop_propagation(),
             for preset in SnoozePreset::ALL {
                 {
@@ -1834,7 +1840,7 @@ fn SnoozeMenu(
                                     preset,
                                 });
                             },
-                            "{preset.label()}"
+                            {crate::i18n::t(preset.label_key())}
                         }
                     }
                 }
@@ -2028,7 +2034,7 @@ fn MessageHeadersDialog(state: MessageHeadersState) -> Element {
                 class: "ui-dialog headers-dialog",
                 role: "dialog",
                 aria_modal: "true",
-                aria_label: "Message headers",
+                aria_label: crate::i18n::t("viewer.headers_title"),
                 tabindex: "-1",
                 onclick: move |evt| evt.stop_propagation(),
                 onkeydown: {
@@ -2169,7 +2175,7 @@ fn MessageSourceDialog(state: MessageSourceState) -> Element {
                 class: "ui-dialog source-dialog",
                 role: "dialog",
                 aria_modal: "true",
-                aria_label: "Message source",
+                aria_label: crate::i18n::t("viewer.source_title"),
                 tabindex: "-1",
                 onclick: move |evt| evt.stop_propagation(),
                 onkeydown: {

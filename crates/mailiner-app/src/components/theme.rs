@@ -22,8 +22,8 @@ pub fn ThemeSelect(
         select {
             id: id,
             class: "{class}",
-            aria_label: "Color theme",
-            title: "Color theme",
+            aria_label: crate::i18n::t("prefs.theme"),
+            title: crate::i18n::t("prefs.theme"),
             value: "{current.as_key()}",
             onchange: move |evt| {
                 if let Some(next) = ThemePref::from_key(&evt.value()) {
@@ -34,7 +34,7 @@ pub fn ThemeSelect(
                 option {
                     value: "{option.as_key()}",
                     selected: option == current,
-                    "{option.label()}"
+                    {crate::i18n::t(option.label_key())}
                 }
             }
         }

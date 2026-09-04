@@ -34,7 +34,7 @@ pub fn UnlockForm() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
-                h1 { class: "bootstrap-title", "Unlock accounts" }
+                h1 { class: "bootstrap-title", {crate::i18n::t("unlock.title")} }
                 p {
                     class: "bootstrap-muted",
                     "Account passwords and proxy tokens are encrypted in this browser. \
@@ -58,7 +58,7 @@ pub fn UnlockForm() -> Element {
                     },
 
                     FormField {
-                        label: "Unlock passphrase",
+                        label: crate::i18n::t("unlock.passphrase"),
                         id: "unlock-passphrase",
                         value: passphrase(),
                         oninput: move |v| passphrase.set(v),
@@ -75,7 +75,7 @@ pub fn UnlockForm() -> Element {
                             r#type: "submit",
                             class: "onboarding-btn onboarding-btn-primary",
                             disabled: busy() || wiping,
-                            if busy() { "Unlocking…" } else { "Unlock" }
+                            if busy() { {crate::i18n::t("unlock.unlocking")} } else { {crate::i18n::t("unlock.submit")} }
                         }
                     }
                 }
@@ -102,7 +102,7 @@ pub fn UnlockForm() -> Element {
                                 class: "onboarding-btn onboarding-btn-secondary",
                                 disabled: wiping,
                                 onclick: move |_| confirm_wipe.set(false),
-                                "Cancel"
+                                {crate::i18n::t("unlock.cancel")}
                             }
                             button {
                                 r#type: "button",
@@ -114,7 +114,7 @@ pub fn UnlockForm() -> Element {
                                     ctx.sign_out_pending.set(true);
                                     core_tx.send(CoreEvent::ClearLocalData);
                                 },
-                                if wiping { "Deleting…" } else { "Delete local data" }
+                                if wiping { {crate::i18n::t("unlock.deleting")} } else { {crate::i18n::t("unlock.delete_local")} }
                             }
                         }
                     }
@@ -126,7 +126,7 @@ pub fn UnlockForm() -> Element {
                             class: "onboarding-btn onboarding-btn-secondary accounts-btn-danger",
                             disabled: busy() || wiping,
                             onclick: move |_| confirm_wipe.set(true),
-                            "Forgot passphrase…"
+                            {crate::i18n::t("unlock.forgot")}
                         }
                     }
                 }
@@ -150,8 +150,8 @@ fn start_unlock(
     }
     let Some(store) = store_ctx() else {
         status_message.set(Some(StatusMessage::error(
-            "Storage",
-            "Account storage is not available.",
+            crate::i18n::t("unlock.storage"),
+            crate::i18n::t("unlock.storage_unavailable"),
         )));
         return;
     };
@@ -185,20 +185,23 @@ fn start_unlock(
                 Err(e) => {
                     warn!("Unlock list failed: {e}");
                     status_message.set(Some(StatusMessage::error(
-                        "Storage",
-                        format!("Unlocked, but failed to read accounts: {e}"),
+                        crate::i18n::t("unlock.storage"),
+                        crate::i18n::t_args("unlock.list_failed", &[("error", &e.to_string())]),
                     )));
                 }
             },
             Err(AccountStoreError::WrongPassphrase) => {
                 status_message.set(Some(StatusMessage::error(
-                    "Unlock failed",
-                    "That passphrase is incorrect.",
+                    crate::i18n::t("unlock.failed"),
+                    crate::i18n::t("unlock.incorrect"),
                 )));
             }
             Err(e) => {
                 warn!("Unlock failed: {e}");
-                status_message.set(Some(StatusMessage::error("Unlock failed", e.to_string())));
+                status_message.set(Some(StatusMessage::error(
+                    crate::i18n::t("unlock.failed"),
+                    e.to_string(),
+                )));
             }
         }
         busy.set(false);

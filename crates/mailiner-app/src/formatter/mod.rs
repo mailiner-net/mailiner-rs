@@ -84,6 +84,9 @@ pub fn retain_cid_payloads_in_scope(
         if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
             continue;
         }
+        if part.is_calendar() {
+            continue;
+        }
         part.content = MessageContent::Empty;
     }
 }
@@ -172,7 +175,7 @@ impl MessageFormatter {
                     None
                 }
             }
-            PartKind::Image | PartKind::Attachment => None,
+            PartKind::Image | PartKind::Attachment | PartKind::Calendar => None,
         }
     }
 }
@@ -454,5 +457,21 @@ mod tests {
         drop_inlined_payloads(&mut parts, &["img".into()]);
         assert!(matches!(parts[0].content, MessageContent::Empty));
         assert!(!parts[0].is_hidden);
+    }
+
+    #[test]
+    fn retain_keeps_calendar_attachment_payload() {
+        let mut cal = part(
+            PartKind::Calendar,
+            "text/calendar",
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Meet\nEND:VEVENT\nEND:VCALENDAR\n",
+        );
+        cal.is_attachment = true;
+        cal.filename = Some("invite.ics".into());
+        let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
+        let mut parts = vec![html, cal];
+        retain_reply_cid_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Text(_)));
     }
 }

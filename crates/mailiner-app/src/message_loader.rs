@@ -295,6 +295,15 @@ mod tests {
         assert!(within_prefetch_budget(&parts[3]));
     }
 
+    #[test]
+    fn prefetch_sections_includes_calendar_attachment() {
+        let mut cal = part_sized("2", Some(400), true);
+        cal.kind = PartKind::Calendar;
+        cal.content_type = "text/calendar".into();
+        let parts = [part_sized("1", Some(100), false), cal];
+        assert_eq!(prefetch_sections(&parts), vec!["1", "2"]);
+    }
+
     fn dummy_loaded(uid: &str) -> Arc<LoadedMessage> {
         let folder = FolderId::new("inbox");
         let id = MessageId::new(folder.clone(), uid);

@@ -12,6 +12,7 @@ use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword};
 
 use crate::account::AccountId;
 use crate::components::attachments::AttachmentsFooter;
+use crate::components::calendar::CalendarInviteCards;
 use crate::components::emailnavigation::MobileBackButton;
 use crate::components::icons::{IconButton, IconKind};
 use crate::context::{
@@ -459,6 +460,13 @@ pub fn MessageView() -> Element {
                         prevented_remote: *prevented_remote.read(),
                         had_remote: *had_remote.read(),
                         from_email: from_email.clone(),
+                    }
+
+                    CalendarInviteCards {
+                        invites: mailiner_mime::invites_from_parts(
+                            &loaded.parts,
+                            nested_section.as_deref(),
+                        ),
                     }
 
                     div {

@@ -63,6 +63,14 @@ impl PartParser for MultipartMixedParser {
                     ctx.registry
                         .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
                 );
+            } else if sub.is_calendar() {
+                out.extend(ctx.registry.parse_as(
+                    ctx.envelope_id,
+                    sub,
+                    "text/calendar",
+                    &sub_id,
+                    &sub_path,
+                ));
             } else if is_attachment(sub) {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,
@@ -102,8 +110,10 @@ impl PartParser for MultipartRelatedParser {
             let sub_id = format!("{part_id}.related.{i}");
             // Attachment only if is_attachment && (!cid || !has_rich).
             // message/rfc822 is always parsed so the nested body can be opened.
-            let force_att =
-                !sub.is_rfc822() && is_attachment(sub) && (sub.id.is_none() || !has_rich);
+            let force_att = !sub.is_rfc822()
+                && !sub.is_calendar()
+                && is_attachment(sub)
+                && (sub.id.is_none() || !has_rich);
             if force_att {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,

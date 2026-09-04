@@ -75,13 +75,13 @@ pub fn decode_content(
 ) -> Result<DecodedContent, DecodeError> {
     let decoded = decode_transfer_encoding(raw, encoding)?;
 
-    let is_text = content_type
+    let mime = content_type
         .split(';')
         .next()
         .unwrap_or(content_type)
         .trim()
-        .to_ascii_lowercase()
-        .starts_with("text/");
+        .to_ascii_lowercase();
+    let is_text = mime.starts_with("text/") || mailiner_core::is_calendar_mime(&mime);
 
     let limit = if is_text {
         MAX_TEXT_DECODE_BYTES
@@ -183,5 +183,15 @@ mod tests {
         let raw = b"hi";
         let c = decode_content(raw, "7bit", "text/plain; charset=utf-8", Some("utf-8")).unwrap();
         assert!(matches!(c, DecodedContent::Text(_)));
+    }
+
+    #[test]
+    fn application_ics_decodes_as_text() {
+        let raw = b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n";
+        let c = decode_content(raw, "7bit", "application/ics; name=invite.ics", None).unwrap();
+        match c {
+            DecodedContent::Text(t) => assert!(t.contains("BEGIN:VCALENDAR")),
+            other => panic!("expected text, got {other:?}"),
+        }
     }
 }

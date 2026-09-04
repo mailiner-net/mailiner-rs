@@ -1,12 +1,14 @@
 //! Pure MIME utilities for Mailiner: transfer-encoding decode, charset conversion,
 //! BODYSTRUCTURE → part list parsing, parameter normalization, and RFC 5322 writing.
 
+pub mod calendar;
 pub mod codec;
 pub mod heuristics;
 pub mod params;
 pub mod parser;
 pub mod writer;
 
+pub use calendar::{invites_from_parts, parse_calendar, CalendarDateTime, CalendarInvite};
 pub use codec::{
     base64_decode, base64_encode, decode_content, decode_part_content, decode_transfer_encoding,
     decode_transfer_stream, qp_decode, qp_encode, DecodeError, DecodedContent,

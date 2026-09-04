@@ -1,0 +1,28 @@
+crates/mailiner-app/src/components/account_form.rs
+  s_84acb3b16f8812::t_fc1655c9554edd 532-535
+  s_84acb3b16f8812::t_5d140e313d4500 904,923-926,935-938,948-951
+  s_84acb3b16f8812::t_834e1777a0d7fa 142-149,151-165,169,206-208
+  s_84acb3b16f8812::t_70e0de2153a715 977
+  s_84acb3b16f8812::t_d43cd4d65996ba 150
+crates/mailiner-app/src/components/onboarding.rs
+  s_84acb3b16f8812::t_f0db276bce172c 15,29
+crates/mailiner-app/src/components/accounts.rs
+  s_84acb3b16f8812::t_e0d55239b5b9eb 1163
+  s_84acb3b16f8812::t_80cb58f58210a0 16-17,786
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7c769c57466581e2df229e3d2f5ba8c4ed58b681",
+  "prompts": {},
+  "sessions": {
+    "s_84acb3b16f8812": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a069f7-b450-70c3-9109-2df05ddeedb8",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

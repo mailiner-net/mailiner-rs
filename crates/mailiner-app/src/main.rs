@@ -119,8 +119,9 @@ const THEME_COLOR: &str = "#121212";
 /// message images working.
 ///
 /// Tradeoffs:
-/// - `script-src 'self' 'wasm-unsafe-eval'`: WASM instantiation needs
-///   `wasm-unsafe-eval` (not full `unsafe-eval`). No third-party scripts.
+/// - `script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'`: WASM instantiation
+///   needs `wasm-unsafe-eval`. wasm-bindgen also builds closures with
+///   `new Function(...)`, which requires `unsafe-eval`. No third-party scripts.
 /// - `style-src 'self' 'unsafe-inline'`: Dioxus components (e.g. virtual list)
 ///   use inline `style=` attributes; strict style-src breaks layout. Remote
 ///   stylesheets are not allowed (formatter/sanitizer strips them).
@@ -143,7 +144,7 @@ const THEME_COLOR: &str = "#121212";
 ///   after mount and does not send the header.
 const CONTENT_SECURITY_POLICY: &str = "\
 default-src 'self'; \
-script-src 'self' 'wasm-unsafe-eval'; \
+script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; \
 style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob: http: https:; \
 font-src 'self'; \

@@ -72,6 +72,7 @@ mod snooze;
 mod source;
 mod toast;
 mod ui_prefs;
+mod unified_inbox;
 mod vacation;
 mod websocket_stream;
 
@@ -432,6 +433,8 @@ fn App() -> Element {
     let sr_status = use_signal(String::new);
     let snoozed_messages = use_signal(Vec::new);
     let snooze_picker_open = use_signal(|| false);
+    let account_inbox_unread = use_signal(HashMap::new);
+    let unified_inbox_notes = use_signal(Vec::new);
 
     let ctx = AppContext {
         accounts,
@@ -484,6 +487,8 @@ fn App() -> Element {
         sr_status,
         snoozed_messages,
         snooze_picker_open,
+        account_inbox_unread,
+        unified_inbox_notes,
     };
     let ctx_clone = ctx.clone();
 
@@ -552,9 +557,14 @@ fn App() -> Element {
 #[component]
 fn TabTitle() -> Element {
     let ctx = use_context::<AppContext>();
-    let unread = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read())
-        .map(|(_, n)| n)
-        .unwrap_or(0);
+    let unread_map = ctx.account_inbox_unread.read();
+    let unread = if unread_map.is_empty() {
+        crate::notifications::inbox_unread(&ctx.mailbox_nodes.read())
+            .map(|(_, n)| n)
+            .unwrap_or(0)
+    } else {
+        crate::unified_inbox::sum_inbox_unread(unread_map.values().copied()) as usize
+    };
     let title = crate::notifications::tab_title(unread);
     rsx! { document::Title { "{title}" } }
 }

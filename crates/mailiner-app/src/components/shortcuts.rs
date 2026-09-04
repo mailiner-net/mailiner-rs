@@ -21,6 +21,7 @@ use crate::message_list_filter::message_matches_filter;
 use crate::shortcuts::{ShortcutGroup, ShortcutId, effective_shortcuts_in_group, shortcut_for_key};
 use crate::toast::ToastAction;
 use crate::ui_prefs::MessageListView;
+use crate::unified_inbox::{batch_open_target, is_unified_mailbox};
 
 fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
     evt.prevent_default();
@@ -270,7 +271,16 @@ fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<Message
     let mailbox_id = ctx.selected_mailbox.peek().clone();
     let message_ids = ctx.selected_ids();
     match (mailbox_id, message_ids.is_empty()) {
-        (Some(mailbox_id), false) => Some((mailbox_id, message_ids)),
+        (Some(mailbox_id), false) => {
+            if is_unified_mailbox(&mailbox_id) {
+                let Some(target) = unified_batch_target(ctx, &message_ids) else {
+                    ctx.show_toast(ToastAction::info("Select messages from one account"));
+                    return None;
+                };
+                return Some((target.mailbox_id, message_ids));
+            }
+            Some((mailbox_id, message_ids))
+        }
         _ => {
             ctx.show_toast(ToastAction::info("Select a message first"));
             None
@@ -365,13 +375,43 @@ fn set_focused_conversation_expanded(
 }
 
 fn require_toggle_target(ctx: &AppContext) -> Option<(AccountId, MailboxId, Vec<MessageId>)> {
+    let message_ids = ctx.selected_ids();
+    if message_ids.is_empty() {
+        ctx.show_toast(ToastAction::info("Select a message first"));
+        return None;
+    }
+    if ctx
+        .selected_mailbox
+        .peek()
+        .as_ref()
+        .is_some_and(is_unified_mailbox)
+    {
+        let Some(target) = unified_batch_target(ctx, &message_ids) else {
+            ctx.show_toast(ToastAction::info("Select messages from one account"));
+            return None;
+        };
+        return Some((target.account_id, target.mailbox_id, message_ids));
+    }
     let account_id = ctx.selected_account.peek().clone();
-    match (account_id, require_selected_messages(ctx)) {
-        (Some(account_id), Some((mailbox_id, message_ids))) => {
-            Some((account_id, mailbox_id, message_ids))
-        }
+    match (account_id, ctx.selected_mailbox.peek().clone()) {
+        (Some(account_id), Some(mailbox_id)) => Some((account_id, mailbox_id, message_ids)),
         _ => None,
     }
+}
+
+fn unified_batch_target(
+    ctx: &AppContext,
+    message_ids: &[MessageId],
+) -> Option<crate::unified_inbox::OpenTarget> {
+    let list = ctx.messages.peek();
+    let rows: Vec<_> = message_ids
+        .iter()
+        .filter_map(|id| list.find(|m| m.id == *id))
+        .collect();
+    if rows.len() != message_ids.len() {
+        return None;
+    }
+    batch_open_target(rows.iter().map(|m| m.as_ref()))
 }
 
 #[component]

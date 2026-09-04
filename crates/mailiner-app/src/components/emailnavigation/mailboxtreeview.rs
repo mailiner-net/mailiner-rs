@@ -14,6 +14,7 @@ use crate::mailbox::{
     mailbox_visible_in_tree,
 };
 use crate::ui_prefs::SavedSearch;
+use crate::unified_inbox::{is_unified_mailbox, sum_inbox_unread, unified_matches_filter};
 
 /// Prompt for a single folder path segment. Non-web builds fail closed.
 pub(crate) fn prompt_folder_name(message: &str, default: &str) -> Option<String> {
@@ -137,7 +138,8 @@ pub fn MailboxTreeView() -> Element {
         .unwrap_or_default();
     let no_folder_matches = visible.as_ref().is_some_and(|ids| ids.is_empty())
         || (visible.is_some() && shown_roots.is_empty());
-    let no_matches = no_folder_matches && shown_searches.is_empty();
+    let show_unified = ctx.accounts.read().len() > 1 && unified_matches_filter(&filter_q);
+    let no_matches = no_folder_matches && shown_searches.is_empty() && !show_unified;
     rsx! {
         div {
             class: "mailbox-tree-filter",
@@ -170,6 +172,9 @@ pub fn MailboxTreeView() -> Element {
                     "No matching folders"
                 }
             } else {
+                if show_unified {
+                    UnifiedInboxItem {}
+                }
                 if !no_folder_matches {
                     for mailbox_id in shown_roots {
                         MailboxTreeViewItem {
@@ -206,6 +211,69 @@ pub fn MailboxTreeView() -> Element {
             SavedSearchContextMenu {
                 menu: open,
                 onclose: move |_| menu.set(None),
+            }
+        }
+    }
+}
+
+#[component]
+fn UnifiedInboxItem() -> Element {
+    let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let is_selected = ctx
+        .selected_mailbox
+        .read()
+        .as_ref()
+        .is_some_and(is_unified_mailbox);
+    let unread = sum_inbox_unread(ctx.account_inbox_unread.read().values().copied());
+    rsx! {
+        div {
+            class: "mailbox-tree-view-item unified-inbox-item",
+
+            div {
+                class: "mailbox-row",
+                class: if is_selected { "selected" },
+                role: "treeitem",
+                aria_selected: if is_selected { "true" } else { "false" },
+                tabindex: "0",
+                aria_label: if unread > 0 {
+                    format!("All inboxes, {unread} unread")
+                } else {
+                    "All inboxes".into()
+                },
+                onclick: move |_| {
+                    let _ = core_tx.send(CoreEvent::SelectUnifiedInbox);
+                },
+                onkeydown: move |evt: KeyboardEvent| {
+                    let activate = match evt.key() {
+                        Key::Enter => true,
+                        Key::Character(c) if c == " " => true,
+                        _ => false,
+                    };
+                    if activate {
+                        evt.prevent_default();
+                        let _ = core_tx.send(CoreEvent::SelectUnifiedInbox);
+                    }
+                },
+
+                span {
+                    class: "mailbox-icon",
+                    Icon {
+                        size: 18,
+                        icon: IconKind::InboxStack,
+                    }
+                }
+
+                div {
+                    class: "mailbox-name",
+                    span { class: "mailbox-title", "All inboxes" }
+                    if unread > 0 {
+                        span {
+                            class: "mailbox-unread",
+                            " ({unread})"
+                        }
+                    }
+                }
             }
         }
     }

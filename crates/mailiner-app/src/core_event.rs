@@ -68,6 +68,11 @@ use crate::snippet::{SNIPPET_FETCH_OCTETS, clean_snippet};
 use crate::snooze::SnoozePreset;
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, SnoozeUndo, ToastAction, UndoRequest};
 use crate::ui_prefs::{MessageListView, SnoozedMessage};
+use crate::unified_inbox::{
+    AccountInboxPrefix, PrefixSource, UNIFIED_INBOX_PREFIX, batch_open_target, inbox_folder_id,
+    inbox_unread_from_status, inbox_unread_from_tree, is_unified_mailbox, merge_inbox_prefixes,
+    notes_from_prefixes, open_target, unified_mailbox_id,
+};
 use chrono::Utc;
 
 thread_local! {
@@ -424,6 +429,8 @@ pub enum CoreEvent {
     },
     /// Periodic `STATUS` of non-selected connected accounts (unread badges).
     BackgroundStatusPoll,
+    /// Virtual All-inboxes view: merge Inbox prefixes from every account.
+    SelectUnifiedInbox,
 }
 
 /// Background BODY.PEEK of list neighbors after the focused message is Ready.
@@ -734,9 +741,28 @@ pub async fn core_loop(
                 message_ids,
                 dest_mailbox_id,
             } => {
-                let Some(account_id) = ctx.selected_account.read().clone() else {
-                    ctx.show_toast(ToastAction::error("No account selected"));
-                    continue;
+                let account_id = if is_unified_mailbox(&mailbox_id) {
+                    match batch_target_for(&ctx, &message_ids) {
+                        Some(target) => target.account_id,
+                        None => {
+                            ctx.show_toast(ToastAction::info("Select messages from one account"));
+                            continue;
+                        }
+                    }
+                } else {
+                    let Some(account_id) = ctx.selected_account.read().clone() else {
+                        ctx.show_toast(ToastAction::error("No account selected"));
+                        continue;
+                    };
+                    account_id
+                };
+                let mailbox_id = if is_unified_mailbox(&mailbox_id) {
+                    match batch_target_for(&ctx, &message_ids) {
+                        Some(target) => target.mailbox_id,
+                        None => mailbox_id,
+                    }
+                } else {
+                    mailbox_id
                 };
                 handle_move_messages(
                     &manager,
@@ -1044,6 +1070,9 @@ pub async fn core_loop(
                 handle_background_status_poll(&manager, &mut ctx).await;
                 schedule_background_status(smtp_tx.clone());
             }
+            CoreEvent::SelectUnifiedInbox => {
+                handle_select_unified_inbox(&manager, &mut ctx).await;
+            }
         }
 
         for id in manager.take_session_deaths() {
@@ -1089,6 +1118,7 @@ async fn handle_bootstrap(
 
     // Refresh UI accounts from store (no secrets). Merge memory-only configs.
     refresh_ui_accounts(manager, ctx).await;
+    hydrate_inbox_unread_map(manager, ctx).await;
 
     // Ensure UI has the active account even if refresh missed it.
     {
@@ -1593,6 +1623,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     }
 
     refresh_ui_accounts(manager, ctx).await;
+    hydrate_inbox_unread_map(manager, ctx).await;
     crate::ui_prefs::retain_last_mailboxes(&known);
     crate::ui_prefs::retain_ack_unread(&known);
     crate::ui_prefs::retain_saved_searches(&known);
@@ -1714,6 +1745,7 @@ async fn list_folders_soft(
                 }
             }
             persist_folder_tree(manager.cache(), ctx, account_id).await;
+            sync_selected_inbox_unread(ctx);
         }
         Err(e) => {
             error!("Failed to list folders for {}: {}", account_id, e);
@@ -1762,6 +1794,9 @@ async fn restore_mailbox(
     ctx: &mut AppContext,
     account_id: &AccountId,
 ) {
+    if is_unified_selected(ctx) {
+        return;
+    }
     let to_open = {
         let nodes = ctx.mailbox_nodes.read();
         let roots = ctx.mailbox_roots.read();
@@ -1793,6 +1828,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.mailbox_nodes.set(HashMap::new());
     ctx.mailbox_roots.set(Vec::new());
     ctx.account_quota.set(None);
+    ctx.unified_inbox_notes.set(Vec::new());
     crate::notifications::reset_inbox_unread_baseline();
 }
 
@@ -1800,6 +1836,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
 pub(crate) fn apply_hydrated(ctx: &mut AppContext, hydrated: HydratedAccount) {
     ctx.mailbox_nodes.set(hydrated.nodes);
     ctx.mailbox_roots.set(hydrated.roots);
+    sync_selected_inbox_unread(ctx);
     if let Some(mailbox_id) = hydrated.selected_mailbox {
         ctx.selected_mailbox.set(Some(mailbox_id));
     }
@@ -1866,12 +1903,16 @@ async fn handle_background_status_poll(manager: &AccountConnectionManager, ctx: 
         })
         .collect();
     for id in ids {
-        poll_background_account(manager, &id).await;
+        poll_background_account(manager, ctx, &id).await;
     }
 }
 
 /// `STATUS` subscribed folders on a non-selected account; persist unread only.
-async fn poll_background_account(manager: &AccountConnectionManager, account_id: &AccountId) {
+async fn poll_background_account(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+) {
     let Some(connector) = manager.get(account_id) else {
         return;
     };
@@ -1885,6 +1926,9 @@ async fn poll_background_account(manager: &AccountConnectionManager, account_id:
     };
     match connector.folder_counts(&targets).await {
         Ok(counts) if !counts.is_empty() => {
+            if let Some(unread) = inbox_unread_from_status(&counts) {
+                set_account_inbox_unread(ctx, account_id, unread);
+            }
             if let Err(e) = crate::background_sync::merge_status_into_cache(
                 manager.cache(),
                 account_id,
@@ -1927,6 +1971,9 @@ async fn persist_selected_messages(
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         return;
     };
+    if is_unified_mailbox(&mailbox_id) {
+        return;
+    }
     if ctx.message_list_filter.peek().imap_search_query().is_some()
         || mailiner_core::mailbox_search_is_active(ctx.list_search_query.peek().as_str())
     {
@@ -2137,7 +2184,288 @@ async fn handle_select_mailbox(
     mailbox_id: MailboxId,
     select_first: bool,
 ) {
+    if is_unified_mailbox(&mailbox_id) {
+        handle_select_unified_inbox(manager, ctx).await;
+        return;
+    }
+    ctx.unified_inbox_notes.set(Vec::new());
     select_mailbox(manager, ctx, mailbox_id, select_first, false).await;
+}
+
+async fn handle_select_unified_inbox(manager: &AccountConnectionManager, ctx: &mut AppContext) {
+    ctx.set_mobile_pane(MobilePane::after_select_mailbox());
+    ctx.active_saved_search.set(None);
+    ctx.list_text_filter.set(String::new());
+    ctx.list_search_query.set(String::new());
+    ctx.selection.write().clear();
+    ctx.message_view.set(MessageViewState::Empty);
+    ctx.message_headers.set(MessageHeadersState::Closed);
+    ctx.message_source.set(MessageSourceState::Closed);
+    ctx.clear_nested_rfc822();
+    ctx.download_status.set(HashMap::new());
+    ctx.clear_attachment_downloads();
+    ctx.selected_mailbox.set(Some(unified_mailbox_id()));
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
+    ctx.unified_inbox_notes.set(Vec::new());
+
+    let mut account_ids: Vec<AccountId> = ctx.accounts.read().keys().cloned().collect();
+    account_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+
+    let mut prefixes = Vec::with_capacity(account_ids.len());
+    for account_id in account_ids {
+        let prefix = fetch_account_inbox_prefix(manager, &account_id).await;
+        if let Some(unread) = prefix.unread {
+            ctx.account_inbox_unread
+                .write()
+                .insert(account_id.clone(), unread);
+        }
+        prefixes.push(prefix);
+        if !is_unified_selected(ctx) {
+            return;
+        }
+    }
+
+    if !is_unified_selected(ctx) {
+        return;
+    }
+
+    let notes = notes_from_prefixes(&prefixes);
+    let merged = merge_inbox_prefixes(prefixes);
+    let mut list = SparseList::new(merged.len());
+    list.insert_batch(0, merged.into_iter().map(Arc::new).collect());
+    ctx.messages.set(list);
+    ctx.unified_inbox_notes.set(notes);
+    ctx.messages_loading.set(false);
+}
+
+async fn fetch_account_inbox_prefix(
+    manager: &AccountConnectionManager,
+    account_id: &AccountId,
+) -> AccountInboxPrefix {
+    let tree = manager
+        .cache()
+        .load_folders(account_id)
+        .await
+        .ok()
+        .flatten();
+    let folder_id = inbox_folder_id(tree.as_ref());
+    let mailbox_id = MailboxId::from(folder_id.clone());
+    let cached_unread = tree.as_ref().and_then(inbox_unread_from_tree);
+
+    if let Some(connector) = manager.get(account_id) {
+        match connector
+            .prepare_folder_list(
+                &folder_id,
+                mailiner_core::MessageSort::Date,
+                MessageListFilter::default(),
+                "",
+            )
+            .await
+        {
+            Ok(state) => {
+                let end = state.total.min(UNIFIED_INBOX_PREFIX);
+                let envelopes = if end > 0 {
+                    match connector.list_envelopes_range(&folder_id, 0..end).await {
+                        Ok(envs) => envs,
+                        Err(e) => {
+                            warn!("unified inbox FETCH failed for {account_id}: {e}");
+                            manager.note_imap_error(account_id, &e);
+                            return cached_inbox_prefix(
+                                manager,
+                                account_id,
+                                folder_id,
+                                mailbox_id,
+                                cached_unread,
+                                PrefixSource::Failed,
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                let unread = state.unread.map(|n| n as u64).or(cached_unread);
+                let snapshot = CachedMessageList::from_prefix(
+                    &mailbox_id,
+                    mailiner_core::MessageSort::Date,
+                    state.total,
+                    state.unread,
+                    envelopes.clone(),
+                );
+                if let Err(e) = manager.cache().save_messages(account_id, &snapshot).await {
+                    warn!("unified inbox cache save failed for {account_id}: {e}");
+                }
+                return AccountInboxPrefix {
+                    account_id: account_id.clone(),
+                    folder_id,
+                    envelopes,
+                    unread,
+                    source: PrefixSource::Live,
+                };
+            }
+            Err(e) => {
+                warn!("unified inbox SELECT failed for {account_id}: {e}");
+                manager.note_imap_error(account_id, &e);
+                return cached_inbox_prefix(
+                    manager,
+                    account_id,
+                    folder_id,
+                    mailbox_id,
+                    cached_unread,
+                    PrefixSource::Failed,
+                )
+                .await;
+            }
+        }
+    }
+
+    cached_inbox_prefix(
+        manager,
+        account_id,
+        folder_id,
+        mailbox_id,
+        cached_unread,
+        PrefixSource::Skipped,
+    )
+    .await
+}
+
+async fn cached_inbox_prefix(
+    manager: &AccountConnectionManager,
+    account_id: &AccountId,
+    folder_id: FolderId,
+    mailbox_id: MailboxId,
+    cached_unread: Option<u64>,
+    miss: PrefixSource,
+) -> AccountInboxPrefix {
+    for sort in mailiner_core::MessageSort::ALL {
+        match manager
+            .cache()
+            .load_messages(account_id, &mailbox_id, sort)
+            .await
+        {
+            Ok(Some(cached)) => {
+                return AccountInboxPrefix {
+                    account_id: account_id.clone(),
+                    folder_id,
+                    envelopes: cached.envelopes,
+                    unread: cached.unread.map(|n| n as u64).or(cached_unread),
+                    source: PrefixSource::Cache,
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!("unified inbox cache load failed for {account_id}: {e}");
+                break;
+            }
+        }
+    }
+    AccountInboxPrefix {
+        account_id: account_id.clone(),
+        folder_id,
+        envelopes: Vec::new(),
+        unread: cached_unread,
+        source: miss,
+    }
+}
+
+fn is_unified_selected(ctx: &AppContext) -> bool {
+    ctx.selected_mailbox
+        .read()
+        .as_ref()
+        .is_some_and(is_unified_mailbox)
+}
+
+/// True when this mailbox action belongs to the open list (including All inboxes).
+fn mailbox_action_applies(ctx: &AppContext, mailbox_id: &MailboxId) -> bool {
+    if is_unified_mailbox(mailbox_id) {
+        return false;
+    }
+    if is_unified_selected(ctx) {
+        return true;
+    }
+    ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
+}
+
+fn action_account_for(ctx: &AppContext, message_ids: &[MessageId]) -> Option<AccountId> {
+    if is_unified_selected(ctx) {
+        return batch_target_for(ctx, message_ids).map(|t| t.account_id);
+    }
+    ctx.selected_account.read().clone()
+}
+
+fn set_account_inbox_unread(ctx: &AppContext, account_id: &AccountId, unread: u64) {
+    let mut map = ctx.account_inbox_unread;
+    map.write().insert(account_id.clone(), unread);
+}
+
+fn sync_selected_inbox_unread(ctx: &AppContext) {
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        return;
+    };
+    let unread = crate::notifications::inbox_unread(&ctx.mailbox_nodes.read()).map(|(_, n)| n);
+    if let Some(unread) = unread {
+        set_account_inbox_unread(ctx, &account_id, unread as u64);
+    }
+}
+
+fn bump_account_inbox_unread(ctx: &AppContext, account_id: &AccountId, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    let mut map = ctx.account_inbox_unread;
+    let mut guard = map.write();
+    let entry = guard.entry(account_id.clone()).or_insert(0);
+    *entry = (*entry as i64 + i64::from(delta)).max(0) as u64;
+}
+
+async fn hydrate_inbox_unread_map(manager: &AccountConnectionManager, ctx: &mut AppContext) {
+    let ids: Vec<AccountId> = ctx.accounts.read().keys().cloned().collect();
+    for id in ids {
+        match manager.cache().load_folders(&id).await {
+            Ok(Some(tree)) => {
+                if let Some(unread) = inbox_unread_from_tree(&tree) {
+                    set_account_inbox_unread(ctx, &id, unread);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => warn!("inbox unread hydrate failed for {id}: {e}"),
+        }
+    }
+    sync_selected_inbox_unread(ctx);
+}
+
+fn list_message_by_id(ctx: &AppContext, message_id: &MessageId) -> Option<Arc<Message>> {
+    if let Some(idx) = ctx.selection.read().focus_at_index()
+        && let Some(msg) = ctx.messages.read().get(idx)
+        && msg.id == *message_id
+    {
+        return Some(msg.clone());
+    }
+    ctx.messages.read().find(|m| m.id == *message_id).cloned()
+}
+
+fn open_target_for(
+    ctx: &AppContext,
+    message_id: &MessageId,
+) -> Option<crate::unified_inbox::OpenTarget> {
+    list_message_by_id(ctx, message_id).map(|m| open_target(m.as_ref()))
+}
+
+fn batch_target_for(
+    ctx: &AppContext,
+    message_ids: &[MessageId],
+) -> Option<crate::unified_inbox::OpenTarget> {
+    let list = ctx.messages.read();
+    let rows: Vec<Arc<Message>> = message_ids
+        .iter()
+        .filter_map(|id| list.find(|m| m.id == *id).cloned())
+        .collect();
+    if rows.len() != message_ids.len() {
+        return None;
+    }
+    batch_open_target(rows.iter().map(|m| m.as_ref()))
 }
 
 async fn select_mailbox(
@@ -2989,6 +3317,9 @@ async fn handle_fetch_message_range(
     mailbox_id: MailboxId,
     range: Range<usize>,
 ) {
+    if is_unified_mailbox(&mailbox_id) {
+        return;
+    }
     if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
         return;
     }
@@ -3525,6 +3856,10 @@ fn prefetch_job_stale(ctx: &AppContext, job: &PrefetchJob) -> bool {
 }
 
 fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) {
+    if is_unified_selected(ctx) {
+        *pending = None;
+        return;
+    }
     let MessageViewState::Ready { message_id, .. } = &*ctx.message_view.read() else {
         *pending = None;
         return;
@@ -3623,9 +3958,14 @@ async fn handle_select_message(
     ctx.message_source.set(MessageSourceState::Closed);
     ctx.clear_nested_rfc822();
 
+    let target = open_target_for(ctx, &message_id);
     let cached = ctx.message_bodies.borrow_mut().get(&message_id);
     if let Some(loaded) = cached {
-        let Some(account_id) = ctx.selected_account.read().clone() else {
+        let Some(account_id) = target
+            .as_ref()
+            .map(|t| t.account_id.clone())
+            .or_else(|| ctx.selected_account.read().clone())
+        else {
             ctx.message_view.set(MessageViewState::Error {
                 message_id: message_id.clone(),
                 message: "No account selected".into(),
@@ -3641,21 +3981,25 @@ async fn handle_select_message(
         return;
     }
 
-    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+    let Some(target) = target.or_else(|| {
+        let mailbox_id = ctx.selected_mailbox.read().clone()?;
+        if is_unified_mailbox(&mailbox_id) {
+            return None;
+        }
+        Some(crate::unified_inbox::OpenTarget {
+            account_id: ctx.selected_account.read().clone()?,
+            mailbox_id,
+            message_id: message_id.clone(),
+        })
+    }) else {
         ctx.message_view.set(MessageViewState::Error {
             message_id: message_id.clone(),
             message: "No mailbox selected".into(),
         });
         return;
     };
-
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        ctx.message_view.set(MessageViewState::Error {
-            message_id: message_id.clone(),
-            message: "No account selected".into(),
-        });
-        return;
-    };
+    let account_id = target.account_id.clone();
+    let mailbox_id = target.mailbox_id.clone();
 
     let persisted = load_cached_loaded_message(manager.cache(), &account_id, &message_id).await;
     if let Some(loaded) = persisted.clone() {
@@ -3691,9 +4035,10 @@ async fn handle_select_message(
 
     let folder_id = FolderId::new(mailbox_id.to_string());
     info!(
-        "Loading message {} in {}",
+        "Loading message {} in {} ({})",
         message_id,
-        mailbox_id.to_string()
+        mailbox_id.to_string(),
+        account_id
     );
 
     match load_message(connector, &folder_id, &message_id).await {
@@ -3703,9 +4048,10 @@ async fn handle_select_message(
             ctx.message_bodies
                 .borrow_mut()
                 .insert(message_id.clone(), loaded.clone());
-            if ctx.selection.read().focus() != Some(&message_id)
-                || !selected_account_is(ctx, &account_id)
-            {
+            if ctx.selection.read().focus() != Some(&message_id) {
+                return;
+            }
+            if !is_unified_selected(ctx) && !selected_account_is(ctx, &account_id) {
                 return;
             }
             ctx.message_view.set(MessageViewState::Ready {
@@ -3758,12 +4104,21 @@ async fn maybe_auto_mark_read(
     message_id: &MessageId,
     auto_mark_read: bool,
 ) {
-    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+    let Some(target) = open_target_for(ctx, message_id).or_else(|| {
+        let mailbox_id = ctx.selected_mailbox.read().clone()?;
+        if is_unified_mailbox(&mailbox_id) {
+            return None;
+        }
+        Some(crate::unified_inbox::OpenTarget {
+            account_id: ctx.selected_account.read().clone()?,
+            mailbox_id,
+            message_id: message_id.clone(),
+        })
+    }) else {
         return;
     };
-    let Some(account_id) = ctx.selected_account.read().clone() else {
-        return;
-    };
+    let account_id = target.account_id;
+    let mailbox_id = target.mailbox_id;
     let Some(connector) = manager.get(&account_id) else {
         return;
     };
@@ -3805,22 +4160,34 @@ fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
     }
     let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
     let mut unread_delta: i32 = 0;
+    let mut per_account: HashMap<AccountId, i32> = HashMap::new();
     for msg in ctx.messages.write().iter_mut() {
         if idset.contains(&msg.id) && msg.is_read != is_read {
+            let account_id = msg.envelope.account_id.clone();
             let mut next = (**msg).clone();
             next.is_read = is_read;
             next.envelope.is_read = is_read;
             *msg = Arc::new(next);
-            if is_read {
-                unread_delta -= 1;
-            } else {
-                unread_delta += 1;
-            }
+            let step = if is_read { -1 } else { 1 };
+            unread_delta += step;
+            *per_account.entry(account_id).or_insert(0) += step;
         }
     }
     if unread_delta != 0 {
+        if per_account.is_empty() {
+            let account_id = ctx.selected_account.read().clone();
+            if let Some(account_id) = account_id {
+                bump_account_inbox_unread(ctx, &account_id, unread_delta);
+            }
+        } else {
+            for (account_id, delta) in per_account {
+                bump_account_inbox_unread(ctx, &account_id, delta);
+            }
+        }
         let mailbox_id = ctx.selected_mailbox.read().clone();
-        if let Some(mailbox_id) = mailbox_id {
+        if let Some(mailbox_id) = mailbox_id
+            && !is_unified_mailbox(&mailbox_id)
+        {
             bump_mailbox_unread(ctx, &mailbox_id, unread_delta, true);
         }
     }
@@ -3916,6 +4283,7 @@ fn sync_inbox_unread(ctx: &AppContext, event: crate::notifications::InboxCountEv
     else {
         return;
     };
+    set_account_inbox_unread(ctx, &account_id, unread as u64);
     let ack = crate::ui_prefs::load_ack_unread(&account_id)
         .get(&inbox_id)
         .copied()
@@ -4081,10 +4449,10 @@ async fn handle_mark_read(
     if message_ids.is_empty() {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if !mailbox_action_applies(ctx, &mailbox_id) {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let Some(account_id) = action_account_for(ctx, &message_ids) else {
         ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };
@@ -4528,6 +4896,9 @@ async fn set_later_keyword(
 }
 
 fn same_mail_session(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) -> bool {
+    if is_unified_selected(ctx) {
+        return !is_unified_mailbox(mailbox_id);
+    }
     selected_account_is(ctx, account_id) && ctx.selected_mailbox.read().as_ref() == Some(mailbox_id)
 }
 
@@ -4704,10 +5075,7 @@ async fn handle_move_messages(
     if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
         return;
     }
-    if !selected_account_is(ctx, &account_id) {
-        return;
-    }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
         return;
     }
     let Some(connector) = manager.get(&account_id) else {
@@ -4832,9 +5200,7 @@ async fn handle_copy_messages(
     if message_ids.is_empty() || mailbox_id == dest_mailbox_id {
         return;
     }
-    if !selected_account_is(ctx, &account_id)
-        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
-    {
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
         return;
     }
     let Some(connector) = manager.get(&account_id) else {
@@ -4892,10 +5258,11 @@ async fn handle_archive_messages(
     if message_ids.is_empty() {
         return;
     }
-    if !selected_account_is(ctx, &account_id) {
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if is_unified_selected(ctx) && !selected_account_is(ctx, &account_id) {
+        ctx.show_toast(ToastAction::info("Switch to that account to archive"));
         return;
     }
     let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
@@ -4926,10 +5293,11 @@ async fn handle_move_to_junk(
     if message_ids.is_empty() {
         return;
     }
-    if !selected_account_is(ctx, &account_id) {
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if is_unified_selected(ctx) && !selected_account_is(ctx, &account_id) {
+        ctx.show_toast(ToastAction::info("Switch to that account to move to Junk"));
         return;
     }
     let junk_id = crate::mailbox::find_junk_mailbox(&ctx.mailbox_nodes.read());
@@ -4949,10 +5317,10 @@ async fn handle_move_to_trash(
     if message_ids.is_empty() {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if !mailbox_action_applies(ctx, &mailbox_id) {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let Some(account_id) = action_account_for(ctx, &message_ids) else {
         ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };
@@ -5036,10 +5404,10 @@ async fn handle_delete_messages(
     if message_ids.is_empty() {
         return;
     }
-    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+    if !mailbox_action_applies(ctx, &mailbox_id) {
         return;
     }
-    let Some(account_id) = ctx.selected_account.read().clone() else {
+    let Some(account_id) = action_account_for(ctx, &message_ids) else {
         ctx.show_toast(ToastAction::error("No account selected"));
         return;
     };

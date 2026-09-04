@@ -1020,6 +1020,74 @@ a.accounts-link-btn {
     white-space: nowrap;
 }
 
+.settings-filter-list {
+    list-style: none;
+    margin: 0.65rem 0 0;
+    padding: 0;
+}
+
+.settings-filter-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--sidebar-border);
+}
+
+.settings-filter-row:last-child {
+    border-bottom: none;
+}
+
+.settings-filter-row.is-disabled .settings-filter-name,
+.settings-filter-row.is-disabled .settings-filter-actions-summary {
+    color: var(--text-muted);
+}
+
+.settings-filter-enable {
+    flex: 0 0 auto;
+    margin-top: 0.15rem;
+}
+
+.settings-filter-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.settings-filter-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-filter-actions-summary {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.settings-filter-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+}
+
+.settings-filter-form {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sidebar-border);
+    border-radius: 6px;
+}
+
+.settings-filter-form-title {
+    margin: 0 0 0.65rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
 /* Nav header: account name + settings gear */
 .pane-header-title {
     flex: 1 1 auto;

@@ -1553,6 +1553,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
         .set(crate::ui_prefs::load_saved_searches());
     crate::ui_prefs::retain_pinned_messages(&known);
     crate::ui_prefs::retain_snoozed_messages(&known);
+    crate::mail_rules::retain_mail_rules(&known);
     crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
@@ -2172,6 +2173,7 @@ async fn select_mailbox(
                     ctx.messages.set(list);
                     apply_list_overlays(ctx);
                     ctx.messages_loading.set(false);
+                    apply_incoming_mail_rules(manager, ctx, &account_id, &mailbox_id).await;
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
                     fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, true).await;
@@ -2306,6 +2308,7 @@ async fn handle_mailbox_activity(
             ctx.messages.set(list);
             apply_list_overlays(ctx);
             prune_selection_after_refresh(ctx, &old_ids, &new_ids);
+            apply_incoming_mail_rules(manager, ctx, &account_id, &mailbox_id).await;
             persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
             fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, true).await;
@@ -2324,6 +2327,212 @@ async fn handle_mailbox_activity(
     }
 
     refresh_other_folder_badges(manager, ctx, &account_id, Some(&mailbox_id)).await;
+}
+
+/// Apply local incoming-mail filters to loaded envelopes (not ManageSieve).
+///
+/// First matching enabled rule wins. Each UID is recorded after a successful
+/// attempt so reopening the folder does not re-move. Sent/Drafts/Trash/Junk/
+/// Outbox are skipped.
+async fn apply_incoming_mail_rules(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+) {
+    if !same_mail_session(ctx, account_id, mailbox_id) {
+        return;
+    }
+    let role = ctx
+        .mailbox_nodes
+        .read()
+        .get(mailbox_id)
+        .map(|n| n.role)
+        .unwrap_or(MailboxRole::Other);
+    if crate::mail_rules::folder_skips_rules(role) {
+        return;
+    }
+    let rules = crate::mail_rules::load_rules(account_id);
+    if rules.iter().all(|r| !r.enabled) {
+        return;
+    }
+    let applied = crate::mail_rules::load_applied_uids(account_id, mailbox_id);
+    let envelopes: Vec<mailiner_core::Envelope> = ctx
+        .messages
+        .read()
+        .iter()
+        .map(|m| m.envelope.clone())
+        .collect();
+    let hits = crate::mail_rules::plan_rule_hits(&rules, &envelopes, &applied);
+    if hits.is_empty() {
+        return;
+    }
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+
+    let planned: Vec<(crate::mail_rules::MailRule, MessageId)> = {
+        let list = ctx.messages.read();
+        hits.iter()
+            .filter_map(|hit| {
+                let msg = list.find(|m| m.id.as_uid() == hit.uid)?;
+                Some((hit.rule.clone(), msg.id.clone()))
+            })
+            .collect()
+    };
+    if planned.is_empty() {
+        return;
+    }
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let mut mark_read: Vec<MessageId> = Vec::new();
+    let mut star: Vec<MessageId> = Vec::new();
+    let mut flag: Vec<MessageId> = Vec::new();
+    let mut keywords: HashMap<ImapKeyword, Vec<MessageId>> = HashMap::new();
+    let mut moves: HashMap<String, Vec<MessageId>> = HashMap::new();
+    let mut done: HashSet<String> = HashSet::new();
+
+    for (rule, id) in &planned {
+        if rule.action_mark_read {
+            mark_read.push(id.clone());
+        }
+        if rule.action_star {
+            star.push(id.clone());
+        }
+        if rule.action_flag {
+            flag.push(id.clone());
+        }
+        if let Some(keyword) = rule.add_keyword() {
+            keywords.entry(keyword).or_default().push(id.clone());
+        }
+        if let Some(dest) = rule.move_mailbox()
+            && dest.as_str() != mailbox_id.as_str()
+        {
+            moves
+                .entry(dest.as_str().to_string())
+                .or_default()
+                .push(id.clone());
+        }
+        done.insert(id.as_uid().to_string());
+    }
+
+    if let Err(e) = store_rule_flags(connector, &folder_id, &mark_read, EnvelopeFlag::Read).await {
+        warn!("mail rule mark-read failed: {e}");
+    } else if !mark_read.is_empty() {
+        apply_read_flag(ctx, &mark_read, true);
+    }
+    if let Err(e) = store_rule_flags(connector, &folder_id, &star, EnvelopeFlag::Starred).await {
+        warn!("mail rule star failed: {e}");
+    } else if !star.is_empty() {
+        apply_toggleable_flag(ctx, &star, EnvelopeFlag::Starred, true);
+    }
+    if let Err(e) = store_rule_flags(connector, &folder_id, &flag, EnvelopeFlag::Flagged).await {
+        warn!("mail rule flag failed: {e}");
+    } else if !flag.is_empty() {
+        apply_toggleable_flag(ctx, &flag, EnvelopeFlag::Flagged, true);
+    }
+    for (keyword, ids) in keywords {
+        if let Err(e) =
+            store_rule_flags(connector, &folder_id, &ids, EnvelopeFlag::Keyword(keyword)).await
+        {
+            warn!("mail rule keyword {} failed: {e}", keyword.atom());
+        } else {
+            apply_toggleable_flag(ctx, &ids, EnvelopeFlag::Keyword(keyword), true);
+        }
+    }
+
+    let mut moved_n = 0usize;
+    let mut removed_sel = None;
+    for (dest, ids) in moves {
+        if ids.is_empty() {
+            continue;
+        }
+        let dest_id = MailboxId::from(dest);
+        let dest_exists = ctx.mailbox_nodes.read().contains_key(&dest_id);
+        if !dest_exists {
+            warn!(
+                "mail rule dest {} missing; leaving {} message(s)",
+                dest_id.as_str(),
+                ids.len()
+            );
+            for id in &ids {
+                done.remove(id.as_uid());
+            }
+            continue;
+        }
+        let dest_folder = FolderId::new(dest_id.to_string());
+        let core_ids = core_message_ids(&ids);
+        match connector
+            .move_messages(&folder_id, &core_ids, &dest_folder)
+            .await
+        {
+            Ok(_) => {
+                if !same_mail_session(ctx, account_id, mailbox_id) {
+                    invalidate_mailbox_messages(manager.cache(), account_id, mailbox_id).await;
+                    invalidate_mailbox_messages(manager.cache(), account_id, &dest_id).await;
+                    continue;
+                }
+                let unread_n = unread_among(ctx, &ids);
+                let dest_is_all_mail = ctx
+                    .mailbox_nodes
+                    .read()
+                    .get(&dest_id)
+                    .is_some_and(|n| mailbox_is_all_mail(&dest_id, Some(n.name.as_str())));
+                let (_, sel) = take_messages_from_ui(ctx, &ids);
+                if removed_sel.is_none() {
+                    removed_sel = sel;
+                }
+                if unread_n != 0 && !dest_is_all_mail {
+                    bump_mailbox_unread(ctx, &dest_id, unread_n, false);
+                }
+                if let Some(node) = ctx.mailbox_nodes.write().get_mut(&dest_id) {
+                    node.total_count = node.total_count.saturating_add(ids.len());
+                }
+                moved_n += ids.len();
+                invalidate_mailbox_messages(manager.cache(), account_id, &dest_id).await;
+            }
+            Err(mailiner_core::MailinerError::PartialMove { message, .. }) => {
+                error!("mail rule partial move: {message}");
+            }
+            Err(e) => {
+                warn!("mail rule move to {} failed: {e}", dest_id.as_str());
+                for id in &ids {
+                    done.remove(id.as_uid());
+                }
+            }
+        }
+    }
+
+    let applied_uids: Vec<String> = done.into_iter().collect();
+    crate::mail_rules::mark_applied(account_id, mailbox_id, &applied_uids);
+
+    if !same_mail_session(ctx, account_id, mailbox_id) {
+        return;
+    }
+    if moved_n > 0 {
+        apply_list_overlays(ctx);
+        select_after_removed_row(manager, ctx, removed_sel).await;
+        let label = if moved_n == 1 {
+            "Filed 1 message".to_string()
+        } else {
+            format!("Filed {moved_n} messages")
+        };
+        ctx.show_toast(ToastAction::info(label));
+    }
+}
+
+async fn store_rule_flags(
+    connector: &dyn EmailConnector,
+    folder_id: &FolderId,
+    ids: &[MessageId],
+    flag: EnvelopeFlag,
+) -> Result<(), mailiner_core::MailinerError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    connector
+        .update_envelope_flags(folder_id, &core_message_ids(ids), &[(flag, true)])
+        .await
 }
 
 fn apply_live_counts(

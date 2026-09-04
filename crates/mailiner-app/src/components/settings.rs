@@ -7,6 +7,8 @@ use crate::account::{Account, AccountId};
 use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::layout::reset_saved_layout;
+use crate::mail_rules::{self, MailRule};
+use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::shortcuts::{
     ShortcutGroup, ShortcutId, effective_shortcuts_in, remap_shortcut, reset_all_shortcuts,
     reset_shortcut,
@@ -14,6 +16,7 @@ use crate::shortcuts::{
 use crate::ui_prefs::{
     ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity, ShortcutMapBlob,
 };
+use mailiner_core::ImapKeyword;
 
 fn account_from_label(account: &Account) -> String {
     if account.name.is_empty() {
@@ -58,7 +61,7 @@ pub fn SettingsPage() -> Element {
                 h1 { class: "bootstrap-title", "Settings" }
                 p {
                     class: "bootstrap-muted",
-                    "Appearance, composer, contacts, privacy, and shortcut preferences are stored in this browser."
+                    "Appearance, composer, filters, contacts, privacy, and shortcut preferences are stored in this browser."
                 }
 
                 section {
@@ -211,6 +214,8 @@ pub fn SettingsPage() -> Element {
                         }
                     }
                 }
+
+                FiltersSection {}
 
                 AddressBookSection {}
 
@@ -446,6 +451,566 @@ fn capture_key_from_event(evt: &KeyboardEvent) -> Option<(String, bool)> {
         return None;
     }
     Some((name, evt.modifiers().shift()))
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RuleForm {
+    id: Option<String>,
+    name: String,
+    enabled: bool,
+    match_from: String,
+    match_to: String,
+    match_subject: String,
+    match_keyword: String,
+    match_unread: bool,
+    action_move_to: String,
+    action_mark_read: bool,
+    action_star: bool,
+    action_flag: bool,
+    action_add_keyword: String,
+}
+
+impl RuleForm {
+    fn blank() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            enabled: true,
+            match_from: String::new(),
+            match_to: String::new(),
+            match_subject: String::new(),
+            match_keyword: String::new(),
+            match_unread: false,
+            action_move_to: String::new(),
+            action_mark_read: false,
+            action_star: false,
+            action_flag: false,
+            action_add_keyword: String::new(),
+        }
+    }
+
+    fn from_rule(rule: &MailRule) -> Self {
+        Self {
+            id: Some(rule.id.clone()),
+            name: rule.name.clone(),
+            enabled: rule.enabled,
+            match_from: rule.match_from.clone(),
+            match_to: rule.match_to.clone(),
+            match_subject: rule.match_subject.clone(),
+            match_keyword: rule.match_keyword.clone().unwrap_or_default(),
+            match_unread: rule.match_unread,
+            action_move_to: rule.action_move_to.clone().unwrap_or_default(),
+            action_mark_read: rule.action_mark_read,
+            action_star: rule.action_star,
+            action_flag: rule.action_flag,
+            action_add_keyword: rule.action_add_keyword.clone().unwrap_or_default(),
+        }
+    }
+
+    fn into_rule(self) -> MailRule {
+        let mut rule = MailRule::new();
+        if let Some(id) = self.id {
+            rule.id = id;
+        }
+        rule.name = self.name;
+        rule.enabled = self.enabled;
+        rule.match_from = self.match_from;
+        rule.match_to = self.match_to;
+        rule.match_subject = self.match_subject;
+        rule.match_keyword = if self.match_keyword.is_empty() {
+            None
+        } else {
+            Some(self.match_keyword)
+        };
+        rule.match_unread = self.match_unread;
+        rule.action_move_to = if self.action_move_to.is_empty() {
+            None
+        } else {
+            Some(self.action_move_to)
+        };
+        rule.action_mark_read = self.action_mark_read;
+        rule.action_star = self.action_star;
+        rule.action_flag = self.action_flag;
+        rule.action_add_keyword = if self.action_add_keyword.is_empty() {
+            None
+        } else {
+            Some(self.action_add_keyword)
+        };
+        rule
+    }
+}
+
+/// Local incoming-mail filters (not ManageSieve).
+#[component]
+fn FiltersSection() -> Element {
+    let ctx = use_context::<AppContext>();
+    let mut accounts: Vec<_> = ctx.accounts.read().values().cloned().collect();
+    accounts.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
+    let selected = ctx.selected_account.read().clone();
+    let mut account_id = use_signal(|| selected.clone());
+    let current = account_id
+        .read()
+        .as_ref()
+        .filter(|id| accounts.iter().any(|a| &a.id == *id))
+        .cloned()
+        .or_else(|| selected.clone())
+        .or_else(|| accounts.first().map(|a| a.id.clone()));
+    let mut rules = use_signal(|| {
+        current
+            .as_ref()
+            .map(mail_rules::load_rules)
+            .unwrap_or_default()
+    });
+    let mut form = use_signal(|| None::<RuleForm>);
+    let mut action_error = use_signal(|| None::<String>);
+    let show_all = *ctx.show_all_folders.read();
+    let folder_account_is_active = current.as_ref() == selected.as_ref();
+    let folders = if folder_account_is_active {
+        let nodes = ctx.mailbox_nodes.read();
+        let roots = ctx.mailbox_roots.read();
+        flatten_mailboxes(&roots, &nodes)
+            .into_iter()
+            .filter(|(id, _)| {
+                nodes
+                    .get(id)
+                    .is_some_and(|n| mailbox_is_action_target(n, show_all))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let listed = rules();
+
+    rsx! {
+        section {
+            class: "settings-section",
+            h2 { "Filters" }
+            p {
+                class: "bootstrap-muted settings-hint",
+                "Sieve is not spoken yet. These rules run locally in this browser when a folder is opened or new mail arrives (IDLE / NOOP). The first matching enabled rule wins. Each message is processed once."
+            }
+            if accounts.is_empty() {
+                p { class: "bootstrap-muted", "Add an account to create filters." }
+            } else {
+                if accounts.len() > 1 {
+                    div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-filter-account", "Account" }
+                        select {
+                            id: "settings-filter-account",
+                            value: "{current.as_ref().map(|id| id.as_str()).unwrap_or(\"\")}",
+                            onchange: move |evt| {
+                                let id = AccountId::new(evt.value());
+                                account_id.set(Some(id.clone()));
+                                rules.set(mail_rules::load_rules(&id));
+                                form.set(None);
+                                action_error.set(None);
+                            },
+                            for account in accounts.iter() {
+                                option {
+                                    value: "{account.id.as_str()}",
+                                    selected: current.as_ref() == Some(&account.id),
+                                    "{account_from_label(account)}"
+                                }
+                            }
+                        }
+                    }
+                }
+                div {
+                    class: "settings-actions",
+                    button {
+                        r#type: "button",
+                        class: "onboarding-btn onboarding-btn-primary accounts-btn-sm",
+                        disabled: current.is_none() || form().is_some(),
+                        onclick: move |_| {
+                            form.set(Some(RuleForm::blank()));
+                            action_error.set(None);
+                        },
+                        "Add filter"
+                    }
+                }
+                if let Some(err) = action_error() {
+                    p {
+                        class: "onboarding-status onboarding-status-error",
+                        role: "alert",
+                        "{err}"
+                    }
+                }
+                if let Some(draft) = form() {
+                    FilterRuleForm {
+                        key: "{draft.id.as_deref().unwrap_or(\"new\")}",
+                        draft,
+                        folders: folders.clone(),
+                        folders_ready: folder_account_is_active && !folders.is_empty(),
+                        form,
+                        rules,
+                        account_id,
+                        action_error,
+                    }
+                }
+                if listed.is_empty() && form().is_none() {
+                    p {
+                        class: "bootstrap-muted settings-contact-empty",
+                        "No filters yet."
+                    }
+                } else if !listed.is_empty() {
+                    ul {
+                        class: "settings-filter-list",
+                        for (idx, rule) in listed.iter().enumerate() {
+                            FilterRuleRow {
+                                key: "{rule.id}",
+                                rule: rule.clone(),
+                                index: idx,
+                                count: listed.len(),
+                                account_id,
+                                rules,
+                                form,
+                                action_error,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FilterRuleRow(
+    rule: MailRule,
+    index: usize,
+    count: usize,
+    mut account_id: Signal<Option<AccountId>>,
+    mut rules: Signal<Vec<MailRule>>,
+    mut form: Signal<Option<RuleForm>>,
+    mut action_error: Signal<Option<String>>,
+) -> Element {
+    let name = rule.display_name();
+    let actions = rule.action_summary();
+    let enabled = rule.enabled;
+    let rule_id = rule.id.clone();
+    let rule_id_up = rule.id.clone();
+    let rule_id_down = rule.id.clone();
+    let rule_id_del = rule.id.clone();
+    let edit_rule = rule.clone();
+
+    rsx! {
+        li {
+            class: "settings-filter-row",
+            class: if !enabled { "is-disabled" },
+            label {
+                class: "onboarding-checkbox-label settings-filter-enable",
+                input {
+                    r#type: "checkbox",
+                    checked: enabled,
+                    aria_label: "Enable {name}",
+                    onchange: move |evt| {
+                        let Some(acc) = account_id() else { return; };
+                        if mail_rules::set_rule_enabled(&acc, &rule_id, evt.checked()) {
+                            rules.set(mail_rules::load_rules(&acc));
+                        }
+                    },
+                }
+                span { class: "sr-only", "Enabled" }
+            }
+            div {
+                class: "settings-filter-main",
+                span { class: "settings-filter-name", "{name}" }
+                span { class: "settings-filter-actions-summary", "{actions}" }
+            }
+            div {
+                class: "settings-filter-row-actions",
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                    disabled: index == 0,
+                    title: "Run earlier",
+                    aria_label: "Move {name} earlier",
+                    onclick: move |_| {
+                        let Some(acc) = account_id() else { return; };
+                        if mail_rules::move_rule(&acc, &rule_id_up, -1) {
+                            rules.set(mail_rules::load_rules(&acc));
+                        }
+                    },
+                    "Up"
+                }
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                    disabled: index + 1 >= count,
+                    title: "Run later",
+                    aria_label: "Move {name} later",
+                    onclick: move |_| {
+                        let Some(acc) = account_id() else { return; };
+                        if mail_rules::move_rule(&acc, &rule_id_down, 1) {
+                            rules.set(mail_rules::load_rules(&acc));
+                        }
+                    },
+                    "Down"
+                }
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                    onclick: move |_| {
+                        form.set(Some(RuleForm::from_rule(&edit_rule)));
+                        action_error.set(None);
+                    },
+                    "Edit"
+                }
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                    title: "Delete {name}",
+                    aria_label: "Delete {name}",
+                    onclick: move |_| {
+                        let Some(acc) = account_id() else { return; };
+                        if mail_rules::remove_rule(&acc, &rule_id_del) {
+                            rules.set(mail_rules::load_rules(&acc));
+                            if form
+                                .peek()
+                                .as_ref()
+                                .is_some_and(|f| f.id.as_deref() == Some(rule_id_del.as_str()))
+                            {
+                                form.set(None);
+                            }
+                            action_error.set(None);
+                        }
+                    },
+                    "Delete"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FilterRuleForm(
+    draft: RuleForm,
+    folders: Vec<(MailboxId, String)>,
+    folders_ready: bool,
+    mut form: Signal<Option<RuleForm>>,
+    mut rules: Signal<Vec<MailRule>>,
+    account_id: Signal<Option<AccountId>>,
+    mut action_error: Signal<Option<String>>,
+) -> Element {
+    let mut draft = use_signal(|| draft);
+    let is_edit = draft.read().id.is_some();
+    let title = if is_edit { "Edit filter" } else { "New filter" };
+    let dest_value = draft.read().action_move_to.clone();
+    let dest_known =
+        dest_value.is_empty() || folders.iter().any(|(id, _)| id.as_str() == dest_value);
+    let keyword_match = draft.read().match_keyword.clone();
+    let keyword_add = draft.read().action_add_keyword.clone();
+
+    rsx! {
+        form {
+            class: "settings-filter-form",
+            onsubmit: move |evt| {
+                evt.prevent_default();
+                let Some(acc) = account_id() else {
+                    action_error.set(Some("Select an account first.".into()));
+                    return;
+                };
+                match mail_rules::save_rule(acc.clone(), draft().into_rule()) {
+                    Ok(_) => {
+                        rules.set(mail_rules::load_rules(&acc));
+                        form.set(None);
+                        action_error.set(None);
+                    }
+                    Err(e) => action_error.set(Some(e.message().into())),
+                }
+            },
+            h3 { class: "settings-filter-form-title", "{title}" }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-name", "Name" }
+                input {
+                    id: "settings-filter-name",
+                    r#type: "text",
+                    value: "{draft.read().name}",
+                    placeholder: "Optional",
+                    oninput: move |evt| draft.write().name = evt.value(),
+                }
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: draft.read().enabled,
+                        onchange: move |evt| draft.write().enabled = evt.checked(),
+                    }
+                    "Enabled"
+                }
+            }
+            p { class: "bootstrap-muted settings-hint", "Match (all set fields, case-insensitive)" }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-from", "From contains" }
+                input {
+                    id: "settings-filter-from",
+                    r#type: "text",
+                    value: "{draft.read().match_from}",
+                    oninput: move |evt| draft.write().match_from = evt.value(),
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-to", "To contains" }
+                input {
+                    id: "settings-filter-to",
+                    r#type: "text",
+                    value: "{draft.read().match_to}",
+                    oninput: move |evt| draft.write().match_to = evt.value(),
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-subject", "Subject contains" }
+                input {
+                    id: "settings-filter-subject",
+                    r#type: "text",
+                    value: "{draft.read().match_subject}",
+                    oninput: move |evt| draft.write().match_subject = evt.value(),
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-keyword", "Has keyword" }
+                select {
+                    id: "settings-filter-keyword",
+                    value: "{keyword_match}",
+                    onchange: move |evt| draft.write().match_keyword = evt.value(),
+                    option { value: "", selected: keyword_match.is_empty(), "Any" }
+                    for keyword in ImapKeyword::ALL {
+                        option {
+                            value: "{keyword.atom()}",
+                            selected: keyword_match == keyword.atom(),
+                            "{keyword.label()}"
+                        }
+                    }
+                }
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: draft.read().match_unread,
+                        onchange: move |evt| draft.write().match_unread = evt.checked(),
+                    }
+                    "Only unread"
+                }
+            }
+            p { class: "bootstrap-muted settings-hint", "Then" }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-move", "Move to folder" }
+                select {
+                    id: "settings-filter-move",
+                    value: "{dest_value}",
+                    onchange: move |evt| draft.write().action_move_to = evt.value(),
+                    option { value: "", selected: dest_value.is_empty(), "Do not move" }
+                    if !dest_known && !dest_value.is_empty() {
+                        option {
+                            value: "{dest_value}",
+                            selected: true,
+                            "{dest_value}"
+                        }
+                    }
+                    for (id, title) in folders.iter() {
+                        option {
+                            value: "{id.as_str()}",
+                            selected: dest_value == id.as_str(),
+                            "{title}"
+                        }
+                    }
+                }
+            }
+            if !folders_ready {
+                p {
+                    class: "bootstrap-muted settings-hint",
+                    "Open this account in mail to load folders for the move list."
+                }
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: draft.read().action_mark_read,
+                        onchange: move |evt| draft.write().action_mark_read = evt.checked(),
+                    }
+                    "Mark as read"
+                }
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: draft.read().action_star,
+                        onchange: move |evt| draft.write().action_star = evt.checked(),
+                    }
+                    "Star"
+                }
+            }
+            div {
+                class: "onboarding-checkbox-field",
+                label {
+                    class: "onboarding-checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: draft.read().action_flag,
+                        onchange: move |evt| draft.write().action_flag = evt.checked(),
+                    }
+                    "Flag"
+                }
+            }
+            div {
+                class: "onboarding-field",
+                label { r#for: "settings-filter-add-keyword", "Add keyword" }
+                select {
+                    id: "settings-filter-add-keyword",
+                    value: "{keyword_add}",
+                    onchange: move |evt| draft.write().action_add_keyword = evt.value(),
+                    option { value: "", selected: keyword_add.is_empty(), "None" }
+                    for keyword in ImapKeyword::ALL {
+                        option {
+                            value: "{keyword.atom()}",
+                            selected: keyword_add == keyword.atom(),
+                            "{keyword.label()}"
+                        }
+                    }
+                }
+            }
+            div {
+                class: "settings-actions",
+                button {
+                    r#type: "submit",
+                    class: "onboarding-btn onboarding-btn-primary accounts-btn-sm",
+                    if is_edit { "Save filter" } else { "Add filter" }
+                }
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                    onclick: move |_| {
+                        form.set(None);
+                        action_error.set(None);
+                    },
+                    "Cancel"
+                }
+            }
+        }
+    }
 }
 
 /// Add/remove name+email contacts stored in origin `localStorage`.

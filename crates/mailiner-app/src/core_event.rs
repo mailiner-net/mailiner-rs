@@ -302,6 +302,8 @@ pub enum CoreEvent {
         bcc_header: Option<String>,
         /// Source message to mark `\Answered` after a successful Reply / Reply All.
         reply_source: Option<MessageId>,
+        /// IMAP Drafts message to delete after the send is queued.
+        imap_draft: Option<MessageId>,
     },
     TestSmtpConnection {
         request_id: AccountId,
@@ -325,6 +327,18 @@ pub enum CoreEvent {
     },
     /// Best-effort IMAP STORE `\Answered` on the source after a successful reply.
     MarkAnswered {
+        account_id: AccountId,
+        message_id: MessageId,
+    },
+    /// Best-effort IMAP APPEND to Drafts (`\Draft`). Replaces `replace` when set.
+    SaveImapDraft {
+        account_id: AccountId,
+        draft_id: String,
+        rfc822: Vec<u8>,
+        replace: Option<MessageId>,
+    },
+    /// Best-effort IMAP delete of a Drafts message (discard / send / empty close).
+    DeleteImapDraft {
         account_id: AccountId,
         message_id: MessageId,
     },
@@ -787,6 +801,7 @@ pub async fn core_loop(
                 draft_id,
                 bcc_header,
                 reply_source,
+                imap_draft,
             } => {
                 handle_send_message(
                     &mut manager,
@@ -800,6 +815,7 @@ pub async fn core_loop(
                     draft_id,
                     bcc_header,
                     reply_source,
+                    imap_draft,
                 )
                 .await;
             }
@@ -855,6 +871,21 @@ pub async fn core_loop(
                 message_id,
             } => {
                 handle_mark_answered(&manager, &mut ctx, account_id, message_id).await;
+            }
+            CoreEvent::SaveImapDraft {
+                account_id,
+                draft_id,
+                rfc822,
+                replace,
+            } => {
+                handle_save_imap_draft(&manager, &mut ctx, account_id, draft_id, rfc822, replace)
+                    .await;
+            }
+            CoreEvent::DeleteImapDraft {
+                account_id,
+                message_id,
+            } => {
+                handle_delete_imap_draft(&manager, &mut ctx, account_id, message_id).await;
             }
             CoreEvent::MailboxActivity {
                 account_id,
@@ -5073,6 +5104,7 @@ async fn handle_send_message(
     draft_id: String,
     bcc_header: Option<String>,
     reply_source: Option<MessageId>,
+    imap_draft: Option<MessageId>,
 ) {
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.set_send_status(
@@ -5138,6 +5170,9 @@ async fn handle_send_message(
     }
     refresh_outbox_signal(outbox, ctx).await;
     crate::draft_store::clear_draft_if(&account_id, &draft_id);
+    if let Some(message_id) = imap_draft {
+        handle_delete_imap_draft(manager, ctx, account_id.clone(), message_id).await;
+    }
     if ctx
         .compose_draft
         .read()
@@ -5483,6 +5518,8 @@ async fn handle_smtp_finished(
 }
 
 const ARCHIVE_SENT_WARN: &str = "Could not save a copy in Sent.";
+const ARCHIVE_DRAFT_WARN: &str = "Could not save this draft on the server.";
+const DELETE_DRAFT_WARN: &str = "Could not delete the server draft.";
 
 async fn handle_archive_sent(
     manager: &AccountConnectionManager,
@@ -5524,6 +5561,112 @@ async fn handle_archive_sent(
         .is_some_and(|id| id.to_string() == sent);
     if viewing_account && viewing_sent {
         handle_select_mailbox(manager, ctx, MailboxId::from(sent), false).await;
+    }
+}
+
+async fn handle_save_imap_draft(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    draft_id: String,
+    rfc822: Vec<u8>,
+    replace: Option<MessageId>,
+) {
+    let Some(connector) = manager.get(&account_id) else {
+        warn!("SaveImapDraft: no IMAP connector for {account_id}");
+        ctx.show_toast(ToastAction::error(ARCHIVE_DRAFT_WARN));
+        return;
+    };
+    let drafts = match connector.find_drafts_folder().await {
+        Ok(Some(name)) => name,
+        Ok(None) => {
+            warn!("SaveImapDraft: no Drafts mailbox for {account_id}");
+            ctx.show_toast(ToastAction::error(ARCHIVE_DRAFT_WARN));
+            return;
+        }
+        Err(e) => {
+            warn!("SaveImapDraft: LIST failed for {account_id}: {e}");
+            manager.note_imap_error_msg(&account_id, &e.to_string());
+            ctx.show_toast(ToastAction::error(ARCHIVE_DRAFT_WARN));
+            return;
+        }
+    };
+    let new_id = match connector.append_rfc822_draft(&drafts, &rfc822).await {
+        Ok(id) => id,
+        Err(e) => {
+            warn!("SaveImapDraft: APPEND failed for {account_id} → {drafts}: {e}");
+            manager.note_imap_error_msg(&account_id, &e.to_string());
+            ctx.show_toast(ToastAction::error(ARCHIVE_DRAFT_WARN));
+            return;
+        }
+    };
+    if let Some(old) = replace.as_ref() {
+        if new_id.as_ref() != Some(old) {
+            if let Err(e) = connector
+                .delete_messages(old.folder_id(), std::slice::from_ref(old))
+                .await
+            {
+                warn!("SaveImapDraft: delete old draft failed for {account_id}: {e}");
+            }
+        }
+    }
+    if let Some(id) = new_id.clone() {
+        crate::draft_store::set_imap_draft(&account_id, &draft_id, Some(id.clone()));
+        if let Some(session) = ctx.compose_draft.write().as_mut() {
+            if session.draft.id.as_str() == draft_id {
+                session.imap_draft = Some(id);
+            }
+        }
+    }
+    info!("SaveImapDraft: appended to {drafts} for {account_id}");
+    refresh_if_viewing_mailbox(manager, ctx, &account_id, &drafts).await;
+}
+
+async fn handle_delete_imap_draft(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    message_id: MessageId,
+) {
+    let Some(connector) = manager.get(&account_id) else {
+        warn!("DeleteImapDraft: no IMAP connector for {account_id}");
+        return;
+    };
+    let folder = message_id.folder_id().as_str().to_string();
+    if let Err(e) = connector
+        .delete_messages(message_id.folder_id(), std::slice::from_ref(&message_id))
+        .await
+    {
+        warn!("DeleteImapDraft: failed for {account_id}: {e}");
+        manager.note_imap_error_msg(&account_id, &e.to_string());
+        ctx.show_toast(ToastAction::error(DELETE_DRAFT_WARN));
+        return;
+    }
+    info!("DeleteImapDraft: removed {message_id} for {account_id}");
+    refresh_if_viewing_mailbox(manager, ctx, &account_id, &folder).await;
+}
+
+async fn refresh_if_viewing_mailbox(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox: &str,
+) {
+    let viewing = ctx.selected_account.read().as_ref() == Some(account_id)
+        && ctx
+            .selected_mailbox
+            .read()
+            .as_ref()
+            .is_some_and(|id| id.to_string() == mailbox);
+    if viewing {
+        handle_select_mailbox(manager, ctx, MailboxId::from(mailbox.to_string()), false).await;
+    } else {
+        invalidate_mailbox_messages(
+            manager.cache(),
+            account_id,
+            &MailboxId::from(mailbox.to_string()),
+        )
+        .await;
     }
 }
 

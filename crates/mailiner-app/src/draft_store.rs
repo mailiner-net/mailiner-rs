@@ -135,6 +135,9 @@ pub struct PersistedComposeDraft {
     /// Source message to mark `\Answered` after a successful Reply / Reply All.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_source: Option<MessageId>,
+    /// IMAP Drafts message this local draft last saved as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imap_draft: Option<MessageId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +287,7 @@ impl PersistedComposeDraft {
             created_at: d.created_at,
             updated_at: d.updated_at,
             reply_source: session.reply_source.clone(),
+            imap_draft: session.imap_draft.clone(),
         }
     }
 
@@ -292,6 +296,7 @@ impl PersistedComposeDraft {
             account_id: self.account_id,
             title: self.title,
             reply_source: self.reply_source,
+            imap_draft: self.imap_draft,
             draft: DraftDocument {
                 id: DraftId(self.draft_id),
                 from: self.from.as_ref().map(ComposerAddress::from),
@@ -456,6 +461,23 @@ pub fn retain_drafts(known: &HashSet<AccountId>) {
     let _ = with_kv(|kv| retain_drafts_in(kv, known));
 }
 
+/// Record the IMAP Drafts UID on the saved local draft, if it is still `draft_id`.
+pub fn set_imap_draft(account_id: &AccountId, draft_id: &str, imap_draft: Option<MessageId>) {
+    let _ = with_kv(|kv| {
+        let Some(mut blob) = load_blob(kv)? else {
+            return Ok(());
+        };
+        let Some(draft) = blob.drafts.iter_mut().find(|d| d.account_id == *account_id) else {
+            return Ok(());
+        };
+        if draft.draft_id != draft_id {
+            return Ok(());
+        }
+        draft.imap_draft = imap_draft;
+        save_blob(kv, &blob)
+    });
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod host_kv {
     use crate::account_store::MemoryKvStore;
@@ -499,6 +521,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         }
     }
@@ -604,6 +627,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         };
         assert!(!session_has_content(&empty));
@@ -681,6 +705,24 @@ mod tests {
 
         clear_draft(&acc);
         assert!(load_draft(&acc).is_none());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn imap_draft_id_roundtrips() {
+        host_kv::reset();
+        let acc = AccountId::new("host-acc");
+        let mut s = session("Subj", "Hello");
+        let mid = MessageId::new(mailiner_core::FolderId::new("Drafts"), "42");
+        s.imap_draft = Some(mid.clone());
+        save_draft(&acc, &s);
+        let back = load_draft(&acc).expect("saved");
+        assert_eq!(back.imap_draft, Some(mid.clone()));
+        set_imap_draft(&acc, back.draft.id.as_str(), None);
+        let cleared = load_draft(&acc).expect("still saved");
+        assert!(cleared.imap_draft.is_none());
+        set_imap_draft(&acc, back.draft.id.as_str(), Some(mid.clone()));
+        assert_eq!(load_draft(&acc).and_then(|d| d.imap_draft), Some(mid));
         host_kv::reset();
     }
 

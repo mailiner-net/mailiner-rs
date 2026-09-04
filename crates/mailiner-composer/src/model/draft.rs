@@ -307,6 +307,15 @@ pub fn validate_draft(
     draft: &DraftDocument,
     identity: &FromIdentity,
 ) -> Result<(), Vec<DraftValidationError>> {
+    validate_draft_ex(draft, identity, true)
+}
+
+/// Like [`validate_draft`], but `require_to` is false when storing an IMAP draft.
+pub fn validate_draft_ex(
+    draft: &DraftDocument,
+    identity: &FromIdentity,
+    require_to: bool,
+) -> Result<(), Vec<DraftValidationError>> {
     let mut errs = Vec::new();
 
     if draft.from.is_none() && identity.email.trim().is_empty() {
@@ -327,7 +336,7 @@ pub fn validate_draft(
         });
     }
 
-    if draft.to.is_empty() {
+    if require_to && draft.to.is_empty() {
         errs.push(DraftValidationError::EmptyTo);
     }
     validate_addr_list("to", &draft.to, &mut errs);
@@ -432,6 +441,7 @@ mod tests {
         let d = DraftDocument::new_empty(&id);
         let err = validate_draft(&d, &id).unwrap_err();
         assert!(err.contains(&DraftValidationError::EmptyTo));
+        assert!(validate_draft_ex(&d, &id, false).is_ok());
     }
 
     #[test]

@@ -28,15 +28,24 @@ impl ListedMailbox {
 
 /// Prefer `\Sent` (selectable). Else first selectable name that looks like Sent.
 pub fn find_sent_mailbox(mailboxes: &[ListedMailbox]) -> Option<&str> {
+    find_role_mailbox(mailboxes, MailboxRole::Sent)
+}
+
+/// Prefer `\Drafts` (selectable). Else first selectable name that looks like Drafts.
+pub fn find_drafts_mailbox(mailboxes: &[ListedMailbox]) -> Option<&str> {
+    find_role_mailbox(mailboxes, MailboxRole::Drafts)
+}
+
+fn find_role_mailbox(mailboxes: &[ListedMailbox], role: MailboxRole) -> Option<&str> {
     if let Some(m) = mailboxes
         .iter()
-        .find(|m| !m.no_select && m.special_use == Some(MailboxRole::Sent))
+        .find(|m| !m.no_select && m.special_use == Some(role))
     {
         return Some(m.name.as_str());
     }
     mailboxes
         .iter()
-        .find(|m| !m.no_select && m.role() == MailboxRole::Sent)
+        .find(|m| !m.no_select && m.role() == role)
         .map(|m| m.name.as_str())
 }
 
@@ -341,6 +350,44 @@ mod tests {
     #[test]
     fn none_when_empty() {
         assert_eq!(find_sent_mailbox(&[]), None);
+    }
+
+    #[test]
+    fn drafts_special_use_wins() {
+        let boxes = [
+            mb("INBOX", Some("."), false, MailboxRole::Other),
+            mb("INBOX.Drafts", Some("."), false, MailboxRole::Other),
+            mb("[Gmail]/Drafts", Some("/"), false, MailboxRole::Drafts),
+        ];
+        assert_eq!(find_drafts_mailbox(&boxes), Some("[Gmail]/Drafts"));
+    }
+
+    #[test]
+    fn drafts_skips_noselect_special_use() {
+        let boxes = [
+            mb("virtual-drafts", Some("/"), true, MailboxRole::Drafts),
+            mb("Drafts", Some("/"), false, MailboxRole::Other),
+        ];
+        assert_eq!(find_drafts_mailbox(&boxes), Some("Drafts"));
+    }
+
+    #[test]
+    fn drafts_name_inbox_dot_drafts() {
+        let boxes = [
+            mb("INBOX", Some("."), false, MailboxRole::Other),
+            mb("INBOX.Drafts", Some("."), false, MailboxRole::Other),
+        ];
+        assert_eq!(find_drafts_mailbox(&boxes), Some("INBOX.Drafts"));
+    }
+
+    #[test]
+    fn drafts_none_when_only_sent() {
+        let boxes = [
+            mb("INBOX", Some("/"), false, MailboxRole::Other),
+            mb("Sent", Some("/"), false, MailboxRole::Other),
+        ];
+        assert_eq!(find_drafts_mailbox(&boxes), None);
+        assert_eq!(find_drafts_mailbox(&[]), None);
     }
 
     #[test]

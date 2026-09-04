@@ -28,18 +28,21 @@ pub mod reply;
 pub mod sanitize;
 pub mod shell;
 
-pub use export::{prepare_submit, PrepareSubmitError, PreparedMessage, SubmitEnvelope};
+pub use export::{
+    prepare_draft, prepare_submit, PrepareSubmitError, PreparedMessage, SubmitEnvelope,
+};
 pub use identity::FromIdentity;
 pub use model::{
     caps, dedupe_addresses, emails_equal, exclude_self, flatten_addresses, html_to_plain,
-    is_valid_email_v1, plain_to_html, try_composer_address, validate_draft, AttachmentData,
-    AttachmentId, AttachmentSource, BodyMode, ComposerAddress, DraftDocument, DraftId,
-    DraftValidationError, FileAttachment, InlineId, InlineImage,
+    is_valid_email_v1, plain_to_html, try_composer_address, validate_draft, validate_draft_ex,
+    AttachmentData, AttachmentId, AttachmentSource, BodyMode, ComposerAddress, DraftDocument,
+    DraftId, DraftValidationError, FileAttachment, InlineId, InlineImage,
 };
 pub use reply::{
     append_plain_signature, apply_plain_signature, attribution_line, bare_content_id, build_draft,
-    discard_rich_quote, extract_cid_refs, is_forwardable_attachment, normalize_cid, quote_plain,
-    rehydrate_cids, subject_with_prefix, CidRehydrateResult, ComposeIntent, PrefillError, SIGDASH,
+    discard_rich_quote, draft_from_stored_message, extract_cid_refs, is_forwardable_attachment,
+    normalize_cid, quote_plain, rehydrate_cids, subject_with_prefix, CidRehydrateResult,
+    ComposeIntent, PrefillError, SIGDASH,
 };
 pub use sanitize::{
     is_safe_image_content_type, sanitize_for_edit, sanitize_for_export, SAFE_IMAGE_ACCEPT,

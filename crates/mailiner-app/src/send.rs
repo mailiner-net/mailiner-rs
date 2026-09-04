@@ -22,6 +22,8 @@ pub struct ComposeSession {
     pub draft: DraftDocument,
     /// Source message to mark `\Answered` after a successful Reply / Reply All.
     pub reply_source: Option<MessageId>,
+    /// IMAP Drafts message this session is editing, if any.
+    pub imap_draft: Option<MessageId>,
     /// Original forwarded files removed via the include toggle.
     pub stashed_originals: Vec<FileAttachment>,
 }
@@ -431,6 +433,7 @@ mod tests {
             draft: DraftDocument::new_empty(&identity),
             account_id: id("old"),
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         };
         set_session_from_account(&mut session, id("new"), "New", "new@example.com");
@@ -461,6 +464,7 @@ mod tests {
             draft: DraftDocument::new_empty(&identity),
             account_id: id("old"),
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         };
         set_session_from_account(&mut session, id("new"), "", "new@example.com");
@@ -640,6 +644,7 @@ mod tests {
             draft: DraftDocument::new_empty(&identity),
             account_id: id("old"),
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         };
         set_session_from_identity(

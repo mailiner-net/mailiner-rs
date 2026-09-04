@@ -140,13 +140,34 @@ impl LookupStatus {
     }
 }
 
+#[derive(Clone, Copy)]
+struct LookupEditGuard {
+    hosts_dirty: Signal<bool>,
+    lookup_gen: Signal<u64>,
+    lookup_status: Signal<LookupStatus>,
+}
+
+impl LookupEditGuard {
+    fn mark_dirty(mut self) {
+        self.hosts_dirty.set(true);
+        invalidate_lookup(self.lookup_gen, self.lookup_status);
+    }
+}
+
+/// Shared by IMAP + SMTP fieldsets so an in-flight lookup cannot overwrite edits.
+pub fn provide_lookup_edit_guard() {
+    let guard = LookupEditGuard {
+        hosts_dirty: use_signal(|| false),
+        lookup_gen: use_signal(|| 0u64),
+        lookup_status: use_signal(|| LookupStatus::Idle),
+    };
+    use_context_provider(|| guard);
+}
+
 fn invalidate_lookup(mut lookup_gen: Signal<u64>, mut lookup_status: Signal<LookupStatus>) {
     let next = lookup_gen.peek().saturating_add(1);
     lookup_gen.set(next);
-    let looking = matches!(&*lookup_status.peek(), LookupStatus::Looking);
-    if looking {
-        lookup_status.set(LookupStatus::Idle);
-    }
+    lookup_status.set(LookupStatus::Idle);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -183,6 +204,9 @@ fn start_server_lookup(
         }
         return;
     }
+    // Clearing a host sets dirty; that edit is the reason we are looking up.
+    // A later edit during the request sets dirty again and aborts apply.
+    hosts_dirty.set(false);
     let generation = lookup_gen.peek().saturating_add(1);
     lookup_gen.set(generation);
     lookup_status.set(LookupStatus::Looking);
@@ -513,9 +537,10 @@ pub fn AccountConnectionFields(
     let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
     let warn_plain = imap_tls_mode == ImapTlsMode::None;
     let imap_port_for_tls = imap_port.clone();
-    let mut hosts_dirty = use_signal(|| false);
-    let lookup_gen = use_signal(|| 0u64);
-    let lookup_status = use_signal(|| LookupStatus::Idle);
+    let guard = use_context::<LookupEditGuard>();
+    let mut hosts_dirty = guard.hosts_dirty;
+    let lookup_gen = guard.lookup_gen;
+    let lookup_status = guard.lookup_status;
     let last_discovered = use_signal(|| None::<DiscoveredConfig>);
     let looking = matches!(lookup_status(), LookupStatus::Looking);
     let current_fields = PresetFormFields {
@@ -943,6 +968,7 @@ pub fn AccountSmtpFields(
     let warn_starttls = smtp_tls_mode == SmtpTlsMode::StartTls;
     let warn_plain = smtp_tls_mode == SmtpTlsMode::None;
     let smtp_port_for_tls = smtp_port.clone();
+    let guard = use_context::<LookupEditGuard>();
     rsx! {
         fieldset {
             class: "onboarding-section",
@@ -961,7 +987,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP host",
                     id: "{id_prefix}-smtp-host",
                     value: smtp_host,
-                    oninput: move |v| set_smtp_host.call(v),
+                    oninput: move |v| {
+                        guard.mark_dirty();
+                        set_smtp_host.call(v);
+                    },
                     placeholder: "smtp.example.com",
                     autocomplete: "off",
                     disabled: busy,
@@ -970,7 +999,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP port",
                     id: "{id_prefix}-smtp-port",
                     value: smtp_port,
-                    oninput: move |v| set_smtp_port.call(v),
+                    oninput: move |v| {
+                        guard.mark_dirty();
+                        set_smtp_port.call(v);
+                    },
                     placeholder: port_placeholder,
                     input_type: "number",
                     autocomplete: "off",
@@ -980,7 +1012,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP username",
                     id: "{id_prefix}-smtp-user",
                     value: smtp_username,
-                    oninput: move |v| set_smtp_username.call(v),
+                    oninput: move |v| {
+                        invalidate_lookup(guard.lookup_gen, guard.lookup_status);
+                        set_smtp_username.call(v);
+                    },
                     autocomplete: "off",
                     disabled: busy,
                 }
@@ -1006,6 +1041,7 @@ pub fn AccountSmtpFields(
                         value: smtp_tls_mode.as_form_value(),
                         disabled: busy,
                         onchange: move |e| {
+                            guard.mark_dirty();
                             let new_mode = SmtpTlsMode::from_form_value(&e.value());
                             let next_port = port_for_tls_mode_change(
                                 &smtp_port_for_tls,

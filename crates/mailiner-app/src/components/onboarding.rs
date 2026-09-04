@@ -11,7 +11,7 @@ use crate::account_config::{SmtpTlsMode, dev_form_prefill, imap_tls_mode_from_le
 use crate::components::account_form::{
     AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
     FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form, kind_label,
-    start_smtp_test, use_form_test_status_cleanup,
+    provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -25,6 +25,7 @@ pub fn OnboardingForm() -> Element {
     let core_tx = use_coroutine_handle::<CoreEvent>();
 
     let prefill = use_hook(dev_form_prefill);
+    provide_lookup_edit_guard();
 
     // Stable account id for this form mount (commit path).
     let account_id = use_hook(|| AccountId::new(Uuid::new_v4().to_string()));

@@ -33,6 +33,11 @@ impl Message {
         preview_mailbox(&self.from)
     }
 
+    /// First From mailbox address, if the envelope has one.
+    pub fn sender_email(&self) -> Option<&str> {
+        first_from_email(self.envelope.from.as_ref())
+    }
+
     pub fn to_preview(&self) -> &str {
         preview_mailbox(&self.to)
     }
@@ -272,6 +277,41 @@ mod tests {
         ]);
         assert_eq!(first_from_email(Some(&from)), Some("me@dvratil.cz"));
         assert!(first_from_email(None).is_none());
+    }
+
+    #[test]
+    fn message_sender_email_uses_envelope() {
+        use mailiner_core::{AccountId, FolderId};
+
+        let now = DateTime::from_timestamp(0, 0).unwrap();
+        let envelope = Envelope {
+            id: MessageId::new(FolderId::new("INBOX"), "1"),
+            account_id: AccountId::new("acc"),
+            folder_id: FolderId::new("INBOX"),
+            subject: Some("s".into()),
+            from: Some(EmailAddress::List(vec![EmailAddr {
+                name: Some("Ada".into()),
+                email: Some("ada@example.com".into()),
+            }])),
+            to: None,
+            cc: None,
+            bcc: None,
+            reply_to: None,
+            rfc_message_id: None,
+            in_reply_to: None,
+            references: vec![],
+            date: now,
+            is_read: false,
+            is_answered: false,
+            is_starred: false,
+            is_flagged: false,
+            is_draft: false,
+            is_deleted: false,
+            has_attachments: false,
+            size: None,
+        };
+        let msg = Message::from(envelope);
+        assert_eq!(msg.sender_email(), Some("ada@example.com"));
     }
 }
 

@@ -209,10 +209,11 @@ fn view_message_key(state: &MessageViewState) -> Option<String> {
 #[component]
 pub fn MessageView() -> Element {
     let ctx = use_context::<AppContext>();
-    let mut allow_remote = use_signal(|| false);
+    let mut allow_remote = use_signal(|| crate::ui_prefs::remote_image_decision(None).allowed());
     let mut prefer_plain = use_signal(|| false);
     let mut formatted_html = use_signal(|| String::new());
     let mut prevented_remote = use_signal(|| false);
+    let mut had_remote = use_signal(|| false);
     let last_msg_key = use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(None::<String>)));
     let html_cache =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(InlinedHtmlCache::default())));
@@ -233,8 +234,17 @@ pub fn MessageView() -> Element {
             if *last_msg_key.borrow() != key {
                 *last_msg_key.borrow_mut() = key.clone();
                 html_cache.borrow_mut().reset();
-                if allow || prefer {
-                    allow_remote.set(false);
+                had_remote.set(false);
+                let sender = match &view {
+                    MessageViewState::Ready { message_id, .. }
+                    | MessageViewState::Loading { message_id }
+                    | MessageViewState::Error { message_id, .. } => find_envelope(&ctx, message_id)
+                        .and_then(|m| m.sender_email().map(str::to_string)),
+                    MessageViewState::Empty => None,
+                };
+                let desired = crate::ui_prefs::remote_image_decision(sender.as_deref()).allowed();
+                if allow != desired || prefer {
+                    allow_remote.set(desired);
                     prefer_plain.set(false);
                     // Effect will re-run after toggles clear.
                     return;
@@ -262,6 +272,9 @@ pub fn MessageView() -> Element {
             if !prefer {
                 let cache = html_cache.borrow();
                 if let Some(html) = cache.html_for(&key, allow) {
+                    if cache.prevented_remote {
+                        had_remote.set(true);
+                    }
                     prevented_remote.set(cache.prevented_remote && !allow);
                     mount_shadow_html(MESSAGE_CONTENT_ID, html);
                     return;
@@ -277,6 +290,9 @@ pub fn MessageView() -> Element {
                 let prevented = result.prevented_remote_resources;
                 let html = result.html;
 
+                if prevented {
+                    had_remote.set(true);
+                }
                 prevented_remote.set(prevented && !allow);
                 mount_shadow_html(MESSAGE_CONTENT_ID, &html);
 
@@ -322,6 +338,9 @@ pub fn MessageView() -> Element {
         | MessageViewState::Error { message_id, .. } => find_envelope(&ctx, message_id),
         MessageViewState::Empty => None,
     };
+    let from_email = envelope
+        .as_ref()
+        .and_then(|m| m.sender_email().map(str::to_string));
     rsx! {
         section {
             id: "messageview",
@@ -356,21 +375,11 @@ pub fn MessageView() -> Element {
                         MessageHeader { message: env, prefer_plain, formatted_html }
                     }
 
-                    if *prevented_remote.read() {
-                        div {
-                            class: "message-privacy-banner",
-                            role: "status",
-                            span {
-                                "To protect your privacy, remote resources (images, styles) were blocked."
-                            }
-                            button {
-                                class: "message-privacy-allow",
-                                onclick: move |_| {
-                                    allow_remote.set(true);
-                                },
-                                "Allow"
-                            }
-                        }
+                    RemotePrivacyBanner {
+                        allow_remote,
+                        prevented_remote: *prevented_remote.read(),
+                        had_remote: *had_remote.read(),
+                        from_email: from_email.clone(),
                     }
 
                     div {
@@ -406,8 +415,12 @@ impl InlinedHtmlCache {
         }
         if allow_remote {
             self.allowed.as_deref().or(self.blocked.as_deref())
-        } else {
+        } else if self.prevented_remote {
+            // `blocked` is only stripped HTML when we formatted with allow=false.
+            // An allow-first format stores allowed HTML there; miss so we re-strip.
             self.blocked.as_deref()
+        } else {
+            None
         }
     }
 }
@@ -606,6 +619,123 @@ fn HeaderAddressRow(
                     }
                 } else {
                     span { "{addr.label}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RemotePrivacyBanner(
+    mut allow_remote: Signal<bool>,
+    prevented_remote: bool,
+    had_remote: bool,
+    from_email: Option<String>,
+) -> Element {
+    use crate::ui_prefs::{self, RemoteImagePref, RemoteImageSource};
+
+    let decision = ui_prefs::remote_image_decision(from_email.as_deref());
+    let domain = from_email.as_deref().and_then(ui_prefs::domain_of_email);
+    let showing = allow_remote();
+    let remembered_allow =
+        showing && decision.allowed() && decision.source != RemoteImageSource::Global;
+    let persist_this_message = showing && !decision.allowed() && had_remote;
+    let blocked = !showing && prevented_remote;
+
+    if !blocked && !persist_this_message && !remembered_allow {
+        return rsx! {};
+    }
+
+    let sender_label = from_email
+        .as_deref()
+        .and_then(ui_prefs::normalize_email)
+        .unwrap_or_default();
+    let domain_label = domain
+        .as_deref()
+        .map(|d| format!("@{d}"))
+        .unwrap_or_default();
+    let from_forget = from_email.clone();
+    let domain_forget = domain.clone();
+    let from_save = from_email.clone();
+    let domain_save = domain.clone();
+
+    rsx! {
+        div {
+            class: if blocked {
+                "message-privacy-banner"
+            } else {
+                "message-privacy-banner is-allowed"
+            },
+            role: "status",
+            if blocked {
+                span {
+                    "To protect your privacy, remote resources (images, styles) were blocked."
+                }
+                button {
+                    class: "message-privacy-allow",
+                    onclick: move |_| {
+                        allow_remote.set(true);
+                    },
+                    "Allow"
+                }
+            } else if remembered_allow {
+                span {
+                    if decision.source == RemoteImageSource::Domain {
+                        "Remote images are allowed for {domain_label}."
+                    } else {
+                        "Remote images are allowed for {sender_label}."
+                    }
+                }
+                button {
+                    class: "message-privacy-remember",
+                    onclick: move |_| {
+                        match decision.source {
+                            RemoteImageSource::Address => {
+                                if let Some(email) = from_forget.as_deref() {
+                                    ui_prefs::clear_remote_image_address(email);
+                                }
+                            }
+                            RemoteImageSource::Domain => {
+                                if let Some(d) = domain_forget.as_deref() {
+                                    ui_prefs::clear_remote_image_domain(d);
+                                }
+                            }
+                            RemoteImageSource::Global => {}
+                        }
+                        let next = ui_prefs::remote_image_decision(from_forget.as_deref()).allowed();
+                        allow_remote.set(next);
+                    },
+                    "Don't always allow"
+                }
+            } else {
+                span {
+                    "Remote resources are shown for this message."
+                }
+            }
+            if (blocked || persist_this_message) && !sender_label.is_empty() {
+                button {
+                    class: "message-privacy-remember",
+                    title: "Always allow remote images from {sender_label}",
+                    onclick: move |_| {
+                        if let Some(email) = from_save.as_deref() {
+                            ui_prefs::save_remote_image_address(email, RemoteImagePref::Allow);
+                        }
+                        allow_remote.set(true);
+                    },
+                    "Always allow from this sender"
+                }
+            }
+            if (blocked || persist_this_message) && !domain_label.is_empty() {
+                button {
+                    class: "message-privacy-remember",
+                    title: "Always allow remote images from {domain_label}",
+                    onclick: move |_| {
+                        if let Some(d) = domain_save.as_deref() {
+                            ui_prefs::save_remote_image_domain(d, RemoteImagePref::Allow);
+                        }
+                        allow_remote.set(true);
+                    },
+                    "Always allow from this domain"
                 }
             }
         }
@@ -1234,5 +1364,21 @@ mod tests {
             prevented_remote: false,
         };
         assert_eq!(cache.html_for(&key, true), Some("same"));
+    }
+
+    #[test]
+    fn html_cache_misses_block_when_only_allowed_html_was_stored() {
+        let key = Some("k".into());
+        let cache = InlinedHtmlCache {
+            message_key: key.clone(),
+            blocked: Some("<img src=\"https://tracker.example/pixel.png\">".into()),
+            allowed: None,
+            prevented_remote: false,
+        };
+        assert_eq!(cache.html_for(&key, false), None);
+        assert_eq!(
+            cache.html_for(&key, true),
+            Some("<img src=\"https://tracker.example/pixel.png\">")
+        );
     }
 }

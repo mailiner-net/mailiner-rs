@@ -86,6 +86,8 @@ pub fn AccountsSettingsPage() -> Element {
                     }
                 }
 
+                PrivacyPrefsSection {}
+
                 if let Some(err) = action_error() {
                     p {
                         class: "onboarding-status onboarding-status-error",
@@ -313,6 +315,101 @@ pub fn AccountsSettingsPage() -> Element {
                             to: Route::MainView {},
                             class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
                             "Back to mail"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PrivacyPrefsSection() -> Element {
+    use crate::ui_prefs;
+
+    let mut allow_remote = use_signal(ui_prefs::load_allow_remote_images);
+    let mut senders_tick = use_signal(|| 0u32);
+    let _ = senders_tick();
+    let entries = ui_prefs::load_remote_image_senders().entries();
+
+    rsx! {
+        fieldset {
+            class: "onboarding-section privacy-section",
+            legend { "Privacy" }
+            p {
+                class: "bootstrap-muted",
+                "Remote images can tell the sender that you opened a message. \
+                 Blocked by default; you can still allow them on a single message \
+                 or remember a sender."
+            }
+            div {
+                class: "onboarding-field",
+                label {
+                    r#for: "privacy-remote-images",
+                    "Remote images"
+                }
+                select {
+                    id: "privacy-remote-images",
+                    class: "theme-select appearance-theme-select",
+                    value: if allow_remote() { "allow" } else { "block" },
+                    onchange: move |evt| {
+                        let next = evt.value() == "allow";
+                        ui_prefs::save_allow_remote_images(next);
+                        allow_remote.set(next);
+                    },
+                    option {
+                        value: "block",
+                        selected: !allow_remote(),
+                        "Block by default"
+                    }
+                    option {
+                        value: "allow",
+                        selected: allow_remote(),
+                        "Allow by default"
+                    }
+                }
+            }
+            if !entries.is_empty() {
+                p {
+                    class: "bootstrap-muted privacy-sender-heading",
+                    "Remembered senders"
+                }
+                ul {
+                    class: "privacy-sender-list",
+                    for entry in entries {
+                        {
+                            let kind = entry.kind;
+                            let key = entry.key.clone();
+                            let display = entry.display_key();
+                            let pref = entry.pref.label();
+                            let kind_key = match kind {
+                                crate::ui_prefs::RemoteImageSenderKind::Address => "addr",
+                                crate::ui_prefs::RemoteImageSenderKind::Domain => "domain",
+                            };
+                            rsx! {
+                                li {
+                                    class: "privacy-sender-row",
+                                    key: "{kind_key}:{key}",
+                                    span {
+                                        class: "privacy-sender-key",
+                                        title: "{display}",
+                                        "{display}"
+                                    }
+                                    span {
+                                        class: "privacy-sender-pref",
+                                        "{pref}"
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                                        onclick: move |_| {
+                                            ui_prefs::clear_remote_image_entry(kind, &key);
+                                            senders_tick.set(senders_tick() + 1);
+                                        },
+                                        "Remove"
+                                    }
+                                }
+                            }
                         }
                     }
                 }

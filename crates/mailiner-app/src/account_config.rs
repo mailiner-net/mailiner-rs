@@ -44,6 +44,109 @@ impl fmt::Display for AccountConfigError {
 
 impl std::error::Error for AccountConfigError {}
 
+/// Extra From identity (name + email alias) on an account.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AccountIdentity {
+    /// Display name shown in From. Empty is omitted on send.
+    #[serde(default)]
+    pub display_name: String,
+    /// Mailbox address.
+    pub email: String,
+}
+
+impl AccountIdentity {
+    /// Construct a name + email identity.
+    pub fn new(display_name: impl Into<String>, email: impl Into<String>) -> Self {
+        Self {
+            display_name: display_name.into(),
+            email: email.into(),
+        }
+    }
+
+    /// Trimmed name + email, or `None` if both are empty.
+    pub fn trimmed(&self) -> Option<Self> {
+        let display_name = self.display_name.trim().to_string();
+        let email = self.email.trim().to_string();
+        if display_name.is_empty() && email.is_empty() {
+            None
+        } else {
+            Some(Self {
+                display_name,
+                email,
+            })
+        }
+    }
+}
+
+/// Primary first, then extras (duplicates of the primary are skipped).
+pub fn account_identities(
+    name: &str,
+    email: &str,
+    extras: &[AccountIdentity],
+) -> Vec<AccountIdentity> {
+    let mut out = Vec::with_capacity(extras.len() + 1);
+    out.push(AccountIdentity::new(name, email));
+    for extra in extras {
+        if identity_same(
+            extra.display_name.trim(),
+            extra.email.trim(),
+            name.trim(),
+            email.trim(),
+        ) {
+            continue;
+        }
+        out.push(extra.clone());
+    }
+    out
+}
+
+fn identity_same(name_a: &str, email_a: &str, name_b: &str, email_b: &str) -> bool {
+    email_a.eq_ignore_ascii_case(email_b) && name_a.eq_ignore_ascii_case(name_b)
+}
+
+/// Skip blank rows, reject incomplete / invalid emails, drop duplicates.
+pub fn normalize_identities(
+    rows: impl IntoIterator<Item = AccountIdentity>,
+    primary_name: &str,
+    primary_email: &str,
+) -> Result<Vec<AccountIdentity>, String> {
+    let primary_name = primary_name.trim();
+    let primary_email = primary_email.trim();
+    let mut out = Vec::new();
+    for (i, raw) in rows.into_iter().enumerate() {
+        let Some(id) = raw.trimmed() else {
+            continue;
+        };
+        if id.email.is_empty() {
+            return Err(format!(
+                "Identity {} needs an email address (or clear the name).",
+                i + 1
+            ));
+        }
+        if !mailiner_composer::is_valid_email_v1(&id.email) {
+            return Err(format!(
+                "Identity {} email must look like an address (user@example.com).",
+                i + 1
+            ));
+        }
+        if identity_same(&id.display_name, &id.email, primary_name, primary_email) {
+            continue;
+        }
+        if out.iter().any(|existing: &AccountIdentity| {
+            identity_same(
+                &existing.display_name,
+                &existing.email,
+                &id.display_name,
+                &id.email,
+            )
+        }) {
+            continue;
+        }
+        out.push(id);
+    }
+    Ok(out)
+}
+
 /// Full account configuration including connection secrets.
 ///
 /// `Debug` is derived; secret-bearing nested fields implement redacting `Debug`
@@ -55,6 +158,9 @@ pub struct AccountConfig {
     pub display_name: String,
     /// Primary mailbox address (From: / identity).
     pub email: String,
+    /// Extra From identities (name + email aliases). Primary is `display_name` + `email`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identities: Vec<AccountIdentity>,
     /// Optional plain-text signature appended when opening a compose draft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
@@ -534,7 +640,27 @@ impl AccountConfig {
             email: self.email.clone(),
             host: self.imap.host.clone(),
             signature: self.signature.clone(),
+            identities: self.identities.clone(),
         }
+    }
+
+    /// Primary From identity (`display_name` + `email`).
+    pub fn primary_identity(&self) -> AccountIdentity {
+        AccountIdentity::new(self.display_name.clone(), self.email.clone())
+    }
+
+    /// Primary first, then extras.
+    pub fn all_identities(&self) -> Vec<AccountIdentity> {
+        account_identities(&self.display_name, &self.email, &self.identities)
+    }
+
+    /// Replace extras after [`normalize_identities`].
+    pub fn with_identities(
+        mut self,
+        rows: impl IntoIterator<Item = AccountIdentity>,
+    ) -> Result<Self, String> {
+        self.identities = normalize_identities(rows, &self.display_name, &self.email)?;
+        Ok(self)
     }
 
     /// Clear IMAP/SMTP passwords and the proxy token in place.
@@ -876,6 +1002,7 @@ mod tests {
             id: AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
             display_name: "Work".into(),
             email: "user@example.com".into(),
+            identities: Vec::new(),
             signature: None,
             imap: sample_imap(),
             smtp: None,
@@ -1146,6 +1273,7 @@ mod tests {
         assert_eq!(ui.email, "user@example.com");
         assert_eq!(ui.host, config.imap.host);
         assert!(ui.signature.is_none());
+        assert!(ui.identities.is_empty());
     }
 
     #[test]
@@ -1181,6 +1309,7 @@ mod tests {
         }"#;
         let back: AccountConfig = serde_json::from_str(old).expect("old blob without signature");
         assert!(back.signature.is_none());
+        assert!(back.identities.is_empty());
         assert_eq!(back.email, "user@example.com");
     }
 
@@ -1196,6 +1325,88 @@ mod tests {
         let back: AccountConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.signature.as_deref(), Some("Jane Doe\nExample Corp"));
         assert_eq!(back.to_ui_account().signature, back.signature);
+    }
+
+    #[test]
+    fn serde_old_config_without_identities_defaults_empty() {
+        let json = serde_json::to_string(&sample_config()).unwrap();
+        assert!(
+            !json.contains("identities"),
+            "empty identities should be omitted: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.identities.is_empty());
+    }
+
+    #[test]
+    fn serde_roundtrip_identities() {
+        let mut config = sample_config();
+        config.identities = vec![AccountIdentity::new("Support", "support@example.com")];
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            json.contains("\"email\":\"support@example.com\""),
+            "identity missing: {json}"
+        );
+        let back: AccountConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.identities, config.identities);
+        assert_eq!(back.to_ui_account().identities, back.identities);
+        assert_eq!(back.all_identities().len(), 2);
+        assert_eq!(back.all_identities()[0].email, "user@example.com");
+        assert_eq!(back.all_identities()[1].email, "support@example.com");
+    }
+
+    #[test]
+    fn normalize_identities_skips_blank_and_primary() {
+        let rows = vec![
+            AccountIdentity::new("", ""),
+            AccountIdentity::new("  ", "  "),
+            AccountIdentity::new("Work", "user@example.com"),
+            AccountIdentity::new(" Support ", " support@example.com "),
+            AccountIdentity::new("Support", "support@example.com"),
+        ];
+        let out = normalize_identities(rows, "Work", "user@example.com").unwrap();
+        assert_eq!(
+            out,
+            vec![AccountIdentity::new("Support", "support@example.com")]
+        );
+    }
+
+    #[test]
+    fn normalize_identities_rejects_name_without_email() {
+        let err = normalize_identities(
+            vec![AccountIdentity::new("Support", "")],
+            "Work",
+            "user@example.com",
+        )
+        .unwrap_err();
+        assert!(err.contains("email"), "{err}");
+    }
+
+    #[test]
+    fn normalize_identities_rejects_invalid_email() {
+        for email in ["not-an-email", "a@b", "a@@b.com"] {
+            let err = normalize_identities(
+                vec![AccountIdentity::new("Support", email)],
+                "Work",
+                "user@example.com",
+            )
+            .unwrap_err();
+            assert!(err.contains("look like an address"), "{email}: {err}");
+        }
+    }
+
+    #[test]
+    fn with_identities_stores_normalized_extras() {
+        let config = sample_config()
+            .with_identities(vec![
+                AccountIdentity::new("", ""),
+                AccountIdentity::new("Alias", "alias@example.com"),
+            ])
+            .unwrap();
+        assert_eq!(
+            config.identities,
+            vec![AccountIdentity::new("Alias", "alias@example.com")]
+        );
     }
 
     #[test]

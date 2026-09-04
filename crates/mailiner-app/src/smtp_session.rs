@@ -264,6 +264,7 @@ mod tests {
             id: AccountId::new("acc"),
             display_name: "Work".into(),
             email: "user@example.com".into(),
+            identities: Vec::new(),
             signature: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),

@@ -10,12 +10,12 @@ use crate::AppBootstrapState;
 use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, DEFAULT_SMTP_PORT, ImapTlsMode, SmtpTlsMode, dev_form_prefill,
+    AccountConfig, AccountIdentity, DEFAULT_SMTP_PORT, ImapTlsMode, SmtpTlsMode, dev_form_prefill,
     imap_tls_mode_from_legacy,
 };
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
-    FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
+    AccountConnectionFields, AccountIdentitiesFields, AccountSignatureFields, AccountSmtpFields,
+    FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
     credentials_changed, kind_label, provide_lookup_edit_guard, start_smtp_test,
     use_form_test_status_cleanup,
 };
@@ -814,6 +814,7 @@ pub fn AccountNewPage() -> Element {
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
     let mut signature = use_signal(String::new);
+    let mut identities = use_signal(Vec::<AccountIdentity>::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -936,7 +937,9 @@ pub fn AccountNewPage() -> Element {
             &smtp_remote_port(),
             &signature(),
             Utc::now(),
-        ) {
+        )
+        .and_then(|c| c.with_identities(identities()))
+        {
             Ok(config) => {
                 if let Some(prev) = test_request_id() {
                     ctx.connection_states.write().remove(&prev);
@@ -981,7 +984,8 @@ pub fn AccountNewPage() -> Element {
                 &smtp_remote_port(),
                 &signature(),
                 Utc::now(),
-            ),
+            )
+            .and_then(|c| c.with_identities(identities())),
             phase,
             test_request_id,
             status_message,
@@ -1016,7 +1020,9 @@ pub fn AccountNewPage() -> Element {
             &smtp_remote_port(),
             &signature(),
             Utc::now(),
-        ) {
+        )
+        .and_then(|c| c.with_identities(identities()))
+        {
             Ok(config) => {
                 ctx.connection_states
                     .write()
@@ -1090,6 +1096,13 @@ pub fn AccountNewPage() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountIdentitiesFields {
+                        id_prefix: "account-new",
+                        identities: identities(),
+                        set_identities: move |v| identities.set(v),
+                        busy: busy,
                     }
 
                     AccountSignatureFields {
@@ -1199,6 +1212,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
     let mut signature = use_signal(String::new);
+    let mut identities = use_signal(Vec::<AccountIdentity>::new);
     let mut open_smtp = use_signal(|| false);
 
     let mut phase = use_signal(|| FormPhase::Idle);
@@ -1262,6 +1276,7 @@ pub fn AccountEditPage(id: String) -> Element {
                         open_smtp.set(false);
                     }
                     signature.set(cfg.signature.clone().unwrap_or_default());
+                    identities.set(cfg.identities.clone());
                     original.set(Some(cfg));
                     load_state.set(EditLoadState::Ready);
                 }
@@ -1473,7 +1488,9 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_remote_port(),
             &signature(),
             orig.created_at,
-        ) {
+        )
+        .and_then(|c| c.with_identities(identities()))
+        {
             Ok(config) => {
                 if let Some(prev) = test_request_id() {
                     ctx.connection_states.write().remove(&prev);
@@ -1521,7 +1538,8 @@ pub fn AccountEditPage(id: String) -> Element {
                 &smtp_remote_port(),
                 &signature(),
                 orig.created_at,
-            ),
+            )
+            .and_then(|c| c.with_identities(identities())),
             phase,
             test_request_id,
             status_message,
@@ -1559,7 +1577,9 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_remote_port(),
             &signature(),
             orig.created_at,
-        ) {
+        )
+        .and_then(|c| c.with_identities(identities()))
+        {
             Ok(c) => c,
             Err(msg) => {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));
@@ -1610,6 +1630,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     ui.email = config.email.clone();
                     ui.host = config.imap.host.clone();
                     ui.signature = config.signature.clone();
+                    ui.identities = config.identities.clone();
                 }
                 core_tx.send(CoreEvent::AccountsChanged);
                 phase.set(FormPhase::Idle);
@@ -1677,6 +1698,13 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_smtp_open: move |v| open_smtp.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
+                    }
+
+                    AccountIdentitiesFields {
+                        id_prefix: "account-edit",
+                        identities: identities(),
+                        set_identities: move |v| identities.set(v),
+                        busy: busy,
                     }
 
                     AccountSignatureFields {

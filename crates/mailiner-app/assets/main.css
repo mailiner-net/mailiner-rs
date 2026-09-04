@@ -408,6 +408,30 @@ button.flat {
     font-size: 0.8rem;
 }
 
+.account-identities {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 0.25rem 0 0.65rem;
+}
+
+.account-identity-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: flex-end;
+}
+
+.account-identity-row .onboarding-field {
+    flex: 1 1 8rem;
+    margin-bottom: 0;
+}
+
+.account-identity-row .onboarding-btn {
+    width: auto;
+    margin-bottom: 0.1rem;
+}
+
 .onboarding-lookup-row {
     display: flex;
     flex-wrap: wrap;

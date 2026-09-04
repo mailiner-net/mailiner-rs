@@ -1,12 +1,15 @@
 //! Composer send / Test SMTP UI state (no secrets).
 
 use mailiner_composer::FileAttachment;
+use mailiner_composer::flatten_addresses;
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument};
+use mailiner_core::EmailAddress;
 use mailiner_core::MessageId;
 use mailiner_core::submit::SendErrorKind;
 
-use crate::account::AccountId;
+use crate::account::{Account, AccountId};
+use crate::account_config::AccountIdentity;
 
 /// Open compose session (owned by [`crate::context::AppContext::compose_draft`]).
 #[derive(Clone, Debug)]
@@ -52,9 +55,193 @@ pub fn from_account_label(name: &str, email: &str) -> String {
     }
 }
 
+/// One selectable From row (account + identity index).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FromChoice {
+    pub account_id: AccountId,
+    pub identity: AccountIdentity,
+    /// `0` is the account primary; extras follow.
+    pub index: usize,
+}
+
+impl FromChoice {
+    /// `<select>` value: `account_id` + unit separator + index.
+    pub fn key(&self) -> String {
+        encode_from_choice_key(&self.account_id, self.index)
+    }
+}
+
+const FROM_KEY_SEP: char = '\u{1f}';
+
+/// Encode a From picker value.
+pub fn encode_from_choice_key(account_id: &AccountId, index: usize) -> String {
+    format!("{}{FROM_KEY_SEP}{index}", account_id.as_str())
+}
+
+/// Parse a From picker value.
+pub fn parse_from_choice_key(key: &str) -> Option<(AccountId, usize)> {
+    let (id, idx) = key.rsplit_once(FROM_KEY_SEP)?;
+    let index = idx.parse().ok()?;
+    if id.is_empty() {
+        return None;
+    }
+    Some((AccountId::new(id), index))
+}
+
+/// Flatten stored accounts into From picker rows (primary then extras).
+pub fn list_from_choices(accounts: &[Account]) -> Vec<FromChoice> {
+    let mut out = Vec::new();
+    for account in accounts {
+        for (index, identity) in account.all_identities().into_iter().enumerate() {
+            out.push(FromChoice {
+                account_id: account.id.clone(),
+                identity,
+                index,
+            });
+        }
+    }
+    out
+}
+
+fn identity_matches(identity: &AccountIdentity, from: &ComposerAddress) -> bool {
+    from.email
+        .trim()
+        .eq_ignore_ascii_case(identity.email.trim())
+        && match from
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            Some(name) => name.eq_ignore_ascii_case(identity.display_name.trim()),
+            None => identity.display_name.trim().is_empty(),
+        }
+}
+
+/// Identity that matches `from` on `account`, else the primary.
+pub fn resolve_account_identity(
+    account: &Account,
+    from: Option<&ComposerAddress>,
+) -> AccountIdentity {
+    let identities = account.all_identities();
+    if let Some(from) = from {
+        if let Some(id) = identities.iter().find(|id| identity_matches(id, from)) {
+            return id.clone();
+        }
+        if let Some(id) = identities
+            .iter()
+            .find(|id| from.email.trim().eq_ignore_ascii_case(id.email.trim()))
+        {
+            return id.clone();
+        }
+    }
+    account.primary_identity()
+}
+
+/// Extra identity whose email appears in `emails`, else the primary if it does.
+///
+/// Aliases win over the primary when both are present so Reply/Forward send
+/// from the address that received the mail, not the account default.
+pub fn identity_matching_emails<'a>(
+    account: &Account,
+    emails: impl IntoIterator<Item = &'a str>,
+) -> AccountIdentity {
+    let listed: Vec<&str> = emails.into_iter().collect();
+    for extra in &account.identities {
+        if listed
+            .iter()
+            .any(|email| email.trim().eq_ignore_ascii_case(extra.email.trim()))
+        {
+            return extra.clone();
+        }
+    }
+    if listed
+        .iter()
+        .any(|email| email.trim().eq_ignore_ascii_case(account.email.trim()))
+    {
+        return account.primary_identity();
+    }
+    account.primary_identity()
+}
+
+/// From identity for Reply/Forward from the original To/Cc.
+///
+/// Aliases win over the primary even when the primary is listed first (To)
+/// and the alias is only on Cc — walking recipients in header order would
+/// otherwise lock onto the primary and ignore the alias.
+pub fn identity_for_reply(
+    account: &Account,
+    to: Option<&EmailAddress>,
+    cc: Option<&EmailAddress>,
+) -> AccountIdentity {
+    let recipient_emails: Vec<String> = to
+        .into_iter()
+        .chain(cc)
+        .flat_map(flatten_addresses)
+        .map(|a| a.email)
+        .collect();
+    identity_matching_emails(account, recipient_emails.iter().map(String::as_str))
+}
+
+/// Whether `email` is this account's primary mailbox or an extra identity.
+pub fn is_account_identity_email(account: &Account, email: &str) -> bool {
+    account
+        .all_identities()
+        .iter()
+        .any(|id| email.trim().eq_ignore_ascii_case(id.email.trim()))
+}
+
+/// Drop To/Cc/Bcc addresses that belong to `account` (all identities).
+pub fn strip_account_identities(draft: &mut DraftDocument, account: &Account) {
+    draft
+        .to
+        .retain(|a| !is_account_identity_email(account, &a.email));
+    draft
+        .cc
+        .retain(|a| !is_account_identity_email(account, &a.email));
+    draft
+        .bcc
+        .retain(|a| !is_account_identity_email(account, &a.email));
+}
+
+/// Picker row for the current session From, falling back to the account primary.
+pub fn selected_from_choice<'a>(
+    choices: &'a [FromChoice],
+    account_id: Option<&AccountId>,
+    from: Option<&ComposerAddress>,
+) -> Option<&'a FromChoice> {
+    let account_id = account_id?;
+    let on_account: Vec<&FromChoice> = choices
+        .iter()
+        .filter(|c| &c.account_id == account_id)
+        .collect();
+    if let Some(from) = from {
+        if let Some(c) = on_account
+            .iter()
+            .copied()
+            .find(|c| identity_matches(&c.identity, from))
+        {
+            return Some(c);
+        }
+        if let Some(c) = on_account.iter().copied().find(|c| {
+            from.email
+                .trim()
+                .eq_ignore_ascii_case(c.identity.email.trim())
+        }) {
+            return Some(c);
+        }
+    }
+    on_account.into_iter().find(|c| c.index == 0)
+}
+
 /// Sender identity for an account's display name + mailbox.
 pub fn identity_from_account(name: impl Into<String>, email: impl Into<String>) -> FromIdentity {
     FromIdentity::new(name, email)
+}
+
+/// Map a stored [`AccountIdentity`] to the composer type.
+pub fn identity_from_stored(identity: &AccountIdentity) -> FromIdentity {
+    identity_from_account(identity.display_name.clone(), identity.email.clone())
 }
 
 /// Draft From address for an identity (empty display name is omitted).
@@ -70,17 +257,26 @@ pub fn composer_address_from_identity(identity: &FromIdentity) -> ComposerAddres
 }
 
 /// Switch the session's send account and draft From header.
+pub fn set_session_from_identity(
+    session: &mut ComposeSession,
+    account_id: AccountId,
+    identity: &AccountIdentity,
+) {
+    session.account_id = account_id;
+    session.draft.from = Some(composer_address_from_identity(&identity_from_stored(
+        identity,
+    )));
+    session.draft.touch();
+}
+
+/// Switch the session's send account and draft From header.
 pub fn set_session_from_account(
     session: &mut ComposeSession,
     account_id: AccountId,
     name: &str,
     email: &str,
 ) {
-    session.account_id = account_id;
-    session.draft.from = Some(composer_address_from_identity(&identity_from_account(
-        name, email,
-    )));
-    session.draft.touch();
+    set_session_from_identity(session, account_id, &AccountIdentity::new(name, email));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,5 +467,189 @@ mod tests {
         let from = session.draft.from.expect("from");
         assert_eq!(from.email, "new@example.com");
         assert_eq!(from.name, None);
+    }
+
+    fn account(id: &str, name: &str, email: &str, extras: Vec<AccountIdentity>) -> Account {
+        Account {
+            id: AccountId::new(id),
+            name: name.into(),
+            email: email.into(),
+            host: "imap.example.com".into(),
+            signature: None,
+            identities: extras,
+        }
+    }
+
+    #[test]
+    fn list_from_choices_includes_primary_and_extras() {
+        let work = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let home = account("h", "Home", "home@example.com", Vec::new());
+        let choices = list_from_choices(&[work, home]);
+        assert_eq!(choices.len(), 3);
+        assert_eq!(choices[0].account_id.as_str(), "w");
+        assert_eq!(choices[0].index, 0);
+        assert_eq!(choices[0].identity.email, "work@example.com");
+        assert_eq!(choices[1].index, 1);
+        assert_eq!(choices[1].identity.email, "support@example.com");
+        assert_eq!(choices[2].account_id.as_str(), "h");
+        assert_eq!(parse_from_choice_key(&choices[1].key()), Some((id("w"), 1)));
+    }
+
+    #[test]
+    fn resolve_account_identity_prefers_name_and_email() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![
+                AccountIdentity::new("Support", "support@example.com"),
+                AccountIdentity::new("Help", "support@example.com"),
+            ],
+        );
+        let from = ComposerAddress {
+            name: Some("Help".into()),
+            email: "support@example.com".into(),
+        };
+        let id = resolve_account_identity(&acc, Some(&from));
+        assert_eq!(id.display_name, "Help");
+        assert_eq!(id.email, "support@example.com");
+
+        let unknown = ComposerAddress {
+            name: Some("X".into()),
+            email: "other@example.com".into(),
+        };
+        let fallback = resolve_account_identity(&acc, Some(&unknown));
+        assert_eq!(fallback.email, "work@example.com");
+    }
+
+    #[test]
+    fn identity_matching_emails_picks_alias() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let id = identity_matching_emails(&acc, ["boss@example.com", "support@example.com"]);
+        assert_eq!(id.email, "support@example.com");
+        let primary = identity_matching_emails(&acc, ["nobody@example.com"]);
+        assert_eq!(primary.email, "work@example.com");
+    }
+
+    #[test]
+    fn identity_matching_emails_prefers_alias_over_primary() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let id = identity_matching_emails(&acc, ["work@example.com", "support@example.com"]);
+        assert_eq!(id.email, "support@example.com");
+        assert_eq!(id.display_name, "Support");
+    }
+
+    fn addr(email: &str) -> mailiner_core::EmailAddress {
+        mailiner_core::EmailAddress::List(vec![mailiner_core::EmailAddr {
+            name: None,
+            email: Some(email.into()),
+        }])
+    }
+
+    #[test]
+    fn identity_for_reply_prefers_alias_in_cc_over_primary_in_to() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let to = addr("work@example.com");
+        let cc = addr("support@example.com");
+        let id = identity_for_reply(&acc, Some(&to), Some(&cc));
+        assert_eq!(id.email, "support@example.com");
+        assert_eq!(id.display_name, "Support");
+    }
+
+    #[test]
+    fn strip_account_identities_removes_primary_and_aliases() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let identity = identity_from_account("Support", "support@example.com");
+        let mut draft = DraftDocument::new_empty(&identity);
+        draft.to = vec![
+            ComposerAddress::email_only("boss@example.com"),
+            ComposerAddress::email_only("work@example.com"),
+        ];
+        draft.cc = vec![
+            ComposerAddress::email_only("support@example.com"),
+            ComposerAddress::email_only("cc@example.com"),
+        ];
+        strip_account_identities(&mut draft, &acc);
+        assert_eq!(
+            draft
+                .to
+                .iter()
+                .map(|a| a.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["boss@example.com"]
+        );
+        assert_eq!(
+            draft
+                .cc
+                .iter()
+                .map(|a| a.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cc@example.com"]
+        );
+    }
+
+    #[test]
+    fn selected_from_choice_matches_draft_from() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let choices = list_from_choices(&[acc]);
+        let from = ComposerAddress {
+            name: Some("Support".into()),
+            email: "support@example.com".into(),
+        };
+        let selected = selected_from_choice(&choices, Some(&id("w")), Some(&from)).unwrap();
+        assert_eq!(selected.index, 1);
+        let fallback = selected_from_choice(&choices, Some(&id("w")), None).unwrap();
+        assert_eq!(fallback.index, 0);
+    }
+
+    #[test]
+    fn set_session_from_identity_updates_from() {
+        let identity = identity_from_account("Old", "old@example.com");
+        let mut session = ComposeSession {
+            title: "New message".into(),
+            draft: DraftDocument::new_empty(&identity),
+            account_id: id("old"),
+            reply_source: None,
+            stashed_originals: Vec::new(),
+        };
+        set_session_from_identity(
+            &mut session,
+            id("w"),
+            &AccountIdentity::new("Support", "support@example.com"),
+        );
+        assert_eq!(session.account_id.as_str(), "w");
+        let from = session.draft.from.expect("from");
+        assert_eq!(from.email, "support@example.com");
+        assert_eq!(from.name.as_deref(), Some("Support"));
     }
 }

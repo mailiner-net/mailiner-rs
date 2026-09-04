@@ -404,6 +404,7 @@ mod tests {
             id: AccountId::new(id),
             display_name: name.into(),
             email: format!("{name}@example.com"),
+            identities: Vec::new(),
             signature: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),

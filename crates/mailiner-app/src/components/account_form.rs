@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::account::AccountId;
 use crate::account_config::{
-    AccountConfig, ImapSettings, ImapTlsMode, ProxySettings, SmtpTlsMode,
+    AccountConfig, AccountIdentity, ImapSettings, ImapTlsMode, ProxySettings, SmtpTlsMode,
     default_port_for_tls_mode, normalize_signature, optional_smtp_from_tls_mode,
     port_for_imap_tls_mode_change, port_for_tls_mode_change,
 };
@@ -337,6 +337,7 @@ pub fn build_config_from_form(
         id: account_id.clone(),
         display_name: display_name.to_string(),
         email: email.to_string(),
+        identities: Vec::new(),
         signature: normalize_signature(signature),
         imap: ImapSettings::new(
             host,
@@ -909,6 +910,103 @@ pub fn AccountConnectionFields(
     }
 }
 
+/// Extra From identities (name + email aliases).
+#[component]
+pub fn AccountIdentitiesFields(
+    id_prefix: String,
+    identities: Vec<AccountIdentity>,
+    set_identities: EventHandler<Vec<AccountIdentity>>,
+    busy: bool,
+) -> Element {
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "From identities" }
+            p {
+                class: "bootstrap-muted",
+                "Extra names and addresses you can send from with this account. \
+                 The primary identity is the display name and email above."
+            }
+            div {
+                class: "account-identities",
+                for (index, identity) in identities.iter().cloned().enumerate() {
+                    div {
+                        class: "account-identity-row",
+                        key: "{index}",
+                        FormField {
+                            label: "Name",
+                            id: "{id_prefix}-identity-{index}-name",
+                            value: identity.display_name.clone(),
+                            oninput: {
+                                let identities = identities.clone();
+                                move |v: String| {
+                                    let mut next = identities.clone();
+                                    if let Some(row) = next.get_mut(index) {
+                                        row.display_name = v;
+                                    }
+                                    set_identities.call(next);
+                                }
+                            },
+                            autocomplete: "off",
+                            disabled: busy,
+                        }
+                        FormField {
+                            label: "Email",
+                            id: "{id_prefix}-identity-{index}-email",
+                            value: identity.email.clone(),
+                            oninput: {
+                                let identities = identities.clone();
+                                move |v: String| {
+                                    let mut next = identities.clone();
+                                    if let Some(row) = next.get_mut(index) {
+                                        row.email = v;
+                                    }
+                                    set_identities.call(next);
+                                }
+                            },
+                            input_type: "email",
+                            autocomplete: "off",
+                            disabled: busy,
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                            title: "Remove identity",
+                            aria_label: "Remove identity",
+                            disabled: busy,
+                            onclick: {
+                                let identities = identities.clone();
+                                move |_| {
+                                    let mut next = identities.clone();
+                                    if index < next.len() {
+                                        next.remove(index);
+                                    }
+                                    set_identities.call(next);
+                                }
+                            },
+                            "Remove"
+                        }
+                    }
+                }
+            }
+            button {
+                r#type: "button",
+                class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                disabled: busy,
+                onclick: {
+                    let identities = identities.clone();
+                    move |_| {
+                        let mut next = identities.clone();
+                        next.push(AccountIdentity::new("", ""));
+                        set_identities.call(next);
+                    }
+                },
+                "Add identity"
+            }
+        }
+    }
+}
+
 /// Optional plain-text signature (new / reply / forward drafts).
 #[component]
 pub fn AccountSignatureFields(
@@ -1347,5 +1445,21 @@ mod tests {
         assert!(err.contains("SMTP remote port"), "{err}");
         let err = form("smtp.example.com", "", "nope").unwrap_err();
         assert!(err.contains("SMTP remote port"), "{err}");
+    }
+
+    #[test]
+    fn form_with_identities_keeps_normalized_extras() {
+        let config = form("smtp.example.com", "", "")
+            .unwrap()
+            .with_identities(vec![
+                AccountIdentity::new("", ""),
+                AccountIdentity::new("Support", "support@example.com"),
+            ])
+            .unwrap();
+        assert_eq!(
+            config.identities,
+            vec![AccountIdentity::new("Support", "support@example.com")]
+        );
+        assert_eq!(config.all_identities().len(), 2);
     }
 }

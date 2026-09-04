@@ -113,8 +113,9 @@ compile-time `MAILINER_DEV_*` values if set in the environment at build time
 Step 3: open the app in the browser. With an empty account store you will see
 **Onboarding**:
 
-1. Enter display name, email, IMAP host / port / username / password
-2. Enter proxy base URL and token (and optional remote host/port overrides)
+1. Enter display name and email — Mailiner looks up IMAP/SMTP (Mozilla ISPDB,
+   then common `imap.` / `smtp.` host guesses). You can edit the result.
+2. Enter IMAP password, proxy base URL and token (and optional remote overrides)
 3. Optionally click **Test connection**
 4. Click **Save & continue** — Mailiner connects and authenticates first; only
    on success are settings saved and the main mail UI opened

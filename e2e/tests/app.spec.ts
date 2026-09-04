@@ -8,5 +8,6 @@ test('empty store shows first-run onboarding', async ({ page }) => {
   await expect(page.locator('.onboarding-shell')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Look up servers' })).toBeVisible();
   await expect(page.locator('#app')).toHaveCount(0);
 });

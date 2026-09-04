@@ -20,7 +20,7 @@ use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
 use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
-use crate::keywords::{MessageKeywordChips, keyword_tone};
+use crate::keywords::{MessageKeywordChips, has_visible_keywords, keyword_tone};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::phishing::{self, SenderCue};
@@ -833,12 +833,19 @@ fn MessageHeader(
     let selected_keywords = {
         let list = ctx.messages.read();
         ImapKeyword::ALL.map(|keyword| {
-            !selected_ids.is_empty()
-                && selected_ids.iter().all(|id| {
-                    list.find(|m| m.id == *id)
-                        .map(|m| m.envelope.has_keyword(keyword))
-                        .unwrap_or_else(|| message.envelope.has_keyword(keyword))
-                })
+            let mut any = false;
+            let mut all_on = true;
+            for id in &selected_ids {
+                let Some(on) = list
+                    .find(|m| m.id == *id)
+                    .map(|m| m.envelope.has_keyword(keyword))
+                else {
+                    continue;
+                };
+                any = true;
+                all_on &= on;
+            }
+            any && all_on
         })
     };
     let mut labels_open = use_signal(|| false);
@@ -1344,7 +1351,7 @@ fn MessageHeader(
                     " {date}"
                 }
                 AuthResultsRow { auth: message.envelope.auth_results }
-                if !message.envelope.keywords.is_empty() {
+                if has_visible_keywords(&message.envelope.keywords) {
                     span {
                         class: "message-view-meta-item message-view-labels",
                         span { class: "message-view-meta-k", "Labels" }
@@ -1393,6 +1400,7 @@ fn LabelsMenu(
                             class: if on { "is-on" },
                             r#type: "button",
                             role: "menuitemcheckbox",
+                            aria_label: keyword.label(),
                             aria_checked: if on { "true" } else { "false" },
                             onclick: move |evt| {
                                 onclose.call(evt);
@@ -1413,7 +1421,6 @@ fn LabelsMenu(
                             },
                             span {
                                 class: "message-keyword-chip {tone}",
-                                aria_hidden: "true",
                                 "{keyword.label()}"
                             }
                             if on {

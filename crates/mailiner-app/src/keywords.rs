@@ -23,6 +23,12 @@ impl KeywordChip {
     }
 }
 
+pub fn has_visible_keywords(atoms: &[String]) -> bool {
+    atoms
+        .iter()
+        .any(|atom| ImapKeyword::from_atom(atom).is_some() || !is_hidden_keyword(atom))
+}
+
 /// Visible labels: built-in keywords first (palette order), then other atoms.
 pub fn visible_keyword_chips(atoms: &[String]) -> Vec<KeywordChip> {
     let mut chips = Vec::new();
@@ -143,12 +149,14 @@ mod tests {
 
     #[test]
     fn hidden_protocol_keywords_are_omitted() {
-        let chips = visible_keyword_chips(&[
+        let hidden = vec![
             "$Forwarded".into(),
             "$Junk".into(),
             "$NotJunk".into(),
             "$Phishing".into(),
-        ]);
-        assert!(chips.is_empty());
+        ];
+        assert!(visible_keyword_chips(&hidden).is_empty());
+        assert!(!has_visible_keywords(&hidden));
+        assert!(has_visible_keywords(&["$Todo".into()]));
     }
 }

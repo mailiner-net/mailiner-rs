@@ -12,9 +12,10 @@ use crate::account_config::DEFAULT_SMTP_PORT;
 use crate::account_config::{SmtpTlsMode, dev_form_prefill, imap_tls_mode_from_legacy};
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormField, FormPhase,
-    FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form, kind_label,
-    provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
+    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, AccountTlsFields,
+    FormField, FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome,
+    build_config_from_form, kind_label, provide_lookup_edit_guard, start_smtp_test,
+    use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -57,6 +58,7 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
+    let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut unlock_passphrase = use_signal(String::new);
     let mut unlock_passphrase_confirm = use_signal(String::new);
@@ -202,6 +204,7 @@ pub fn OnboardingForm() -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -250,6 +253,7 @@ pub fn OnboardingForm() -> Element {
                 &smtp_remote_host(),
                 &smtp_remote_port(),
                 &signature(),
+                &extra_ca_pems(),
                 Utc::now(),
             ),
             phase,
@@ -285,6 +289,7 @@ pub fn OnboardingForm() -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -384,6 +389,13 @@ pub fn OnboardingForm() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountTlsFields {
+                        id_prefix: "onboarding",
+                        extra_ca_pems: extra_ca_pems(),
+                        set_extra_ca_pems: move |v| extra_ca_pems.set(v),
+                        busy: busy,
                     }
 
                     AccountSignatureFields {

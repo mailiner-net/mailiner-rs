@@ -11,14 +11,14 @@ use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, AccountIdentity, DEFAULT_SMTP_PORT, ImapTlsMode, SmtpTlsMode, dev_form_prefill,
-    imap_tls_mode_from_legacy,
+    extra_ca_pems_to_text, imap_tls_mode_from_legacy,
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
     AccountConnectionFields, AccountIdentitiesFields, AccountSignatureFields, AccountSmtpFields,
-    FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
-    credentials_changed, kind_label, provide_lookup_edit_guard, start_smtp_test,
-    use_form_test_status_cleanup,
+    AccountTlsFields, FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome,
+    build_config_from_form, credentials_changed, kind_label, provide_lookup_edit_guard,
+    start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -1059,6 +1059,7 @@ pub fn AccountNewPage() -> Element {
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
+    let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
 
@@ -1182,6 +1183,7 @@ pub fn AccountNewPage() -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             Utc::now(),
         )
         .and_then(|c| c.with_identities(identities()))
@@ -1229,6 +1231,7 @@ pub fn AccountNewPage() -> Element {
                 &smtp_remote_host(),
                 &smtp_remote_port(),
                 &signature(),
+                &extra_ca_pems(),
                 Utc::now(),
             )
             .and_then(|c| c.with_identities(identities())),
@@ -1265,6 +1268,7 @@ pub fn AccountNewPage() -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             Utc::now(),
         )
         .and_then(|c| c.with_identities(identities()))
@@ -1342,6 +1346,13 @@ pub fn AccountNewPage() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountTlsFields {
+                        id_prefix: "account-new",
+                        extra_ca_pems: extra_ca_pems(),
+                        set_extra_ca_pems: move |v| extra_ca_pems.set(v),
+                        busy: busy,
                     }
 
                     AccountIdentitiesFields {
@@ -1457,6 +1468,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
+    let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
     let mut open_smtp = use_signal(|| false);
@@ -1521,6 +1533,7 @@ pub fn AccountEditPage(id: String) -> Element {
                         smtp_remote_port.set(String::new());
                         open_smtp.set(false);
                     }
+                    extra_ca_pems.set(extra_ca_pems_to_text(&cfg.extra_ca_pems));
                     signature.set(cfg.signature.clone().unwrap_or_default());
                     identities.set(cfg.identities.clone());
                     original.set(Some(cfg));
@@ -1733,6 +1746,7 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             orig.created_at,
         )
         .and_then(|c| c.with_identities(identities()))
@@ -1783,6 +1797,7 @@ pub fn AccountEditPage(id: String) -> Element {
                 &smtp_remote_host(),
                 &smtp_remote_port(),
                 &signature(),
+                &extra_ca_pems(),
                 orig.created_at,
             )
             .and_then(|c| c.with_identities(identities())),
@@ -1822,6 +1837,7 @@ pub fn AccountEditPage(id: String) -> Element {
             &smtp_remote_host(),
             &smtp_remote_port(),
             &signature(),
+            &extra_ca_pems(),
             orig.created_at,
         )
         .and_then(|c| c.with_identities(identities()))
@@ -1944,6 +1960,13 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_smtp_open: move |v| open_smtp.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
+                    }
+
+                    AccountTlsFields {
+                        id_prefix: "account-edit",
+                        extra_ca_pems: extra_ca_pems(),
+                        set_extra_ca_pems: move |v| extra_ca_pems.set(v),
+                        busy: busy,
                     }
 
                     AccountIdentitiesFields {

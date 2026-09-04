@@ -7,12 +7,14 @@ mod section_path;
 mod sent;
 mod sort;
 mod structure_cache;
+mod tls;
 mod watch;
 
 pub use sent::{
     apply_subscriptions, find_drafts_mailbox, find_sent_mailbox, folders_from_listed,
     role_from_name, special_use_from_attrs, ListedMailbox,
 };
+pub use tls::{add_extra_ca_pems, parse_pem_certificates, root_cert_store};
 pub use watch::{MailboxChange, MailboxWatchOutcome};
 
 use std::fmt::Debug;
@@ -33,7 +35,7 @@ use mail_parser::{Address, HeaderValue, MessageParser};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
@@ -267,6 +269,8 @@ where
     port: u16,
     username: String,
     tls_mode: ImapTlsMode,
+    /// Extra CA PEMs trusted in addition to webpki roots.
+    extra_ca_pems: Vec<String>,
     /// Shared so `stream_raw_part` can hold a clone across partial FETCH chunks.
     imap: Arc<Mutex<ImapSession<S>>>,
     /// Mailbox last successfully SELECTed on this session. Chunked FETCH skips
@@ -318,6 +322,7 @@ where
             port,
             username,
             tls_mode: ImapTlsMode::Implicit,
+            extra_ca_pems: Vec::new(),
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
             selected_mailbox: Arc::new(std::sync::Mutex::new(None)),
             structure_cache: Mutex::new(StructureCache::new()),
@@ -387,15 +392,19 @@ where
         self
     }
 
+    /// Extra CA PEMs trusted in addition to the webpki root store.
+    pub fn with_extra_ca_pems(mut self, extra_ca_pems: Vec<String>) -> Self {
+        self.extra_ca_pems = extra_ca_pems;
+        self
+    }
+
     /// rustls over the provided byte stream (SNI = `host`). Used after implicit
     /// TLS connect and after STARTTLS.
     pub async fn wrap_tls(&self, stream: S) -> Result<TlsStream<S>, ImapError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let root_store = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
+        let root_store = root_cert_store(&self.extra_ca_pems).map_err(ImapError::Tls)?;
         let config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();

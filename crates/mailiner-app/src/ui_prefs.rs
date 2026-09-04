@@ -506,6 +506,13 @@ pub const SAVED_SEARCHES_SCHEMA_VERSION: u32 = 1;
 /// Cap on remembered searches (evict the oldest on insert).
 pub const MAX_SAVED_SEARCHES: usize = 50;
 
+/// `localStorage` key for per-folder pinned message UIDs.
+pub const PINNED_MESSAGES_KEY: &str = "mailiner.ui.pinnedMessages.v1";
+/// Schema version for [`PinnedMessagesBlob`].
+pub const PINNED_MESSAGES_SCHEMA_VERSION: u32 = 1;
+/// Cap on pinned UIDs remembered for one account+mailbox.
+pub const MAX_PINNED_PER_MAILBOX: usize = 50;
+
 /// One remapped binding. `key` is a `KeyboardEvent.key` value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutBinding {
@@ -815,6 +822,105 @@ impl AckUnreadBlob {
     pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
         self.acknowledged.retain(|id, _| known.contains(id));
         self.schema_version = ACK_UNREAD_SCHEMA_VERSION;
+    }
+}
+
+/// Per-account, per-mailbox pinned IMAP UIDs (local order overlay).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PinnedMessagesBlob {
+    pub schema_version: u32,
+    /// Account id → mailbox id → UIDs (pin order, first is top of the list).
+    #[serde(default)]
+    pub pinned: HashMap<AccountId, HashMap<String, Vec<String>>>,
+}
+
+impl PinnedMessagesBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: PINNED_MESSAGES_SCHEMA_VERSION,
+            pinned: HashMap::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > PINNED_MESSAGES_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported pinned-messages schema_version {} (max supported {})",
+                blob.schema_version, PINNED_MESSAGES_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+
+    pub fn uids(&self, account_id: &AccountId, mailbox_id: &MailboxId) -> Vec<String> {
+        self.pinned
+            .get(account_id)
+            .and_then(|m| m.get(mailbox_id.as_str()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_uids(
+        &mut self,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+        mut uids: Vec<String>,
+    ) {
+        uids.retain(|uid| !uid.is_empty());
+        uids.truncate(MAX_PINNED_PER_MAILBOX);
+        let mailbox = mailbox_id.as_str().to_string();
+        if uids.is_empty() {
+            if let Some(mailboxes) = self.pinned.get_mut(&account_id) {
+                mailboxes.remove(&mailbox);
+                if mailboxes.is_empty() {
+                    self.pinned.remove(&account_id);
+                }
+            }
+        } else {
+            self.pinned
+                .entry(account_id)
+                .or_default()
+                .insert(mailbox, uids);
+        }
+        self.schema_version = PINNED_MESSAGES_SCHEMA_VERSION;
+    }
+
+    /// Pin (`pin`) or unpin `uids` for one folder. Pinned UIDs are moved to the
+    /// front in the given order. Returns the resulting UID list.
+    pub fn apply_toggle(
+        &mut self,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+        uids: &[String],
+        pin: bool,
+    ) -> Vec<String> {
+        let mut current = self.uids(&account_id, mailbox_id);
+        if pin {
+            let selected: Vec<String> = uids
+                .iter()
+                .filter(|uid| !uid.is_empty())
+                .cloned()
+                .collect::<Vec<_>>();
+            current.retain(|uid| !selected.iter().any(|s| s == uid));
+            let mut next = selected;
+            next.extend(current);
+            self.set_uids(account_id.clone(), mailbox_id, next);
+        } else {
+            current.retain(|uid| !uids.iter().any(|s| s == uid));
+            self.set_uids(account_id.clone(), mailbox_id, current);
+        }
+        self.uids(&account_id, mailbox_id)
+    }
+
+    pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
+        self.pinned.retain(|id, _| known.contains(id));
+        self.schema_version = PINNED_MESSAGES_SCHEMA_VERSION;
     }
 }
 
@@ -1183,6 +1289,60 @@ pub fn retain_ack_unread(known: &HashSet<AccountId>) {
         let mut blob = load_ack_blob(kv)?;
         blob.retain_accounts(known);
         save_ack_blob(kv, &blob)
+    });
+}
+
+fn load_pinned_blob(kv: &dyn StringKvStore) -> Result<PinnedMessagesBlob, AccountStoreError> {
+    match kv.get_item(PINNED_MESSAGES_KEY)? {
+        None => Ok(PinnedMessagesBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(PinnedMessagesBlob::empty()),
+        Some(s) => PinnedMessagesBlob::decode(&s),
+    }
+}
+
+fn save_pinned_blob(
+    kv: &dyn StringKvStore,
+    blob: &PinnedMessagesBlob,
+) -> Result<(), AccountStoreError> {
+    kv.set_item(PINNED_MESSAGES_KEY, &blob.encode()?)
+}
+
+/// Pinned IMAP UIDs for `account_id` + `mailbox_id` (pin order).
+pub fn load_pinned_uids(account_id: &AccountId, mailbox_id: &MailboxId) -> Vec<String> {
+    with_kv(|kv| Ok(load_pinned_blob(kv)?.uids(account_id, mailbox_id))).unwrap_or_default()
+}
+
+/// Replace the pinned UID list for one folder.
+pub fn save_pinned_uids(account_id: &AccountId, mailbox_id: &MailboxId, uids: Vec<String>) {
+    let _ = with_kv(|kv| {
+        let mut blob = load_pinned_blob(kv)?;
+        blob.set_uids(account_id.clone(), mailbox_id, uids);
+        save_pinned_blob(kv, &blob)
+    });
+}
+
+/// Pin or unpin `uids` in one folder. Returns the resulting UID list.
+pub fn toggle_pinned_uids(
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    uids: &[String],
+    pin: bool,
+) -> Vec<String> {
+    with_kv(|kv| {
+        let mut blob = load_pinned_blob(kv)?;
+        let next = blob.apply_toggle(account_id.clone(), mailbox_id, uids, pin);
+        save_pinned_blob(kv, &blob)?;
+        Ok(next)
+    })
+    .unwrap_or_default()
+}
+
+/// Drop pinned rows for accounts that are no longer known.
+pub fn retain_pinned_messages(known: &HashSet<AccountId>) {
+    let _ = with_kv(|kv| {
+        let mut blob = load_pinned_blob(kv)?;
+        blob.retain_accounts(known);
+        save_pinned_blob(kv, &blob)
     });
 }
 
@@ -2111,5 +2271,63 @@ mod tests {
         });
         assert!(load_saved_searches().is_empty());
         host_kv::reset();
+    }
+
+    #[test]
+    fn pinned_messages_roundtrip_and_toggle() {
+        host_kv::reset();
+        let acc = AccountId::new("acc-pin");
+        let inbox = MailboxId::from("INBOX".to_string());
+        assert!(load_pinned_uids(&acc, &inbox).is_empty());
+
+        let next = toggle_pinned_uids(&acc, &inbox, &["10".into(), "11".into()], true);
+        assert_eq!(next, vec!["10", "11"]);
+        assert_eq!(load_pinned_uids(&acc, &inbox), vec!["10", "11"]);
+
+        let next = toggle_pinned_uids(&acc, &inbox, &["12".into()], true);
+        assert_eq!(next, vec!["12", "10", "11"]);
+
+        let next = toggle_pinned_uids(&acc, &inbox, &["10".into()], false);
+        assert_eq!(next, vec!["12", "11"]);
+
+        let sent = MailboxId::from("Sent".to_string());
+        toggle_pinned_uids(&acc, &sent, &["99".into()], true);
+        assert_eq!(load_pinned_uids(&acc, &inbox), vec!["12", "11"]);
+        assert_eq!(load_pinned_uids(&acc, &sent), vec!["99"]);
+
+        retain_pinned_messages(&HashSet::new());
+        assert!(load_pinned_uids(&acc, &inbox).is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn pinned_messages_cap_and_empty_uid() {
+        let mut blob = PinnedMessagesBlob::empty();
+        let acc = AccountId::new("acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let uids: Vec<String> = (0..MAX_PINNED_PER_MAILBOX + 5)
+            .map(|n| n.to_string())
+            .collect();
+        blob.set_uids(acc.clone(), &inbox, uids);
+        assert_eq!(blob.uids(&acc, &inbox).len(), MAX_PINNED_PER_MAILBOX);
+        blob.set_uids(acc.clone(), &inbox, vec![String::new(), "7".into()]);
+        assert_eq!(blob.uids(&acc, &inbox), vec!["7"]);
+        blob.set_uids(acc.clone(), &inbox, Vec::new());
+        assert!(blob.uids(&acc, &inbox).is_empty());
+        assert!(blob.pinned.is_empty());
+    }
+
+    #[test]
+    fn pinned_messages_decode_rejects_future_schema() {
+        let err = PinnedMessagesBlob::decode(r#"{"schema_version":99,"pinned":{}}"#).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
     }
 }

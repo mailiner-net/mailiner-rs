@@ -47,6 +47,7 @@ mod message_loader;
 mod notifications;
 mod outbox_store;
 mod phishing;
+mod pin;
 mod print;
 mod provider_preset;
 mod recipient_suggest;
@@ -369,6 +370,7 @@ fn App() -> Element {
     let notify_inbox = use_signal(crate::ui_prefs::load_notify_inbox);
     let folder_subscribe_open = use_signal(|| false);
     let show_all_folders = use_signal(crate::ui_prefs::load_show_all_folders);
+    let pinned_uids = use_signal(Vec::new);
 
     let ctx = AppContext {
         accounts,
@@ -415,6 +417,7 @@ fn App() -> Element {
         notify_inbox,
         folder_subscribe_open,
         show_all_folders,
+        pinned_uids,
     };
     let ctx_clone = ctx.clone();
 

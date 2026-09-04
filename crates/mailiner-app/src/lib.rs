@@ -20,6 +20,7 @@ pub mod message_loader;
 pub mod notifications;
 pub mod outbox_store;
 pub mod phishing;
+pub mod pin;
 pub mod print;
 pub mod provider_preset;
 pub mod recipient_suggest;

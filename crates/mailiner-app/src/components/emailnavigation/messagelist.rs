@@ -48,12 +48,16 @@ pub fn MessageList() -> Element {
     let search_active = mailiner_core::mailbox_search_is_active(&search_query);
     let filtering = filter.has_attachment;
     let filtered_matches: Vec<Arc<Message>> = if filtering {
-        ctx.messages
+        let pinned_uids = ctx.pinned_uids.read().clone();
+        let mut matches: Vec<Arc<Message>> = ctx
+            .messages
             .read()
             .iter()
             .filter(|m| message_matches_filter(m, filter))
             .cloned()
-            .collect()
+            .collect();
+        crate::pin::sort_pinned_first(&mut matches, &pinned_uids, |m| m.id.as_uid());
+        matches
     } else {
         Vec::new()
     };
@@ -356,15 +360,23 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
     let message_id = message.id.clone();
     let star_id = message.id.clone();
     let flag_id = message.id.clone();
+    let pin_id = message.id.clone();
     let drag_id = message.id.clone();
     let row_account = ctx.selected_account.peek().clone();
     let row_mailbox = MailboxId::from(message.id.folder_id().clone());
     let star_account = row_account.clone();
-    let flag_account = row_account;
+    let flag_account = row_account.clone();
+    let pin_account = row_account;
     let star_mailbox = row_mailbox.clone();
-    let flag_mailbox = row_mailbox;
+    let flag_mailbox = row_mailbox.clone();
+    let pin_mailbox = row_mailbox;
     let is_starred = message.is_starred;
     let is_flagged = message.is_flagged;
+    let is_pinned = ctx
+        .pinned_uids
+        .read()
+        .iter()
+        .any(|uid| uid == message.id.as_uid());
 
     rsx! {
         div {
@@ -373,6 +385,7 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
             class: if is_focused { "focused" },
             class: if !message.is_read { "unread" },
             class: if is_dragging { "dragging" },
+            class: if is_pinned { "is-pinned" },
             aria_selected: if is_selected { "true" } else { "false" },
             draggable: "true",
 
@@ -484,6 +497,30 @@ fn MessageListItem(index: usize, message: Arc<Message>) -> Element {
                                 });
                             },
                             Icon { size: 14, icon: IconKind::Flag }
+                        }
+                        button {
+                            class: "message-pin-indicator",
+                            class: if is_pinned { "is-on" },
+                            r#type: "button",
+                            aria_pressed: if is_pinned { "true" } else { "false" },
+                            aria_label: if is_pinned { "Unpin" } else { "Pin" },
+                            title: if is_pinned { "Unpin" } else { "Pin" },
+                            onmousedown: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                            },
+                            onclick: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                                evt.prevent_default();
+                                let Some(account_id) = pin_account.clone() else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::TogglePin {
+                                    account_id,
+                                    mailbox_id: pin_mailbox.clone(),
+                                    message_ids: vec![pin_id.clone()],
+                                });
+                            },
+                            Icon { size: 14, icon: IconKind::Pin }
                         }
                         if message.has_attachments {
                             span {

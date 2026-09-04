@@ -215,6 +215,16 @@ fn run_shortcut(
                 message_ids,
             });
         }
+        ShortcutId::TogglePin => {
+            let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
+                return;
+            };
+            let _ = core.send(CoreEvent::TogglePin {
+                account_id,
+                mailbox_id,
+                message_ids,
+            });
+        }
         ShortcutId::ShowHelp => {
             help_open.set(true);
         }

@@ -2569,6 +2569,7 @@ body:has(.compose-dock) .toast {
 .message-answered-indicator,
 .message-star-indicator,
 .message-flag-indicator,
+.message-pin-indicator,
 .message-attachment-indicator {
     flex-shrink: 0;
     display: inline-flex;
@@ -2578,7 +2579,8 @@ body:has(.compose-dock) .toast {
 }
 
 .message-star-indicator,
-.message-flag-indicator {
+.message-flag-indicator,
+.message-pin-indicator {
     margin: 0;
     padding: 0;
     border: 0;
@@ -2588,7 +2590,8 @@ body:has(.compose-dock) .toast {
 }
 
 .message-star-indicator:hover,
-.message-flag-indicator:hover {
+.message-flag-indicator:hover,
+.message-pin-indicator:hover {
     opacity: 1;
 }
 
@@ -2604,8 +2607,15 @@ body:has(.compose-dock) .toast {
     opacity: 1;
 }
 
+.message-pin-indicator.is-on,
+.message-pin-btn.is-on {
+    color: #4263eb;
+    opacity: 1;
+}
+
 .message-view-actions .message-star-btn,
-.message-view-actions .message-flag-btn {
+.message-view-actions .message-flag-btn,
+.message-view-actions .message-pin-btn {
     padding: 0.3rem 0.45rem;
 }
 

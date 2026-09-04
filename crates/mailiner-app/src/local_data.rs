@@ -46,7 +46,26 @@ pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     FOLDER_WIDTH_KEY,
     LIST_HEIGHT_KEY,
     LIST_WIDTH_KEY,
+    E2E_SKIP_CONNECT_KEY,
 ];
+
+/// Playwright e2e: skip live IMAP (no WebSocket, no auto-reconnect).
+pub const E2E_SKIP_CONNECT_KEY: &str = "mailiner.e2e.skipConnect";
+
+/// `true` when [`E2E_SKIP_CONNECT_KEY`] is `1` or `true`.
+pub fn e2e_skip_connect() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|s| s.get_item(E2E_SKIP_CONNECT_KEY).ok().flatten())
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
 
 /// Downloadable account list. `includes_secrets` is the only difference between
 /// the public export and the warned full backup.
@@ -294,6 +313,7 @@ mod tests {
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&FOLDER_WIDTH_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_HEIGHT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_WIDTH_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&E2E_SKIP_CONNECT_KEY));
     }
 
     #[test]

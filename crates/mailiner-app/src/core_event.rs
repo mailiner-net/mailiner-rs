@@ -1079,6 +1079,13 @@ async fn handle_bootstrap(
     if ctx.mailbox_roots.read().is_empty() {
         hydrate_account_into(manager.cache(), ctx, &account_id).await;
     }
+    if crate::local_data::e2e_skip_connect() {
+        info!(
+            "Bootstrap: skipping IMAP connect ({})",
+            crate::local_data::E2E_SKIP_CONNECT_KEY
+        );
+        return;
+    }
     match manager
         .ensure_connected(&config, ctx, EnsureConnectedMode::Switch)
         .await

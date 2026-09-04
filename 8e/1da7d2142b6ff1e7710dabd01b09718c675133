@@ -1,0 +1,67 @@
+crates/mailiner-app/src/main.rs
+  s_c5d85d51cdde93::t_c42bdf41d5f956 20,487-494
+  s_c5d85d51cdde93::t_a076d4bfecd959 404-405,454-455
+crates/mailiner-app/src/shortcuts.rs
+  s_c5d85d51cdde93::t_6e1dfcc702a6c6 37,71,105
+  s_c5d85d51cdde93::t_a86e1f7df1cb33 139,371-377
+  s_c5d85d51cdde93::t_5234fa4d0e7bd1 790-791
+crates/mailiner-app/assets/main.css
+  s_c5d85d51cdde93::t_a000e3501b389b 2655-2656,2753-2754,2758-2759,2766-2767
+crates/mailiner-app/src/notifications.rs
+  s_c5d85d51cdde93::t_a02c64df7bf38c 73-82,203-210
+  s_c5d85d51cdde93::t_cfdaa784b3c5ca 270-283,339-342
+crates/mailiner-app/src/snooze.rs
+  s_c5d85d51cdde93::t_2653b894c7784c 1-120,122-161
+crates/mailiner-app/src/toast.rs
+  s_c5d85d51cdde93::t_4842572bf59b02 48-68,97-101
+  s_c5d85d51cdde93::t_b1834c7fbcdf49 151-171,179-187,213-223,229-232
+  s_c5d85d51cdde93::t_703d4acff57371 334-372
+crates/mailiner-app/src/core_event.rs
+  s_c5d85d51cdde93::t_9e75dd27bec3f8 58,60,147-155
+  s_c5d85d51cdde93::t_510dd107b3a9bf 59,3849,3878-3880,4791-4792,4803
+  s_c5d85d51cdde93::t_6a1ab5a3077884 61
+  s_c5d85d51cdde93::t_d6ad94de1025ce 652-670
+  s_c5d85d51cdde93::t_b5dd27121b8e66 1513
+  s_c5d85d51cdde93::t_72d1e76b9b3841 1715
+  s_c5d85d51cdde93::t_fae95c24171e71 1721,1738,2070,2131,2265,2595,3736,4081
+  s_c5d85d51cdde93::t_ca2a2e583960eb 2042,2069,3590-3619
+  s_c5d85d51cdde93::t_b5d7045ce7eb73 3622-3664,3737-3788,3798-3832,3839-3841,3851-3877,3881-3920
+  s_c5d85d51cdde93::t_4afa175026a6bc 3789-3797,3833-3838,3842-3843
+  s_c5d85d51cdde93::t_ff974757903b3e 3844-3848,3850
+  s_c5d85d51cdde93::t_37f7474f03663b 4784-4790,4793-4802,4804-4821
+crates/mailiner-app/src/context.rs
+  s_c5d85d51cdde93::t_65a207ab0ed60d 21-23,191-194,337-338
+crates/mailiner-app/src/ui_prefs.rs
+  s_c5d85d51cdde93::t_aabb51a822a06a 8,517-522
+  s_c5d85d51cdde93::t_1fa6ec9703b29b 935-1056,1060-1102
+  s_c5d85d51cdde93::t_a6ac98af3b726a 1057-1059,1583-1585
+  s_c5d85d51cdde93::t_68918f83e2e5e7 1525-1540,1545-1582,1586-1599,2584-2617,2622-2680
+  s_c5d85d51cdde93::t_11fa51cc1e4ac7 1541-1544,2618-2621,2681
+crates/mailiner-app/src/components/shortcuts.rs
+  s_c5d85d51cdde93::t_95e8c63c2c37e2 228-233
+crates/mailiner-app/src/local_data.rs
+  s_c5d85d51cdde93::t_acad3b70248f9a 16,42,287
+crates/mailiner-app/src/components/messageview.rs
+  s_c5d85d51cdde93::t_7df1a5fa1393da 30,1239-1241,1243-1250,1253-1254,1256-1259,1261-1262
+  s_c5d85d51cdde93::t_bac9e11e60a43e 1117,1242,1252,1255,1260
+  s_c5d85d51cdde93::t_b899d28266afa5 1251
+  s_c5d85d51cdde93::t_003f0a441558d0 1716-1768
+crates/mailiner-app/src/components/icons.rs
+  s_c5d85d51cdde93::t_461627b9d7929c 27,111-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8e1da7d2142b6ff1e7710dabd01b09718c675133",
+  "prompts": {},
+  "sessions": {
+    "s_c5d85d51cdde93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06ac9-045d-7942-b354-b922c7a11525",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

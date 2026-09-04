@@ -24,3 +24,6 @@ Release (size-optimized, what CI deploys):
 ```bash
 dx build -p mailiner-app --release --web --debug-symbols=false
 ```
+
+The crate `public/` directory (manifest, service worker, install icons) is
+copied into that output as-is so the site is installable as a standalone PWA.

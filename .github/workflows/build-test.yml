@@ -142,7 +142,16 @@ jobs:
           set -euo pipefail
           PUBLIC_DIR="target/dx/mailiner-app/release/web/public"
           test -f "$PUBLIC_DIR/index.html"
-          # SPA fallback for Dioxus client-side routing on Cloudflare Pages
+          # Dioxus copies crates/mailiner-app/public/ as-is (stable PWA paths).
+          test -f "$PUBLIC_DIR/manifest.webmanifest"
+          test -f "$PUBLIC_DIR/sw.js"
+          test -f "$PUBLIC_DIR/icons/icon-192.png"
+          test -f "$PUBLIC_DIR/icons/icon-512.png"
+          test -f "$PUBLIC_DIR/icons/icon-maskable-192.png"
+          test -f "$PUBLIC_DIR/icons/icon-maskable-512.png"
+          test -f "$PUBLIC_DIR/icons/apple-touch-icon.png"
+          # SPA fallback for Dioxus client-side routing on Cloudflare Pages.
+          # Existing files (sw.js, manifest, icons) are served before redirects.
           printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
           # Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/main.rs.
           # Cloudflare Pages custom headers:
@@ -161,7 +170,14 @@ jobs:
           headers.write_text(
               "# Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/main.rs\n"
               "/*\n"
-              "  Content-Security-Policy: %s\n" % (policy,)
+              "  Content-Security-Policy: %s\n"
+              "\n"
+              "# Always revalidate the service worker so updates are not stuck.\n"
+              "/sw.js\n"
+              "  Cache-Control: no-cache\n"
+              "\n"
+              "/manifest.webmanifest\n"
+              "  Content-Type: application/manifest+json\n" % (policy,)
           )
           print("Wrote", headers, "CSP:")
           print(policy)

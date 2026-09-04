@@ -270,8 +270,7 @@ impl PersistedComposeDraft {
             account_id,
             title: session.title.clone(),
             draft_id: d.id.as_str().to_string(),
-            // From is account identity, not user-typed. Restore fills current identity.
-            from: None,
+            from: d.from.as_ref().map(PersistedAddress::from),
             to: d.to.iter().map(PersistedAddress::from).collect(),
             cc: d.cc.iter().map(PersistedAddress::from).collect(),
             bcc: d.bcc.iter().map(PersistedAddress::from).collect(),
@@ -295,7 +294,7 @@ impl PersistedComposeDraft {
             reply_source: self.reply_source,
             draft: DraftDocument {
                 id: DraftId(self.draft_id),
-                from: None,
+                from: self.from.as_ref().map(ComposerAddress::from),
                 to: self.to.iter().map(ComposerAddress::from).collect(),
                 cc: self.cc.iter().map(ComposerAddress::from).collect(),
                 bcc: self.bcc.iter().map(ComposerAddress::from).collect(),
@@ -535,6 +534,33 @@ mod tests {
         assert_eq!(restored.draft.plain_body, "Body text");
         assert_eq!(restored.draft.to[0].email, "you@example.com");
         assert_eq!(restored.draft.mode, BodyMode::Plain);
+        assert_eq!(
+            restored.draft.from.as_ref().map(|f| f.email.as_str()),
+            Some("me@example.com")
+        );
+        assert_eq!(
+            restored.draft.from.as_ref().and_then(|f| f.name.as_deref()),
+            Some("Me")
+        );
+    }
+
+    #[test]
+    fn persisted_from_roundtrip_keeps_alias() {
+        let account = AccountId::new("acc");
+        let mut session = session("Hi", "body");
+        session.draft.from = Some(ComposerAddress {
+            name: Some("Support".into()),
+            email: "support@example.com".into(),
+        });
+        let persisted = PersistedComposeDraft::from_session(account, &session);
+        assert_eq!(
+            persisted.from.as_ref().map(|f| f.email.as_str()),
+            Some("support@example.com")
+        );
+        let restored = persisted.into_session();
+        let from = restored.draft.from.expect("from");
+        assert_eq!(from.email, "support@example.com");
+        assert_eq!(from.name.as_deref(), Some("Support"));
     }
 
     #[test]
@@ -726,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_from_is_not_restored() {
+    fn persisted_from_is_restored() {
         let account = AccountId::new("acc");
         let mut s = session("Hi", "x");
         s.draft.from = Some(ComposerAddress {
@@ -734,19 +760,25 @@ mod tests {
             email: "old@example.com".into(),
         });
         let persisted = PersistedComposeDraft::from_session(account, &s);
-        assert!(persisted.from.is_none());
-        assert!(persisted.into_session().draft.from.is_none());
+        let from = persisted.from.as_ref().expect("from");
+        assert_eq!(from.email, "old@example.com");
+        assert_eq!(from.name.as_deref(), Some("Old"));
+        let restored = persisted.into_session().draft.from.expect("from");
+        assert_eq!(restored.email, "old@example.com");
+        assert_eq!(restored.name.as_deref(), Some("Old"));
     }
 
     #[test]
-    fn decode_ignores_legacy_from() {
+    fn decode_restores_legacy_from() {
         let json = r#"{"schema_version":1,"drafts":[{"account_id":"acc","title":"New message","draft_id":"d1","from":{"name":"Old","email":"old@example.com"},"to":[{"email":"you@example.com"}],"subject":"Hi","mode":"plain","plain_body":"x","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}"#;
         let restored = DraftsBlob::decode(json)
             .unwrap()
             .drafts
             .remove(0)
             .into_session();
-        assert!(restored.draft.from.is_none());
+        let from = restored.draft.from.expect("from");
+        assert_eq!(from.email, "old@example.com");
+        assert_eq!(from.name.as_deref(), Some("Old"));
         assert_eq!(restored.draft.subject, "Hi");
     }
 

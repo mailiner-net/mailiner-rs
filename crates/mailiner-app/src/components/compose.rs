@@ -18,8 +18,8 @@ use mailiner_composer::shell::attachment_list::{
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     AttachmentData, ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError,
-    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, is_safe_image_content_type,
-    plain_to_html, prepare_submit,
+    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, flatten_addresses,
+    is_safe_image_content_type, is_valid_email_v1, plain_to_html, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -29,7 +29,9 @@ use crate::draft_store::{self, session_has_content};
 use crate::recipient_suggest;
 use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
-    identity_from_account, resolve_compose_account_id, set_session_from_account,
+    identity_from_stored, identity_matching_emails, list_from_choices, parse_from_choice_key,
+    resolve_account_identity, resolve_compose_account_id, selected_from_choice,
+    set_session_from_identity,
 };
 use crate::ui_prefs::{ComposeBodyMode, ComposePlacement};
 
@@ -323,7 +325,7 @@ fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> O
 fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
     let preferred = crate::ui_prefs::load_default_from_account();
     let account = resolve_compose_account(ctx, preferred.as_ref())?;
-    let identity = identity_from_account(account.name.clone(), account.email.clone());
+    let identity = identity_from_stored(&account.primary_identity());
     let mut draft = match build_draft(
         ComposeIntent::New,
         &identity,
@@ -356,9 +358,9 @@ pub fn open_new_message(ctx: &mut AppContext) {
     let preferred = crate::ui_prefs::load_default_from_account();
     if let Some(account) = resolve_compose_account(ctx, preferred.as_ref()) {
         if let Some(mut session) = draft_store::load_draft(&account.id) {
-            let identity = identity_from_account(account.name.clone(), account.email.clone());
-            session.account_id = account.id;
-            apply_current_from(&mut session, &identity);
+            session.account_id = account.id.clone();
+            let identity = resolve_account_identity(&account, session.draft.from.as_ref());
+            apply_current_from(&mut session, &identity_from_stored(&identity));
             ctx.compose_draft.set(Some(session));
             return;
         }
@@ -389,7 +391,18 @@ pub fn open_reply_or_forward(
         ctx.show_toast(crate::toast::ToastAction::error("Select an account first."));
         return;
     };
-    let identity = identity_from_account(account.name, account.email);
+    let recipient_emails: Vec<String> = envelope
+        .to
+        .iter()
+        .chain(envelope.cc.iter())
+        .chain(envelope.bcc.iter())
+        .flat_map(flatten_addresses)
+        .map(|a| a.email)
+        .collect();
+    let identity = identity_from_stored(&identity_matching_emails(
+        &account,
+        recipient_emails.iter().map(String::as_str),
+    ));
     match build_draft(
         intent,
         &identity,
@@ -454,9 +467,15 @@ fn submit_compose(
         error.set(Some("This draft's account is no longer available.".into()));
         return;
     };
-    let identity = identity_from_account(account.name.clone(), account.email.clone());
+    let identity = identity_from_stored(&resolve_account_identity(&account, draft.from.as_ref()));
     let mode = compose_body_mode_from_draft(&draft);
-    draft.from = Some(composer_address_from_identity(&identity));
+    if draft
+        .from
+        .as_ref()
+        .is_none_or(|from| !is_valid_email_v1(&from.email))
+    {
+        draft.from = Some(composer_address_from_identity(&identity));
+    }
     draft.plain_body = form.body.peek().clone();
     draft.subject = form.subject.peek().clone();
     apply_compose_body_mode(&mut draft, mode);
@@ -1227,7 +1246,7 @@ pub fn ComposeOverlay() -> Element {
     };
     let mut include_original = use_signal(|| true);
 
-    let (open, title, listed_files, from_account_id, has_originals, prefill_warnings) = {
+    let (open, title, listed_files, from_account_id, from_addr, has_originals, prefill_warnings) = {
         let slot = ctx.compose_draft.read();
         match slot.as_ref() {
             Some(s) => {
@@ -1263,6 +1282,7 @@ pub fn ComposeOverlay() -> Element {
                     s.title.clone(),
                     listed,
                     Some(s.account_id.clone()),
+                    s.draft.from.clone(),
                     has_original_attachments(s),
                     s.draft.prefill_warnings.clone(),
                 )
@@ -1272,18 +1292,23 @@ pub fn ComposeOverlay() -> Element {
                 "New message".to_string(),
                 Vec::new(),
                 None,
+                None,
                 false,
                 Vec::new(),
             ),
         }
     };
     let from_accounts = listed_compose_accounts(&ctx);
-    let from_label = from_account_id
-        .as_ref()
-        .and_then(|id| from_accounts.iter().find(|a| &a.id == id))
-        .map(|a| from_account_label(&a.name, &a.email))
+    let from_choices = list_from_choices(&from_accounts);
+    let selected_choice =
+        selected_from_choice(&from_choices, from_account_id.as_ref(), from_addr.as_ref());
+    let from_label = selected_choice
+        .map(|c| from_account_label(&c.identity.display_name, &c.identity.email))
         .unwrap_or_default();
-    let multi_from = from_accounts.len() > 1;
+    let selected_from_key = selected_choice
+        .map(crate::send::FromChoice::key)
+        .unwrap_or_default();
+    let multi_from = from_choices.len() > 1;
     let sending = submitting();
     let attaching_now = attaching() || forward_fetching();
     let busy = sending || attaching_now;
@@ -1571,40 +1596,44 @@ pub fn ComposeOverlay() -> Element {
                         if multi_from {
                             select {
                                 class: "ui-input",
-                                value: from_account_id
-                                    .as_ref()
-                                    .map(|id| id.as_str().to_string())
-                                    .unwrap_or_default(),
+                                value: "{selected_from_key}",
                                 disabled: sending,
-                                aria_label: "From account",
+                                aria_label: "From",
                                 onchange: {
                                     let ctx = ctx.clone();
                                     let mut compose_draft = ctx.compose_draft;
+                                    let from_choices = from_choices.clone();
                                     move |evt: FormEvent| {
                                         if sending {
                                             return;
                                         }
-                                        let id = AccountId::new(evt.value());
-                                        let Some(account) = ctx.accounts.read().get(&id).cloned()
+                                        let Some((account_id, index)) =
+                                            parse_from_choice_key(&evt.value())
+                                        else {
+                                            return;
+                                        };
+                                        let Some(choice) = from_choices
+                                            .iter()
+                                            .find(|c| c.account_id == account_id && c.index == index)
+                                            .cloned()
                                         else {
                                             return;
                                         };
                                         let mut slot = compose_draft.write();
                                         if let Some(session) = slot.as_mut() {
-                                            set_session_from_account(
+                                            set_session_from_identity(
                                                 session,
-                                                account.id,
-                                                &account.name,
-                                                &account.email,
+                                                choice.account_id,
+                                                &choice.identity,
                                             );
                                         }
                                     }
                                 },
-                                for account in from_accounts.iter() {
+                                for choice in from_choices.iter() {
                                     option {
-                                        value: "{account.id}",
-                                        selected: from_account_id.as_ref() == Some(&account.id),
-                                        "{from_account_label(&account.name, &account.email)}"
+                                        value: "{choice.key()}",
+                                        selected: selected_from_key == choice.key(),
+                                        "{from_account_label(&choice.identity.display_name, &choice.identity.email)}"
                                     }
                                 }
                             }
@@ -1614,7 +1643,7 @@ pub fn ComposeOverlay() -> Element {
                                 value: "{from_label}",
                                 disabled: true,
                                 readonly: true,
-                                aria_label: "From account",
+                                aria_label: "From",
                             }
                         }
                     }
@@ -1993,7 +2022,7 @@ mod tests {
     }
 
     fn empty_draft() -> DraftDocument {
-        DraftDocument::new_empty(&identity_from_account("Me", "me@example.com"))
+        DraftDocument::new_empty(&FromIdentity::new("Me", "me@example.com"))
     }
 
     #[test]

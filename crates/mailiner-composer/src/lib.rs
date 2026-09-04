@@ -33,13 +33,13 @@ pub use identity::FromIdentity;
 pub use model::{
     caps, dedupe_addresses, emails_equal, exclude_self, flatten_addresses, html_to_plain,
     is_valid_email_v1, plain_to_html, try_composer_address, validate_draft, AttachmentData,
-    AttachmentId, BodyMode, ComposerAddress, DraftDocument, DraftId, DraftValidationError,
-    FileAttachment, InlineId, InlineImage,
+    AttachmentId, AttachmentSource, BodyMode, ComposerAddress, DraftDocument, DraftId,
+    DraftValidationError, FileAttachment, InlineId, InlineImage,
 };
 pub use reply::{
     append_plain_signature, apply_plain_signature, attribution_line, bare_content_id, build_draft,
-    discard_rich_quote, extract_cid_refs, normalize_cid, quote_plain, rehydrate_cids,
-    subject_with_prefix, CidRehydrateResult, ComposeIntent, PrefillError, SIGDASH,
+    discard_rich_quote, extract_cid_refs, is_forwardable_attachment, normalize_cid, quote_plain,
+    rehydrate_cids, subject_with_prefix, CidRehydrateResult, ComposeIntent, PrefillError, SIGDASH,
 };
 pub use sanitize::{
     is_safe_image_content_type, sanitize_for_edit, sanitize_for_export, SAFE_IMAGE_ACCEPT,

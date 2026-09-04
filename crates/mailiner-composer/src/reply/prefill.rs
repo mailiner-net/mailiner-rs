@@ -3,6 +3,7 @@
 use mailiner_core::{Envelope, LoadedMessage, MessageContent, MessagePart, PartKind};
 
 use crate::identity::FromIdentity;
+use crate::model::attachment::{AttachmentData, AttachmentId, AttachmentSource, FileAttachment};
 use crate::model::draft::{caps, BodyMode, ComposerAddress, DraftDocument};
 use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
@@ -18,7 +19,7 @@ pub enum ComposeIntent {
     Reply,
     /// Reply to all participants.
     ReplyAll,
-    /// Forward body (no auto file attachments in v1).
+    /// Forward body and original non-inline file attachments.
     Forward,
 }
 
@@ -116,6 +117,10 @@ fn build_reply_like(
         }
     }
 
+    if intent == ComposeIntent::Forward {
+        apply_forward_attachments(&mut draft, loaded);
+    }
+
     Ok(draft)
 }
 
@@ -160,6 +165,111 @@ pub fn discard_rich_quote(draft: &mut DraftDocument) {
     draft.mode = BodyMode::Plain;
     draft.html_body.clear();
     draft.inline_images.clear();
+}
+
+/// True for original parts that should be attached when forwarding.
+///
+/// Includes non-inline file attachments (`is_attachment && !is_hidden`).
+/// Skips cid/inline images already represented in the quoted body.
+pub fn is_forwardable_attachment(part: &MessagePart) -> bool {
+    part.is_attachment && !part.is_hidden
+}
+
+fn apply_forward_attachments(draft: &mut DraftDocument, loaded: &LoadedMessage) {
+    let mut used = draft_payload_bytes(draft);
+    let mut skipped = 0usize;
+
+    for part in loaded.parts.iter().filter(|p| is_forwardable_attachment(p)) {
+        if draft.attachments.len() >= caps::MAX_ATTACHMENTS {
+            skipped += 1;
+            continue;
+        }
+        let (data, size) = part_attachment_data(part);
+        if size > caps::MAX_FILE_BYTES {
+            skipped += 1;
+            continue;
+        }
+        if size > 0 && used.saturating_add(size) > caps::MAX_DRAFT_BYTES {
+            skipped += 1;
+            continue;
+        }
+        used = used.saturating_add(size);
+        draft.attachments.push(FileAttachment {
+            id: AttachmentId::new(),
+            filename: forward_filename(part),
+            content_type: forward_content_type(part),
+            size,
+            data,
+            source: Some(AttachmentSource {
+                message_id: loaded.envelope_id.clone(),
+                section: part.section(),
+                encoding: part.encoding,
+            }),
+        });
+    }
+
+    if skipped > 0 {
+        draft.prefill_warnings.push(format!(
+            "{skipped} original attachment(s) were skipped (size or file limit)."
+        ));
+    }
+}
+
+fn part_attachment_data(part: &MessagePart) -> (AttachmentData, u64) {
+    match &part.content {
+        MessageContent::Binary(b) => (AttachmentData::Bytes(b.clone()), b.len() as u64),
+        MessageContent::Text(t) => {
+            let b = t.as_bytes().to_vec();
+            let n = b.len() as u64;
+            (AttachmentData::Bytes(b), n)
+        }
+        MessageContent::Empty => {
+            let size = if part.size > 0 {
+                part.size
+            } else {
+                part.original_size.unwrap_or(0)
+            };
+            (AttachmentData::Pending, size)
+        }
+    }
+}
+
+fn forward_filename(part: &MessagePart) -> String {
+    if let Some(f) = part
+        .filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return f.to_string();
+    }
+    if let Some(d) = part
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return d.to_string();
+    }
+    let ext = match part.content_type.split(';').next().unwrap_or("").trim() {
+        "application/pdf" => "pdf",
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "text/plain" => "txt",
+        "message/rfc822" => "eml",
+        _ => "bin",
+    };
+    format!("attachment.{ext}")
+}
+
+fn forward_content_type(part: &MessagePart) -> String {
+    let ct = part.content_type.split(';').next().unwrap_or("").trim();
+    if ct.is_empty() {
+        "application/octet-stream".into()
+    } else {
+        ct.to_string()
+    }
 }
 
 fn wrap_html_quote(attribution: &str, sanitized_body: &str) -> String {
@@ -641,6 +751,181 @@ mod tests {
         );
     }
 
+    fn loaded_parts(parts: Vec<MessagePart>) -> LoadedMessage {
+        LoadedMessage {
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
+            folder_id: FolderId::new("INBOX"),
+            parts,
+        }
+    }
+
+    struct Tp {
+        id: &'static str,
+        path: &'static str,
+        kind: PartKind,
+        content_type: &'static str,
+        filename: Option<&'static str>,
+        is_attachment: bool,
+        is_hidden: bool,
+        content: MessageContent,
+        content_id: Option<&'static str>,
+        size: u64,
+    }
+
+    impl Tp {
+        fn body(
+            path: &'static str,
+            kind: PartKind,
+            content_type: &'static str,
+            text: &str,
+        ) -> Self {
+            Self {
+                id: path,
+                path,
+                kind,
+                content_type,
+                filename: None,
+                is_attachment: false,
+                is_hidden: false,
+                content: MessageContent::Text(text.into()),
+                content_id: None,
+                size: text.len() as u64,
+            }
+        }
+
+        fn file(path: &'static str, content_type: &'static str, filename: &'static str) -> Self {
+            Self {
+                id: path,
+                path,
+                kind: PartKind::Attachment,
+                content_type,
+                filename: Some(filename),
+                is_attachment: true,
+                is_hidden: false,
+                content: MessageContent::Empty,
+                content_id: None,
+                size: 50,
+            }
+        }
+
+        fn hidden_cid(path: &'static str) -> Self {
+            Self {
+                id: path,
+                path,
+                kind: PartKind::Image,
+                content_type: "image/png",
+                filename: Some("logo.png"),
+                is_attachment: true,
+                is_hidden: true,
+                content: MessageContent::Binary(vec![1, 2, 3]),
+                content_id: Some("<logo@x>"),
+                size: 3,
+            }
+        }
+
+        fn size(mut self, size: u64) -> Self {
+            self.size = size;
+            self
+        }
+
+        fn bytes(mut self, data: Vec<u8>) -> Self {
+            self.size = data.len() as u64;
+            self.content = MessageContent::Binary(data);
+            self
+        }
+
+        fn cid_image(path: &'static str, filename: &'static str) -> Self {
+            Self {
+                id: path,
+                path,
+                kind: PartKind::Image,
+                content_type: "image/jpeg",
+                filename: Some(filename),
+                is_attachment: true,
+                is_hidden: false,
+                content: MessageContent::Empty,
+                content_id: Some("<pic@x>"),
+                size: 80,
+            }
+        }
+
+        fn text_file(path: &'static str, filename: &'static str) -> Self {
+            Self {
+                id: path,
+                path,
+                kind: PartKind::TextPlain,
+                content_type: "text/plain",
+                filename: Some(filename),
+                is_attachment: true,
+                is_hidden: false,
+                content: MessageContent::Empty,
+                content_id: None,
+                size: 20,
+            }
+        }
+
+        fn nameless_pdf(path: &'static str) -> Self {
+            Self {
+                id: path,
+                path,
+                kind: PartKind::Attachment,
+                content_type: "application/pdf",
+                filename: None,
+                is_attachment: true,
+                is_hidden: false,
+                content: MessageContent::Empty,
+                content_id: None,
+                size: 1,
+            }
+        }
+
+        fn finish(self) -> MessagePart {
+            MessagePart {
+                id: MessagePartId::new(self.id),
+                envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
+                path: vec![self.path.into()],
+                kind: self.kind,
+                content_type: self.content_type.into(),
+                charset: None,
+                content_id: self.content_id.map(str::to_string),
+                description: None,
+                filename: self.filename.map(str::to_string),
+                encoding: TransferEncoding::Base64,
+                original_size: Some(self.size),
+                size: self.size,
+                is_attachment: self.is_attachment,
+                is_hidden: self.is_hidden,
+                content: self.content,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }
+        }
+    }
+
+    fn selected_names(loaded: &LoadedMessage) -> Vec<String> {
+        loaded
+            .parts
+            .iter()
+            .filter(|p| is_forwardable_attachment(p))
+            .map(forward_filename)
+            .collect()
+    }
+
+    #[test]
+    fn selects_non_inline_file_attachments() {
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "hi").finish(),
+            Tp::file("2", "application/pdf", "report.pdf")
+                .size(100)
+                .finish(),
+            Tp::text_file("3", "notes.txt").finish(),
+        ]);
+        assert_eq!(
+            selected_names(&loaded),
+            vec!["report.pdf".to_string(), "notes.txt".into()]
+        );
+    }
+
     #[test]
     fn draft_build_missing_signature_is_noop() {
         let id = FromIdentity::new("Me", "me@example.com");
@@ -693,5 +978,117 @@ mod tests {
             "{}",
             d.plain_body
         );
+    }
+
+    #[test]
+    fn skips_hidden_cid_inline_images() {
+        let loaded = loaded_parts(vec![
+            Tp::body(
+                "1",
+                PartKind::TextHtml,
+                "text/html",
+                "<img src=\"cid:logo@x\">",
+            )
+            .finish(),
+            Tp::hidden_cid("2").finish(),
+            Tp::file("3", "application/pdf", "file.pdf").finish(),
+        ]);
+        assert_eq!(selected_names(&loaded), vec!["file.pdf".to_string()]);
+        assert!(!is_forwardable_attachment(&loaded.parts[1]));
+        assert!(is_forwardable_attachment(&loaded.parts[2]));
+    }
+
+    #[test]
+    fn includes_cid_image_when_real_attachment() {
+        // Parser leaves is_hidden=false when disposition is ATTACHMENT.
+        let loaded = loaded_parts(vec![Tp::cid_image("2", "photo.jpg").finish()]);
+        assert_eq!(selected_names(&loaded), vec!["photo.jpg".to_string()]);
+    }
+
+    #[test]
+    fn skips_display_body_parts() {
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "body").finish(),
+            Tp::body("2", PartKind::TextHtml, "text/html", "<p>body</p>").finish(),
+        ]);
+        assert!(selected_names(&loaded).is_empty());
+    }
+
+    #[test]
+    fn reply_does_not_copy_attachments() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "hi").finish(),
+            Tp::file("2", "application/pdf", "report.pdf")
+                .bytes(b"%PDF".to_vec())
+                .finish(),
+        ]);
+        let reply =
+            build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
+        assert!(reply.attachments.is_empty());
+        let fwd =
+            build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
+        assert_eq!(fwd.attachments.len(), 1);
+        assert_eq!(fwd.attachments[0].filename, "report.pdf");
+    }
+
+    #[test]
+    fn forward_copies_loaded_bytes_and_pends_empty() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "hi").finish(),
+            Tp::file("2", "application/pdf", "report.pdf")
+                .bytes(b"%PDF".to_vec())
+                .finish(),
+            Tp::file("3", "application/zip", "data.zip")
+                .size(200)
+                .finish(),
+        ]);
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
+        assert_eq!(d.attachments.len(), 2);
+        assert!(matches!(
+            &d.attachments[0].data,
+            AttachmentData::Bytes(b) if b == b"%PDF"
+        ));
+        assert_eq!(d.attachments[0].size, 4);
+        assert!(matches!(d.attachments[1].data, AttachmentData::Pending));
+        assert_eq!(d.attachments[1].size, 200);
+        let src = d.attachments[1].source.as_ref().expect("source");
+        assert_eq!(src.section, "3");
+        assert_eq!(src.message_id.as_uid(), "1");
+    }
+
+    #[test]
+    fn forward_skips_oversize_and_hidden() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let too_big = caps::MAX_FILE_BYTES + 1;
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "hi").finish(),
+            Tp::hidden_cid("2").finish(),
+            Tp::file("3", "application/zip", "huge.zip")
+                .size(too_big)
+                .finish(),
+            Tp::file("4", "application/pdf", "ok.pdf").size(10).finish(),
+        ]);
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
+        assert_eq!(
+            d.attachments
+                .iter()
+                .map(|a| a.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ok.pdf"]
+        );
+        assert_eq!(d.prefill_warnings.len(), 1);
+        assert!(d.prefill_warnings[0].contains("skipped"));
+    }
+
+    #[test]
+    fn forward_filename_falls_back_from_type() {
+        let p = Tp::nameless_pdf("2").finish();
+        assert_eq!(forward_filename(&p), "attachment.pdf");
+        assert!(is_forwardable_attachment(&p));
     }
 }

@@ -17,8 +17,9 @@ use mailiner_composer::shell::attachment_list::{
 };
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
-    ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError, SAFE_IMAGE_ACCEPT, build_draft,
-    caps, discard_rich_quote, is_safe_image_content_type, plain_to_html, prepare_submit,
+    AttachmentData, ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError,
+    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, is_safe_image_content_type,
+    plain_to_html, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -344,6 +345,7 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
             title: "New message".into(),
             draft,
             reply_source: None,
+            stashed_originals: Vec::new(),
         },
     );
 }
@@ -414,6 +416,7 @@ pub fn open_reply_or_forward(
                     title: title.into(),
                     draft,
                     reply_source,
+                    stashed_originals: Vec::new(),
                 },
             );
         }
@@ -429,8 +432,9 @@ fn submit_compose(
     mut submitting: Signal<bool>,
     mut submitted_id: Signal<Option<String>>,
     attaching: Signal<bool>,
+    forward_fetching: Signal<bool>,
 ) {
-    if submitting() || attaching() {
+    if submitting() || attaching() || forward_fetching() {
         return;
     }
     error.set(None);
@@ -441,12 +445,12 @@ fn submit_compose(
             session.reply_source.clone(),
         ),
         None => {
-            error.set(Some("Select an account first.".into()));
+            error.set(Some("No draft open.".into()));
             return;
         }
     };
     let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
-        error.set(Some("Account not found.".into()));
+        error.set(Some("This draft's account is no longer available.".into()));
         return;
     };
     let identity = identity_from_account(account.name.clone(), account.email.clone());
@@ -462,6 +466,14 @@ fn submit_compose(
     draft.to = form.to.take_committed();
     draft.cc = form.cc.take_committed();
     draft.bcc = form.bcc.take_committed();
+    if draft
+        .attachments
+        .iter()
+        .any(|a| matches!(a.data, AttachmentData::Pending))
+    {
+        error.set(Some("Still loading original attachments.".into()));
+        return;
+    }
     match prepare_submit(&draft, &identity) {
         Ok(prepared) => {
             let display = OutboxDisplay {
@@ -560,6 +572,7 @@ fn remove_attachment(mut compose_draft: Signal<Option<ComposeSession>>, id: &str
     };
     let before = session.draft.attachments.len();
     session.draft.attachments.retain(|a| a.id.0 != id);
+    session.stashed_originals.retain(|a| a.id.0 != id);
     if session.draft.attachments.len() != before {
         session.draft.touch();
     }
@@ -601,6 +614,60 @@ fn remove_inline(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
     let before = session.draft.inline_images.len();
     session.draft.inline_images.retain(|a| a.id.0 != id);
     if session.draft.inline_images.len() != before {
+        session.draft.touch();
+    }
+}
+
+fn toggle_original_attachments(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    include: bool,
+    body: Signal<String>,
+) {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    if include {
+        if session.stashed_originals.is_empty() {
+            return;
+        }
+        let mut used = live_payload_bytes(&session.draft, &body());
+        let mut kept = Vec::new();
+        let mut skipped = 0usize;
+        for att in session.stashed_originals.drain(..) {
+            let extra = match &att.data {
+                AttachmentData::Bytes(b) => b.len() as u64,
+                AttachmentData::Pending => att.size,
+            };
+            if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS
+                || (extra > 0 && would_exceed_draft_cap(used, extra))
+            {
+                skipped += 1;
+                kept.push(att);
+                continue;
+            }
+            used = used.saturating_add(extra);
+            session.draft.attachments.push(att);
+        }
+        session.stashed_originals = kept;
+        if skipped > 0 {
+            session.draft.prefill_warnings.push(format!(
+                "{skipped} original attachment(s) were skipped (size or file limit)."
+            ));
+        }
+        session.draft.touch();
+    } else {
+        let (orig, rest): (Vec<_>, Vec<_>) = session
+            .draft
+            .attachments
+            .drain(..)
+            .partition(|a| a.source.is_some());
+        if orig.is_empty() && session.stashed_originals.is_empty() {
+            session.draft.attachments = rest;
+            return;
+        }
+        session.draft.attachments = rest;
+        session.stashed_originals.extend(orig);
         session.draft.touch();
     }
 }
@@ -699,6 +766,19 @@ async fn sleep_ms(ms: u32) {
     {
         tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
     }
+}
+
+fn has_original_attachments(session: &ComposeSession) -> bool {
+    session.draft.attachments.iter().any(|a| a.source.is_some())
+        || !session.stashed_originals.is_empty()
+}
+
+fn has_pending_forward_fetch(session: &ComposeSession) -> bool {
+    session
+        .draft
+        .attachments
+        .iter()
+        .any(|a| matches!(a.data, AttachmentData::Pending) && a.source.is_some())
 }
 
 fn oversize_message(filename: &str) -> String {
@@ -1117,6 +1197,7 @@ pub fn ComposeOverlay() -> Element {
     let submitting = use_signal(|| false);
     let mut submitted_id = use_signal(|| None::<String>);
     let mut attaching = use_signal(|| false);
+    let forward_fetching = use_signal(|| false);
     let mut attach_gen = use_signal(|| 0u32);
     let mut attach_input_gen = use_signal(|| 0u32);
     let mut image_input_gen = use_signal(|| 0u32);
@@ -1136,8 +1217,9 @@ pub fn ComposeOverlay() -> Element {
         subject,
         body,
     };
+    let mut include_original = use_signal(|| true);
 
-    let (open, title, listed_files, from_account_id) = {
+    let (open, title, listed_files, from_account_id, has_originals, prefill_warnings) = {
         let slot = ctx.compose_draft.read();
         match slot.as_ref() {
             Some(s) => {
@@ -1168,9 +1250,23 @@ pub fn ComposeOverlay() -> Element {
                         true,
                     )
                 }));
-                (true, s.title.clone(), listed, Some(s.account_id.clone()))
+                (
+                    true,
+                    s.title.clone(),
+                    listed,
+                    Some(s.account_id.clone()),
+                    has_original_attachments(s),
+                    s.draft.prefill_warnings.clone(),
+                )
             }
-            None => (false, "New message".to_string(), Vec::new(), None),
+            None => (
+                false,
+                "New message".to_string(),
+                Vec::new(),
+                None,
+                false,
+                Vec::new(),
+            ),
         }
     };
     let from_accounts = listed_compose_accounts(&ctx);
@@ -1181,29 +1277,42 @@ pub fn ComposeOverlay() -> Element {
         .unwrap_or_default();
     let multi_from = from_accounts.len() > 1;
     let sending = submitting();
-    let attaching_now = attaching();
+    let attaching_now = attaching() || forward_fetching();
     let busy = sending || attaching_now;
 
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
+        let core = core;
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
         let mut attaching = attaching;
+        let mut forward_fetching = forward_fetching;
         let mut attach_gen = attach_gen;
+        let mut include_original = include_original;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
                 if last_draft_id() != Some(id.clone()) {
-                    last_draft_id.set(Some(id));
+                    last_draft_id.set(Some(id.clone()));
                     apply_draft_fields(&session.draft, &mut form);
                     show_cc_bcc.set(!session.draft.cc.is_empty() || !session.draft.bcc.is_empty());
                     error.set(None);
                     submitting.set(false);
                     let next = *attach_gen.peek() + 1;
                     attach_gen.set(next);
-                    attaching.set(false);
+                    include_original.set(true);
                     submitted_id.set(None);
+                    attaching.set(false);
+                    if has_pending_forward_fetch(session) {
+                        forward_fetching.set(true);
+                        core.send(CoreEvent::FetchComposeAttachments {
+                            draft_id: id,
+                            account_id: session.account_id.clone(),
+                        });
+                    } else {
+                        forward_fetching.set(false);
+                    }
                 }
             }
             None => {
@@ -1212,6 +1321,7 @@ pub fn ComposeOverlay() -> Element {
                 let next = *attach_gen.peek() + 1;
                 attach_gen.set(next);
                 attaching.set(false);
+                forward_fetching.set(false);
                 submitted_id.set(None);
             }
         });
@@ -1262,6 +1372,24 @@ pub fn ComposeOverlay() -> Element {
                     body,
                 );
             });
+        });
+    }
+
+    {
+        let ctx = ctx.clone();
+        let mut forward_fetching = forward_fetching;
+        use_effect(move || {
+            if !forward_fetching() {
+                return;
+            }
+            let still = ctx
+                .compose_draft
+                .read()
+                .as_ref()
+                .is_some_and(has_pending_forward_fetch);
+            if !still {
+                forward_fetching.set(false);
+            }
         });
     }
 
@@ -1343,6 +1471,7 @@ pub fn ComposeOverlay() -> Element {
                                     submitting,
                                     submitted_id,
                                     attaching,
+                                    forward_fetching,
                                 );
                             }
                         }
@@ -1605,6 +1734,22 @@ pub fn ComposeOverlay() -> Element {
                                 "Insert image"
                             }
                         }
+                        if has_originals {
+                            label {
+                                class: "compose-include-original",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: include_original(),
+                                    disabled: sending,
+                                    onchange: move |e| {
+                                        let on = e.checked();
+                                        include_original.set(on);
+                                        toggle_original_attachments(compose_draft, on, body);
+                                    },
+                                }
+                                "Include original attachments"
+                            }
+                        }
                         if !listed_files.is_empty() {
                             ul {
                                 class: "compose-attachment-list",
@@ -1648,6 +1793,12 @@ pub fn ComposeOverlay() -> Element {
                                 }
                             }
                         }
+                        for warn in prefill_warnings {
+                            p {
+                                class: "compose-prefill-note",
+                                "{warn}"
+                            }
+                        }
                     }
                     if let Some(err) = error() {
                         p { class: "ui-alert-error", "{err}" }
@@ -1683,6 +1834,7 @@ pub fn ComposeOverlay() -> Element {
                                         submitting,
                                         submitted_id,
                                         attaching,
+                                        forward_fetching,
                                     );
                                 }
                             },

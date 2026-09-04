@@ -372,6 +372,7 @@ mod tests {
             content_type: "application/pdf".into(),
             size: 4,
             data: AttachmentData::Bytes(b"%PDF".to_vec()),
+            source: None,
         });
         let prepared = prepare_submit(&d, &identity()).unwrap();
         let s = String::from_utf8_lossy(&prepared.rfc822);

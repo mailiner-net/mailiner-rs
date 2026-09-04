@@ -257,6 +257,7 @@ fn restore_attachments(persisted: &[PersistedAttachment]) -> Vec<FileAttachment>
                 a.size
             },
             data: AttachmentData::Bytes(bytes),
+            source: None,
         });
     }
     out
@@ -311,6 +312,7 @@ impl PersistedComposeDraft {
                 created_at: self.created_at,
                 updated_at: self.updated_at,
             },
+            stashed_originals: Vec::new(),
         }
     }
 }
@@ -498,6 +500,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            stashed_originals: Vec::new(),
         }
     }
 
@@ -575,6 +578,7 @@ mod tests {
             title: "New message".into(),
             draft,
             reply_source: None,
+            stashed_originals: Vec::new(),
         };
         assert!(!session_has_content(&empty));
         save_draft_in(&kv, &account, &session("Hi", "x")).unwrap();
@@ -592,6 +596,7 @@ mod tests {
             content_type: "text/plain".into(),
             size: 5,
             data: AttachmentData::Bytes(b"hello".to_vec()),
+            source: None,
         });
         let persisted = PersistedComposeDraft::from_session(account, &s);
         assert_eq!(persisted.attachments.len(), 1);
@@ -615,6 +620,7 @@ mod tests {
             content_type: "application/octet-stream".into(),
             size: (MAX_ATTACHMENT_PERSIST_BYTES + 1) as u64,
             data: AttachmentData::Bytes(vec![0u8; MAX_ATTACHMENT_PERSIST_BYTES + 1]),
+            source: None,
         });
         let persisted = PersistedComposeDraft::from_session(account, &s);
         assert!(persisted.attachments.is_empty());
@@ -630,6 +636,7 @@ mod tests {
             content_type: "application/octet-stream".into(),
             size: 0,
             data: AttachmentData::Pending,
+            source: None,
         });
         let persisted = PersistedComposeDraft::from_session(account, &s);
         assert!(persisted.attachments.is_empty());
@@ -770,6 +777,7 @@ mod tests {
             content_type: "application/octet-stream".into(),
             size: n as u64,
             data: AttachmentData::Bytes(vec![b'x'; n]),
+            source: None,
         };
         // 256 + 256 + 238 KiB stays under the per-draft persist cap but two
         // such drafts exceed the shared blob cap.

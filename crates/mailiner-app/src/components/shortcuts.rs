@@ -301,7 +301,7 @@ pub fn ShortcutsHost() -> Element {
                 return;
             }
 
-            if ctx.mailbox_picker.peek().is_some() {
+            if ctx.mailbox_picker.peek().is_some() || *ctx.folder_subscribe_open.peek() {
                 return;
             }
 

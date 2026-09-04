@@ -161,6 +161,10 @@ pub struct AppContext {
     pub message_drag: Signal<Option<MessageDrag>>,
     /// Inbox desktop notifications (off until permission is granted).
     pub notify_inbox: Signal<bool>,
+    /// Subscribe-folder manager dialog.
+    pub folder_subscribe_open: Signal<bool>,
+    /// Show unsubscribed folders in the tree and pickers.
+    pub show_all_folders: Signal<bool>,
 }
 
 /// In-progress drag of list rows onto a folder.

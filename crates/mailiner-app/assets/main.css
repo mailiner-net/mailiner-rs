@@ -992,6 +992,7 @@ a.accounts-link-btn {
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
+    margin-left: 0;
     flex-shrink: 0;
     border-radius: 6px;
     padding: 2px;
@@ -2211,6 +2212,89 @@ textarea.ui-input {
     font-size: var(--text-sm);
 }
 
+.folder-subscribe-btn {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--foreground);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+.folder-subscribe-btn:hover {
+    background: var(--item-hover-background);
+}
+
+.folder-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+}
+
+.folder-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 12rem;
+    padding: 0.25rem 0;
+    background: var(--surface);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-dialog);
+}
+
+.folder-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    font-size: var(--text-sm);
+    color: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0.4rem 0.75rem;
+    cursor: pointer;
+}
+
+.folder-menu-item:hover {
+    background: var(--item-hover-background);
+}
+
+.folder-menu-item.is-danger {
+    color: var(--danger, #b42318);
+}
+
+.subscribe-dialog {
+    width: min(32rem, 94vw);
+}
+
+.subscribe-row-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+    flex: 1 1 auto;
+    cursor: pointer;
+}
+
+.subscribe-row.unsubscribed {
+    opacity: 0.65;
+}
+
+.subscribe-show-all {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: var(--text-sm);
+    cursor: pointer;
+}
+
 /* Nested mail-chrome rules. Do not append new top-level CSS after this. */
 #app {
     #emailnavigation {
@@ -2262,6 +2346,10 @@ textarea.ui-input {
 
                     &:hover {
                         background-color: var(--item-hover-background);
+                    }
+
+                    &.unsubscribed {
+                        opacity: 0.6;
                     }
 
                     &.selected {

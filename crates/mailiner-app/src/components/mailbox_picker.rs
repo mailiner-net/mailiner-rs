@@ -10,7 +10,10 @@ use wasm_bindgen::JsCast;
 use super::icons::{Icon, IconButton, IconKind};
 use crate::context::{AppContext, MailboxPickerMode};
 use crate::core_event::CoreEvent;
-use crate::mailbox::{MailboxEntry, MailboxId, collect_mailbox_entries, filter_mailbox_entries};
+use crate::mailbox::{
+    MailboxEntry, MailboxId, collect_mailbox_entries, filter_mailbox_entries,
+    mailbox_is_action_target,
+};
 use crate::toast::ToastAction;
 
 fn role_icon(role: MailboxRole) -> IconKind {
@@ -70,7 +73,13 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
     let current = ctx.selected_mailbox.read().clone();
     let nodes = ctx.mailbox_nodes.read();
     let roots = ctx.mailbox_roots.read();
+    let show_all = *ctx.show_all_folders.read();
     let mut entries = collect_mailbox_entries(&roots, &nodes);
+    entries.retain(|e| {
+        nodes
+            .get(&e.id)
+            .is_some_and(|n| mailbox_is_action_target(n, show_all))
+    });
     if matches!(mode, MailboxPickerMode::Move | MailboxPickerMode::Copy) {
         entries.retain(|e| current.as_ref() != Some(&e.id));
     }

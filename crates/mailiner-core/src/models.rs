@@ -197,6 +197,9 @@ pub struct Folder {
     /// False for `\\Noselect` / synthesized ancestors. Default true for older blobs.
     #[serde(default = "default_true")]
     pub selectable: bool,
+    /// IMAP subscription (`LSUB`). Default true for older cache blobs.
+    #[serde(default = "default_true")]
+    pub subscribed: bool,
 }
 
 fn default_true() -> bool {

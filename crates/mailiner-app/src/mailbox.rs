@@ -42,6 +42,8 @@ pub struct MailboxNode {
     pub role: MailboxRole,
     /// False for `\\Noselect` / synthesized ancestors.
     pub selectable: bool,
+    /// IMAP `LSUB` subscription. Unsubscribed folders stay in the map.
+    pub subscribed: bool,
 }
 
 impl MailboxNode {
@@ -76,6 +78,7 @@ impl From<Folder> for MailboxNode {
             has_new: false,
             role,
             selectable: folder.selectable,
+            subscribed: folder.subscribed,
         }
     }
 }
@@ -97,6 +100,7 @@ pub fn build_mailbox_tree(
                 node.name = folder.name.clone();
                 node.role = role;
                 node.selectable = folder.selectable;
+                node.subscribed = folder.subscribed;
             })
             .or_insert(MailboxNode {
                 id: mailbox_id.clone(),
@@ -108,6 +112,7 @@ pub fn build_mailbox_tree(
                 has_new: false,
                 role,
                 selectable: folder.selectable,
+                subscribed: folder.subscribed,
             });
         if let Some(parent_id) = folder.parent_id.clone() {
             mboxes
@@ -122,6 +127,7 @@ pub fn build_mailbox_tree(
                     has_new: false,
                     role: MailboxRole::Other,
                     selectable: false,
+                    subscribed: false,
                 })
                 .children
                 .push(mailbox_id);
@@ -231,6 +237,42 @@ pub fn mailbox_subtree_deepest_first(
     out
 }
 
+/// Inbox stays subscribed; every other folder can be toggled.
+pub fn can_toggle_subscription(node: &MailboxNode) -> bool {
+    node.role != MailboxRole::Inbox
+}
+
+/// Jump / move targets: selectable, and subscribed unless `show_all`.
+pub fn mailbox_is_action_target(node: &MailboxNode, show_all: bool) -> bool {
+    node.selectable && (show_all || node.subscribed)
+}
+
+/// Default tree shows subscribed folders and ancestors of subscribed children.
+pub fn mailbox_visible_in_tree(
+    id: &MailboxId,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+    show_all: bool,
+) -> bool {
+    if show_all {
+        return nodes.contains_key(id);
+    }
+    mailbox_is_subscribed_or_has_subscribed_descendant(id, nodes)
+}
+
+fn mailbox_is_subscribed_or_has_subscribed_descendant(
+    id: &MailboxId,
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> bool {
+    let Some(node) = nodes.get(id) else {
+        return false;
+    };
+    node.subscribed
+        || node
+            .children
+            .iter()
+            .any(|child| mailbox_is_subscribed_or_has_subscribed_descendant(child, nodes))
+}
+
 /// First mailbox with `role`, if any.
 pub fn find_mailbox_with_role(
     nodes: &HashMap<MailboxId, MailboxNode>,
@@ -314,9 +356,12 @@ pub fn resolve_startup_mailbox(
     saved: Option<&MailboxId>,
     nodes: &HashMap<MailboxId, MailboxNode>,
     roots: &[MailboxId],
+    show_all: bool,
 ) -> Option<MailboxId> {
     if let Some(id) = saved
-        && nodes.get(id).is_some_and(|n| n.selectable)
+        && nodes
+            .get(id)
+            .is_some_and(|n| mailbox_is_action_target(n, show_all))
     {
         return Some(id.clone());
     }
@@ -325,7 +370,11 @@ pub fn resolve_startup_mailbox(
     }
     roots
         .iter()
-        .find(|id| nodes.get(*id).is_some_and(|n| n.selectable))
+        .find(|id| {
+            nodes
+                .get(*id)
+                .is_some_and(|n| mailbox_is_action_target(n, show_all))
+        })
         .cloned()
 }
 
@@ -354,6 +403,8 @@ pub struct MailboxEntry {
     pub path: String,
     pub depth: usize,
     pub role: MailboxRole,
+    pub subscribed: bool,
+    pub selectable: bool,
 }
 
 /// Depth-first list of every selectable mailbox.
@@ -386,8 +437,52 @@ pub fn collect_mailbox_entries(
                 path: path.clone(),
                 depth,
                 role: node.role,
+                subscribed: node.subscribed,
+                selectable: node.selectable,
             });
         }
+        for child in &node.children {
+            walk(child, depth + 1, &path, nodes, out);
+        }
+    }
+    for root in roots {
+        walk(root, 0, "", nodes, &mut out);
+    }
+    out
+}
+
+/// Depth-first list of every mailbox, including `\\Noselect` ancestors.
+pub fn collect_all_mailbox_entries(
+    roots: &[MailboxId],
+    nodes: &HashMap<MailboxId, MailboxNode>,
+) -> Vec<MailboxEntry> {
+    let mut out = Vec::new();
+    fn walk(
+        id: &MailboxId,
+        depth: usize,
+        parent_path: &str,
+        nodes: &HashMap<MailboxId, MailboxNode>,
+        out: &mut Vec<MailboxEntry>,
+    ) {
+        let Some(node) = nodes.get(id) else {
+            return;
+        };
+        let title = node.title().to_string();
+        let path = if parent_path.is_empty() {
+            title.clone()
+        } else {
+            format!("{parent_path} / {title}")
+        };
+        out.push(MailboxEntry {
+            id: id.clone(),
+            title: title.clone(),
+            name: node.name.clone(),
+            path: path.clone(),
+            depth,
+            role: node.role,
+            subscribed: node.subscribed,
+            selectable: node.selectable,
+        });
         for child in &node.children {
             walk(child, depth + 1, &path, nodes, out);
         }
@@ -542,7 +637,20 @@ mod tests {
             parent_id: parent.map(FolderId::new),
             role,
             selectable,
+            subscribed: true,
         }
+    }
+
+    fn folder_sub(
+        id: &str,
+        name: &str,
+        parent: Option<&str>,
+        role: MailboxRole,
+        subscribed: bool,
+    ) -> Folder {
+        let mut f = folder(id, name, parent, role);
+        f.subscribed = subscribed;
+        f
     }
 
     #[test]
@@ -662,6 +770,7 @@ mod tests {
                 has_new: false,
                 role: MailboxRole::Other,
                 selectable: true,
+                subscribed: true,
             },
         );
         assert_eq!(find_archive_mailbox(&nodes).unwrap().to_string(), "Archive");
@@ -763,6 +872,7 @@ mod tests {
                 has_new: false,
                 role: MailboxRole::Other,
                 selectable: true,
+                subscribed: true,
             },
         );
         assert_eq!(find_junk_mailbox(&nodes).unwrap().to_string(), "Junk");
@@ -803,7 +913,7 @@ mod tests {
             folder("Archive", "Archive", None, MailboxRole::Other),
         ]);
         let saved = MailboxId::from("Archive".to_string());
-        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots, false).unwrap();
         assert_eq!(chosen.as_str(), "Archive");
     }
 
@@ -814,9 +924,9 @@ mod tests {
             folder("Sent", "Sent", None, MailboxRole::Sent),
         ]);
         let saved = MailboxId::from("Gone".to_string());
-        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots, false).unwrap();
         assert_eq!(chosen.as_str(), "INBOX");
-        let first_time = resolve_startup_mailbox(None, &nodes, &roots).unwrap();
+        let first_time = resolve_startup_mailbox(None, &nodes, &roots, false).unwrap();
         assert_eq!(first_time.as_str(), "INBOX");
     }
 
@@ -826,7 +936,7 @@ mod tests {
             folder("Archive", "Archive", None, MailboxRole::Other),
             folder("Lists", "Lists", None, MailboxRole::Other),
         ]);
-        let chosen = resolve_startup_mailbox(None, &nodes, &roots).unwrap();
+        let chosen = resolve_startup_mailbox(None, &nodes, &roots, false).unwrap();
         assert_eq!(chosen.as_str(), roots[0].as_str());
     }
 
@@ -834,7 +944,7 @@ mod tests {
     fn resolve_startup_empty_tree_is_none() {
         let nodes = HashMap::new();
         let roots: Vec<MailboxId> = Vec::new();
-        assert!(resolve_startup_mailbox(None, &nodes, &roots).is_none());
+        assert!(resolve_startup_mailbox(None, &nodes, &roots, false).is_none());
     }
 
     #[test]
@@ -844,7 +954,7 @@ mod tests {
             folder_sel("[Gmail]", "[Gmail]", None, MailboxRole::Other, false),
         ]);
         let saved = MailboxId::from("[Gmail]".to_string());
-        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots).unwrap();
+        let chosen = resolve_startup_mailbox(Some(&saved), &nodes, &roots, false).unwrap();
         assert_eq!(chosen.as_str(), "INBOX");
     }
 
@@ -1193,5 +1303,67 @@ mod tests {
         apply_unread_new_state(&mut nodes, &counts, &ack);
         assert!(!nodes.get(&inbox_id).unwrap().has_new);
         assert!(nodes.get(&archive_id).unwrap().has_new);
+    }
+
+    #[test]
+    fn unsubscribed_hidden_unless_ancestor_of_subscribed() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sub("Lists", "Lists", None, MailboxRole::Other, false),
+            folder_sub("Work", "Work", None, MailboxRole::Other, false),
+            folder("Work/Clients", "Clients", Some("Work"), MailboxRole::Other),
+        ]);
+        let inbox = MailboxId::from("INBOX".to_string());
+        let lists = MailboxId::from("Lists".to_string());
+        let work = MailboxId::from("Work".to_string());
+        let clients = MailboxId::from("Work/Clients".to_string());
+        assert!(mailbox_visible_in_tree(&inbox, &nodes, false));
+        assert!(!mailbox_visible_in_tree(&lists, &nodes, false));
+        assert!(mailbox_visible_in_tree(&work, &nodes, false));
+        assert!(mailbox_visible_in_tree(&clients, &nodes, false));
+        assert!(mailbox_visible_in_tree(&lists, &nodes, true));
+        assert!(!mailbox_is_action_target(nodes.get(&lists).unwrap(), false));
+        assert!(mailbox_is_action_target(nodes.get(&lists).unwrap(), true));
+        assert_eq!(roots.len(), 3);
+    }
+
+    #[test]
+    fn resolve_startup_skips_unsubscribed_saved() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sub("Archive", "Archive", None, MailboxRole::Other, false),
+        ]);
+        let saved = MailboxId::from("Archive".to_string());
+        let hidden = resolve_startup_mailbox(Some(&saved), &nodes, &roots, false).unwrap();
+        assert_eq!(hidden.as_str(), "INBOX");
+        let shown = resolve_startup_mailbox(Some(&saved), &nodes, &roots, true).unwrap();
+        assert_eq!(shown.as_str(), "Archive");
+    }
+
+    #[test]
+    fn inbox_subscription_is_not_toggleable() {
+        let inbox = MailboxNode::from(folder("INBOX", "INBOX", None, MailboxRole::Inbox));
+        assert!(!can_toggle_subscription(&inbox));
+        let lists = MailboxNode::from(folder("Lists", "Lists", None, MailboxRole::Other));
+        assert!(can_toggle_subscription(&lists));
+    }
+
+    #[test]
+    fn collect_all_includes_unselectable() {
+        let (roots, nodes) = build_mailbox_tree(vec![
+            folder("INBOX", "INBOX", None, MailboxRole::Inbox),
+            folder_sel("[Gmail]", "[Gmail]", None, MailboxRole::Other, false),
+            folder(
+                "[Gmail]/Sent Mail",
+                "Sent Mail",
+                Some("[Gmail]"),
+                MailboxRole::Sent,
+            ),
+        ]);
+        let all: Vec<_> = collect_all_mailbox_entries(&roots, &nodes)
+            .into_iter()
+            .map(|e| e.id.to_string())
+            .collect();
+        assert_eq!(all, vec!["INBOX", "[Gmail]", "[Gmail]/Sent Mail"]);
     }
 }

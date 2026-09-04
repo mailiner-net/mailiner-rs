@@ -5,7 +5,8 @@ mod sent;
 mod sort;
 
 pub use sent::{
-    find_sent_mailbox, folders_from_listed, role_from_name, special_use_from_attrs, ListedMailbox,
+    apply_subscriptions, find_sent_mailbox, folders_from_listed, role_from_name,
+    special_use_from_attrs, ListedMailbox,
 };
 
 use std::fmt::Debug;
@@ -342,9 +343,29 @@ where
                 delimiter: mailbox.delimiter().map(str::to_string),
                 no_select,
                 special_use,
+                subscribed: true,
             });
         }
         Ok(mailboxes)
+    }
+
+    /// Names declared active via `LSUB`. Empty when the server has no list.
+    async fn list_subscribed_names(&self) -> Result<std::collections::HashSet<String>, ImapError> {
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated);
+        };
+        let mut lsub = session
+            .lsub(Some(""), Some("*"))
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to LSUB folders: {e}")))?;
+        let mut names = std::collections::HashSet::new();
+        while let Some(result) = lsub.next().await {
+            let mailbox =
+                result.map_err(|e| ImapError::Imap(format!("Failed to read LSUB row: {e}")))?;
+            names.insert(mailbox.name().to_string());
+        }
+        Ok(names)
     }
 
     async fn ensure_connected(&self, stream: S) -> Result<(), ImapError> {
@@ -1056,9 +1077,43 @@ where
     }
 
     async fn list_folders(&self, account_id: &AccountId) -> MailinerResult<Vec<Folder>> {
-        // Full LIST (not LSUB): unsubscribed mailboxes are still selectable.
-        let listed = self.list_all_mailboxes().await?;
+        // Full LIST so unsubscribed mailboxes stay selectable (manager / show-all).
+        let mut listed = self.list_all_mailboxes().await?;
+        match self.list_subscribed_names().await {
+            Ok(names) if !names.is_empty() => apply_subscriptions(&mut listed, &names),
+            Ok(_) => {
+                // Empty LSUB: keep the LIST default (all subscribed) so the tree
+                // is not blank on servers that never persist subscriptions.
+            }
+            Err(e) => {
+                tracing::warn!("LSUB failed ({e}); showing every LIST folder");
+            }
+        }
         Ok(folders_from_listed(account_id, &listed))
+    }
+
+    async fn set_folder_subscribed(
+        &self,
+        folder_id: &FolderId,
+        subscribed: bool,
+    ) -> MailinerResult<()> {
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+        let name = folder_id.as_str();
+        if subscribed {
+            session
+                .subscribe(name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to SUBSCRIBE {name}: {e}")))?;
+        } else {
+            session
+                .unsubscribe(name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to UNSUBSCRIBE {name}: {e}")))?;
+        }
+        Ok(())
     }
 
     async fn folder_counts(
@@ -1462,6 +1517,7 @@ where
             parent_id: parent_id.cloned(),
             role,
             selectable: true,
+            subscribed: true,
         })
     }
 
@@ -1502,6 +1558,7 @@ where
             parent_id: parent,
             role,
             selectable: true,
+            subscribed: true,
         })
     }
 

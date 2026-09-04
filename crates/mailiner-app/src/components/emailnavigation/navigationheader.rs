@@ -44,6 +44,7 @@ pub struct EmailNavigationHeaderProps {
 #[component]
 pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let ctx = use_context::<AppContext>();
+    let mut folder_subscribe_open = ctx.folder_subscribe_open;
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let mailboxes = ctx.mailbox_nodes.read();
     let accounts = ctx.accounts.read();
@@ -194,6 +195,15 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                     }
                 }
                 ThemeSelect { class: "theme-select pane-header-theme", }
+                button {
+                    class: "folder-subscribe-btn",
+                    title: "Choose which folders appear in the tree",
+                    aria_label: "Folder subscriptions",
+                    onclick: move |_| {
+                        folder_subscribe_open.set(true);
+                    },
+                    "Folders"
+                }
                 Link {
                     to: Route::SettingsView {},
                     class: "pane-header-settings",

@@ -38,6 +38,8 @@ where
 
     // Folder operations
     async fn list_folders(&self, account_id: &AccountId) -> Result<Vec<Folder>>;
+    /// IMAP `SUBSCRIBE` / `UNSUBSCRIBE`. Does not refresh the folder list.
+    async fn set_folder_subscribed(&self, folder_id: &FolderId, subscribed: bool) -> Result<()>;
     /// `STATUS (MESSAGES UNSEEN)` for each id. Missing entries were skipped or failed.
     async fn folder_counts(
         &self,
@@ -326,6 +328,7 @@ where
                 parent_id: None,
                 role: crate::MailboxRole::Inbox,
                 selectable: true,
+                subscribed: true,
             },
             Folder {
                 id: FolderId::new("sent"),
@@ -334,8 +337,13 @@ where
                 parent_id: None,
                 role: crate::MailboxRole::Sent,
                 selectable: true,
+                subscribed: true,
             },
         ])
+    }
+
+    async fn set_folder_subscribed(&self, _folder_id: &FolderId, _subscribed: bool) -> Result<()> {
+        Ok(())
     }
 
     async fn folder_counts(
@@ -462,6 +470,7 @@ where
             parent_id: parent_id.cloned(),
             role: crate::MailboxRole::Other,
             selectable: true,
+            subscribed: true,
         })
     }
 
@@ -488,6 +497,7 @@ where
             parent_id: parent,
             role: crate::MailboxRole::Other,
             selectable: true,
+            subscribed: true,
         })
     }
 
@@ -691,6 +701,52 @@ mod tests {
             ))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn mock_set_folder_subscribed_succeeds() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+        #[derive(Debug)]
+        struct NoopStream;
+
+        impl AsyncRead for NoopStream {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                _: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for NoopStream {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let connector = MockConnector::new();
+        let folder = FolderId::new("lists");
+        let result = futures::executor::block_on(
+            EmailConnector::<NoopStream>::set_folder_subscribed(&connector, &folder, false),
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

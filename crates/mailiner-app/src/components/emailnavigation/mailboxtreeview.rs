@@ -9,7 +9,10 @@ use super::super::icons::{Icon, IconButton, IconKind};
 
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
-use crate::mailbox::{MailboxId, can_manage_folder, mailbox_tree_filter_ids};
+use crate::mailbox::{
+    MailboxId, can_manage_folder, can_toggle_subscription, mailbox_tree_filter_ids,
+    mailbox_visible_in_tree,
+};
 
 /// Prompt for a single folder path segment. Non-web builds fail closed.
 pub(crate) fn prompt_folder_name(message: &str, default: &str) -> Option<String> {
@@ -51,13 +54,6 @@ fn confirm_delete_folder(title: &str, has_children: bool) -> bool {
     }
 }
 
-#[derive(Clone, PartialEq)]
-struct FolderContextMenu {
-    mailbox_id: MailboxId,
-    x: f64,
-    y: f64,
-}
-
 fn is_valid_drop_target(
     selectable: bool,
     dest: &MailboxId,
@@ -80,16 +76,40 @@ fn role_icon(role: MailboxRole) -> IconKind {
     }
 }
 
+fn folder_shown(
+    id: &MailboxId,
+    nodes: &std::collections::HashMap<MailboxId, crate::mailbox::MailboxNode>,
+    show_all: bool,
+    visible: &Option<Rc<HashSet<MailboxId>>>,
+) -> bool {
+    mailbox_visible_in_tree(id, nodes, show_all)
+        && visible.as_ref().is_none_or(|ids| ids.contains(id))
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct FolderMenu {
+    mailbox_id: MailboxId,
+    x: f64,
+    y: f64,
+}
+
 #[component]
 pub fn MailboxTreeView() -> Element {
     let ctx = use_context::<AppContext>();
     let mut query = use_signal(String::new);
+    let mut menu = use_signal(|| None::<FolderMenu>);
     let roots = (ctx.mailbox_roots)();
     let nodes = ctx.mailbox_nodes.read();
+    let show_all = *ctx.show_all_folders.read();
     let visible = mailbox_tree_filter_ids(&roots, &nodes, &query.read()).map(Rc::new);
-    let no_matches = visible.as_ref().is_some_and(|ids| ids.is_empty());
     let drop_active = ctx.message_drag.read().is_some();
-    let menu = use_signal(|| None::<FolderContextMenu>);
+    let shown_roots: Vec<MailboxId> = roots
+        .iter()
+        .filter(|id| folder_shown(id, &nodes, show_all, &visible))
+        .cloned()
+        .collect();
+    let no_matches = visible.as_ref().is_some_and(|ids| ids.is_empty())
+        || (visible.is_some() && shown_roots.is_empty());
     rsx! {
         div {
             class: "mailbox-tree-filter",
@@ -120,23 +140,21 @@ pub fn MailboxTreeView() -> Element {
                     "No matching folders"
                 }
             } else {
-                for mailbox_id in roots.iter().cloned() {
-                    if visible.as_ref().is_none_or(|ids| ids.contains(&mailbox_id)) {
-                        MailboxTreeViewItem {
-                            key: "{mailbox_id.as_str()}",
-                            mailbox_id: mailbox_id.clone(),
-                            visible: visible.clone(),
-                            menu,
-                        }
+                for mailbox_id in shown_roots {
+                    MailboxTreeViewItem {
+                        key: "{mailbox_id.as_str()}",
+                        mailbox_id: mailbox_id.clone(),
+                        visible: visible.clone(),
+                        on_menu: move |next| menu.set(Some(next)),
                     }
                 }
             }
+        }
 
-            if let Some(open) = menu() {
-                FolderMenu {
-                    open,
-                    menu,
-                }
+        if let Some(open) = menu() {
+            FolderContextMenu {
+                menu: open,
+                onclose: move |_| menu.set(None),
             }
         }
     }
@@ -146,17 +164,25 @@ pub fn MailboxTreeView() -> Element {
 pub struct MailboxTreeViewItemProps {
     pub mailbox_id: MailboxId,
     visible: Option<Rc<HashSet<MailboxId>>>,
-    pub menu: Signal<Option<FolderContextMenu>>,
+    pub on_menu: EventHandler<FolderMenu>,
 }
 
 #[component]
-pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
+fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
     let ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let mut message_drag = ctx.message_drag;
     let mailboxes = ctx.mailbox_nodes.read();
     let mailbox = mailboxes.get(&props.mailbox_id).unwrap();
     let selectable = mailbox.selectable;
+    let subscribed = mailbox.subscribed;
+    let show_all = *ctx.show_all_folders.read();
+    let visible_children: Vec<MailboxId> = mailbox
+        .children
+        .iter()
+        .filter(|id| folder_shown(id, &mailboxes, show_all, &props.visible))
+        .cloned()
+        .collect();
     let is_selected = ctx
         .selected_mailbox
         .read()
@@ -165,18 +191,13 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
         .unwrap_or(false);
     let mut children_visible = use_signal(|| false);
     let filtering = props.visible.is_some();
-    let has_visible_children = mailbox
-        .children
-        .iter()
-        .any(|id| props.visible.as_ref().is_none_or(|ids| ids.contains(id)));
+    let has_visible_children = !visible_children.is_empty();
     let show_children = has_visible_children && (filtering || children_visible());
     let is_drop_target = message_drag
         .read()
         .as_ref()
         .is_some_and(|d| d.over.as_ref() == Some(&props.mailbox_id));
     let mailbox_id = props.mailbox_id.clone();
-    let mut menu = props.menu;
-    let menu_id = mailbox_id.clone();
     // Reveal a nested restored/jumped folder so the selected row is visible.
     {
         let mailbox_id = mailbox_id.clone();
@@ -191,6 +212,8 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
             }
         });
     }
+    let on_menu = props.on_menu;
+    let mailbox_id_menu = mailbox_id.clone();
     rsx! {
         div {
             class: "mailbox-tree-view-item",
@@ -199,6 +222,7 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 class: "mailbox-row",
                 class: if is_selected { "selected" },
                 class: if is_drop_target { "drop-target" },
+                class: if !subscribed { "unsubscribed" },
 
                 onclick: {
                     let mailbox_id = mailbox_id.clone();
@@ -299,12 +323,12 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 oncontextmenu: move |evt: MouseEvent| {
                     evt.prevent_default();
                     evt.stop_propagation();
-                    let pt = evt.data().client_coordinates();
-                    menu.set(Some(FolderContextMenu {
-                        mailbox_id: menu_id.clone(),
-                        x: pt.x,
-                        y: pt.y,
-                    }));
+                    let coords = evt.client_coordinates();
+                    on_menu.call(FolderMenu {
+                        mailbox_id: mailbox_id_menu.clone(),
+                        x: coords.x,
+                        y: coords.y,
+                    });
                 },
 
                 if has_visible_children && !filtering {
@@ -343,15 +367,154 @@ pub fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
             div {
                 display: if show_children { "block" } else { "none" },
 
-                for child_id in mailbox.children.iter().cloned() {
-                    if props.visible.as_ref().is_none_or(|ids| ids.contains(&child_id)) {
-                        MailboxTreeViewItem {
-                            key: "{child_id.as_str()}",
-                            mailbox_id: child_id.clone(),
-                            visible: props.visible.clone(),
-                            menu: props.menu,
-                        }
+                for child_id in visible_children {
+                    MailboxTreeViewItem {
+                        key: "{child_id.as_str()}",
+                        mailbox_id: child_id.clone(),
+                        visible: props.visible.clone(),
+                        on_menu,
                     }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Element {
+    let mut ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let nodes = ctx.mailbox_nodes.read();
+    let Some(node) = nodes.get(&menu.mailbox_id) else {
+        return rsx! {};
+    };
+    let title = node.title().to_string();
+    let name = node.name.clone();
+    let can_manage = can_manage_folder(node);
+    let can_toggle = can_toggle_subscription(node);
+    let has_children = !node.children.is_empty();
+    let subscribed = node.subscribed;
+    let toggle_label = if subscribed {
+        "Unsubscribe"
+    } else {
+        "Subscribe"
+    };
+    let mailbox_id = menu.mailbox_id.clone();
+    let account_id = ctx.selected_account.read().clone();
+    let create_account = account_id.clone();
+    let rename_account = account_id.clone();
+    let delete_account = account_id.clone();
+    let create_mailbox = mailbox_id.clone();
+    let rename_mailbox = mailbox_id.clone();
+    let delete_mailbox = mailbox_id.clone();
+    let rename_current = name.clone();
+    rsx! {
+        div {
+            class: "folder-menu-backdrop",
+            onclick: move |evt| onclose.call(evt),
+            oncontextmenu: move |evt: MouseEvent| {
+                evt.prevent_default();
+                onclose.call(evt);
+            },
+            div {
+                class: "folder-menu",
+                role: "menu",
+                style: "left: {menu.x}px; top: {menu.y}px;",
+                onclick: move |evt| evt.stop_propagation(),
+
+                button {
+                    class: "folder-menu-item",
+                    r#type: "button",
+                    role: "menuitem",
+                    onclick: move |evt| {
+                        onclose.call(evt);
+                        let Some(account_id) = create_account.clone() else {
+                            return;
+                        };
+                        let Some(name) = prompt_folder_name("New folder name", "") else {
+                            return;
+                        };
+                        let _ = core_tx.send(CoreEvent::CreateFolder {
+                            account_id,
+                            parent_id: Some(create_mailbox.clone()),
+                            name,
+                        });
+                    },
+                    "New folder"
+                }
+
+                if can_manage {
+                    button {
+                        class: "folder-menu-item",
+                        r#type: "button",
+                        role: "menuitem",
+                        onclick: move |evt| {
+                            onclose.call(evt);
+                            let Some(account_id) = rename_account.clone() else {
+                                return;
+                            };
+                            let Some(new_name) =
+                                prompt_folder_name("Rename folder", &rename_current)
+                            else {
+                                return;
+                            };
+                            if new_name == rename_current {
+                                return;
+                            }
+                            let _ = core_tx.send(CoreEvent::RenameFolder {
+                                account_id,
+                                mailbox_id: rename_mailbox.clone(),
+                                new_name,
+                            });
+                        },
+                        "Rename"
+                    }
+                    button {
+                        class: "folder-menu-item is-danger",
+                        r#type: "button",
+                        role: "menuitem",
+                        onclick: move |evt| {
+                            onclose.call(evt);
+                            let Some(account_id) = delete_account.clone() else {
+                                return;
+                            };
+                            if !confirm_delete_folder(&title, has_children) {
+                                return;
+                            }
+                            let _ = core_tx.send(CoreEvent::DeleteFolder {
+                                account_id,
+                                mailbox_id: delete_mailbox.clone(),
+                            });
+                        },
+                        "Delete"
+                    }
+                }
+
+                if can_toggle {
+                    button {
+                        class: "folder-menu-item",
+                        role: "menuitem",
+                        onclick: move |evt| {
+                            if let Some(account_id) = account_id.clone() {
+                                let _ = core_tx.send(CoreEvent::SetFolderSubscribed {
+                                    account_id,
+                                    mailbox_id: mailbox_id.clone(),
+                                    subscribed: !subscribed,
+                                });
+                            }
+                            onclose.call(evt);
+                        },
+                        "{toggle_label}"
+                    }
+                }
+                button {
+                    class: "folder-menu-item",
+                    role: "menuitem",
+                    onclick: move |evt| {
+                        ctx.folder_subscribe_open.set(true);
+                        onclose.call(evt);
+                    },
+                    "Manage subscriptions…"
                 }
             }
         }
@@ -375,112 +538,5 @@ mod tests {
         assert!(!is_valid_drop_target(false, &sent, Some(&inbox), true));
         assert!(!is_valid_drop_target(true, &sent, Some(&inbox), false));
         assert!(!is_valid_drop_target(true, &sent, None, true));
-    }
-}
-
-#[component]
-fn FolderMenu(open: FolderContextMenu, mut menu: Signal<Option<FolderContextMenu>>) -> Element {
-    let ctx = use_context::<AppContext>();
-    let core_tx = use_coroutine_handle::<CoreEvent>();
-    let nodes = ctx.mailbox_nodes.read();
-    let Some(node) = nodes.get(&open.mailbox_id) else {
-        return rsx! {};
-    };
-    let title = node.title().to_string();
-    let name = node.name.clone();
-    let can_manage = can_manage_folder(node);
-    let has_children = !node.children.is_empty();
-    let mailbox_id = open.mailbox_id.clone();
-    let account_id = ctx.selected_account.read().clone();
-    let create_account = account_id.clone();
-    let rename_account = account_id.clone();
-    let delete_account = account_id;
-    let create_mailbox = mailbox_id.clone();
-    let rename_mailbox = mailbox_id.clone();
-    let delete_mailbox = mailbox_id;
-    let rename_current = name.clone();
-    let x = open.x;
-    let y = open.y;
-
-    rsx! {
-        div {
-            class: "folder-context-backdrop",
-            onclick: move |_| menu.set(None),
-            oncontextmenu: move |evt: MouseEvent| {
-                evt.prevent_default();
-                menu.set(None);
-            },
-        }
-        div {
-            class: "folder-context-menu",
-            style: "left: {x}px; top: {y}px;",
-            role: "menu",
-
-            button {
-                r#type: "button",
-                role: "menuitem",
-                onclick: move |_| {
-                    menu.set(None);
-                    let Some(account_id) = create_account.clone() else {
-                        return;
-                    };
-                    let Some(name) = prompt_folder_name("New folder name", "") else {
-                        return;
-                    };
-                    let _ = core_tx.send(CoreEvent::CreateFolder {
-                        account_id,
-                        parent_id: Some(create_mailbox.clone()),
-                        name,
-                    });
-                },
-                "New folder"
-            }
-
-            if can_manage {
-                button {
-                    r#type: "button",
-                    role: "menuitem",
-                    onclick: move |_| {
-                        menu.set(None);
-                        let Some(account_id) = rename_account.clone() else {
-                            return;
-                        };
-                        let Some(new_name) =
-                            prompt_folder_name("Rename folder", &rename_current)
-                        else {
-                            return;
-                        };
-                        if new_name == rename_current {
-                            return;
-                        }
-                        let _ = core_tx.send(CoreEvent::RenameFolder {
-                            account_id,
-                            mailbox_id: rename_mailbox.clone(),
-                            new_name,
-                        });
-                    },
-                    "Rename"
-                }
-                button {
-                    r#type: "button",
-                    role: "menuitem",
-                    class: "is-danger",
-                    onclick: move |_| {
-                        menu.set(None);
-                        let Some(account_id) = delete_account.clone() else {
-                            return;
-                        };
-                        if !confirm_delete_folder(&title, has_children) {
-                            return;
-                        }
-                        let _ = core_tx.send(CoreEvent::DeleteFolder {
-                            account_id,
-                            mailbox_id: delete_mailbox.clone(),
-                        });
-                    },
-                    "Delete"
-                }
-            }
-        }
     }
 }

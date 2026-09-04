@@ -407,6 +407,24 @@ button.flat {
     font-size: 0.8rem;
 }
 
+.onboarding-lookup-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    margin: 0.15rem 0 0.65rem;
+}
+
+.onboarding-lookup-row .onboarding-btn {
+    width: auto;
+}
+
+.onboarding-lookup-status {
+    margin: 0;
+    font-size: 0.8rem;
+    flex: 1 1 12rem;
+}
+
 .onboarding-disclosure {
     margin: 0.25rem 0 0;
     padding: 0.65rem 0.75rem;

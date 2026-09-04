@@ -25,6 +25,7 @@ mod account;
 mod account_config;
 mod account_store;
 mod address_book;
+mod autodiscover;
 mod components;
 mod connection;
 mod context;

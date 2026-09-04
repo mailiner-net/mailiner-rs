@@ -10,6 +10,10 @@ use crate::account_config::{
     default_port_for_tls_mode, normalize_signature, optional_smtp_from_tls_mode,
     port_for_imap_tls_mode_change, port_for_tls_mode_change,
 };
+use crate::autodiscover::{
+    DiscoverSource, DiscoveredConfig, apply_discovered, domain_from_email, lookup_servers,
+    should_autofill_hosts,
+};
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
@@ -106,6 +110,140 @@ pub fn email_to_imap_host_hint(email: &str) -> String {
         .filter(|d| !d.is_empty() && d.contains('.'))
         .map(|d| format!("imap.{d}"))
         .unwrap_or_default()
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum LookupStatus {
+    Idle,
+    Looking,
+    NeedEmail,
+    Filled {
+        source: DiscoverSource,
+        domain: String,
+    },
+    AlreadySet,
+    Failed,
+}
+
+impl LookupStatus {
+    fn message(&self) -> String {
+        match self {
+            Self::Idle => String::new(),
+            Self::Looking => "Looking up IMAP and SMTP over HTTPS…".into(),
+            Self::NeedEmail => "Enter a full email address (user@example.com) first.".into(),
+            Self::Filled { source, domain } => source.filled_message(domain),
+            Self::AlreadySet => {
+                "IMAP and SMTP are already set. Clear a host to fill from lookup.".into()
+            }
+            Self::Failed => "Could not look up servers. Enter IMAP and SMTP manually.".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LookupEditGuard {
+    hosts_dirty: Signal<bool>,
+    lookup_gen: Signal<u64>,
+    lookup_status: Signal<LookupStatus>,
+}
+
+impl LookupEditGuard {
+    fn mark_dirty(mut self) {
+        self.hosts_dirty.set(true);
+        invalidate_lookup(self.lookup_gen, self.lookup_status);
+    }
+}
+
+/// Shared by IMAP + SMTP fieldsets so an in-flight lookup cannot overwrite edits.
+pub fn provide_lookup_edit_guard() {
+    let guard = LookupEditGuard {
+        hosts_dirty: use_signal(|| false),
+        lookup_gen: use_signal(|| 0u64),
+        lookup_status: use_signal(|| LookupStatus::Idle),
+    };
+    use_context_provider(|| guard);
+}
+
+fn invalidate_lookup(mut lookup_gen: Signal<u64>, mut lookup_status: Signal<LookupStatus>) {
+    let next = lookup_gen.peek().saturating_add(1);
+    lookup_gen.set(next);
+    lookup_status.set(LookupStatus::Idle);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_server_lookup(
+    email: String,
+    fields: PresetFormFields,
+    force: bool,
+    busy: bool,
+    mut hosts_dirty: Signal<bool>,
+    mut lookup_gen: Signal<u64>,
+    mut lookup_status: Signal<LookupStatus>,
+    mut last_discovered: Signal<Option<DiscoveredConfig>>,
+    set_imap_host: EventHandler<String>,
+    set_imap_port: EventHandler<String>,
+    set_imap_username: EventHandler<String>,
+    set_smtp_host: EventHandler<String>,
+    set_smtp_port: EventHandler<String>,
+    set_smtp_username: EventHandler<String>,
+    set_smtp_use_tls: EventHandler<bool>,
+    set_smtp_open: EventHandler<bool>,
+) {
+    if busy {
+        return;
+    }
+    let Some(domain) = domain_from_email(&email) else {
+        if force {
+            lookup_status.set(LookupStatus::NeedEmail);
+        }
+        return;
+    };
+    if !should_autofill_hosts(&fields, last_discovered.peek().as_ref()) {
+        if force {
+            lookup_status.set(LookupStatus::AlreadySet);
+        }
+        return;
+    }
+    // Clearing a host sets dirty; that edit is the reason we are looking up.
+    // A later edit during the request sets dirty again and aborts apply.
+    hosts_dirty.set(false);
+    let generation = lookup_gen.peek().saturating_add(1);
+    lookup_gen.set(generation);
+    lookup_status.set(LookupStatus::Looking);
+    spawn(async move {
+        let result = lookup_servers(&email).await;
+        if lookup_gen() != generation {
+            return;
+        }
+        if hosts_dirty() {
+            lookup_status.set(LookupStatus::Idle);
+            return;
+        }
+        let Some(cfg) = result else {
+            lookup_status.set(LookupStatus::Failed);
+            return;
+        };
+        let last = last_discovered();
+        let mut next = fields;
+        apply_discovered(&cfg, &email, &mut next, last.as_ref());
+        hosts_dirty.set(false);
+        last_discovered.set(Some(cfg.clone()));
+        lookup_status.set(LookupStatus::Filled {
+            source: cfg.source,
+            domain,
+        });
+        let open_smtp = !next.smtp_host.trim().is_empty();
+        set_imap_host.call(next.imap_host);
+        set_imap_port.call(next.imap_port);
+        set_imap_username.call(next.imap_username);
+        set_smtp_host.call(next.smtp_host);
+        set_smtp_port.call(next.smtp_port);
+        set_smtp_username.call(next.smtp_username);
+        set_smtp_use_tls.call(next.smtp_use_tls);
+        if open_smtp {
+            set_smtp_open.call(true);
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -324,6 +462,7 @@ pub fn FormField(
     #[props(default)] placeholder: String,
     #[props(default)] autocomplete: String,
     #[props(default)] disabled: bool,
+    #[props(default)] onblur: EventHandler<String>,
 ) -> Element {
     rsx! {
         div {
@@ -341,6 +480,10 @@ pub fn FormField(
                 autocomplete: "{autocomplete}",
                 disabled: disabled,
                 oninput: move |e| oninput.call(e.value()),
+                onblur: {
+                    let value = value.clone();
+                    move |_| onblur.call(value.clone())
+                },
             }
         }
     }
@@ -394,6 +537,21 @@ pub fn AccountConnectionFields(
     let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
     let warn_plain = imap_tls_mode == ImapTlsMode::None;
     let imap_port_for_tls = imap_port.clone();
+    let guard = use_context::<LookupEditGuard>();
+    let mut hosts_dirty = guard.hosts_dirty;
+    let lookup_gen = guard.lookup_gen;
+    let lookup_status = guard.lookup_status;
+    let last_discovered = use_signal(|| None::<DiscoveredConfig>);
+    let looking = matches!(lookup_status(), LookupStatus::Looking);
+    let current_fields = PresetFormFields {
+        imap_host: imap_host.clone(),
+        imap_port: imap_port.clone(),
+        imap_username: imap_username.clone(),
+        smtp_host: smtp_host.clone(),
+        smtp_port: smtp_port.clone(),
+        smtp_username: smtp_username.clone(),
+        smtp_use_tls,
+    };
     let insecure_proxy = {
         ProxySettings {
             base_url: proxy_base_url.clone(),
@@ -426,6 +584,7 @@ pub fn AccountConnectionFields(
                     let smtp_username = smtp_username.clone();
                     let smtp_host = smtp_host.clone();
                     move |v: String| {
+                        invalidate_lookup(lookup_gen, lookup_status);
                         let mut next = PresetFormFields {
                             imap_host: String::new(),
                             imap_port: String::new(),
@@ -448,9 +607,79 @@ pub fn AccountConnectionFields(
                         }
                     }
                 },
+                onblur: {
+                    let fields = current_fields.clone();
+                    move |v: String| {
+                        start_server_lookup(
+                            v,
+                            fields.clone(),
+                            false,
+                            busy,
+                            hosts_dirty,
+                            lookup_gen,
+                            lookup_status,
+                            last_discovered,
+                            set_imap_host,
+                            set_imap_port,
+                            set_imap_username,
+                            set_smtp_host,
+                            set_smtp_port,
+                            set_smtp_username,
+                            set_smtp_use_tls,
+                            set_smtp_open,
+                        );
+                    }
+                },
                 input_type: "email",
                 autocomplete: "email",
                 disabled: busy,
+            }
+            div {
+                class: "onboarding-lookup-row",
+                button {
+                    r#type: "button",
+                    class: "onboarding-btn onboarding-btn-secondary",
+                    disabled: busy || looking,
+                    onclick: {
+                        let email = email.clone();
+                        let fields = current_fields.clone();
+                        move |_| {
+                            start_server_lookup(
+                                email.clone(),
+                                fields.clone(),
+                                true,
+                                busy,
+                                hosts_dirty,
+                                lookup_gen,
+                                lookup_status,
+                                last_discovered,
+                                set_imap_host,
+                                set_imap_port,
+                                set_imap_username,
+                                set_smtp_host,
+                                set_smtp_port,
+                                set_smtp_username,
+                                set_smtp_use_tls,
+                                set_smtp_open,
+                            );
+                        }
+                    },
+                    if looking {
+                        "Looking up…"
+                    } else {
+                        "Look up servers"
+                    }
+                }
+                p {
+                    class: "bootstrap-muted onboarding-lookup-status",
+                    role: "status",
+                    "{lookup_status().message()}"
+                }
+            }
+            p {
+                class: "bootstrap-muted onboarding-preset-hint",
+                "Looks up Mozilla ISPDB and common imap./smtp. hosts over HTTPS. \
+                 Only the domain is sent. You can edit the result."
             }
         }
 
@@ -470,6 +699,7 @@ pub fn AccountConnectionFields(
                     smtp_use_tls,
                 },
                 on_apply: move |next: PresetFormFields| {
+                    hosts_dirty.set(true);
                     let open_smtp = !next.smtp_host.trim().is_empty();
                     set_imap_host.call(next.imap_host);
                     set_imap_port.call(next.imap_port);
@@ -488,7 +718,10 @@ pub fn AccountConnectionFields(
                 label: "Host",
                 id: "{id_prefix}-imap-host",
                 value: imap_host,
-                oninput: move |v| set_imap_host.call(v),
+                oninput: move |v| {
+                    hosts_dirty.set(true);
+                    set_imap_host.call(v);
+                },
                 placeholder: host_placeholder.clone(),
                 autocomplete: "off",
                 disabled: busy,
@@ -497,7 +730,10 @@ pub fn AccountConnectionFields(
                 label: "Port",
                 id: "{id_prefix}-imap-port",
                 value: imap_port,
-                oninput: move |v| set_imap_port.call(v),
+                oninput: move |v| {
+                    hosts_dirty.set(true);
+                    set_imap_port.call(v);
+                },
                 input_type: "number",
                 autocomplete: "off",
                 disabled: busy,
@@ -565,7 +801,10 @@ pub fn AccountConnectionFields(
                 label: "Username",
                 id: "{id_prefix}-imap-user",
                 value: imap_username,
-                oninput: move |v| set_imap_username.call(v),
+                oninput: move |v| {
+                    invalidate_lookup(lookup_gen, lookup_status);
+                    set_imap_username.call(v);
+                },
                 autocomplete: "username",
                 disabled: busy,
             }
@@ -729,6 +968,7 @@ pub fn AccountSmtpFields(
     let warn_starttls = smtp_tls_mode == SmtpTlsMode::StartTls;
     let warn_plain = smtp_tls_mode == SmtpTlsMode::None;
     let smtp_port_for_tls = smtp_port.clone();
+    let guard = use_context::<LookupEditGuard>();
     rsx! {
         fieldset {
             class: "onboarding-section",
@@ -747,7 +987,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP host",
                     id: "{id_prefix}-smtp-host",
                     value: smtp_host,
-                    oninput: move |v| set_smtp_host.call(v),
+                    oninput: move |v| {
+                        guard.mark_dirty();
+                        set_smtp_host.call(v);
+                    },
                     placeholder: "smtp.example.com",
                     autocomplete: "off",
                     disabled: busy,
@@ -756,7 +999,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP port",
                     id: "{id_prefix}-smtp-port",
                     value: smtp_port,
-                    oninput: move |v| set_smtp_port.call(v),
+                    oninput: move |v| {
+                        guard.mark_dirty();
+                        set_smtp_port.call(v);
+                    },
                     placeholder: port_placeholder,
                     input_type: "number",
                     autocomplete: "off",
@@ -766,7 +1012,10 @@ pub fn AccountSmtpFields(
                     label: "SMTP username",
                     id: "{id_prefix}-smtp-user",
                     value: smtp_username,
-                    oninput: move |v| set_smtp_username.call(v),
+                    oninput: move |v| {
+                        invalidate_lookup(guard.lookup_gen, guard.lookup_status);
+                        set_smtp_username.call(v);
+                    },
                     autocomplete: "off",
                     disabled: busy,
                 }
@@ -792,6 +1041,7 @@ pub fn AccountSmtpFields(
                         value: smtp_tls_mode.as_form_value(),
                         disabled: busy,
                         onchange: move |e| {
+                            guard.mark_dirty();
                             let new_mode = SmtpTlsMode::from_form_value(&e.value());
                             let next_port = port_for_tls_mode_change(
                                 &smtp_port_for_tls,

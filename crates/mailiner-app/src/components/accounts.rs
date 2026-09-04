@@ -16,7 +16,8 @@ use crate::account_config::{
 use crate::components::account_form::{
     AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
     FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
-    credentials_changed, kind_label, start_smtp_test, use_form_test_status_cleanup,
+    credentials_changed, kind_label, provide_lookup_edit_guard, start_smtp_test,
+    use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -786,6 +787,7 @@ pub fn AccountNewPage() -> Element {
     let nav = use_navigator();
 
     let prefill = use_hook(dev_form_prefill);
+    provide_lookup_edit_guard();
     let account_id = use_hook(|| AccountId::new(Uuid::new_v4().to_string()));
     let account_id_effect = account_id.clone();
     let account_id_test = account_id.clone();
@@ -1168,6 +1170,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let nav = use_navigator();
 
+    provide_lookup_edit_guard();
     let account_id = AccountId::new(id.clone());
     let account_id_effect = account_id.clone();
     let account_id_test = account_id.clone();

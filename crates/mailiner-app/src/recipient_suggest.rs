@@ -31,10 +31,8 @@ pub enum SuggestionSource {
 /// One autocomplete row for the compose chip field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientSuggestion {
-    /// Display name. Empty when the row is email-only.
-    pub name: String,
-    /// Mailbox as stored / harvested (trimmed, not lowercased).
-    pub email: String,
+    /// Name + mailbox. Formatting and chip conversion come from [`Contact`].
+    pub contact: Contact,
     /// Address book vs recent / harvested.
     pub source: SuggestionSource,
 }
@@ -42,35 +40,17 @@ pub struct RecipientSuggestion {
 impl RecipientSuggestion {
     /// Visible primary line: name, or the mailbox when unnamed.
     pub fn display_label(&self) -> &str {
-        let name = self.name.trim();
-        if name.is_empty() {
-            self.email.as_str()
-        } else {
-            name
-        }
+        self.contact.display_label()
     }
 
-    /// `Name <email>` when a name exists; otherwise the mailbox.
+    /// Quoted `Name <email>` when a name exists; otherwise the mailbox.
     pub fn formatted(&self) -> String {
-        let name = self.name.trim();
-        if name.is_empty() {
-            self.email.clone()
-        } else {
-            format!("{name} <{}>", self.email)
-        }
+        self.contact.formatted()
     }
 
     /// Chip to commit when the row is accepted.
     pub fn to_composer_address(&self) -> ComposerAddress {
-        let name = self.name.trim();
-        ComposerAddress {
-            name: if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            },
-            email: self.email.clone(),
-        }
+        self.contact.to_composer_address()
     }
 
     /// Short source label for the suggestion list.
@@ -121,8 +101,7 @@ pub fn suggest_recipients(
             ranked.push((
                 rank,
                 RecipientSuggestion {
-                    name: contact.name.clone(),
-                    email: contact.email.clone(),
+                    contact: contact.clone(),
                     source,
                 },
             ));
@@ -132,14 +111,16 @@ pub fn suggest_recipients(
         a.0.cmp(&b.0)
             .then_with(|| a.1.source.cmp(&b.1.source))
             .then_with(|| {
-                a.1.name
+                a.1.contact
+                    .name
                     .to_ascii_lowercase()
-                    .cmp(&b.1.name.to_ascii_lowercase())
+                    .cmp(&b.1.contact.name.to_ascii_lowercase())
             })
             .then_with(|| {
-                a.1.email
+                a.1.contact
+                    .email
                     .to_ascii_lowercase()
-                    .cmp(&b.1.email.to_ascii_lowercase())
+                    .cmp(&b.1.contact.email.to_ascii_lowercase())
             })
     });
     ranked.into_iter().take(limit).map(|(_, s)| s).collect()
@@ -193,7 +174,8 @@ fn push_envelope_addresses(
         {
             continue;
         }
-        let Ok(contact) = parse_contact(chip.name.as_deref().unwrap_or(""), &chip.email) else {
+        let Some(contact) = contact_from_address(chip.name.as_deref().unwrap_or(""), &chip.email)
+        else {
             continue;
         };
         if out
@@ -203,6 +185,15 @@ fn push_envelope_addresses(
             continue;
         }
         out.push(contact);
+    }
+}
+
+/// Parse a name+email pair, keeping a valid mailbox when the display name is over the cap.
+pub fn contact_from_address(name: &str, email: &str) -> Option<Contact> {
+    match parse_contact(name, email) {
+        Ok(contact) => Some(contact),
+        Err(AddressBookError::NameTooLong) => parse_contact("", email).ok(),
+        Err(_) => None,
     }
 }
 
@@ -386,7 +377,7 @@ pub fn load_recent_recipients() -> Vec<Contact> {
 pub fn remember_recipients<'a>(addrs: impl IntoIterator<Item = &'a ComposerAddress>) {
     let incoming: Vec<Contact> = addrs
         .into_iter()
-        .filter_map(|addr| parse_contact(addr.name.as_deref().unwrap_or(""), &addr.email).ok())
+        .filter_map(|addr| contact_from_address(addr.name.as_deref().unwrap_or(""), &addr.email))
         .collect();
     if incoming.is_empty() {
         return;
@@ -468,20 +459,22 @@ mod tests {
         ];
         let hits = suggest_recipients(&contacts, &recents, "ada", &[], 8);
         assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].email, "ada@example.com");
+        assert_eq!(hits[0].contact.email, "ada@example.com");
         assert_eq!(hits[0].source, SuggestionSource::Contact);
-        assert_eq!(hits[0].name, "Ada Lovelace");
-        assert_eq!(hits[1].email, "ada.help@team.example.com");
+        assert_eq!(hits[0].contact.name, "Ada Lovelace");
+        assert_eq!(hits[1].contact.email, "ada.help@team.example.com");
         assert_eq!(hits[1].source, SuggestionSource::Recent);
 
         let excluded = vec![ComposerAddress::email_only("ada@example.com")];
         let rest = suggest_recipients(&contacts, &recents, "ada", &excluded, 8);
         assert_eq!(rest.len(), 1);
-        assert_eq!(rest[0].email, "ada.help@team.example.com");
+        assert_eq!(rest[0].contact.email, "ada.help@team.example.com");
 
         assert!(suggest_recipients(&contacts, &recents, "  ", &[], 8).is_empty());
         assert_eq!(
-            suggest_recipients(&contacts, &recents, "b", &[], 1)[0].email,
+            suggest_recipients(&contacts, &recents, "b", &[], 1)[0]
+                .contact
+                .email,
             "bob@example.com"
         );
     }
@@ -491,9 +484,9 @@ mod tests {
         let contacts = vec![sample("Help Desk", "support@example.com")];
         let recents = vec![sample("", "help@example.com")];
         let hits = suggest_recipients(&contacts, &recents, "help", &[], 8);
-        assert_eq!(hits[0].email, "help@example.com");
+        assert_eq!(hits[0].contact.email, "help@example.com");
         assert_eq!(hits[0].source, SuggestionSource::Recent);
-        assert_eq!(hits[1].email, "support@example.com");
+        assert_eq!(hits[1].contact.email, "support@example.com");
     }
 
     #[test]
@@ -593,8 +586,7 @@ mod tests {
     #[test]
     fn suggestion_formats_chip() {
         let named = RecipientSuggestion {
-            name: "Ada".into(),
-            email: "ada@example.com".into(),
+            contact: sample("Ada", "ada@example.com"),
             source: SuggestionSource::Contact,
         };
         assert_eq!(named.display_label(), "Ada");
@@ -602,13 +594,38 @@ mod tests {
         assert_eq!(named.to_composer_address().name.as_deref(), Some("Ada"));
         assert_eq!(named.source_label(), "Contact");
 
+        let comma = RecipientSuggestion {
+            contact: sample("Smith, Alice", "alice@example.com"),
+            source: SuggestionSource::Contact,
+        };
+        assert_eq!(comma.formatted(), r#""Smith, Alice" <alice@example.com>"#);
+        assert_eq!(
+            comma.to_composer_address().name.as_deref(),
+            Some("Smith, Alice")
+        );
+        assert_eq!(comma.to_composer_address().email, "alice@example.com");
+
         let bare = RecipientSuggestion {
-            name: String::new(),
-            email: "bob@ex.com".into(),
+            contact: sample("", "bob@ex.com"),
             source: SuggestionSource::Recent,
         };
         assert_eq!(bare.display_label(), "bob@ex.com");
         assert_eq!(bare.formatted(), "bob@ex.com");
         assert_eq!(bare.source_label(), "Recent");
+    }
+
+    #[test]
+    fn long_display_name_falls_back_to_email_only() {
+        let long = "n".repeat(crate::address_book::MAX_CONTACT_NAME_CHARS + 1);
+        let kept = contact_from_address(&long, "ada@example.com").expect("email kept");
+        assert_eq!(kept.name, "");
+        assert_eq!(kept.email, "ada@example.com");
+        assert!(contact_from_address("Ada", "not-an-email").is_none());
+
+        let envelopes = [env_with(Some(list(&long, "ada@example.com")), None)];
+        let hits = contacts_from_envelopes(&envelopes, &[]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].email, "ada@example.com");
+        assert_eq!(hits[0].name, "");
     }
 }

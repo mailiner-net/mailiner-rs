@@ -467,13 +467,6 @@ fn submit_compose(
     draft.to = form.to.take_committed();
     draft.cc = form.cc.take_committed();
     draft.bcc = form.bcc.take_committed();
-    recipient_suggest::remember_recipients(
-        draft
-            .to
-            .iter()
-            .chain(draft.cc.iter())
-            .chain(draft.bcc.iter()),
-    );
     if draft
         .attachments
         .iter()
@@ -484,6 +477,13 @@ fn submit_compose(
     }
     match prepare_submit(&draft, &identity) {
         Ok(prepared) => {
+            recipient_suggest::remember_recipients(
+                draft
+                    .to
+                    .iter()
+                    .chain(draft.cc.iter())
+                    .chain(draft.bcc.iter()),
+            );
             let display = OutboxDisplay {
                 subject: draft.subject.clone(),
                 to_preview: prepared.envelope.rcpt_to.join(", "),

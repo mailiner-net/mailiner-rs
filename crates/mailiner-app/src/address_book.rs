@@ -43,13 +43,11 @@ impl Contact {
     }
 
     /// `Name <email>` when a name exists; otherwise the mailbox.
+    ///
+    /// Names that contain `,` / quotes / angle brackets are quoted so
+    /// [`mailiner_composer::shell::recipient_field::parse_recipient`] keeps one token.
     pub fn formatted(&self) -> String {
-        let name = self.name.trim();
-        if name.is_empty() {
-            self.email.clone()
-        } else {
-            format!("{name} <{}>", self.email)
-        }
+        format_named_mailbox(&self.name, &self.email)
     }
 
     /// Composer chip for autocomplete / prefill (#89).
@@ -121,6 +119,20 @@ impl From<AccountStoreError> for AddressBookError {
                 Self::Serialization(msg)
             }
         }
+    }
+}
+
+/// Format `Name <email>`, quoting the name when it would break comma-splitting.
+pub fn format_named_mailbox(name: &str, email: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        return email.to_string();
+    }
+    if name.contains([',', '<', '>', '"', '\\']) || name.contains('@') {
+        let quoted = format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
+        format!("{quoted} <{email}>")
+    } else {
+        format!("{name} <{email}>")
     }
 }
 
@@ -460,6 +472,9 @@ mod tests {
         assert_eq!(c.email, "ada@example.com");
         assert_eq!(c.display_label(), "Ada Lovelace");
         assert_eq!(c.formatted(), "Ada Lovelace <ada@example.com>");
+
+        let comma = parse_contact("Smith, Alice", "alice@example.com").unwrap();
+        assert_eq!(comma.formatted(), r#""Smith, Alice" <alice@example.com>"#);
 
         let bare = parse_contact("   ", "solo@example.com").unwrap();
         assert_eq!(bare.name, "");

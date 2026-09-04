@@ -3,6 +3,7 @@
 use dioxus::html::Key;
 use dioxus::prelude::*;
 
+use mailiner_composer::emails_equal;
 use mailiner_composer::model::draft::ComposerAddress;
 use mailiner_composer::shell::recipient_field::{
     chip_is_valid, chip_label, chip_title, commit_input, remove_last_recipient, remove_recipient,
@@ -36,9 +37,16 @@ fn apply_suggestion(
     suggestion: &RecipientSuggestion,
     open: &mut Signal<bool>,
 ) {
-    let (next, leftover) = commit_input(&chips(), &suggestion.formatted(), true);
+    let addr = suggestion.to_composer_address();
+    let mut next = chips();
+    if !next
+        .iter()
+        .any(|existing| emails_equal(&existing.email, &addr.email))
+    {
+        next.push(addr);
+    }
     chips.set(next);
-    draft.set(leftover);
+    draft.set(String::new());
     open.set(false);
 }
 
@@ -183,14 +191,14 @@ pub fn RecipientField(
                                 list_open.set(true);
                             }
                         }
-                        Key::Escape if list_open() => {
+                        Key::Escape if show_list => {
                             evt.prevent_default();
                             evt.stop_propagation();
                             list_open.set(false);
                         }
                         Key::Tab if show_list => {
                             if let Some(suggestion) = suggestions.get(active_idx) {
-                                if !typed_overrides_suggestion(&draft(), &suggestion.email) {
+                                if !typed_overrides_suggestion(&draft(), &suggestion.contact.email) {
                                     apply_suggestion(
                                         &mut chips,
                                         &mut draft,
@@ -209,7 +217,10 @@ pub fn RecipientField(
                             evt.prevent_default();
                             if show_list {
                                 if let Some(suggestion) = suggestions.get(active_idx) {
-                                    if !typed_overrides_suggestion(&draft(), &suggestion.email) {
+                                    if !typed_overrides_suggestion(
+                                        &draft(),
+                                        &suggestion.contact.email,
+                                    ) {
                                         apply_suggestion(
                                             &mut chips,
                                             &mut draft,
@@ -254,12 +265,12 @@ pub fn RecipientField(
                             let option_id = format!("{list_id}-{i}");
                             let active = i == active_idx;
                             let name = suggestion.display_label().to_string();
-                            let email = suggestion.email.clone();
-                            let show_email = !suggestion.name.trim().is_empty();
+                            let email = suggestion.contact.email.clone();
+                            let show_email = !suggestion.contact.name.trim().is_empty();
                             let source = suggestion.source_label();
                             rsx! {
                                 li {
-                                    key: "{suggestion.email}",
+                                    key: "{suggestion.contact.email}",
                                     id: "{option_id}",
                                     class: if active {
                                         "recipient-suggest-option is-active"

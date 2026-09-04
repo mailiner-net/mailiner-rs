@@ -331,6 +331,7 @@ fn App() -> Element {
     let toast = use_signal(|| None);
     let compose_draft = use_signal(|| None);
     let compose_placement = use_signal(crate::ui_prefs::load_compose_placement);
+    let mail_layout = use_signal(crate::ui_prefs::load_mail_layout);
     let mailbox_picker = use_signal(|| None);
     let theme = use_signal(|| {
         let pref = crate::ui_prefs::load_theme();
@@ -376,6 +377,7 @@ fn App() -> Element {
         toast,
         compose_draft,
         compose_placement,
+        mail_layout,
         mailbox_picker,
         sign_out_epoch,
         sign_out_pending,
@@ -525,6 +527,12 @@ fn AppShell() -> Element {
 #[component]
 fn MainView() -> Element {
     let bootstrap = use_context::<Signal<AppBootstrapState>>();
+    let ctx = use_context::<AppContext>();
+    let mail_layout = *ctx.mail_layout.read();
+    let list_axis = match mail_layout {
+        crate::ui_prefs::MailLayout::Stacked => SplitAxis::List,
+        crate::ui_prefs::MailLayout::Classic => SplitAxis::ListWidth,
+    };
 
     // While NeedsOnboarding, guard redirects away; avoid mounting mail chrome.
     if !matches!(bootstrap(), AppBootstrapState::Ready) {
@@ -536,6 +544,7 @@ fn MainView() -> Element {
             class: "mail-shell",
             div {
                 id: "app",
+                class: "{mail_layout.css_class()}",
                 onmounted: move |_| {
                     crate::layout::apply_saved_layout();
                 },
@@ -548,9 +557,12 @@ fn MainView() -> Element {
 
                     ConnectionStatusBanner {}
 
-                    MessageList {}
-                    SplitHandle { axis: SplitAxis::List }
-                    MessageView {}
+                    div {
+                        class: "mail-panes",
+                        MessageList {}
+                        SplitHandle { axis: list_axis }
+                        MessageView {}
+                    }
 
                     OutboxPanel {}
                 }

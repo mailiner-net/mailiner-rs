@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use crate::account_config::{ACCOUNT_STORE_SCHEMA_VERSION, AccountConfig};
 use crate::account_store::{ACCOUNTS_LOCAL_STORAGE_KEY, AccountStoreError};
 use crate::address_book::ADDRESS_BOOK_LOCAL_STORAGE_KEY;
-use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY};
+use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY, LIST_WIDTH_KEY};
 use crate::mail_cache::MAIL_CACHE_LOCAL_STORAGE_KEY;
 use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
 use crate::recipient_suggest::RECENT_RECIPIENTS_LOCAL_STORAGE_KEY;
-use crate::ui_prefs::{ACK_UNREAD_KEY, COMPOSE_PLACEMENT_KEY, LAST_MAILBOX_KEY, MESSAGE_SORT_KEY};
+use crate::ui_prefs::{
+    ACK_UNREAD_KEY, COMPOSE_PLACEMENT_KEY, LAST_MAILBOX_KEY, MAIL_LAYOUT_KEY, MESSAGE_SORT_KEY,
+};
 
 /// Prefix of every Mailiner-owned `localStorage` key.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
@@ -32,8 +34,10 @@ pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     LAST_MAILBOX_KEY,
     ACK_UNREAD_KEY,
     COMPOSE_PLACEMENT_KEY,
+    MAIL_LAYOUT_KEY,
     FOLDER_WIDTH_KEY,
     LIST_HEIGHT_KEY,
+    LIST_WIDTH_KEY,
 ];
 
 /// Downloadable account list. `includes_secrets` is the only difference between
@@ -270,8 +274,10 @@ mod tests {
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ACK_UNREAD_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MESSAGE_SORT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&COMPOSE_PLACEMENT_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_LAYOUT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&FOLDER_WIDTH_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_HEIGHT_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_WIDTH_KEY));
     }
 
     #[test]

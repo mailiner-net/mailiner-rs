@@ -226,6 +226,53 @@ impl ComposePlacement {
     }
 }
 
+/// `localStorage` key for mail chrome arrangement (`stacked` | `classic`).
+pub const MAIL_LAYOUT_KEY: &str = "mailiner.ui.mailLayout";
+
+/// Mail chrome pane arrangement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MailLayout {
+    /// Folders | (list stacked above viewer).
+    #[default]
+    Stacked,
+    /// Folders | list | viewer side-by-side.
+    Classic,
+}
+
+impl MailLayout {
+    pub const ALL: [Self; 2] = [Self::Stacked, Self::Classic];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Stacked => "stacked",
+            Self::Classic => "classic",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "stacked" => Some(Self::Stacked),
+            "classic" => Some(Self::Classic),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stacked => "List above message",
+            Self::Classic => "Three columns",
+        }
+    }
+
+    /// Class on `#app` so chrome CSS can switch pane axes.
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::Stacked => "layout-stacked",
+            Self::Classic => "layout-classic",
+        }
+    }
+}
+
 /// Remembered allow/block for remote images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -677,6 +724,21 @@ pub fn load_compose_placement() -> ComposePlacement {
 
 pub fn save_compose_placement(placement: ComposePlacement) {
     let _ = with_kv(|kv| kv.set_item(COMPOSE_PLACEMENT_KEY, placement.as_key()));
+}
+
+pub fn load_mail_layout() -> MailLayout {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(MAIL_LAYOUT_KEY)?
+            .as_deref()
+            .and_then(MailLayout::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_mail_layout(layout: MailLayout) {
+    let _ = with_kv(|kv| kv.set_item(MAIL_LAYOUT_KEY, layout.as_key()));
 }
 
 /// Preferred compose From account, if one was saved.
@@ -1196,6 +1258,35 @@ mod tests {
                 .expect("set unknown compose placement");
         });
         assert_eq!(load_compose_placement(), ComposePlacement::Modal);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn mail_layout_encode_decode_roundtrip() {
+        for layout in MailLayout::ALL {
+            assert_eq!(MailLayout::from_key(layout.as_key()), Some(layout));
+        }
+        assert_eq!(MailLayout::from_key("wide"), None);
+        assert_eq!(MailLayout::default(), MailLayout::Stacked);
+        assert_eq!(MailLayout::Stacked.label(), "List above message");
+        assert_eq!(MailLayout::Classic.label(), "Three columns");
+        assert_eq!(MailLayout::Stacked.css_class(), "layout-stacked");
+        assert_eq!(MailLayout::Classic.css_class(), "layout-classic");
+    }
+
+    #[test]
+    fn mail_layout_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_mail_layout(), MailLayout::Stacked);
+        save_mail_layout(MailLayout::Classic);
+        assert_eq!(load_mail_layout(), MailLayout::Classic);
+        save_mail_layout(MailLayout::Stacked);
+        assert_eq!(load_mail_layout(), MailLayout::Stacked);
+        host_kv::with(|kv| {
+            kv.set_item(MAIL_LAYOUT_KEY, "nope")
+                .expect("set unknown mail layout");
+        });
+        assert_eq!(load_mail_layout(), MailLayout::Stacked);
         host_kv::reset();
     }
 

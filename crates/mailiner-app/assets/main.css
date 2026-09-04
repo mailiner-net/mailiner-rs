@@ -66,6 +66,7 @@
 
     --folder-pane-width: 240px;
     --message-list-height: 40%;
+    --message-list-width: 340px;
     --message-avatar-size: 32px;
 }
 
@@ -1169,6 +1170,32 @@ a.accounts-link-btn {
 .split-handle-row:focus-visible,
 .split-handle-row.is-dragging {
     background: var(--item-accent);
+}
+
+/* List + viewer wrapper. Stacked (column) is the default; classic is row.
+   Standalone so the asset pipeline keeps flex-direction. */
+.mail-panes {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#app.layout-classic .mail-panes {
+    flex-direction: row;
+}
+
+#app.layout-classic #messagelist {
+    flex: 0 0 var(--message-list-width);
+    min-height: 0;
+    border-bottom: none;
+    border-right: 1px solid var(--sidebar-border);
+}
+
+#app.layout-classic #messageview {
+    min-width: 0;
 }
 
 /* —— Shared UI primitives (keep above the nested #app block) —— */

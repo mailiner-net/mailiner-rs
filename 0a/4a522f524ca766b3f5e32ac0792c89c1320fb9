@@ -1,0 +1,49 @@
+crates/mailiner-app/src/components/emailnavigation/messagelist.rs
+  s_55a915d65c4df1::t_310ec0c58dd9ee 59,61,240-243
+  s_55a915d65c4df1::t_320cac20ca60e3 67,69
+  s_630206927fd386::t_6736ff690b7145 78,82,250-251,63,83-104,244,246-247
+  s_55a915d65c4df1::t_ead8e264dcdcbe 124
+  s_55a915d65c4df1::t_6fd9e4895c1ccb 288-292,294-296,301,314-320,322,324-333,335-338,358-376,378,380,384-385,433-455,105,245,248
+crates/mailiner-core/src/connector.rs
+  s_55a915d65c4df1::t_3547141ac228b1 20,52,57
+  s_55a915d65c4df1::t_30fe81ac68bd21 5,299-301,305-307,388,390,392-393,400-401,403,405-406,418-419,424-425,427-430,211
+  s_55a915d65c4df1::t_d5603079358c21 197
+  s_630206927fd386::t_2d28dd36108fa4 207-210,212
+  s_630206927fd386::t_ea9d73e32d1a27 367,371,394-399,402,420-423,426
+  s_630206927fd386::t_9a517160f30457 407
+crates/mailiner-app/src/core_event.rs
+  s_55a915d65c4df1::t_76cbfc03cfd8e8 477,1790-1794
+  s_55a915d65c4df1::t_37808f6cf41b4a 1612-1614
+  s_55a915d65c4df1::t_b231b2e6bc0d27 1751-1764
+  s_55a915d65c4df1::t_10c0ffecb12db3 1895-1896,1900-1901,1912-1925,3090-3091
+  s_55a915d65c4df1::t_3c0cba7a54ce4d 2995,3085,1862-1864,1905,1908,1911,2038,2040,2043-2044,2053-2056,2058-2066,3099-3110,2052,2937-2938
+  s_55a915d65c4df1::t_b3aa3e8353b1fe 69-74,464-476
+  s_55a915d65c4df1::t_b6e9303d0b616e 1806-1812
+  s_55a915d65c4df1::t_b08b41add790c5 1894,1897-1899,1902-1904,1906-1907,1909-1910
+  s_630206927fd386::t_f2b918c693e2ba 1,2935-2936
+  s_630206927fd386::t_25b35572834dd1 2045-2051,2923-2926,2928-2934,3088-3089
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0a4a522f524ca766b3f5e32ac0792c89c1320fb9",
+  "prompts": {},
+  "sessions": {
+    "s_55a915d65c4df1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06928-e8a2-7c13-a1e1-60ed9cc5625e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    },
+    "s_630206927fd386": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06975-8daf-7252-982d-1a2f8284370e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

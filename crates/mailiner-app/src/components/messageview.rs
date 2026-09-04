@@ -14,7 +14,7 @@ use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
-use crate::formatter::{FormatOptions, MessageFormatter, drop_inlined_payloads};
+use crate::formatter::{FormatOptions, MessageFormatter, retain_reply_cid_payloads};
 use crate::mailbox::{MailboxId, flatten_mailboxes};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
@@ -297,8 +297,8 @@ pub fn MessageView() -> Element {
                 mount_shadow_html(MESSAGE_CONTENT_ID, &html);
 
                 if !prefer && !inlined.is_empty() {
-                    // Keep at most one extra HTML copy (the other remote-policy
-                    // variant) so Allow still works after Binary is dropped.
+                    // Cache both remote-policy variants so Allow does not
+                    // re-format. Referenced CID payloads stay on `loaded`.
                     let allowed_html = if prevented && !allow {
                         MessageFormatter::new(FormatOptions {
                             allow_remote_resources: true,
@@ -320,7 +320,7 @@ pub fn MessageView() -> Element {
                 }
 
                 drop(loaded);
-                apply_inlined_payload_drop(&mut ctx, &message_id, &inlined);
+                apply_cid_payload_retention(&mut ctx, &message_id, &inlined);
             } else {
                 prevented_remote.set(false);
                 let fallback =
@@ -395,7 +395,7 @@ pub fn MessageView() -> Element {
     }
 }
 
-/// Cached HTML so Allow / plain toggles can re-render after CID payloads are dropped.
+/// Cached HTML so Allow / plain toggles can re-render without reformatting.
 #[derive(Default)]
 struct InlinedHtmlCache {
     message_key: Option<String>,
@@ -425,29 +425,11 @@ impl InlinedHtmlCache {
     }
 }
 
-fn inlined_parts_hold_payload(
-    loaded: &mailiner_core::models::LoadedMessage,
-    ids: &[String],
-) -> bool {
-    loaded.parts.iter().any(|p| {
-        ids.iter().any(|id| p.id.as_str() == id) && !matches!(p.content, MessageContent::Empty)
-    })
-}
-
-fn apply_inlined_payload_drop(ctx: &mut AppContext, message_id: &MessageId, ids: &[String]) {
-    if ids.is_empty() {
-        return;
-    }
-    let needs_drop = match &*ctx.message_view.read() {
-        MessageViewState::Ready {
-            message_id: id,
-            loaded,
-        } if id == message_id => inlined_parts_hold_payload(loaded, ids),
-        _ => false,
-    };
-    if !needs_drop {
-        return;
-    }
+fn apply_cid_payload_retention(
+    ctx: &mut AppContext,
+    message_id: &MessageId,
+    referenced: &[String],
+) {
     let mut view = ctx.message_view.write();
     let MessageViewState::Ready {
         message_id: id,
@@ -459,7 +441,7 @@ fn apply_inlined_payload_drop(ctx: &mut AppContext, message_id: &MessageId, ids:
     if id != message_id {
         return;
     }
-    drop_inlined_payloads(&mut Arc::make_mut(loaded).parts, ids);
+    retain_reply_cid_payloads(&mut Arc::make_mut(loaded).parts, referenced);
 }
 
 fn has_decoded_text(part: &mailiner_core::models::MessagePart) -> bool {

@@ -1,11 +1,12 @@
 //! Reply / forward draft construction from structured envelope + loaded body.
 
-use mailiner_core::{Envelope, LoadedMessage, MessageContent, PartKind};
+use mailiner_core::{Envelope, LoadedMessage, MessageContent, MessagePart, PartKind};
 
 use crate::identity::FromIdentity;
-use crate::model::draft::{BodyMode, ComposerAddress, DraftDocument};
+use crate::model::draft::{caps, BodyMode, ComposerAddress, DraftDocument};
 use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
+use crate::shell::attachment_list::draft_payload_bytes;
 
 /// How the user opened the composer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +39,7 @@ pub enum PrefillError {
 ///
 /// Plain bodies use `>` quotes. HTML bodies are sanitized via
 /// [`crate::sanitize::sanitize_for_edit`] and wrapped as a rich quote.
-/// CID rehydration lands in PR 6.
+/// `cid:` images referenced by the quote are copied onto [`DraftDocument::inline_images`].
 pub fn build_draft(
     intent: ComposeIntent,
     identity: &FromIdentity,
@@ -101,22 +102,57 @@ fn build_reply_like(
             draft.plain_cache_dirty = false;
         }
         BodyPick::HtmlOnly(html) => {
-            let clean = crate::sanitize::sanitize_for_edit(&html);
-            draft.mode = BodyMode::Rich;
-            draft.html_body = wrap_html_quote(&attribution, &clean);
-            draft.plain_body = quote_plain(&attribution, &crate::model::html_to_plain(&clean));
-            draft.plain_cache_dirty = false;
+            apply_html_quote(&mut draft, &attribution, &html, &loaded.parts, None);
         }
         BodyPick::HtmlWithPlain { plain, html } => {
-            let clean = crate::sanitize::sanitize_for_edit(&html);
-            draft.mode = BodyMode::Rich;
-            draft.html_body = wrap_html_quote(&attribution, &clean);
-            draft.plain_body = quote_plain(&attribution, &plain);
-            draft.plain_cache_dirty = false;
+            apply_html_quote(&mut draft, &attribution, &html, &loaded.parts, Some(&plain));
         }
     }
 
     Ok(draft)
+}
+
+fn apply_html_quote(
+    draft: &mut DraftDocument,
+    attribution: &str,
+    html: &str,
+    parts: &[MessagePart],
+    plain_override: Option<&str>,
+) {
+    let clean = crate::sanitize::sanitize_for_edit(html);
+    // Reserve the quote wrapper + plain alternative before admitting inlines so
+    // the finished draft cannot exceed MAX_DRAFT_BYTES.
+    let html_est = wrap_html_quote(attribution, &clean);
+    let plain_est = match plain_override {
+        Some(plain) => quote_plain(attribution, plain),
+        None => quote_plain(attribution, &crate::model::html_to_plain(&clean)),
+    };
+    let reserved = html_est.len() as u64 + plain_est.len() as u64;
+    let remaining = caps::MAX_DRAFT_BYTES
+        .saturating_sub(draft_payload_bytes(draft))
+        .saturating_sub(reserved);
+    let rehydrated =
+        crate::reply::cid::rehydrate_cids(&clean, parts, draft.inline_images.len(), remaining);
+    draft.mode = BodyMode::Rich;
+    draft.html_body = wrap_html_quote(attribution, &rehydrated.html);
+    draft.plain_body = match plain_override {
+        Some(plain) => quote_plain(attribution, plain),
+        None => quote_plain(attribution, &crate::model::html_to_plain(&rehydrated.html)),
+    };
+    draft.plain_cache_dirty = false;
+    draft.inline_images = rehydrated.images;
+    draft.prefill_warnings.extend(rehydrated.warnings);
+}
+
+/// Drop the rich quote and its CID inlines when the caller will send plain text.
+///
+/// `build_draft` still attaches inlines for a rich export path. The v1 compose
+/// overlay forces [`BodyMode::Plain`] and must call this so send does not emit
+/// unused `multipart/related` parts.
+pub fn discard_rich_quote(draft: &mut DraftDocument) {
+    draft.mode = BodyMode::Plain;
+    draft.html_body.clear();
+    draft.inline_images.clear();
 }
 
 fn wrap_html_quote(attribution: &str, sanitized_body: &str) -> String {
@@ -342,28 +378,60 @@ mod tests {
     }
 
     fn loaded_html_only(html: &str) -> LoadedMessage {
+        loaded_html_with_parts(html, Vec::new())
+    }
+
+    fn html_part(html: &str) -> MessagePart {
+        MessagePart {
+            id: MessagePartId::new("h1"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
+            path: vec!["1".into()],
+            kind: PartKind::TextHtml,
+            content_type: "text/html".into(),
+            charset: Some("utf-8".into()),
+            content_id: None,
+            description: None,
+            filename: None,
+            encoding: TransferEncoding::SevenBit,
+            original_size: None,
+            size: html.len() as u64,
+            is_attachment: false,
+            is_hidden: false,
+            content: MessageContent::Text(html.into()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn loaded_html_with_parts(html: &str, extra: Vec<MessagePart>) -> LoadedMessage {
+        let mut parts = vec![html_part(html)];
+        parts.extend(extra);
         LoadedMessage {
             envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
             folder_id: FolderId::new("INBOX"),
-            parts: vec![MessagePart {
-                id: MessagePartId::new("h1"),
-                envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
-                path: vec!["1".into()],
-                kind: PartKind::TextHtml,
-                content_type: "text/html".into(),
-                charset: Some("utf-8".into()),
-                content_id: None,
-                description: None,
-                filename: None,
-                encoding: TransferEncoding::SevenBit,
-                original_size: None,
-                size: html.len() as u64,
-                is_attachment: false,
-                is_hidden: false,
-                content: MessageContent::Text(html.into()),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            }],
+            parts,
+        }
+    }
+
+    fn cid_png(cid: &str, bytes: &[u8]) -> MessagePart {
+        MessagePart {
+            id: MessagePartId::new("img"),
+            envelope_id: MessageId::new(FolderId::new("INBOX"), "1"),
+            path: vec!["2".into()],
+            kind: PartKind::Image,
+            content_type: "image/png".into(),
+            charset: None,
+            content_id: Some(cid.into()),
+            description: None,
+            filename: Some("logo.png".into()),
+            encoding: TransferEncoding::Base64,
+            original_size: Some(bytes.len() as u64),
+            size: bytes.len() as u64,
+            is_attachment: true,
+            is_hidden: true,
+            content: MessageContent::Binary(bytes.to_vec()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 
@@ -456,5 +524,84 @@ mod tests {
         let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
         assert!(d.to.is_empty());
         assert!(d.subject.starts_with("Fwd:"), "{}", d.subject);
+    }
+
+    #[test]
+    fn reply_html_rehydrates_cid_images() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let png = [0x89, b'P', b'N', b'G', 0, 1, 2, 3];
+        let loaded = loaded_html_with_parts(
+            r#"<p>Hi <img src="cid:logo@x" alt="logo"></p>"#,
+            vec![cid_png("logo@x", &png)],
+        );
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert_eq!(d.mode, BodyMode::Rich);
+        assert_eq!(d.inline_images.len(), 1);
+        assert_eq!(d.inline_images[0].content_id, "logo@x");
+        assert!(d.html_body.contains("cid:logo@x"), "{}", d.html_body);
+        assert!(!d.html_body.contains("data:"), "{}", d.html_body);
+        assert!(d.prefill_warnings.is_empty());
+    }
+
+    #[test]
+    fn forward_html_rehydrates_cid_images() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let png = [1u8, 2, 3, 4];
+        let loaded = loaded_html_with_parts(
+            r#"<img src="cid:pic@mailiner">"#,
+            vec![cid_png("<pic@mailiner>", &png)],
+        );
+        let d = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded)).unwrap();
+        assert_eq!(d.inline_images.len(), 1);
+        assert_eq!(d.inline_images[0].content_id, "pic@mailiner");
+        assert!(d.html_body.contains("cid:pic@mailiner"), "{}", d.html_body);
+    }
+
+    #[test]
+    fn reply_strips_missing_cid_with_warning() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let loaded = loaded_html_only(r#"<p>Hi <img src="cid:gone@x"></p>"#);
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert!(d.inline_images.is_empty());
+        assert!(!d.html_body.contains("cid:gone@x"), "{}", d.html_body);
+        assert!(d.prefill_warnings.iter().any(|w| w.contains("Missing")));
+    }
+
+    #[test]
+    fn rehydrated_reply_exports_multipart_related() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let png = [0x89, b'P', b'N', b'G'];
+        let loaded = loaded_html_with_parts(
+            r#"<p>Hi <img src="cid:logo@x"></p>"#,
+            vec![cid_png("<logo@x>", &png)],
+        );
+        let d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        let prepared = crate::prepare_submit(&d, &id).unwrap();
+        let s = String::from_utf8_lossy(&prepared.rfc822);
+        assert!(s.contains("multipart/related"), "{s}");
+        assert!(s.contains("Content-ID: <logo@x>"), "{s}");
+        assert!(s.contains("cid:logo@x"), "{s}");
+    }
+
+    #[test]
+    fn discard_rich_quote_clears_inlines() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let env = env_with_from("alice@example.com");
+        let png = [1u8, 2, 3];
+        let loaded = loaded_html_with_parts(
+            r#"<p>Hi <img src="cid:logo@x"></p>"#,
+            vec![cid_png("logo@x", &png)],
+        );
+        let mut d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded)).unwrap();
+        assert!(!d.inline_images.is_empty());
+        assert!(!d.html_body.is_empty());
+        discard_rich_quote(&mut d);
+        assert_eq!(d.mode, BodyMode::Plain);
+        assert!(d.html_body.is_empty());
+        assert!(d.inline_images.is_empty());
     }
 }

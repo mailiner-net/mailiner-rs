@@ -17,7 +17,7 @@ use mailiner_composer::shell::attachment_list::{
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError, SAFE_IMAGE_ACCEPT, build_draft,
-    caps, is_safe_image_content_type, plain_to_html, prepare_submit,
+    caps, discard_rich_quote, is_safe_image_content_type, plain_to_html, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -345,7 +345,11 @@ pub fn open_reply_or_forward(
     let identity = identity_from_account(account.name, account.email);
     match build_draft(intent, &identity, Some(envelope), Some(loaded)) {
         Ok(mut draft) => {
-            apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
+            let mode = crate::ui_prefs::load_compose_body_mode();
+            apply_compose_body_mode(&mut draft, mode);
+            if mode == ComposeBodyMode::Plain {
+                discard_rich_quote(&mut draft);
+            }
             let title = match intent {
                 ComposeIntent::Forward => "Forward",
                 ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",

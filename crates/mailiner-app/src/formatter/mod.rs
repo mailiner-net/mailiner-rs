@@ -42,6 +42,36 @@ pub fn drop_inlined_payloads(parts: &mut [MessagePart], inlined_part_ids: &[Stri
     }
 }
 
+/// Keep referenced CID payloads for reply/forward; drop the rest.
+///
+/// Referenced parts are retained up to [`mailiner_composer::caps::MAX_DRAFT_BYTES`]
+/// so a large newsletter cannot pin unbounded decoded binaries in the viewer.
+pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[String]) {
+    let mut kept = 0u64;
+    for part in parts {
+        let referenced = referenced_ids.iter().any(|id| part.id.as_str() == id);
+        if referenced {
+            let size = match &part.content {
+                MessageContent::Binary(b) => b.len() as u64,
+                MessageContent::Text(t) => t.len() as u64,
+                MessageContent::Empty => 0,
+            };
+            if kept.saturating_add(size) > mailiner_composer::caps::MAX_DRAFT_BYTES {
+                part.content = MessageContent::Empty;
+            } else {
+                kept = kept.saturating_add(size);
+            }
+            continue;
+        }
+        // Keep only the visible text body. Drop unreferenced images and
+        // hidden/attached text so they cannot bypass the CID budget.
+        if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
+            continue;
+        }
+        part.content = MessageContent::Empty;
+    }
+}
+
 impl FormatResult {
     /// Drop Binary/Text on [`Self::inlined_part_ids`] after a successful format.
     pub fn drop_inlined_payloads(&self, parts: &mut [MessagePart]) {
@@ -295,6 +325,51 @@ mod tests {
         let mut parts = vec![png_part("img", "<logo@x>", b"\x89PNG")];
         drop_inlined_payloads(&mut parts, &[]);
         assert!(matches!(parts[0].content, MessageContent::Binary(_)));
+    }
+
+    #[test]
+    fn retain_keeps_referenced_and_drops_unused() {
+        let html = part(PartKind::TextHtml, "text/html", r#"<img src="cid:logo@x">"#);
+        let inlined = png_part("img", "<logo@x>", b"\x89PNG");
+        let leftover = png_part("other", "<other@x>", b"\x89PNG extra");
+        let mut parts = vec![html, inlined, leftover];
+        retain_reply_cid_payloads(&mut parts, &["img".into()]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Binary(_)));
+        assert!(matches!(parts[2].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn retain_caps_aggregate_referenced_bytes() {
+        let too_big = vec![0u8; (mailiner_composer::caps::MAX_DRAFT_BYTES as usize) + 1];
+        let mut parts = vec![png_part("img", "<logo@x>", &too_big)];
+        retain_reply_cid_payloads(&mut parts, &["img".into()]);
+        assert!(matches!(parts[0].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn retain_drops_unreferenced_visible_image() {
+        let mut img = png_part("img", "<logo@x>", b"\x89PNG");
+        img.is_hidden = false;
+        img.is_attachment = false;
+        let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
+        let mut parts = vec![html, img];
+        retain_reply_cid_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn retain_drops_unreferenced_text_attachment() {
+        let mut notes = part(PartKind::TextPlain, "text/plain", "secret notes");
+        notes.is_attachment = true;
+        notes.is_hidden = false;
+        notes.id = mailiner_core::ids::MessagePartId::new("att");
+        let html = part(PartKind::TextHtml, "text/html", "<p>Hi</p>");
+        let mut parts = vec![html, notes];
+        retain_reply_cid_payloads(&mut parts, &[]);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Empty));
     }
 
     #[test]

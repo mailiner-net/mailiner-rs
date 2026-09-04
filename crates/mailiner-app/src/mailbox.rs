@@ -157,6 +157,29 @@ pub fn unread_badge_is_new(unread: usize, acknowledged: usize) -> bool {
     unread > acknowledged
 }
 
+/// End index (exclusive) to re-fetch after IDLE/NOOP so the visible prefix stays filled.
+pub fn live_refresh_end(total: usize, loaded_hi: usize) -> usize {
+    if total == 0 {
+        0
+    } else {
+        total.min(loaded_hi.max(20))
+    }
+}
+
+/// Update totals after a live mailbox change. Does not acknowledge unread.
+pub fn apply_live_folder_state(
+    node: &mut MailboxNode,
+    folder_total: usize,
+    unread: Option<usize>,
+    acknowledged: usize,
+) {
+    node.total_count = folder_total;
+    if let Some(unread) = unread {
+        node.unread_count = unread;
+    }
+    node.has_new = unread_badge_is_new(node.unread_count, acknowledged);
+}
+
 /// Copy IMAP `STATUS` totals onto matching tree nodes.
 pub fn apply_folder_counts(
     nodes: &mut HashMap<MailboxId, MailboxNode>,
@@ -1266,6 +1289,28 @@ mod tests {
         assert!(!unread_badge_is_new(0, 0));
         assert!(!unread_badge_is_new(5, 5));
         assert!(!unread_badge_is_new(3, 5));
+    }
+
+    #[test]
+    fn live_refresh_end_covers_loaded_prefix() {
+        assert_eq!(live_refresh_end(0, 0), 0);
+        assert_eq!(live_refresh_end(8, 0), 8);
+        assert_eq!(live_refresh_end(100, 0), 20);
+        assert_eq!(live_refresh_end(100, 35), 35);
+        assert_eq!(live_refresh_end(12, 40), 12);
+    }
+
+    #[test]
+    fn apply_live_folder_state_does_not_ack() {
+        let mut node = MailboxNode::from(folder("INBOX", "INBOX", None, MailboxRole::Inbox));
+        node.unread_count = 2;
+        node.total_count = 5;
+        apply_live_folder_state(&mut node, 8, Some(4), 2);
+        assert_eq!(node.total_count, 8);
+        assert_eq!(node.unread_count, 4);
+        assert!(node.has_new);
+        apply_live_folder_state(&mut node, 8, Some(2), 2);
+        assert!(!node.has_new);
     }
 
     #[test]

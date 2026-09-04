@@ -42,7 +42,7 @@ use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
     hydrate_account,
 };
-use crate::mailbox::MailboxId;
+use crate::mailbox::{MailboxId, apply_live_folder_state, live_refresh_end};
 use crate::message::{Message, MessageId, next_flag_value};
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
@@ -325,6 +325,11 @@ pub enum CoreEvent {
         account_id: AccountId,
         message_id: MessageId,
     },
+    /// Selected mailbox changed on the server (IDLE / NOOP).
+    MailboxActivity {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+    },
 }
 
 /// Background BODY.PEEK of list neighbors after the focused message is Ready.
@@ -347,6 +352,11 @@ pub enum InitialBootstrap {
     /// Run [`CoreEvent::Bootstrap`] once with the resolved active account (or `None`).
     Run { active: Option<AccountId> },
 }
+
+/// RFC 2177: re-issue IDLE before typical 30-minute server inactivity timeouts.
+const IDLE_REISSUE_MS: u32 = 25 * 60 * 1000;
+/// Poll interval when the server does not advertise IDLE.
+const NOOP_INTERVAL_MS: u32 = 30_000;
 
 /// Application core task: handles mail ops and account connection lifecycle.
 ///
@@ -404,12 +414,19 @@ pub async fn core_loop(
         }
 
         let watches = manager.death_watches();
-        let Some(event) = (if let Some(ev) = pending_event.take() {
-            Some(ev)
+        let event = if let Some(ev) = pending_event.take() {
+            ev
         } else {
-            recv_next_event(&mut core_rx, &mut smtp_rx, watches).await
-        }) else {
-            break;
+            match recv_next_or_watch(&mut core_rx, &mut smtp_rx, watches, &manager, &ctx).await {
+                RecvOutcome::Event { event, follow_up } => {
+                    if let Some(extra) = follow_up {
+                        pending_event = Some(extra);
+                    }
+                    event
+                }
+                RecvOutcome::Continue => continue,
+                RecvOutcome::Closed => break,
+            }
         };
         match event {
             CoreEvent::Bootstrap { active } => {
@@ -831,6 +848,12 @@ pub async fn core_loop(
                 message_id,
             } => {
                 handle_mark_answered(&manager, &mut ctx, account_id, message_id).await;
+            }
+            CoreEvent::MailboxActivity {
+                account_id,
+                mailbox_id,
+            } => {
+                handle_mailbox_activity(&manager, &mut ctx, account_id, mailbox_id).await;
             }
         }
 
@@ -2004,6 +2027,205 @@ async fn handle_select_mailbox(
         }
     }
     fetch_quota_soft(manager, ctx, &account_id, &folder_id).await;
+}
+
+async fn handle_mailbox_activity(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+) {
+    if !selected_account_is(ctx, &account_id)
+        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+    {
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        return;
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let requested = *ctx.message_sort.peek();
+    let filter = *ctx.message_list_filter.peek();
+    let search = ctx.list_search_query.peek().clone();
+    let state = match connector
+        .prepare_folder_list(&folder_id, requested, filter, &search)
+        .await
+    {
+        Ok(state) => state,
+        Err(e) => {
+            warn!(
+                "live mailbox refresh failed for {}: {e}",
+                mailbox_id.as_str()
+            );
+            note_selected_imap_error(manager, ctx, &e);
+            return;
+        }
+    };
+
+    if !selected_account_is(ctx, &account_id)
+        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+    {
+        return;
+    }
+
+    ctx.sort_supports_size_sender
+        .set(state.supports_size_sender);
+    ctx.message_sort.set(state.sort);
+    apply_live_counts(
+        ctx,
+        &account_id,
+        &mailbox_id,
+        state.folder_total,
+        state.unread,
+    );
+
+    let loaded_hi = ctx
+        .messages
+        .read()
+        .iter_indexed()
+        .map(|(i, _)| i.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    let end = live_refresh_end(state.total, loaded_hi);
+    let old_ids: HashSet<MessageId> = ctx
+        .messages
+        .read()
+        .iter_indexed()
+        .filter(|(i, _)| *i < end)
+        .map(|(_, m)| m.id.clone())
+        .collect();
+
+    let live = if end > 0 {
+        connector.list_envelopes_range(&folder_id, 0..end).await
+    } else {
+        Ok(Vec::new())
+    };
+    if !selected_account_is(ctx, &account_id)
+        || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
+    {
+        return;
+    }
+    match live {
+        Ok(envelopes) => {
+            let new_ids: HashSet<MessageId> = envelopes.iter().map(|e| e.id.clone()).collect();
+            let mut list = SparseList::new(state.total);
+            let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
+            list.insert_batch(0, batch);
+            ctx.messages.set(list);
+            prune_selection_after_refresh(ctx, &old_ids, &new_ids);
+            persist_selected_messages(manager.cache(), ctx, &account_id).await;
+            persist_folder_tree(manager.cache(), ctx, &account_id).await;
+            fetch_and_apply_snippets(manager, ctx, &account_id, &mailbox_id, true).await;
+        }
+        Err(e) => {
+            warn!(
+                "live mailbox list fetch failed for {}: {e}",
+                mailbox_id.as_str()
+            );
+            note_selected_imap_error(manager, ctx, &e);
+            let mut list = ctx.messages.write();
+            if list.total_count() != state.total {
+                list.set_total_count(state.total);
+            }
+        }
+    }
+
+    refresh_other_folder_badges(manager, ctx, &account_id, Some(&mailbox_id)).await;
+}
+
+fn apply_live_counts(
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    folder_total: usize,
+    unread: Option<usize>,
+) {
+    let ack = crate::ui_prefs::load_ack_unread(account_id)
+        .get(mailbox_id)
+        .copied()
+        .unwrap_or(0);
+    {
+        let mut nodes = ctx.mailbox_nodes.write();
+        if let Some(node) = nodes.get_mut(mailbox_id) {
+            apply_live_folder_state(node, folder_total, unread, ack);
+        }
+    }
+    if ctx
+        .mailbox_nodes
+        .read()
+        .get(mailbox_id)
+        .is_some_and(|n| n.role == MailboxRole::Inbox)
+    {
+        sync_inbox_unread(ctx, crate::notifications::InboxCountEvent::Remote);
+    }
+}
+
+fn prune_selection_after_refresh(
+    ctx: &mut AppContext,
+    old_ids_in_range: &HashSet<MessageId>,
+    new_ids: &HashSet<MessageId>,
+) {
+    let gone: HashSet<MessageId> = old_ids_in_range.difference(new_ids).cloned().collect();
+    if !gone.is_empty() {
+        let focus_gone = ctx
+            .selection
+            .read()
+            .focus()
+            .is_some_and(|id| gone.contains(id));
+        ctx.selection.write().remove_ids(&gone);
+        if focus_gone {
+            ctx.message_view.set(MessageViewState::Empty);
+            ctx.message_headers.set(MessageHeadersState::Closed);
+            ctx.message_source.set(MessageSourceState::Closed);
+        }
+    }
+    let focus = ctx.selection.read().focus().cloned();
+    if let Some(id) = focus
+        && let Some(idx) = ctx.messages.read().position(|m| m.id == id)
+    {
+        ctx.selection.write().note_focus(id, Some(idx));
+    }
+}
+
+async fn refresh_other_folder_badges(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    skip: Option<&MailboxId>,
+) {
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+    let rest: Vec<FolderId> = ctx
+        .mailbox_nodes
+        .read()
+        .iter()
+        .filter(|(id, node)| node.selectable && node.subscribed && skip.is_none_or(|s| s != *id))
+        .map(|(id, _)| FolderId::new(id.to_string()))
+        .collect();
+    if rest.is_empty() {
+        return;
+    }
+    let ack = crate::ui_prefs::load_ack_unread(account_id);
+    for id in rest {
+        match connector.folder_counts(std::slice::from_ref(&id)).await {
+            Ok(counts) if !counts.is_empty() => {
+                {
+                    let mut nodes = ctx.mailbox_nodes.write();
+                    crate::mailbox::apply_folder_counts(&mut nodes, &counts);
+                    crate::mailbox::apply_unread_new_state(&mut nodes, &counts, &ack);
+                }
+                observe_remote_counts(ctx, &counts);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("folder_counts {} failed: {}", id, e);
+                manager.note_imap_error(account_id, &e);
+            }
+        }
+    }
+    persist_folder_tree(manager.cache(), ctx, account_id).await;
 }
 
 async fn handle_set_message_sort(
@@ -5352,6 +5574,134 @@ async fn handle_retry_outbox(
     let _ = outbox.upsert(&item).await;
     refresh_outbox_signal(outbox, ctx).await;
     drain_outbox(manager, ctx, outbox, smtp_tx, inflight).await;
+}
+
+enum RecvOutcome {
+    Event {
+        event: CoreEvent,
+        follow_up: Option<CoreEvent>,
+    },
+    Continue,
+    Closed,
+}
+
+fn watch_target(
+    manager: &AccountConnectionManager,
+    ctx: &AppContext,
+) -> Option<(AccountId, MailboxId)> {
+    let account_id = ctx.selected_account.read().clone()?;
+    let mailbox_id = ctx.selected_mailbox.read().clone()?;
+    let ready = ctx
+        .connection_states
+        .read()
+        .get(&account_id)
+        .is_some_and(|s| matches!(s, ConnectionState::Ready));
+    if !ready || manager.get(&account_id).is_none() {
+        return None;
+    }
+    let selectable = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(|n| n.selectable);
+    selectable.then_some((account_id, mailbox_id))
+}
+
+async fn recv_next_or_watch(
+    core_rx: &mut UnboundedReceiver<CoreEvent>,
+    smtp_rx: &mut SmtpUnboundedReceiver<CoreEvent>,
+    watches: Vec<(AccountId, crate::websocket_stream::WsDeathWatch)>,
+    manager: &AccountConnectionManager,
+    ctx: &AppContext,
+) -> RecvOutcome {
+    let recv = recv_next_event(core_rx, smtp_rx, watches);
+    let Some((account_id, mailbox_id)) = watch_target(manager, ctx) else {
+        return match recv.await {
+            Some(event) => RecvOutcome::Event {
+                event,
+                follow_up: None,
+            },
+            None => RecvOutcome::Closed,
+        };
+    };
+    let Some(connector) = manager.get(&account_id) else {
+        return match recv.await {
+            Some(event) => RecvOutcome::Event {
+                event,
+                follow_up: None,
+            },
+            None => RecvOutcome::Closed,
+        };
+    };
+
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let (cancel_tx, cancel_rx) = futures_channel::oneshot::channel::<()>();
+    let interval_ms = if connector.supports_idle() {
+        IDLE_REISSUE_MS
+    } else {
+        NOOP_INTERVAL_MS
+    };
+    let tick = TimeoutFuture::new(interval_ms);
+    let watch = connector.watch_mailbox(
+        &folder_id,
+        async {
+            let _ = cancel_rx.await;
+        },
+        tick,
+    );
+
+    futures_util::pin_mut!(recv);
+    futures_util::pin_mut!(watch);
+    match select(recv, watch).await {
+        Either::Left((ev, watch)) => {
+            let _ = cancel_tx.send(());
+            let follow_up = match watch.await {
+                Ok(outcome) if outcome.needs_refresh() => Some(CoreEvent::MailboxActivity {
+                    account_id,
+                    mailbox_id,
+                }),
+                Ok(_) => None,
+                Err(e) => {
+                    warn!("mailbox watch failed for {account_id}: {e}");
+                    manager.note_imap_error(&account_id, &e);
+                    Some(CoreEvent::SessionDropped {
+                        account_id: account_id.clone(),
+                    })
+                }
+            };
+            match ev {
+                Some(event) => RecvOutcome::Event { event, follow_up },
+                None => match follow_up {
+                    Some(event) => RecvOutcome::Event {
+                        event,
+                        follow_up: None,
+                    },
+                    None => RecvOutcome::Closed,
+                },
+            }
+        }
+        Either::Right((Ok(outcome), _)) => {
+            if outcome.needs_refresh() {
+                RecvOutcome::Event {
+                    event: CoreEvent::MailboxActivity {
+                        account_id,
+                        mailbox_id,
+                    },
+                    follow_up: None,
+                }
+            } else {
+                RecvOutcome::Continue
+            }
+        }
+        Either::Right((Err(e), _)) => {
+            warn!("mailbox watch failed for {account_id}: {e}");
+            manager.note_imap_error(&account_id, &e);
+            RecvOutcome::Event {
+                event: CoreEvent::SessionDropped { account_id },
+                follow_up: None,
+            }
+        }
+    }
 }
 
 async fn recv_next_event(

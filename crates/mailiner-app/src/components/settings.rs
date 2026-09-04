@@ -1,9 +1,10 @@
-//! General settings home: appearance, composer defaults, privacy, shortcuts.
+//! General settings home: appearance, composer defaults, address book, privacy, shortcuts.
 
 use dioxus::prelude::*;
 
 use crate::Route;
 use crate::account::{Account, AccountId};
+use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::layout::reset_saved_layout;
 use crate::shortcuts::{ShortcutGroup, shortcuts_in_group};
@@ -49,7 +50,7 @@ pub fn SettingsPage() -> Element {
                 h1 { class: "bootstrap-title", "Settings" }
                 p {
                     class: "bootstrap-muted",
-                    "Appearance, composer, and privacy preferences are stored in this browser."
+                    "Appearance, composer, contacts, and privacy preferences are stored in this browser."
                 }
 
                 section {
@@ -161,6 +162,8 @@ pub fn SettingsPage() -> Element {
                     }
                 }
 
+                AddressBookSection {}
+
                 section {
                     class: "settings-section",
                     h2 { "Privacy" }
@@ -231,6 +234,152 @@ pub fn SettingsPage() -> Element {
                         "Back to mail"
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Add/remove name+email contacts stored in origin `localStorage`.
+#[component]
+fn AddressBookSection() -> Element {
+    let initial = use_hook(address_book::try_load_contacts);
+    let storage_error = initial.as_ref().err().map(AddressBookError::to_string);
+    let mut contacts = use_signal(|| initial.clone().unwrap_or_default());
+    let mut name = use_signal(String::new);
+    let mut email = use_signal(String::new);
+    let mut action_error = use_signal(|| None::<String>);
+    let blocked = storage_error.is_some();
+    let listed = contacts();
+
+    rsx! {
+        section {
+            class: "settings-section",
+            h2 { "Address book" }
+            p {
+                class: "bootstrap-muted settings-hint",
+                "Contacts stay in this browser."
+            }
+            if let Some(err) = storage_error {
+                p {
+                    class: "onboarding-status onboarding-status-error",
+                    role: "alert",
+                    "{err}"
+                }
+            }
+            form {
+                class: "settings-contact-form",
+                onsubmit: move |evt| {
+                    evt.prevent_default();
+                    if blocked {
+                        return;
+                    }
+                    action_error.set(None);
+                    match address_book::add_contact(&name(), &email()) {
+                        Ok(_) => {
+                            contacts.set(address_book::load_contacts());
+                            name.set(String::new());
+                            email.set(String::new());
+                        }
+                        Err(e) => action_error.set(Some(e.to_string())),
+                    }
+                },
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-contact-name", "Name" }
+                    input {
+                        id: "settings-contact-name",
+                        r#type: "text",
+                        autocomplete: "name",
+                        value: "{name}",
+                        disabled: blocked,
+                        oninput: move |evt| name.set(evt.value()),
+                    }
+                }
+                div {
+                    class: "onboarding-field",
+                    label { r#for: "settings-contact-email", "Email" }
+                    input {
+                        id: "settings-contact-email",
+                        r#type: "email",
+                        inputmode: "email",
+                        autocomplete: "email",
+                        spellcheck: "false",
+                        autocapitalize: "off",
+                        value: "{email}",
+                        disabled: blocked,
+                        required: true,
+                        oninput: move |evt| email.set(evt.value()),
+                    }
+                }
+                button {
+                    r#type: "submit",
+                    class: "onboarding-btn onboarding-btn-primary accounts-btn-sm settings-contact-add",
+                    disabled: blocked,
+                    "Add"
+                }
+            }
+            if let Some(err) = action_error() {
+                p {
+                    class: "onboarding-status onboarding-status-error",
+                    role: "alert",
+                    "{err}"
+                }
+            }
+            if listed.is_empty() {
+                p {
+                    class: "bootstrap-muted settings-contact-empty",
+                    "No contacts yet."
+                }
+            } else {
+                ul {
+                    class: "settings-contact-list",
+                    for contact in listed.iter() {
+                        ContactRow {
+                            key: "{contact.email}",
+                            contact: contact.clone(),
+                            contacts,
+                            action_error,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ContactRow(
+    contact: Contact,
+    mut contacts: Signal<Vec<Contact>>,
+    mut action_error: Signal<Option<String>>,
+) -> Element {
+    let email = contact.email.clone();
+    let name_label = contact.display_label().to_string();
+    let show_email = !contact.name.trim().is_empty();
+
+    rsx! {
+        li {
+            class: "settings-contact-row",
+            div {
+                class: "settings-contact-main",
+                span { class: "settings-contact-name", "{name_label}" }
+                if show_email {
+                    span { class: "settings-contact-email", "{email}" }
+                }
+            }
+            button {
+                r#type: "button",
+                class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
+                title: "Remove {email}",
+                aria_label: "Remove {email}",
+                onclick: move |_| {
+                    action_error.set(None);
+                    match address_book::remove_contact(&email) {
+                        Ok(_) => contacts.set(address_book::load_contacts()),
+                        Err(e) => action_error.set(Some(e.to_string())),
+                    }
+                },
+                "Remove"
             }
         }
     }

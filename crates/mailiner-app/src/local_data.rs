@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account_config::{ACCOUNT_STORE_SCHEMA_VERSION, AccountConfig};
 use crate::account_store::{ACCOUNTS_LOCAL_STORAGE_KEY, AccountStoreError};
+use crate::address_book::ADDRESS_BOOK_LOCAL_STORAGE_KEY;
 use crate::layout::{FOLDER_WIDTH_KEY, LIST_HEIGHT_KEY};
 use crate::mail_cache::MAIL_CACHE_LOCAL_STORAGE_KEY;
 use crate::outbox_store::OUTBOX_LOCAL_STORAGE_KEY;
@@ -22,6 +23,7 @@ pub const ACCOUNTS_EXPORT_FORMAT: &str = "mailiner.accounts.export";
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     ACCOUNTS_LOCAL_STORAGE_KEY,
+    ADDRESS_BOOK_LOCAL_STORAGE_KEY,
     MAIL_CACHE_LOCAL_STORAGE_KEY,
     OUTBOX_LOCAL_STORAGE_KEY,
     MESSAGE_SORT_KEY,
@@ -257,6 +259,7 @@ mod tests {
             );
         }
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ACCOUNTS_LOCAL_STORAGE_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&ADDRESS_BOOK_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_CACHE_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&OUTBOX_LOCAL_STORAGE_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LAST_MAILBOX_KEY));

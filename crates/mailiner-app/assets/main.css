@@ -832,6 +832,66 @@ a.accounts-link-btn {
     margin-top: 0.75rem;
 }
 
+.settings-contact-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    align-items: flex-end;
+}
+
+.settings-contact-form .onboarding-field {
+    flex: 1 1 10rem;
+    margin-bottom: 0;
+}
+
+.settings-contact-add {
+    flex: 0 0 auto;
+}
+
+.settings-contact-empty {
+    margin: 0.65rem 0 0;
+}
+
+.settings-contact-list {
+    list-style: none;
+    margin: 0.65rem 0 0;
+    padding: 0;
+}
+
+.settings-contact-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--sidebar-border);
+}
+
+.settings-contact-row:last-child {
+    border-bottom: none;
+}
+
+.settings-contact-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-contact-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-contact-email {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Nav header: account name + settings gear */
 .pane-header-title {
     flex: 1 1 auto;

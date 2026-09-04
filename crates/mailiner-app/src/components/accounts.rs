@@ -506,7 +506,8 @@ fn DataActionConfirm(
         ),
         DataConfirm::SignOut => (
             "Delete all Mailiner data stored in this browser? This removes accounts, passwords, \
-             cached mail, the outbox, and preferences. Mail on the server is not affected.",
+             cached mail, the outbox, the address book, and preferences. Mail on the server is \
+             not affected.",
             "Delete local data",
             true,
         ),

@@ -27,6 +27,7 @@ use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
 use crate::message::{Message, MessageId, preview_mailbox};
 use crate::phishing::{self, SenderCue};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
+use crate::snooze::SnoozePreset;
 use crate::toast::ToastAction;
 
 use super::compose::{open_imap_draft, open_new_message_to, open_reply_or_forward};
@@ -1113,6 +1114,7 @@ fn MessageHeader(
         })
     };
     let mut labels_open = use_signal(|| false);
+    let mut snooze_picker_open = ctx.snooze_picker_open;
     let own_email = account_id
         .as_ref()
         .and_then(|id| ctx.accounts.read().get(id).map(|a| a.email.clone()));
@@ -1233,6 +1235,31 @@ fn MessageHeader(
                                 });
                             }
                         },
+                    }
+                    div {
+                        class: "message-snooze-wrap",
+                        IconButton {
+                            class: if snooze_picker_open() {
+                                "ui-btn ui-btn-secondary message-snooze-btn is-open"
+                            } else {
+                                "ui-btn ui-btn-secondary message-snooze-btn"
+                            },
+                            title: "Snooze",
+                            size: 16,
+                            icon: IconKind::Clock,
+                            onclick: move |_| {
+                                let next = !*snooze_picker_open.peek();
+                                snooze_picker_open.set(next);
+                            },
+                        }
+                        if snooze_picker_open() {
+                            SnoozeMenu {
+                                account_id: account_id.clone(),
+                                mailbox_id: mailbox_id.clone(),
+                                message_ids: selected_ids.clone(),
+                                onclose: move |_| snooze_picker_open.set(false),
+                            }
+                        }
                     }
                     div {
                         class: "message-labels-wrap",
@@ -1681,6 +1708,60 @@ fn MessageHeader(
                 }
             }
             SenderCueBanner { cues: sender_cues }
+        }
+    }
+}
+
+#[component]
+fn SnoozeMenu(
+    account_id: Option<AccountId>,
+    mailbox_id: Option<MailboxId>,
+    message_ids: Vec<MessageId>,
+    onclose: EventHandler<MouseEvent>,
+) -> Element {
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    rsx! {
+        div {
+            class: "folder-menu-backdrop",
+            onclick: move |evt| onclose.call(evt),
+        }
+        div {
+            class: "folder-menu message-snooze-menu",
+            role: "menu",
+            aria_label: "Snooze",
+            onclick: move |evt| evt.stop_propagation(),
+            for preset in SnoozePreset::ALL {
+                {
+                    let account_id = account_id.clone();
+                    let mailbox_id = mailbox_id.clone();
+                    let ids = message_ids.clone();
+                    rsx! {
+                        button {
+                            class: "folder-menu-item",
+                            r#type: "button",
+                            role: "menuitem",
+                            onclick: move |evt| {
+                                onclose.call(evt);
+                                let (Some(account_id), Some(mailbox_id)) =
+                                    (account_id.clone(), mailbox_id.clone())
+                                else {
+                                    return;
+                                };
+                                if ids.is_empty() {
+                                    return;
+                                }
+                                let _ = core_tx.send(CoreEvent::SnoozeMessages {
+                                    account_id,
+                                    mailbox_id,
+                                    message_ids: ids.clone(),
+                                    preset,
+                                });
+                            },
+                            "{preset.label()}"
+                        }
+                    }
+                }
+            }
         }
     }
 }

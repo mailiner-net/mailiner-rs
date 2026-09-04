@@ -45,6 +45,27 @@ pub enum ToastAction {
         snapshots: Vec<RemovedMessage>,
     },
     Sent,
+    /// Local snooze committed; Undo restores the rows.
+    Snoozed {
+        until_label: String,
+        undo: SnoozeUndo,
+    },
+    /// A hide-until time elapsed; View jumps to the message.
+    SnoozeEnded {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        uid: String,
+        subject: String,
+    },
+}
+
+/// Inverse of a local snooze (restore rows and clear the overlay).
+#[derive(Clone, Debug)]
+pub struct SnoozeUndo {
+    pub account_id: AccountId,
+    pub mailbox_id: MailboxId,
+    pub uids: Vec<String>,
+    pub snapshots: Vec<RemovedMessage>,
 }
 
 /// Inverse of a move that already succeeded on the server (new dest UIDs).
@@ -72,6 +93,12 @@ pub enum UndoRequest {
         account_id: AccountId,
         mailbox_id: MailboxId,
         snapshots: Vec<RemovedMessage>,
+    },
+    Unsnooze(SnoozeUndo),
+    OpenSnoozed {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        uid: String,
     },
 }
 
@@ -121,6 +148,27 @@ impl ToastAction {
         }
     }
 
+    pub fn snoozed(until_label: impl Into<String>, undo: SnoozeUndo) -> Self {
+        Self::Snoozed {
+            until_label: until_label.into(),
+            undo,
+        }
+    }
+
+    pub fn snooze_ended(
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        uid: impl Into<String>,
+        subject: impl Into<String>,
+    ) -> Self {
+        Self::SnoozeEnded {
+            account_id,
+            mailbox_id,
+            uid: uid.into(),
+            subject: subject.into(),
+        }
+    }
+
     pub fn message(&self) -> String {
         match self {
             Self::Info { message } | Self::Error { message } => message.clone(),
@@ -128,6 +176,15 @@ impl ToastAction {
             Self::Trashed { .. } => "Moved to Trash".into(),
             Self::Deleted { .. } => "Deleted".into(),
             Self::Sent => "Sent".into(),
+            Self::Snoozed { until_label, .. } => format!("Snoozed until {until_label}"),
+            Self::SnoozeEnded { subject, .. } => {
+                let subject = subject.trim();
+                if subject.is_empty() {
+                    "Snoozed message is back".into()
+                } else {
+                    format!("Snoozed: {subject}")
+                }
+            }
         }
     }
 
@@ -153,12 +210,26 @@ impl ToastAction {
                 mailbox_id: mailbox_id.clone(),
                 snapshots: snapshots.clone(),
             }),
+            Self::Snoozed { undo, .. } => Some(UndoRequest::Unsnooze(undo.clone())),
+            Self::SnoozeEnded {
+                account_id,
+                mailbox_id,
+                uid,
+                ..
+            } => Some(UndoRequest::OpenSnoozed {
+                account_id: account_id.clone(),
+                mailbox_id: mailbox_id.clone(),
+                uid: uid.clone(),
+            }),
             Self::Info { .. } | Self::Error { .. } | Self::Sent => None,
         }
     }
 
     pub fn undo_label(&self) -> Option<&'static str> {
-        self.undo().map(|_| "Undo")
+        match self {
+            Self::SnoozeEnded { .. } => Some("View"),
+            _ => self.undo().map(|_| "Undo"),
+        }
     }
 
     /// IMAP (or other) work held until the toast goes away without Undo.
@@ -259,5 +330,44 @@ mod tests {
         assert_eq!(a.message(), "Deleted");
         assert!(matches!(a.undo(), Some(UndoRequest::RestoreLocal { .. })));
         assert!(matches!(a.on_dismiss(), Some(DismissCommit::Delete { .. })));
+    }
+
+    #[test]
+    fn snoozed_pairs_with_unsnooze() {
+        let a = ToastAction::snoozed(
+            "03 Sep, 14:05",
+            SnoozeUndo {
+                account_id: AccountId::new("a"),
+                mailbox_id: MailboxId::from("INBOX".to_string()),
+                uids: vec!["1".into()],
+                snapshots: vec![RemovedMessage {
+                    index: 0,
+                    message: dummy_msg("1"),
+                }],
+            },
+        );
+        assert_eq!(a.message(), "Snoozed until 03 Sep, 14:05");
+        assert_eq!(a.undo_label(), Some("Undo"));
+        assert!(matches!(a.undo(), Some(UndoRequest::Unsnooze(_))));
+    }
+
+    #[test]
+    fn snooze_ended_view_jumps() {
+        let a = ToastAction::snooze_ended(
+            AccountId::new("a"),
+            MailboxId::from("INBOX".to_string()),
+            "9",
+            "Hello",
+        );
+        assert_eq!(a.message(), "Snoozed: Hello");
+        assert_eq!(a.undo_label(), Some("View"));
+        assert!(matches!(a.undo(), Some(UndoRequest::OpenSnoozed { .. })));
+        let empty = ToastAction::snooze_ended(
+            AccountId::new("a"),
+            MailboxId::from("INBOX".to_string()),
+            "9",
+            "  ",
+        );
+        assert_eq!(empty.message(), "Snoozed message is back");
     }
 }

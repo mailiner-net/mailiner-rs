@@ -2652,7 +2652,8 @@ body:has(.compose-dock) .toast {
 
 .message-view-actions .message-star-btn,
 .message-view-actions .message-flag-btn,
-.message-view-actions .message-pin-btn {
+.message-view-actions .message-pin-btn,
+.message-view-actions .message-snooze-btn {
     padding: 0.3rem 0.45rem;
 }
 
@@ -2749,15 +2750,21 @@ body:has(.compose-dock) .toast {
     white-space: normal;
 }
 
-.message-labels-wrap {
+.message-labels-wrap,
+.message-snooze-wrap {
     position: relative;
 }
 
-.message-labels-wrap .message-labels-menu {
+.message-labels-wrap .message-labels-menu,
+.message-snooze-wrap .message-snooze-menu {
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
     left: auto;
+}
+
+.message-snooze-btn.is-open {
+    color: #4263eb;
 }
 
 .message-labels-item {

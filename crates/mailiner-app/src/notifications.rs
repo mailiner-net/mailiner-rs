@@ -70,6 +70,16 @@ pub fn notification_body(added: usize) -> String {
     }
 }
 
+/// Body text for a desktop notification when a snooze ends.
+pub fn snooze_notification_body(subject: &str) -> String {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        "A snoozed message is back".to_string()
+    } else {
+        format!("Snoozed: {subject}")
+    }
+}
+
 /// Update `last` and return how many new Inbox messages to announce, if any.
 ///
 /// The first sample for an account/Inbox pair only establishes a baseline
@@ -190,6 +200,15 @@ pub fn show_inbox_notification(added: usize) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn show_inbox_notification(_added: usize) {}
 
+/// Best-effort desktop alert when a snooze ends. No-op without permission.
+#[cfg(target_arch = "wasm32")]
+pub fn show_snooze_notification(subject: &str) {
+    wasm::show_snooze_notification(subject);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn show_snooze_notification(_subject: &str) {}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::{NotifyPermission, notification_body};
@@ -248,6 +267,20 @@ mod wasm {
         opts.set_renotify(true);
         let _ = web_sys::Notification::new_with_options("Mailiner", &opts);
     }
+
+    pub fn show_snooze_notification(subject: &str) {
+        if !notification_api_available() {
+            return;
+        }
+        if current_permission() != NotifyPermission::Granted {
+            return;
+        }
+        let opts = web_sys::NotificationOptions::new();
+        opts.set_body(&super::snooze_notification_body(subject));
+        opts.set_tag("mailiner-snooze");
+        opts.set_renotify(true);
+        let _ = web_sys::Notification::new_with_options("Mailiner", &opts);
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +334,12 @@ mod tests {
     fn notification_body_pluralizes() {
         assert_eq!(notification_body(1), "1 new message in Inbox");
         assert_eq!(notification_body(3), "3 new messages in Inbox");
+    }
+
+    #[test]
+    fn snooze_notification_uses_subject() {
+        assert_eq!(snooze_notification_body("Invoice"), "Snoozed: Invoice");
+        assert_eq!(snooze_notification_body("  "), "A snoozed message is back");
     }
 
     #[test]

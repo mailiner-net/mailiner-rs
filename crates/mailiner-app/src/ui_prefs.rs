@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
 use mailiner_core::ids::AccountId;
 use mailiner_core::mailbox_search_is_active;
 use serde::{Deserialize, Serialize};
@@ -513,6 +514,13 @@ pub const PINNED_MESSAGES_SCHEMA_VERSION: u32 = 1;
 /// Cap on pinned UIDs remembered for one account+mailbox.
 pub const MAX_PINNED_PER_MAILBOX: usize = 50;
 
+/// `localStorage` key for per-folder snoozed message UIDs.
+pub const SNOOZED_MESSAGES_KEY: &str = "mailiner.ui.snoozedMessages.v1";
+/// Schema version for [`SnoozedMessagesBlob`].
+pub const SNOOZED_MESSAGES_SCHEMA_VERSION: u32 = 1;
+/// Cap on snoozed UIDs remembered for one account+mailbox.
+pub const MAX_SNOOZED_PER_MAILBOX: usize = 50;
+
 /// One remapped binding. `key` is a `KeyboardEvent.key` value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutBinding {
@@ -921,6 +929,174 @@ impl PinnedMessagesBlob {
     pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
         self.pinned.retain(|id, _| known.contains(id));
         self.schema_version = PINNED_MESSAGES_SCHEMA_VERSION;
+    }
+}
+
+/// One locally snoozed IMAP UID (hide until `until`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnoozedMessage {
+    pub uid: String,
+    pub until: DateTime<Utc>,
+    #[serde(default)]
+    pub subject: String,
+}
+
+/// A snooze that just ended, with enough context to notify and jump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredSnooze {
+    pub account_id: AccountId,
+    pub mailbox_id: MailboxId,
+    pub uid: String,
+    pub subject: String,
+}
+
+/// Per-account, per-mailbox snoozed IMAP UIDs (local hide-until overlay).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SnoozedMessagesBlob {
+    pub schema_version: u32,
+    /// Account id → mailbox id → snoozed rows.
+    #[serde(default)]
+    pub snoozed: HashMap<AccountId, HashMap<String, Vec<SnoozedMessage>>>,
+}
+
+impl SnoozedMessagesBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: SNOOZED_MESSAGES_SCHEMA_VERSION,
+            snoozed: HashMap::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > SNOOZED_MESSAGES_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported snoozed-messages schema_version {} (max supported {})",
+                blob.schema_version, SNOOZED_MESSAGES_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+
+    pub fn entries(&self, account_id: &AccountId, mailbox_id: &MailboxId) -> Vec<SnoozedMessage> {
+        self.snoozed
+            .get(account_id)
+            .and_then(|m| m.get(mailbox_id.as_str()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_entries(
+        &mut self,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+        mut entries: Vec<SnoozedMessage>,
+    ) {
+        entries.retain(|entry| !entry.uid.is_empty());
+        if entries.len() > MAX_SNOOZED_PER_MAILBOX {
+            let drop_n = entries.len() - MAX_SNOOZED_PER_MAILBOX;
+            entries.drain(0..drop_n);
+        }
+        let mailbox = mailbox_id.as_str().to_string();
+        if entries.is_empty() {
+            if let Some(mailboxes) = self.snoozed.get_mut(&account_id) {
+                mailboxes.remove(&mailbox);
+                if mailboxes.is_empty() {
+                    self.snoozed.remove(&account_id);
+                }
+            }
+        } else {
+            self.snoozed
+                .entry(account_id)
+                .or_default()
+                .insert(mailbox, entries);
+        }
+        self.schema_version = SNOOZED_MESSAGES_SCHEMA_VERSION;
+    }
+
+    /// Insert or refresh snooze rows for `entries` in one folder.
+    pub fn apply_snooze(
+        &mut self,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+        incoming: &[SnoozedMessage],
+    ) -> Vec<SnoozedMessage> {
+        let mut current = self.entries(&account_id, mailbox_id);
+        for next in incoming {
+            if next.uid.is_empty() {
+                continue;
+            }
+            current.retain(|entry| entry.uid != next.uid);
+            current.push(next.clone());
+        }
+        self.set_entries(account_id.clone(), mailbox_id, current);
+        self.entries(&account_id, mailbox_id)
+    }
+
+    /// Drop snooze rows for `uids` in one folder.
+    pub fn apply_unsnooze(
+        &mut self,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+        uids: &[String],
+    ) -> Vec<SnoozedMessage> {
+        let mut current = self.entries(&account_id, mailbox_id);
+        current.retain(|entry| !uids.iter().any(|uid| uid == &entry.uid));
+        self.set_entries(account_id.clone(), mailbox_id, current);
+        self.entries(&account_id, mailbox_id)
+    }
+
+    /// Remove every row whose `until` is not after `now`.
+    pub fn take_expired(&mut self, now: DateTime<Utc>) -> Vec<ExpiredSnooze> {
+        let mut expired = Vec::new();
+        if self.snoozed.is_empty() {
+            return expired;
+        }
+        let accounts: Vec<AccountId> = self.snoozed.keys().cloned().collect();
+        for account_id in accounts {
+            let Some(mailboxes) = self.snoozed.get_mut(&account_id) else {
+                continue;
+            };
+            let mailbox_ids: Vec<String> = mailboxes.keys().cloned().collect();
+            for mailbox in mailbox_ids {
+                let Some(entries) = mailboxes.get_mut(&mailbox) else {
+                    continue;
+                };
+                let mut still = Vec::new();
+                for entry in entries.drain(..) {
+                    if entry.until > now {
+                        still.push(entry);
+                    } else {
+                        expired.push(ExpiredSnooze {
+                            account_id: account_id.clone(),
+                            mailbox_id: MailboxId::from(mailbox.clone()),
+                            uid: entry.uid,
+                            subject: entry.subject,
+                        });
+                    }
+                }
+                if still.is_empty() {
+                    mailboxes.remove(&mailbox);
+                } else {
+                    mailboxes.insert(mailbox, still);
+                }
+            }
+            if mailboxes.is_empty() {
+                self.snoozed.remove(&account_id);
+            }
+        }
+        self.schema_version = SNOOZED_MESSAGES_SCHEMA_VERSION;
+        expired
+    }
+
+    pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
+        self.snoozed.retain(|id, _| known.contains(id));
+        self.schema_version = SNOOZED_MESSAGES_SCHEMA_VERSION;
     }
 }
 
@@ -1343,6 +1519,81 @@ pub fn retain_pinned_messages(known: &HashSet<AccountId>) {
         let mut blob = load_pinned_blob(kv)?;
         blob.retain_accounts(known);
         save_pinned_blob(kv, &blob)
+    });
+}
+
+fn load_snoozed_blob(kv: &dyn StringKvStore) -> Result<SnoozedMessagesBlob, AccountStoreError> {
+    match kv.get_item(SNOOZED_MESSAGES_KEY)? {
+        None => Ok(SnoozedMessagesBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(SnoozedMessagesBlob::empty()),
+        Some(s) => SnoozedMessagesBlob::decode(&s),
+    }
+}
+
+fn save_snoozed_blob(
+    kv: &dyn StringKvStore,
+    blob: &SnoozedMessagesBlob,
+) -> Result<(), AccountStoreError> {
+    kv.set_item(SNOOZED_MESSAGES_KEY, &blob.encode()?)
+}
+
+/// Snoozed rows for `account_id` + `mailbox_id`.
+pub fn load_snoozed_messages(
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+) -> Vec<SnoozedMessage> {
+    with_kv(|kv| Ok(load_snoozed_blob(kv)?.entries(account_id, mailbox_id))).unwrap_or_default()
+}
+
+/// Hide `entries` until their `until` time. Returns the folder's snooze list.
+pub fn snooze_messages(
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    entries: &[SnoozedMessage],
+) -> Vec<SnoozedMessage> {
+    with_kv(|kv| {
+        let mut blob = load_snoozed_blob(kv)?;
+        let next = blob.apply_snooze(account_id.clone(), mailbox_id, entries);
+        save_snoozed_blob(kv, &blob)?;
+        Ok(next)
+    })
+    .unwrap_or_default()
+}
+
+/// Clear snooze for `uids` in one folder. Returns the remaining list.
+pub fn unsnooze_messages(
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    uids: &[String],
+) -> Vec<SnoozedMessage> {
+    with_kv(|kv| {
+        let mut blob = load_snoozed_blob(kv)?;
+        let next = blob.apply_unsnooze(account_id.clone(), mailbox_id, uids);
+        save_snoozed_blob(kv, &blob)?;
+        Ok(next)
+    })
+    .unwrap_or_default()
+}
+
+/// Drop expired rows across every account and return them for notify + jump.
+pub fn take_expired_snoozes(now: DateTime<Utc>) -> Vec<ExpiredSnooze> {
+    with_kv(|kv| {
+        let mut blob = load_snoozed_blob(kv)?;
+        let expired = blob.take_expired(now);
+        if !expired.is_empty() {
+            save_snoozed_blob(kv, &blob)?;
+        }
+        Ok(expired)
+    })
+    .unwrap_or_default()
+}
+
+/// Drop snoozed rows for accounts that are no longer known.
+pub fn retain_snoozed_messages(known: &HashSet<AccountId>) {
+    let _ = with_kv(|kv| {
+        let mut blob = load_snoozed_blob(kv)?;
+        blob.retain_accounts(known);
+        save_snoozed_blob(kv, &blob)
     });
 }
 
@@ -2320,6 +2571,114 @@ mod tests {
     #[test]
     fn pinned_messages_decode_rejects_future_schema() {
         let err = PinnedMessagesBlob::decode(r#"{"schema_version":99,"pinned":{}}"#).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
+    fn snooze_entry(uid: &str, until_secs: i64) -> SnoozedMessage {
+        SnoozedMessage {
+            uid: uid.into(),
+            until: DateTime::from_timestamp(until_secs, 0).expect("ts"),
+            subject: format!("s-{uid}"),
+        }
+    }
+
+    #[test]
+    fn snoozed_messages_roundtrip_and_unsnooze() {
+        host_kv::reset();
+        let acc = AccountId::new("acc-snooze");
+        let inbox = MailboxId::from("INBOX".to_string());
+        assert!(load_snoozed_messages(&acc, &inbox).is_empty());
+
+        let next = snooze_messages(
+            &acc,
+            &inbox,
+            &[snooze_entry("10", 200), snooze_entry("11", 300)],
+        );
+        assert_eq!(next.len(), 2);
+        assert_eq!(load_snoozed_messages(&acc, &inbox).len(), 2);
+
+        let next = snooze_messages(&acc, &inbox, &[snooze_entry("10", 400)]);
+        assert_eq!(next.len(), 2);
+        assert_eq!(
+            next.iter()
+                .find(|e| e.uid == "10")
+                .map(|e| e.until.timestamp()),
+            Some(400)
+        );
+
+        let next = unsnooze_messages(&acc, &inbox, &["11".into()]);
+        assert_eq!(
+            next.iter().map(|e| e.uid.as_str()).collect::<Vec<_>>(),
+            vec!["10"]
+        );
+
+        let sent = MailboxId::from("Sent".to_string());
+        snooze_messages(&acc, &sent, &[snooze_entry("99", 500)]);
+        assert_eq!(load_snoozed_messages(&acc, &inbox).len(), 1);
+        assert_eq!(load_snoozed_messages(&acc, &sent).len(), 1);
+
+        retain_snoozed_messages(&HashSet::new());
+        assert!(load_snoozed_messages(&acc, &inbox).is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn snoozed_messages_cap_and_empty_uid() {
+        let mut blob = SnoozedMessagesBlob::empty();
+        let acc = AccountId::new("acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let entries: Vec<SnoozedMessage> = (0..MAX_SNOOZED_PER_MAILBOX + 5)
+            .map(|n| snooze_entry(&n.to_string(), n as i64 + 1))
+            .collect();
+        blob.set_entries(acc.clone(), &inbox, entries);
+        assert_eq!(blob.entries(&acc, &inbox).len(), MAX_SNOOZED_PER_MAILBOX);
+        blob.apply_snooze(
+            acc.clone(),
+            &inbox,
+            &[SnoozedMessage {
+                uid: String::new(),
+                until: DateTime::from_timestamp(9, 0).expect("ts"),
+                subject: String::new(),
+            }],
+        );
+        assert_eq!(blob.entries(&acc, &inbox).len(), MAX_SNOOZED_PER_MAILBOX);
+        blob.set_entries(acc.clone(), &inbox, Vec::new());
+        assert!(blob.entries(&acc, &inbox).is_empty());
+        assert!(blob.snoozed.is_empty());
+    }
+
+    #[test]
+    fn snoozed_messages_take_expired() {
+        host_kv::reset();
+        let acc = AccountId::new("acc-exp");
+        let inbox = MailboxId::from("INBOX".to_string());
+        snooze_messages(
+            &acc,
+            &inbox,
+            &[snooze_entry("old", 50), snooze_entry("live", 150)],
+        );
+        let now = DateTime::from_timestamp(100, 0).expect("ts");
+        let expired = take_expired_snoozes(now);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].uid, "old");
+        assert_eq!(expired[0].subject, "s-old");
+        let left = load_snoozed_messages(&acc, &inbox);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].uid, "live");
+        host_kv::reset();
+    }
+
+    #[test]
+    fn snoozed_messages_decode_rejects_future_schema() {
+        let err = SnoozedMessagesBlob::decode(r#"{"schema_version":99,"snoozed":{}}"#).unwrap_err();
         match err {
             AccountStoreError::Serialization(msg) => {
                 assert!(

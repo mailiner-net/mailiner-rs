@@ -36,6 +36,7 @@ pub enum ShortcutId {
     TogglePin,
     Snooze,
     ShowHelp,
+    ToggleConversation,
 }
 
 impl ShortcutId {
@@ -104,6 +105,7 @@ impl ShortcutId {
             Self::TogglePin => "toggle_pin",
             Self::Snooze => "snooze",
             Self::ShowHelp => "show_help",
+            Self::ToggleConversation => "toggle_conversation",
         }
     }
 
@@ -138,6 +140,7 @@ impl ShortcutId {
             "toggle_pin" => Some(Self::TogglePin),
             "snooze" => Some(Self::Snooze),
             "show_help" => Some(Self::ShowHelp),
+            "toggle_conversation" => Some(Self::ToggleConversation),
             _ => None,
         }
     }
@@ -416,6 +419,16 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         label: "?",
         description: "Show keyboard shortcuts",
         group: ShortcutGroup::Help,
+    },
+    // Enter / → / ← are handled in the window listener when conversation
+    // view is on so they do not steal Send (Ctrl+Enter) or message scroll.
+    Shortcut {
+        id: ShortcutId::ToggleConversation,
+        keys: &[],
+        require_shift: false,
+        label: "Enter / → / ←",
+        description: "Expand or collapse conversation",
+        group: ShortcutGroup::Mail,
     },
 ];
 
@@ -753,6 +766,11 @@ mod tests {
         assert_eq!(send.description, "Send message");
         assert!(lookup("Enter", false).is_none());
         assert!(lookup("Enter", true).is_none());
+        let toggle = GLOBAL_SHORTCUTS
+            .iter()
+            .find(|s| s.id == ShortcutId::ToggleConversation)
+            .expect("ToggleConversation catalog entry");
+        assert!(toggle.keys.is_empty());
     }
 
     #[test]
@@ -847,6 +865,7 @@ mod tests {
         assert!(!ShortcutId::SelectAll.remappable());
         assert!(!ShortcutId::MoveToTrash.remappable());
         assert!(!ShortcutId::DeletePermanently.remappable());
+        assert!(!ShortcutId::ToggleConversation.remappable());
     }
 
     #[test]

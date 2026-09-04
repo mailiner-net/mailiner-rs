@@ -14,7 +14,7 @@ use crate::download::{DownloadStatus, MAIL_IMPORT_KEY, MAX_DOWNLOAD_BYTES};
 use crate::mail_file::parse_import_files;
 use crate::mailbox::{MailboxId, can_empty_trash};
 use crate::toast::ToastAction;
-use crate::ui_prefs::MessageListDensity;
+use crate::ui_prefs::{MessageListDensity, MessageListView};
 
 async fn import_selected_files(
     ctx: AppContext,
@@ -114,6 +114,9 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let sort = *ctx.message_sort.read();
     let mut density = ctx.message_list_density;
     let current_density = *density.read();
+    let mut list_view = ctx.message_list_view;
+    let current_view = *list_view.read();
+    let mut expanded_conversations = ctx.expanded_conversations;
     let filter = *ctx.message_list_filter.read();
     let supports_size_sender = *ctx.sort_supports_size_sender.read();
     let message_total = ctx.messages.read().total_count();
@@ -220,6 +223,29 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                                 has_attachment: true,
                             });
                         },
+                    }
+                }
+
+                select {
+                    class: "message-view-mode",
+                    aria_label: "Message list view",
+                    title: "Group messages into conversations",
+                    value: "{current_view.as_key()}",
+                    onchange: move |evt| {
+                        if let Some(next) = MessageListView::from_key(&evt.value()) {
+                            crate::ui_prefs::save_message_list_view(next);
+                            list_view.set(next);
+                            if next == MessageListView::Flat {
+                                expanded_conversations.write().clear();
+                            }
+                        }
+                    },
+                    for option in MessageListView::ALL {
+                        option {
+                            value: "{option.as_key()}",
+                            selected: option == current_view,
+                            "{option.label()}"
+                        }
                     }
                 }
 

@@ -13,11 +13,14 @@ use super::icons::{IconButton, IconKind};
 use super::messageview::{MessageScroll, find_envelope, ready_loaded, scroll_message_view};
 use crate::account::AccountId;
 use crate::context::{AppContext, MailboxPickerMode};
+use crate::conversation::{conversation_for_message, group_conversations};
 use crate::core_event::CoreEvent;
 use crate::mailbox::MailboxId;
 use crate::message::MessageId;
+use crate::message_list_filter::message_matches_filter;
 use crate::shortcuts::{ShortcutGroup, ShortcutId, effective_shortcuts_in_group, shortcut_for_key};
 use crate::toast::ToastAction;
+use crate::ui_prefs::MessageListView;
 
 fn claim_shortcut(evt: &web_sys::KeyboardEvent) {
     evt.prevent_default();
@@ -166,10 +169,17 @@ fn run_shortcut(
             let _ = core.send(CoreEvent::SelectAdjacentUnread { delta: -1 });
         }
         ShortcutId::ScrollMessageDown => {
-            scroll_message_view(true, MessageScroll::Line);
+            if !set_focused_conversation_expanded(ctx, core, true) {
+                scroll_message_view(true, MessageScroll::Line);
+            }
         }
         ShortcutId::ScrollMessageUp => {
-            scroll_message_view(false, MessageScroll::Line);
+            if !set_focused_conversation_expanded(ctx, core, false) {
+                scroll_message_view(false, MessageScroll::Line);
+            }
+        }
+        ShortcutId::ToggleConversation => {
+            toggle_focused_conversation(ctx, core);
         }
         ShortcutId::PageMessageDown => {
             scroll_message_view(true, MessageScroll::Page);
@@ -268,6 +278,92 @@ fn require_selected_messages(ctx: &AppContext) -> Option<(MailboxId, Vec<Message
     }
 }
 
+fn loaded_for_conversations(ctx: &AppContext) -> Vec<std::sync::Arc<crate::message::Message>> {
+    let filter = *ctx.message_list_filter.peek();
+    ctx.messages
+        .read()
+        .iter()
+        .filter(|m| !filter.has_attachment || message_matches_filter(m, filter))
+        .cloned()
+        .collect()
+}
+
+fn toggle_focused_conversation(ctx: &mut AppContext, core: Coroutine<CoreEvent>) {
+    let Some(focus) = ctx.selection.peek().focus().cloned() else {
+        return;
+    };
+    if *ctx.message_list_view.peek() != MessageListView::Conversations {
+        return;
+    }
+    let conversations = group_conversations(
+        loaded_for_conversations(ctx),
+        ctx.pinned_uids.peek().as_slice(),
+    );
+    let Some(conv) = conversation_for_message(&conversations, &focus) else {
+        return;
+    };
+    if conv.count() <= 1 {
+        return;
+    }
+    let id = conv.id.clone();
+    let target = conv.open_target().id.clone();
+    let expanding = !ctx.expanded_conversations.peek().contains(&id);
+    {
+        let mut open = ctx.expanded_conversations.write();
+        if expanding {
+            open.insert(id);
+        } else {
+            open.remove(&id);
+        }
+    }
+    if expanding {
+        let _ = core.send(CoreEvent::SelectMessage(target));
+    }
+}
+
+/// Expand (`want = true`) or collapse the focused conversation.
+/// Returns whether the expanded set changed (so arrow keys should not scroll).
+fn set_focused_conversation_expanded(
+    ctx: &mut AppContext,
+    core: Coroutine<CoreEvent>,
+    want: bool,
+) -> bool {
+    if *ctx.message_list_view.peek() != MessageListView::Conversations {
+        return false;
+    }
+    let Some(focus) = ctx.selection.peek().focus().cloned() else {
+        return false;
+    };
+    let conversations = group_conversations(
+        loaded_for_conversations(ctx),
+        ctx.pinned_uids.peek().as_slice(),
+    );
+    let Some(conv) = conversation_for_message(&conversations, &focus) else {
+        return false;
+    };
+    if conv.count() <= 1 {
+        return false;
+    }
+    let id = conv.id.clone();
+    let target = conv.open_target().id.clone();
+    let is_open = ctx.expanded_conversations.peek().contains(&id);
+    if is_open == want {
+        return false;
+    }
+    {
+        let mut open = ctx.expanded_conversations.write();
+        if want {
+            open.insert(id);
+        } else {
+            open.remove(&id);
+        }
+    }
+    if want {
+        let _ = core.send(CoreEvent::SelectMessage(target));
+    }
+    true
+}
+
 fn require_toggle_target(ctx: &AppContext) -> Option<(AccountId, MailboxId, Vec<MessageId>)> {
     let account_id = ctx.selected_account.peek().clone();
     match (account_id, require_selected_messages(ctx)) {
@@ -325,6 +421,19 @@ pub fn ShortcutsHost() -> Element {
             }
 
             if ctx.mailbox_picker.peek().is_some() || *ctx.folder_subscribe_open.peek() {
+                return;
+            }
+
+            if evt.key() == "Enter"
+                && *ctx.message_list_view.peek() == MessageListView::Conversations
+            {
+                claim_shortcut(&evt);
+                run_shortcut(
+                    ShortcutId::ToggleConversation,
+                    &mut ctx,
+                    core,
+                    &mut help_open,
+                );
                 return;
             }
 

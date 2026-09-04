@@ -1148,7 +1148,8 @@ a.accounts-link-btn {
 }
 
 .message-sort,
-.message-density {
+.message-density,
+.message-view-mode {
     flex: 0 0 auto;
     font: inherit;
     font-size: var(--text-sm);
@@ -2773,6 +2774,39 @@ body:has(.compose-dock) .toast {
     white-space: nowrap;
 }
 
+.message-thread-toggle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.message-thread-toggle:hover {
+    color: var(--foreground);
+}
+
+.message-thread-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    margin-left: 0.35rem;
+    padding: 0 0.35rem;
+    border-radius: var(--radius-pill);
+    background: var(--accent-soft);
+    color: var(--item-accent);
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.4;
+    vertical-align: middle;
+}
+
 .message-list-item-meta {
     display: flex;
     align-items: center;
@@ -3386,6 +3420,10 @@ body:has(.compose-dock) .toast {
 
             &.selected {
                 background-color: var(--accent-soft);
+            }
+
+            &.is-thread-member {
+                padding-left: 1.6rem;
             }
 
             &.focused::before {

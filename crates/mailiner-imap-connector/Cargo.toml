@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 async-channel = "2"
+async-compression = { version = "0.4", default-features = false, features = ["deflate", "tokio"] }
 async-imap = { git = "https://github.com/mailiner-net/async-imap", branch = "main", default-features = false, features = ["runtime-tokio"] }
 tokio = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
@@ -26,4 +27,5 @@ tracing = { version = "0.1" }
 web-time = "1.1"
 
 [dev-dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }

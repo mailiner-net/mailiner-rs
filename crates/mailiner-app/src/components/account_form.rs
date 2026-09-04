@@ -121,6 +121,7 @@ enum LookupStatus {
         source: DiscoverSource,
         domain: String,
     },
+    AlreadySet,
     Failed,
 }
 
@@ -131,8 +132,20 @@ impl LookupStatus {
             Self::Looking => "Looking up IMAP and SMTP over HTTPS…".into(),
             Self::NeedEmail => "Enter a full email address (user@example.com) first.".into(),
             Self::Filled { source, domain } => source.filled_message(domain),
+            Self::AlreadySet => {
+                "IMAP and SMTP are already set. Clear a host to fill from lookup.".into()
+            }
             Self::Failed => "Could not look up servers. Enter IMAP and SMTP manually.".into(),
         }
+    }
+}
+
+fn invalidate_lookup(mut lookup_gen: Signal<u64>, mut lookup_status: Signal<LookupStatus>) {
+    let next = lookup_gen.peek().saturating_add(1);
+    lookup_gen.set(next);
+    let looking = matches!(&*lookup_status.peek(), LookupStatus::Looking);
+    if looking {
+        lookup_status.set(LookupStatus::Idle);
     }
 }
 
@@ -164,9 +177,10 @@ fn start_server_lookup(
         }
         return;
     };
-    if !force
-        && (*hosts_dirty.peek() || !should_autofill_hosts(&fields, last_discovered.peek().as_ref()))
-    {
+    if !should_autofill_hosts(&fields, last_discovered.peek().as_ref()) {
+        if force {
+            lookup_status.set(LookupStatus::AlreadySet);
+        }
         return;
     }
     let generation = lookup_gen.peek().saturating_add(1);
@@ -177,7 +191,7 @@ fn start_server_lookup(
         if lookup_gen() != generation {
             return;
         }
-        if !force && hosts_dirty() {
+        if hosts_dirty() {
             lookup_status.set(LookupStatus::Idle);
             return;
         }
@@ -185,8 +199,9 @@ fn start_server_lookup(
             lookup_status.set(LookupStatus::Failed);
             return;
         };
+        let last = last_discovered();
         let mut next = fields;
-        apply_discovered(&cfg, &email, &mut next);
+        apply_discovered(&cfg, &email, &mut next, last.as_ref());
         hosts_dirty.set(false);
         last_discovered.set(Some(cfg.clone()));
         lookup_status.set(LookupStatus::Filled {
@@ -544,6 +559,7 @@ pub fn AccountConnectionFields(
                     let smtp_username = smtp_username.clone();
                     let smtp_host = smtp_host.clone();
                     move |v: String| {
+                        invalidate_lookup(lookup_gen, lookup_status);
                         let mut next = PresetFormFields {
                             imap_host: String::new(),
                             imap_port: String::new(),
@@ -760,7 +776,10 @@ pub fn AccountConnectionFields(
                 label: "Username",
                 id: "{id_prefix}-imap-user",
                 value: imap_username,
-                oninput: move |v| set_imap_username.call(v),
+                oninput: move |v| {
+                    invalidate_lookup(lookup_gen, lookup_status);
+                    set_imap_username.call(v);
+                },
                 autocomplete: "username",
                 disabled: busy,
             }

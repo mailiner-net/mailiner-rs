@@ -180,8 +180,8 @@ pub fn parse_client_config(xml: &str, email: &str) -> Option<DiscoveredConfig> {
     if !xml.contains("<clientConfig") && !xml.contains("<incomingServer") {
         return None;
     }
-    let imap = pick_server(&xml, "incomingServer", "imap")?;
-    let smtp = pick_server(&xml, "outgoingServer", "smtp")
+    let imap = pick_server(&xml, "incomingServer", "imap", server_ok_for_imap)?;
+    let smtp = pick_server(&xml, "outgoingServer", "smtp", server_ok_for_smtp)
         .or_else(|| guess_config(email).map(smtp_from_discovered))?;
     let mut cfg = config_from_servers(imap, smtp, DiscoverSource::Ispdb);
     finalize_usernames(&mut cfg, email);
@@ -206,6 +206,7 @@ fn smtp_from_discovered(cfg: DiscoveredConfig) -> Server {
 }
 
 fn config_from_servers(imap: Server, smtp: Server, source: DiscoverSource) -> DiscoveredConfig {
+    let smtp_use_tls = smtp_use_tls_for_form(&smtp).unwrap_or(true);
     DiscoveredConfig {
         source,
         imap_host: imap.host,
@@ -214,11 +215,36 @@ fn config_from_servers(imap: Server, smtp: Server, source: DiscoverSource) -> Di
         smtp_host: smtp.host,
         smtp_port: smtp.port,
         smtp_username: smtp.username,
-        smtp_use_tls: smtp.socket != SocketType::Plain,
+        smtp_use_tls,
     }
 }
 
-fn pick_server(xml: &str, tag: &str, type_attr: &str) -> Option<Server> {
+/// IMAP form is implicit TLS only (`use_tls: true`). Skip STARTTLS/plain.
+fn server_ok_for_imap(server: &Server) -> bool {
+    server.socket == SocketType::Ssl
+}
+
+/// Form TLS is `use_tls` + port (`true`+587 → STARTTLS, `true`+other → implicit).
+/// Reject combinations that would flip the advertised socket type.
+fn server_ok_for_smtp(server: &Server) -> bool {
+    smtp_use_tls_for_form(server).is_some()
+}
+
+fn smtp_use_tls_for_form(server: &Server) -> Option<bool> {
+    match server.socket {
+        SocketType::Ssl if server.port != 587 => Some(true),
+        SocketType::StartTls if server.port == 587 => Some(true),
+        SocketType::Plain => Some(false),
+        _ => None,
+    }
+}
+
+fn pick_server(
+    xml: &str,
+    tag: &str,
+    type_attr: &str,
+    ok: impl Fn(&Server) -> bool,
+) -> Option<Server> {
     let mut best: Option<Server> = None;
     for (attrs, inner) in elements(xml, tag) {
         if !attr_eq_ignore_ascii_case(&attrs, "type", type_attr) {
@@ -227,6 +253,9 @@ fn pick_server(xml: &str, tag: &str, type_attr: &str) -> Option<Server> {
         let Some(server) = parse_server_block(inner) else {
             continue;
         };
+        if !ok(&server) {
+            continue;
+        }
         match &best {
             None => best = Some(server),
             Some(current) if server.socket > current.socket => best = Some(server),
@@ -305,41 +334,68 @@ pub async fn lookup_servers(email: &str) -> Option<DiscoveredConfig> {
     resolve_config(email, None, well_known.as_deref())
 }
 
-/// Whether auto-lookup may overwrite the current hosts (empty or last fill).
+/// Whether lookup may write at least one host side (empty or last fill).
 pub fn should_autofill_hosts(fields: &PresetFormFields, last: Option<&DiscoveredConfig>) -> bool {
-    if fields.imap_host.trim().is_empty() {
-        return true;
-    }
-    last.is_some_and(|cfg| hosts_match_discovery(fields, cfg))
+    imap_replaceable(fields, last) || smtp_replaceable(fields, last)
 }
 
-pub fn hosts_match_discovery(fields: &PresetFormFields, cfg: &DiscoveredConfig) -> bool {
+fn imap_replaceable(fields: &PresetFormFields, last: Option<&DiscoveredConfig>) -> bool {
+    fields.imap_host.trim().is_empty() || last.is_some_and(|cfg| imap_matches(fields, cfg))
+}
+
+fn smtp_replaceable(fields: &PresetFormFields, last: Option<&DiscoveredConfig>) -> bool {
+    fields.smtp_host.trim().is_empty() || last.is_some_and(|cfg| smtp_matches(fields, cfg))
+}
+
+fn imap_matches(fields: &PresetFormFields, cfg: &DiscoveredConfig) -> bool {
     eq_host(&fields.imap_host, &cfg.imap_host)
         && parse_port(&fields.imap_port) == Some(cfg.imap_port)
-        && eq_host(&fields.smtp_host, &cfg.smtp_host)
+}
+
+fn smtp_matches(fields: &PresetFormFields, cfg: &DiscoveredConfig) -> bool {
+    eq_host(&fields.smtp_host, &cfg.smtp_host)
         && parse_port(&fields.smtp_port) == Some(cfg.smtp_port)
         && fields.smtp_use_tls == cfg.smtp_use_tls
 }
 
-/// Write discovered hosts/ports/TLS. Usernames only when empty or still the email.
-pub fn apply_discovered(cfg: &DiscoveredConfig, email: &str, fields: &mut PresetFormFields) {
-    fields.imap_host = cfg.imap_host.clone();
-    fields.imap_port = cfg.imap_port.to_string();
-    fields.smtp_host = cfg.smtp_host.clone();
-    fields.smtp_port = cfg.smtp_port.to_string();
-    fields.smtp_use_tls = cfg.smtp_use_tls;
-    if username_is_replaceable(&fields.imap_username, email) {
+/// Write replaceable hosts/ports/TLS. Usernames when empty, still the email, or last fill.
+pub fn apply_discovered(
+    cfg: &DiscoveredConfig,
+    email: &str,
+    fields: &mut PresetFormFields,
+    last: Option<&DiscoveredConfig>,
+) {
+    if imap_replaceable(fields, last) {
+        fields.imap_host = cfg.imap_host.clone();
+        fields.imap_port = cfg.imap_port.to_string();
+    }
+    if smtp_replaceable(fields, last) {
+        fields.smtp_host = cfg.smtp_host.clone();
+        fields.smtp_port = cfg.smtp_port.to_string();
+        fields.smtp_use_tls = cfg.smtp_use_tls;
+    }
+    if username_is_replaceable(
+        &fields.imap_username,
+        email,
+        last.map(|l| l.imap_username.as_str()),
+    ) {
         fields.imap_username = cfg.imap_username.clone();
     }
-    if username_is_replaceable(&fields.smtp_username, email) {
+    if username_is_replaceable(
+        &fields.smtp_username,
+        email,
+        last.map(|l| l.smtp_username.as_str()),
+    ) {
         fields.smtp_username = cfg.smtp_username.clone();
     }
 }
 
-fn username_is_replaceable(current: &str, email: &str) -> bool {
+fn username_is_replaceable(current: &str, email: &str, last_username: Option<&str>) -> bool {
     let current = current.trim();
     let email = email.trim();
-    current.is_empty() || (!email.is_empty() && current == email)
+    current.is_empty()
+        || (!email.is_empty() && current == email)
+        || last_username.is_some_and(|u| current == u)
 }
 
 fn eq_host(a: &str, b: &str) -> bool {
@@ -765,7 +821,7 @@ mod tests {
             "ada@gmail.com",
         );
         let mut fields = PresetFormFields::empty();
-        apply_discovered(&cfg, "ada@gmail.com", &mut fields);
+        apply_discovered(&cfg, "ada@gmail.com", &mut fields, None);
         assert_eq!(fields.imap_host, "imap.gmail.com");
         assert_eq!(fields.imap_port, "993");
         assert_eq!(fields.smtp_host, "smtp.gmail.com");
@@ -773,24 +829,108 @@ mod tests {
 
         fields.imap_username = "keep-me".into();
         let mut next = fields.clone();
-        apply_discovered(&cfg, "ada@gmail.com", &mut next);
+        apply_discovered(&cfg, "ada@gmail.com", &mut next, Some(&cfg));
         assert_eq!(next.imap_username, "keep-me");
         assert_eq!(next.imap_host, "imap.gmail.com");
     }
 
     #[test]
-    fn autofill_only_when_empty_or_last_discovery() {
+    fn apply_replaces_last_local_part_username() {
+        let first = finalize(
+            parse_client_config(ICLOUD_XML, "ada@icloud.com").unwrap(),
+            "ada@icloud.com",
+        );
+        let mut fields = PresetFormFields::empty();
+        apply_discovered(&first, "ada@icloud.com", &mut fields, None);
+        assert_eq!(fields.imap_username, "ada");
+
+        let next_cfg = finalize(
+            parse_client_config(ICLOUD_XML, "bob@icloud.com").unwrap(),
+            "bob@icloud.com",
+        );
+        apply_discovered(&next_cfg, "bob@icloud.com", &mut fields, Some(&first));
+        assert_eq!(fields.imap_username, "bob");
+        assert_eq!(fields.smtp_username, "bob@icloud.com");
+    }
+
+    #[test]
+    fn apply_does_not_overwrite_custom_smtp_when_imap_empty() {
+        let cfg = guess_config("ada@example.com").unwrap();
+        let mut fields = PresetFormFields {
+            smtp_host: "smtp.custom.com".into(),
+            smtp_port: "587".into(),
+            smtp_use_tls: true,
+            ..PresetFormFields::empty()
+        };
+        assert!(should_autofill_hosts(&fields, None));
+        apply_discovered(&cfg, "ada@example.com", &mut fields, None);
+        assert_eq!(fields.imap_host, "imap.example.com");
+        assert_eq!(fields.smtp_host, "smtp.custom.com");
+        assert_eq!(fields.smtp_port, "587");
+    }
+
+    #[test]
+    fn autofill_only_when_a_side_is_empty_or_last_discovery() {
         let cfg = guess_config("ada@example.com").unwrap();
         let empty = PresetFormFields::empty();
         assert!(should_autofill_hosts(&empty, None));
 
         let mut filled = PresetFormFields::empty();
-        apply_discovered(&cfg, "ada@example.com", &mut filled);
+        apply_discovered(&cfg, "ada@example.com", &mut filled, None);
         assert!(should_autofill_hosts(&filled, Some(&cfg)));
 
         filled.imap_host = "imap.custom.com".into();
+        assert!(should_autofill_hosts(&filled, Some(&cfg)));
+        apply_discovered(&cfg, "ada@example.com", &mut filled, Some(&cfg));
+        assert_eq!(filled.imap_host, "imap.custom.com");
+        assert_eq!(filled.smtp_host, "smtp.example.com");
+
+        filled.smtp_host = "smtp.custom.com".into();
         assert!(!should_autofill_hosts(&filled, Some(&cfg)));
         assert!(!should_autofill_hosts(&filled, None));
+    }
+
+    #[test]
+    fn parse_rejects_starttls_imap_and_incompatible_smtp() {
+        let starttls_imap = r#"
+<clientConfig version="1.1">
+  <incomingServer type="imap">
+    <hostname>imap.example.com</hostname>
+    <port>143</port>
+    <socketType>STARTTLS</socketType>
+    <username>%EMAILADDRESS%</username>
+  </incomingServer>
+  <outgoingServer type="smtp">
+    <hostname>smtp.example.com</hostname>
+    <port>465</port>
+    <socketType>SSL</socketType>
+    <username>%EMAILADDRESS%</username>
+  </outgoingServer>
+</clientConfig>
+"#;
+        assert!(parse_client_config(starttls_imap, "ada@example.com").is_none());
+
+        let starttls_smtp_465 = r#"
+<clientConfig version="1.1">
+  <incomingServer type="imap">
+    <hostname>imap.example.com</hostname>
+    <port>993</port>
+    <socketType>SSL</socketType>
+    <username>%EMAILADDRESS%</username>
+  </incomingServer>
+  <outgoingServer type="smtp">
+    <hostname>smtp.example.com</hostname>
+    <port>465</port>
+    <socketType>STARTTLS</socketType>
+    <username>%EMAILADDRESS%</username>
+  </outgoingServer>
+</clientConfig>
+"#;
+        let cfg = parse_client_config(starttls_smtp_465, "ada@example.com").unwrap();
+        assert_eq!(cfg.imap_host, "imap.example.com");
+        assert_eq!(cfg.smtp_host, "smtp.example.com");
+        assert_eq!(cfg.smtp_port, 465);
+        assert!(cfg.smtp_use_tls);
     }
 
     #[test]

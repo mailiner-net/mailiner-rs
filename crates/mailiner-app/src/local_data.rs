@@ -177,13 +177,13 @@ mod tests {
             display_name: "Work".into(),
             email: "user@example.com".into(),
             signature: None,
-            imap: ImapSettings {
-                host: "imap.example.com".into(),
-                port: 993,
-                username: "user@example.com".into(),
-                password: "s3cret".into(),
-                use_tls: true,
-            },
+            imap: ImapSettings::new(
+                "imap.example.com".into(),
+                993,
+                "user@example.com".into(),
+                "s3cret".into(),
+                crate::account_config::ImapTlsMode::Implicit,
+            ),
             smtp: Some(SmtpSettings::new(
                 "smtp.example.com".into(),
                 465,

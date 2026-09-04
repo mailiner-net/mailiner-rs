@@ -22,3 +22,6 @@ mailiner-mime = { path = "../mailiner-mime" }
 uuid = { version = "1.16", features = ["js"] }
 webpki-roots = "0.26"
 tracing = { version = "0.1" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "io-util"] }

@@ -66,8 +66,83 @@ pub struct AccountConfig {
     pub updated_at: DateTime<Utc>,
 }
 
+/// How the IMAP session is wrapped in TLS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImapTlsMode {
+    /// Implicit TLS (typically port 993).
+    #[default]
+    Implicit,
+    /// STARTTLS after a plaintext greeting (typically port 143).
+    StartTls,
+    /// No TLS. LOGIN and mail travel in the clear (including through the proxy).
+    None,
+}
+
+impl ImapTlsMode {
+    /// `true` when the session is expected to be encrypted (implicit or STARTTLS).
+    pub fn uses_tls(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Form `<select>` value (`implicit` / `start_tls` / `none`).
+    pub fn as_form_value(self) -> &'static str {
+        match self {
+            Self::Implicit => "implicit",
+            Self::StartTls => "start_tls",
+            Self::None => "none",
+        }
+    }
+
+    /// Parse a form `<select>` value; unknown → Implicit.
+    pub fn from_form_value(value: &str) -> Self {
+        match value {
+            "start_tls" => Self::StartTls,
+            "none" => Self::None,
+            _ => Self::Implicit,
+        }
+    }
+
+    /// Connector connect path for this persisted mode.
+    pub fn to_connector(self) -> mailiner_imap_connector::ImapTlsMode {
+        match self {
+            Self::Implicit => mailiner_imap_connector::ImapTlsMode::Implicit,
+            Self::StartTls => mailiner_imap_connector::ImapTlsMode::StartTls,
+            Self::None => mailiner_imap_connector::ImapTlsMode::None,
+        }
+    }
+}
+
+/// Map a v1 `use_tls` + port pair. `true` + 143 → [`ImapTlsMode::StartTls`].
+pub fn imap_tls_mode_from_legacy(use_tls: bool, port: u16) -> ImapTlsMode {
+    match (use_tls, port) {
+        (false, _) => ImapTlsMode::None,
+        (true, 143) => ImapTlsMode::StartTls,
+        (true, _) => ImapTlsMode::Implicit,
+    }
+}
+
+/// Nominal default port for an IMAP TLS mode (form auto-fill only).
+pub fn default_port_for_imap_tls_mode(mode: ImapTlsMode) -> u16 {
+    match mode {
+        ImapTlsMode::Implicit => DEFAULT_IMAP_PORT,
+        ImapTlsMode::StartTls | ImapTlsMode::None => 143,
+    }
+}
+
+/// Rewrite IMAP port when TLS mode changes, only if it is still the previous default.
+pub fn port_for_imap_tls_mode_change(port: &str, from: ImapTlsMode, to: ImapTlsMode) -> String {
+    let trimmed = port.trim();
+    let prev_default = default_port_for_imap_tls_mode(from).to_string();
+    if trimmed.is_empty() || trimmed == prev_default {
+        default_port_for_imap_tls_mode(to).to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// IMAP connection settings.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq)]
 pub struct ImapSettings {
     /// Hostname for TLS SNI and display (e.g. "imap.example.com").
     pub host: String,
@@ -78,8 +153,60 @@ pub struct ImapSettings {
     pub username: String,
     /// Password / app password.
     pub password: String,
-    /// Reserved; v1 only supports implicit TLS over the proxy stream. Default true.
+    pub tls_mode: ImapTlsMode,
+    /// Dual-written for schema-1 readers. Always derived from [`Self::tls_mode`].
     pub use_tls: bool,
+}
+
+impl ImapSettings {
+    /// Construct settings and derive `use_tls` from `tls_mode`.
+    pub fn new(
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+        tls_mode: ImapTlsMode,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            username,
+            password,
+            tls_mode,
+            use_tls: tls_mode.uses_tls(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ImapSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            host: String,
+            port: u16,
+            username: String,
+            password: String,
+            /// Absent on v1 blobs. Must **not** use `#[serde(default)]` on the
+            /// public field — missing key must stay distinguishable.
+            tls_mode: Option<ImapTlsMode>,
+            use_tls: Option<bool>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let tls_mode = match raw.tls_mode {
+            Some(mode) => mode,
+            None => imap_tls_mode_from_legacy(raw.use_tls.unwrap_or(true), raw.port),
+        };
+        Ok(ImapSettings::new(
+            raw.host,
+            raw.port,
+            raw.username,
+            raw.password,
+            tls_mode,
+        ))
+    }
 }
 
 impl fmt::Debug for ImapSettings {
@@ -89,6 +216,7 @@ impl fmt::Debug for ImapSettings {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &"***")
+            .field("tls_mode", &self.tls_mode)
             .field("use_tls", &self.use_tls)
             .finish()
     }
@@ -507,6 +635,9 @@ pub fn normalize_signature(raw: &str) -> Option<String> {
     }
 }
 
+/// Default IMAP port used when the form leaves port blank (implicit TLS).
+pub const DEFAULT_IMAP_PORT: u16 = 993;
+
 /// Default SMTP port used when the form leaves port blank but host is set.
 pub const DEFAULT_SMTP_PORT: u16 = 465;
 
@@ -655,7 +786,7 @@ impl Default for DevFormPrefill {
             display_name: String::new(),
             email: String::new(),
             imap_host: String::new(),
-            imap_port: 993,
+            imap_port: DEFAULT_IMAP_PORT,
             imap_username: String::new(),
             imap_password: String::new(),
             proxy_base_url: String::new(),
@@ -679,7 +810,7 @@ pub fn dev_form_prefill() -> DevFormPrefill {
     {
         let port: u16 = option_env!("MAILINER_DEV_IMAP_PORT")
             .and_then(|p| p.parse().ok())
-            .unwrap_or(993);
+            .unwrap_or(DEFAULT_IMAP_PORT);
         DevFormPrefill {
             display_name: option_env!("MAILINER_DEV_DISPLAY_NAME")
                 .unwrap_or("")
@@ -721,13 +852,13 @@ mod tests {
     use chrono::TimeZone;
 
     fn sample_imap() -> ImapSettings {
-        ImapSettings {
-            host: "imap.example.com".into(),
-            port: 993,
-            username: "user@example.com".into(),
-            password: "s3cret".into(),
-            use_tls: true,
-        }
+        ImapSettings::new(
+            "imap.example.com".into(),
+            DEFAULT_IMAP_PORT,
+            "user@example.com".into(),
+            "s3cret".into(),
+            ImapTlsMode::Implicit,
+        )
     }
 
     fn sample_proxy() -> ProxySettings {
@@ -1448,6 +1579,101 @@ mod tests {
     }
 
     #[test]
+    fn imap_tls_mode_from_legacy_maps_use_tls_and_port() {
+        assert_eq!(imap_tls_mode_from_legacy(true, 993), ImapTlsMode::Implicit);
+        assert_eq!(imap_tls_mode_from_legacy(true, 143), ImapTlsMode::StartTls);
+        assert_eq!(imap_tls_mode_from_legacy(false, 993), ImapTlsMode::None);
+        assert_eq!(imap_tls_mode_from_legacy(false, 143), ImapTlsMode::None);
+        assert_eq!(imap_tls_mode_from_legacy(true, 9930), ImapTlsMode::Implicit);
+    }
+
+    #[test]
+    fn v1_json_143_use_tls_true_becomes_starttls() {
+        let json = r#"{
+            "host": "imap.example.com",
+            "port": 143,
+            "username": "u",
+            "password": "pw",
+            "use_tls": true
+        }"#;
+        let imap: ImapSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(imap.tls_mode, ImapTlsMode::StartTls);
+        assert!(imap.use_tls);
+        let out = serde_json::to_string(&imap).unwrap();
+        assert!(out.contains("\"tls_mode\":\"start_tls\""));
+        assert!(out.contains("\"use_tls\":true"));
+    }
+
+    #[test]
+    fn v1_json_993_use_tls_true_stays_implicit() {
+        let json = r#"{
+            "host": "imap.example.com",
+            "port": 993,
+            "username": "u",
+            "password": "pw",
+            "use_tls": true
+        }"#;
+        let imap: ImapSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(imap.tls_mode, ImapTlsMode::Implicit);
+        assert!(imap.use_tls);
+    }
+
+    #[test]
+    fn v1_json_use_tls_false_becomes_none() {
+        let json = r#"{
+            "host": "imap.example.com",
+            "port": 143,
+            "username": "u",
+            "password": "pw",
+            "use_tls": false
+        }"#;
+        let imap: ImapSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(imap.tls_mode, ImapTlsMode::None);
+        assert!(!imap.use_tls);
+        let out = serde_json::to_string(&imap).unwrap();
+        assert!(out.contains("\"tls_mode\":\"none\""));
+        assert!(out.contains("\"use_tls\":false"));
+    }
+
+    #[test]
+    fn imap_tls_mode_to_connector_maps_each_variant() {
+        use mailiner_imap_connector::ImapTlsMode as ConnectorMode;
+        assert_eq!(
+            ImapTlsMode::Implicit.to_connector(),
+            ConnectorMode::Implicit
+        );
+        assert_eq!(
+            ImapTlsMode::StartTls.to_connector(),
+            ConnectorMode::StartTls
+        );
+        assert_eq!(ImapTlsMode::None.to_connector(), ConnectorMode::None);
+    }
+
+    #[test]
+    fn port_for_imap_tls_mode_change_only_rewrites_previous_default() {
+        assert_eq!(
+            port_for_imap_tls_mode_change("993", ImapTlsMode::Implicit, ImapTlsMode::StartTls),
+            "143"
+        );
+        assert_eq!(
+            port_for_imap_tls_mode_change("143", ImapTlsMode::StartTls, ImapTlsMode::Implicit),
+            "993"
+        );
+        assert_eq!(
+            port_for_imap_tls_mode_change("", ImapTlsMode::Implicit, ImapTlsMode::None),
+            "143"
+        );
+        assert_eq!(
+            port_for_imap_tls_mode_change("1993", ImapTlsMode::Implicit, ImapTlsMode::StartTls),
+            "1993"
+        );
+        assert_eq!(
+            port_for_imap_tls_mode_change("143", ImapTlsMode::Implicit, ImapTlsMode::StartTls),
+            "143"
+        );
+    }
+
+    #[test]
     fn form_value_roundtrip_tls_mode() {
         for mode in [
             SmtpTlsMode::Implicit,
@@ -1457,5 +1683,17 @@ mod tests {
             assert_eq!(SmtpTlsMode::from_form_value(mode.as_form_value()), mode);
         }
         assert_eq!(SmtpTlsMode::from_form_value("bogus"), SmtpTlsMode::Implicit);
+    }
+
+    #[test]
+    fn form_value_roundtrip_imap_tls_mode() {
+        for mode in [
+            ImapTlsMode::Implicit,
+            ImapTlsMode::StartTls,
+            ImapTlsMode::None,
+        ] {
+            assert_eq!(ImapTlsMode::from_form_value(mode.as_form_value()), mode);
+        }
+        assert_eq!(ImapTlsMode::from_form_value("bogus"), ImapTlsMode::Implicit);
     }
 }

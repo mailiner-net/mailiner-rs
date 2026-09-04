@@ -12,6 +12,7 @@ pub enum ShortcutId {
     MoveToFolder,
     CopyToFolder,
     Archive,
+    MoveToJunk,
     NextMessage,
     PrevMessage,
     NextUnread,
@@ -144,6 +145,14 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: false,
         label: "E",
         description: "Archive message",
+        group: ShortcutGroup::Mail,
+    },
+    Shortcut {
+        id: ShortcutId::MoveToJunk,
+        keys: &["!"],
+        require_shift: false,
+        label: "!",
+        description: "Move message to junk",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -431,6 +440,18 @@ mod tests {
         assert_eq!(
             shortcut_for_key("a", false).map(|s| s.id),
             Some(ShortcutId::ReplyAll)
+        );
+    }
+
+    #[test]
+    fn junk_key_resolves() {
+        assert_eq!(
+            shortcut_for_key("!", false).map(|s| s.id),
+            Some(ShortcutId::MoveToJunk)
+        );
+        assert_eq!(
+            shortcut_for_key("!", true).map(|s| s.id),
+            Some(ShortcutId::MoveToJunk)
         );
     }
 

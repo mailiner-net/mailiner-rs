@@ -16,6 +16,8 @@ pub struct MessageSelection {
     anchor_index: Option<usize>,
     /// Index of `focus` when it was focused (before unread-sort relocate).
     focus_at_index: Option<usize>,
+    /// Last-known unread members. Survives virtual-list eviction.
+    unread: HashSet<MessageId>,
 }
 
 impl MessageSelection {
@@ -63,6 +65,7 @@ impl MessageSelection {
     /// Replace the set with a single message (plain click / arrow).
     pub fn replace(&mut self, id: MessageId, index: Option<usize>) {
         self.ids.clear();
+        self.unread.retain(|u| u == &id);
         self.ids.insert(id.clone());
         self.focus = Some(id);
         self.anchor_index = index;
@@ -79,6 +82,7 @@ impl MessageSelection {
                 return;
             }
             self.ids.remove(&id);
+            self.unread.remove(&id);
             if self.focus.as_ref() == Some(&id) {
                 self.focus = self.ids.iter().next().cloned();
                 self.focus_at_index = None;
@@ -108,6 +112,7 @@ impl MessageSelection {
         }
         self.focus = Some(focus);
         self.focus_at_index = focus_index;
+        self.unread.retain(|id| self.ids.contains(id));
         if self.anchor_index.is_none() {
             self.anchor_index = focus_index;
         }
@@ -122,6 +127,7 @@ impl MessageSelection {
 
     pub fn remove_ids(&mut self, gone: &HashSet<MessageId>) {
         self.ids.retain(|id| !gone.contains(id));
+        self.unread.retain(|id| !gone.contains(id));
         if self.focus.as_ref().is_some_and(|id| gone.contains(id)) {
             self.focus = self.ids.iter().next().cloned();
             self.focus_at_index = None;
@@ -201,6 +207,23 @@ impl MessageSelection {
         {
             *i += 1;
         }
+    }
+
+    /// Record whether `id` is unread. Ignored when `id` is not selected.
+    pub fn note_unread(&mut self, id: &MessageId, unread: bool) {
+        if !self.ids.contains(id) {
+            return;
+        }
+        if unread {
+            self.unread.insert(id.clone());
+        } else {
+            self.unread.remove(id);
+        }
+    }
+
+    /// How many of `ids` were last known unread.
+    pub fn unread_among(&self, ids: &[MessageId]) -> usize {
+        ids.iter().filter(|id| self.unread.contains(*id)).count()
     }
 }
 
@@ -289,6 +312,18 @@ mod tests {
         assert_eq!(s.focus_at_index(), Some(3));
         s.note_removed_at(3);
         assert_eq!(s.focus_at_index(), Some(3));
+    }
+
+    #[test]
+    fn unread_among_survives_without_list() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.note_unread(&id("a"), true);
+        s.toggle(id("b"), Some(1));
+        s.note_unread(&id("b"), false);
+        assert_eq!(s.unread_among(&[id("a"), id("b")]), 1);
+        s.toggle(id("a"), Some(0));
+        assert_eq!(s.unread_among(&[id("a"), id("b")]), 0);
     }
 
     #[test]

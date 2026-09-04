@@ -21,6 +21,7 @@ fn role_icon(role: MailboxRole) -> IconKind {
         MailboxRole::Sent => IconKind::PaperAirplane,
         MailboxRole::Outbox => IconKind::InboxStack,
         MailboxRole::Trash => IconKind::Trash,
+        MailboxRole::Junk => IconKind::NoSymbol,
         MailboxRole::Other => IconKind::Folder,
     }
 }

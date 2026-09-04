@@ -151,12 +151,13 @@ pub enum MailboxRole {
     Sent,
     Outbox,
     Trash,
+    Junk,
     #[default]
     Other,
 }
 
 impl MailboxRole {
-    /// Inbox, Archive, Drafts, Sent, Outbox, Trash, then everything else.
+    /// Inbox, Archive, Drafts, Sent, Outbox, Trash, Junk, then everything else.
     pub fn sort_rank(self) -> u8 {
         match self {
             Self::Inbox => 0,
@@ -165,7 +166,8 @@ impl MailboxRole {
             Self::Sent => 3,
             Self::Outbox => 4,
             Self::Trash => 5,
-            Self::Other => 6,
+            Self::Junk => 6,
+            Self::Other => 7,
         }
     }
 
@@ -178,6 +180,7 @@ impl MailboxRole {
             Self::Sent => Some("Sent"),
             Self::Outbox => Some("Outbox"),
             Self::Trash => Some("Trash"),
+            Self::Junk => Some("Junk"),
             Self::Other => None,
         }
     }
@@ -465,6 +468,13 @@ mod tests {
         assert!(MailboxRole::Inbox.sort_rank() < MailboxRole::Archive.sort_rank());
         assert!(MailboxRole::Archive.sort_rank() < MailboxRole::Drafts.sort_rank());
         assert_eq!(MailboxRole::Archive.label(), Some("Archive"));
+    }
+
+    #[test]
+    fn junk_role_ranks_after_trash() {
+        assert!(MailboxRole::Trash.sort_rank() < MailboxRole::Junk.sort_rank());
+        assert!(MailboxRole::Junk.sort_rank() < MailboxRole::Other.sort_rank());
+        assert_eq!(MailboxRole::Junk.label(), Some("Junk"));
     }
 
     #[test]

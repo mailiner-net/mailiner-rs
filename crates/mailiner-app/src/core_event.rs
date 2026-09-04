@@ -121,6 +121,12 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Move to the Junk special-use folder when one exists.
+    MoveToJunk {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+    },
     /// Permanently delete (IMAP on toast dismiss unless undone).
     DeleteMessages {
         mailbox_id: MailboxId,
@@ -487,6 +493,13 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_move_to_trash(&manager, &mut ctx, mailbox_id, message_ids).await;
+            }
+            CoreEvent::MoveToJunk {
+                account_id,
+                mailbox_id,
+                message_ids,
+            } => {
+                handle_move_to_junk(&manager, &mut ctx, account_id, mailbox_id, message_ids).await;
             }
             CoreEvent::DeleteMessages {
                 mailbox_id,
@@ -1923,6 +1936,7 @@ async fn handle_select_list_click(
         ctx.selection
             .write()
             .toggle(message_id.clone(), Some(index));
+        snapshot_selection_unread(ctx);
         let Some(focus) = ctx.selection.read().focus().cloned() else {
             return;
         };
@@ -1951,6 +1965,7 @@ async fn apply_index_range_selection(
     let focus = ctx.messages.read().get(end_index).map(|m| m.id.clone());
     if let Some(focus) = focus {
         ctx.selection.write().set_range(ids, focus, Some(end_index));
+        snapshot_selection_unread(ctx);
     }
 }
 
@@ -2016,6 +2031,7 @@ async fn handle_select_message(
     } else {
         ctx.selection.write().note_focus(message_id.clone(), index);
     }
+    snapshot_selection_unread(ctx);
     ctx.download_status.set(HashMap::new());
     ctx.message_view.set(MessageViewState::Loading {
         message_id: message_id.clone(),
@@ -2109,7 +2125,33 @@ async fn handle_select_message(
     }
 }
 
+fn snapshot_selection_unread(ctx: &mut AppContext) {
+    let list = ctx.messages.read();
+    let mut sel = ctx.selection.write();
+    for id in sel.ids_vec() {
+        if let Some(m) = list.find(|m| m.id == id) {
+            sel.note_unread(&id, !m.is_read);
+        }
+    }
+}
+
+fn unread_in_ids(ctx: &AppContext, ids: &[MessageId]) -> usize {
+    let from_sel = ctx.selection.read().unread_among(ids);
+    let list = ctx.messages.read();
+    let from_list = ids
+        .iter()
+        .filter(|id| list.find(|m| m.id == **id).is_some_and(|m| !m.is_read))
+        .count();
+    from_sel.max(from_list)
+}
+
 fn apply_read_flag(ctx: &mut AppContext, ids: &[MessageId], is_read: bool) {
+    {
+        let mut sel = ctx.selection.write();
+        for id in ids {
+            sel.note_unread(id, !is_read);
+        }
+    }
     let idset: std::collections::HashSet<&MessageId> = ids.iter().collect();
     let mut unread_delta: i32 = 0;
     for msg in ctx.messages.write().iter_mut() {
@@ -2249,7 +2291,8 @@ fn take_messages_from_ui(
         }
     }
     let n = taken.len();
-    let unread_n = taken.iter().filter(|(_, m)| !m.is_read).count() as i32;
+    let unread_n =
+        unread_in_ids(ctx, ids).max(taken.iter().filter(|(_, m)| !m.is_read).count()) as i32;
     let mb = ctx.selected_mailbox.read().clone();
     if let Some(mb) = mb {
         if let Some(node) = ctx.mailbox_nodes.write().get_mut(&mb) {
@@ -2560,7 +2603,18 @@ async fn handle_move_messages(
     let folder_id = FolderId::new(mailbox_id.to_string());
     let dest_id = FolderId::new(dest_mailbox_id.to_string());
     let core_ids = core_message_ids(&message_ids);
-    let unread_n = unread_among(ctx, &message_ids);
+    let unread_flags: Vec<bool> = {
+        let from_sel = ctx.selection.read();
+        let list = ctx.messages.read();
+        message_ids
+            .iter()
+            .map(|id| {
+                from_sel.unread_among(std::slice::from_ref(id)) > 0
+                    || list.find(|m| m.id == *id).is_some_and(|m| !m.is_read)
+            })
+            .collect()
+    };
+    let unread_n = unread_flags.iter().filter(|u| **u).count();
     match connector
         .move_messages(&folder_id, &core_ids, &dest_id)
         .await
@@ -2569,7 +2623,22 @@ async fn handle_move_messages(
             if !selected_account_is(ctx, &account_id)
                 || ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id)
             {
-                let moved = dest_uids.len().max(message_ids.len());
+                // COPYUID present → mapped count; empty → no mapping, assume all moved.
+                let (moved, unread_n) = if dest_uids.is_empty() {
+                    (message_ids.len(), unread_n)
+                } else if dest_uids.len() >= message_ids.len() {
+                    (dest_uids.len(), unread_n)
+                } else {
+                    // Same-order COPYUID: only the leading mapped ids moved.
+                    (
+                        dest_uids.len(),
+                        unread_flags
+                            .iter()
+                            .take(dest_uids.len())
+                            .filter(|u| **u)
+                            .count(),
+                    )
+                };
                 persist_stale_move_counts(
                     manager.cache(),
                     ctx,
@@ -2577,7 +2646,7 @@ async fn handle_move_messages(
                     &mailbox_id,
                     &dest_mailbox_id,
                     moved,
-                    unread_n,
+                    unread_n as i32,
                 )
                 .await;
                 invalidate_mailbox_messages(manager.cache(), &account_id, &mailbox_id).await;
@@ -2730,6 +2799,30 @@ async fn handle_archive_messages(
         archive_id,
     )
     .await;
+}
+
+async fn handle_move_to_junk(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    if ctx.selected_mailbox.read().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let junk_id = crate::mailbox::find_junk_mailbox(&ctx.mailbox_nodes.read());
+    let Some(junk_id) = junk_id else {
+        ctx.show_toast(ToastAction::error("No Junk folder found on this account"));
+        return;
+    };
+    handle_move_messages(manager, ctx, account_id, mailbox_id, message_ids, junk_id).await;
 }
 
 async fn handle_move_to_trash(

@@ -426,6 +426,27 @@ button.flat {
     resize: vertical;
 }
 
+.smime-identity-list {
+    list-style: none;
+    margin: 0 0 0.75rem;
+    padding: 0;
+}
+
+.smime-identity-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    font-size: 0.9rem;
+}
+
+.form-error {
+    color: var(--danger);
+    font-size: 0.85rem;
+    margin: 0.35rem 0 0;
+}
+
 .onboarding-field input:focus,
 .onboarding-field select:focus,
 .onboarding-field textarea:focus {
@@ -3659,6 +3680,43 @@ body:has(.compose-dock) .toast {
         .message-pgp-signer {
             font-size: var(--text-sm);
             opacity: 0.9;
+        }
+
+        .message-smime-banner {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 8px;
+            padding: 8px 24px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+            flex-shrink: 0;
+
+            .message-smime-label {
+                font-weight: 600;
+            }
+
+            &.is-ok {
+                background: var(--info-bg);
+                color: var(--info-fg);
+                border-bottom-color: var(--info-border);
+            }
+
+            &.is-info {
+                background: color-mix(in srgb, var(--item-accent) 10%, transparent);
+            }
+
+            &.is-warn {
+                background: var(--warning-bg);
+                color: var(--warning-fg);
+                border-bottom-color: var(--warning-border);
+            }
+
+            &.is-fail {
+                background: var(--danger-bg, var(--warning-bg));
+                color: var(--danger);
+                border-bottom-color: var(--danger);
+            }
         }
 
         .message-privacy-banner {

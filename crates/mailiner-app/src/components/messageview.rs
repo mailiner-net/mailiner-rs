@@ -341,7 +341,18 @@ pub fn MessageView() -> Element {
                 allow_remote_resources: allow,
                 prefer_plain: prefer,
             });
-            if let Some(result) = fmt.format_scope(&loaded.parts, nested_in.as_deref()) {
+            let mut format_parts = loaded.parts.clone();
+            if nested_in.is_none() {
+                let trust = ctx
+                    .selected_account
+                    .read()
+                    .as_ref()
+                    .and_then(|id| ctx.accounts.read().get(id).cloned())
+                    .map(|a| crate::smime::SmimeTrust::from_account(&a))
+                    .unwrap_or_default();
+                let _ = crate::smime::evaluate_parts(&mut format_parts, &trust);
+            }
+            if let Some(result) = fmt.format_scope(&format_parts, nested_in.as_deref()) {
                 let inlined = result.inlined_part_ids.clone();
                 let prevented = result.prevented_remote_resources;
                 let html = result.html;
@@ -360,7 +371,7 @@ pub fn MessageView() -> Element {
                             allow_remote_resources: true,
                             prefer_plain: false,
                         })
-                        .format_scope(&loaded.parts, nested_in.as_deref())
+                        .format_scope(&format_parts, nested_in.as_deref())
                         .map(|r| r.html)
                     } else {
                         None
@@ -467,6 +478,14 @@ pub fn MessageView() -> Element {
                         prevented_remote: *prevented_remote.read(),
                         had_remote: *had_remote.read(),
                         from_email: from_email.clone(),
+                    }
+
+                    SmimeStatusBanner {
+                        parts: loaded.parts.clone(),
+                        account_id: match &view {
+                            MessageViewState::Ready { account_id, .. } => Some(account_id.clone()),
+                            _ => None,
+                        },
                     }
 
                     CalendarInviteCards {
@@ -1990,6 +2009,36 @@ fn PgpStatusBanner(state: PgpViewState) -> Element {
             if !signer.is_empty() && state.signature == PgpSignatureState::Valid {
                 span { class: "message-pgp-signer", "{signer}" }
             }
+        }
+    }
+}
+
+#[component]
+fn SmimeStatusBanner(parts: Vec<MessagePart>, account_id: Option<AccountId>) -> Element {
+    let ctx = use_context::<AppContext>();
+    let trust = account_id
+        .as_ref()
+        .and_then(|id| ctx.accounts.read().get(id).cloned())
+        .map(|a| crate::smime::SmimeTrust::from_account(&a))
+        .unwrap_or_default();
+    let mut parts = parts;
+    let Some(banner) = crate::smime::evaluate_parts(&mut parts, &trust) else {
+        return rsx! {};
+    };
+    let class = match banner.tone() {
+        crate::smime::SmimeTone::Ok => "message-smime-banner is-ok",
+        crate::smime::SmimeTone::Info => "message-smime-banner is-info",
+        crate::smime::SmimeTone::Warn => "message-smime-banner is-warn",
+        crate::smime::SmimeTone::Fail => "message-smime-banner is-fail",
+    };
+    let label = banner.label();
+    let detail = banner.detail();
+    rsx! {
+        div {
+            class: "{class}",
+            role: "status",
+            strong { class: "message-smime-label", "{label}" }
+            span { class: "message-smime-detail", "{detail}" }
         }
     }
 }

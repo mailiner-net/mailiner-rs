@@ -3,6 +3,7 @@ use mailiner_core::models::MessagePart;
 
 use super::{ParseContext, PartParser, ATTACHMENT_MIME};
 use crate::heuristics::{is_attachment, is_rich_part};
+use crate::smime::{is_pkcs7_signature, is_smime_protocol};
 
 pub struct MultipartAlternativeParser;
 pub struct MultipartMixedParser;
@@ -73,6 +74,8 @@ impl PartParser for MultipartMixedParser {
                     &sub_id,
                     &sub_path,
                 ));
+            } else if sub.is_smime() {
+                out.extend(parse_smime_leaf(ctx, sub, &sub_id, &sub_path, false));
             } else if is_attachment(sub) {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,
@@ -121,15 +124,11 @@ impl PartParser for MultipartSignedParser {
         part_id: &str,
         path: &[String],
     ) -> Vec<MessagePart> {
-        // RFC 3156: signed body + detached signature. Hide only the signature.
-        let protocol = part
-            .parameters
-            .get("PROTOCOL")
-            .map(|s| s.to_ascii_lowercase())
-            .unwrap_or_default();
-        if protocol.contains("pkcs7") {
-            return MultipartMixedParser.parse(ctx, part, part_id, path);
+        let protocol = part.parameters.get("PROTOCOL").map(String::as_str);
+        if protocol.is_some_and(is_smime_protocol) {
+            return parse_smime_signed(ctx, part, part_id, path);
         }
+        // RFC 3156 OpenPGP (or unknown): signed body + detached signature.
         let mut out = Vec::new();
         for (i, sub) in part.subparts.iter().enumerate() {
             let mut sub_path = path.to_vec();
@@ -209,9 +208,12 @@ impl PartParser for MultipartRelatedParser {
             // message/rfc822 is always parsed so the nested body can be opened.
             let force_att = !sub.is_rfc822()
                 && !sub.is_calendar()
+                && !sub.is_smime()
                 && is_attachment(sub)
                 && (sub.id.is_none() || !has_rich);
-            if force_att {
+            if sub.is_smime() {
+                out.extend(parse_smime_leaf(ctx, sub, &sub_id, &sub_path, false));
+            } else if force_att {
                 out.extend(ctx.registry.parse_as(
                     ctx.envelope_id,
                     sub,
@@ -228,4 +230,61 @@ impl PartParser for MultipartRelatedParser {
         }
         out
     }
+}
+
+fn parse_smime_signed(
+    ctx: &ParseContext<'_>,
+    part: &BodyPart,
+    part_id: &str,
+    path: &[String],
+) -> Vec<MessagePart> {
+    let mut out = Vec::new();
+    let last = part.subparts.len().saturating_sub(1);
+    for (i, sub) in part.subparts.iter().enumerate() {
+        let mut sub_path = path.to_vec();
+        sub_path.push((i + 1).to_string());
+        let sub_id = format!("{part_id}.signed.{i}");
+        let is_sig = i == last && (sub.is_smime() || is_pkcs7_signature(&sub.content_type()));
+        if is_sig {
+            out.extend(parse_smime_leaf(ctx, sub, &sub_id, &sub_path, true));
+        } else if sub.is_smime() {
+            out.extend(parse_smime_leaf(ctx, sub, &sub_id, &sub_path, false));
+        } else {
+            out.extend(
+                ctx.registry
+                    .parse_part(ctx.envelope_id, sub, &sub_id, &sub_path),
+            );
+        }
+    }
+    out
+}
+
+fn parse_smime_leaf(
+    ctx: &ParseContext<'_>,
+    part: &BodyPart,
+    part_id: &str,
+    path: &[String],
+    hide_signature: bool,
+) -> Vec<MessagePart> {
+    use super::leaf_part;
+    use mailiner_core::models::PartKind;
+
+    let hidden = hide_signature || is_pkcs7_signature(&part.content_type());
+    let mut mp = leaf_part(
+        ctx.envelope_id,
+        part,
+        &format!("{part_id}.smime"),
+        path,
+        PartKind::Attachment,
+        Some(true),
+        Some(hidden),
+    );
+    if mp.filename.is_none() {
+        mp.filename = Some(if hidden {
+            "smime.p7s".into()
+        } else {
+            "smime.p7m".into()
+        });
+    }
+    vec![mp]
 }

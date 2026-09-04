@@ -113,12 +113,31 @@ web-sys = { version = "0.3", features = [
 ] }
 tokio = { workspace = true }
 
+# S/MIME (CMS / X.509). Pure Rust — no OpenSSL. Works on wasm32.
+cms = { version = "0.2", default-features = false, features = ["std"] }
+const-oid = { version = "0.9", default-features = false, features = ["db"] }
+der = { version = "0.7", default-features = false, features = ["alloc", "oid"] }
+digest = { version = "0.10", default-features = false }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pem"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "pem"] }
+pkcs8 = { version = "0.10", default-features = false, features = ["alloc", "pem"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "sha2", "sha1", "pem"] }
+sha1 = { version = "0.10", default-features = false }
+signature = { version = "2", default-features = false, features = ["std"] }
+spki = { version = "0.7", default-features = false, features = ["alloc"] }
+x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
+p12-keystore = "0.1"
+
+# getrandom 0.3 (via p12-keystore / uuid) needs the wasm_js backend on
+# wasm32-unknown-unknown. Pair with `--cfg getrandom_backend="wasm_js"`.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", default-features = false, features = ["wasm_js"] }
+
 # Host-only AES-GCM + PBKDF2 so unit tests exercise the same vault format.
 # The WASM build uses WebCrypto instead (smaller binary, browser-audited).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-sha2 = "0.10"
 rand = "0.8"
 
 [features]
@@ -132,3 +151,6 @@ dev-defaults = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
+cms = { version = "0.2", default-features = false, features = ["std", "builder"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "sha2", "sha1"] }

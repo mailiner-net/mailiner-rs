@@ -481,6 +481,8 @@ mod tests {
             host: "imap.example.com".into(),
             signature: None,
             identities: extras,
+            extra_ca_pems: Vec::new(),
+            smime_identities: Vec::new(),
         }
     }
 

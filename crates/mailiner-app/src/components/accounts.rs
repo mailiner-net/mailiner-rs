@@ -11,14 +11,16 @@ use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, AccountIdentity, AuthKind, DEFAULT_SMTP_PORT, ImapTlsMode, Oauth2Provider,
-    Oauth2Tokens, SmtpTlsMode, dev_form_prefill, extra_ca_pems_to_text, imap_tls_mode_from_legacy,
+    Oauth2Tokens, SmimeIdentity, SmtpTlsMode, dev_form_prefill, extra_ca_pems_to_text,
+    imap_tls_mode_from_legacy,
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
     AccountConnectionFields, AccountIdentitiesFields, AccountOauthFields, AccountSignatureFields,
-    AccountSmtpFields, AccountTlsFields, FormAuth, FormPhase, FormStatusBanner, StatusMessage,
-    apply_form_auth, apply_smtp_test_outcome, build_config_from_form, credentials_changed,
-    kind_label, provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
+    AccountSmimeFields, AccountSmtpFields, AccountTlsFields, FormAuth, FormPhase, FormStatusBanner,
+    StatusMessage, apply_form_auth, apply_smtp_test_outcome, build_config_from_form,
+    credentials_changed, kind_label, provide_lookup_edit_guard, start_smtp_test,
+    use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -1062,6 +1064,7 @@ pub fn AccountNewPage() -> Element {
     let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
+    let mut smime_identities = use_signal(Vec::<SmimeIdentity>::new);
     let mut auth_kind = use_signal(|| AuthKind::Password);
     let mut oauth_provider = use_signal(|| Oauth2Provider::Google);
     let mut oauth_client_id = use_signal(String::new);
@@ -1200,6 +1203,7 @@ pub fn AccountNewPage() -> Element {
         )
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
+        .map(|c| c.with_smime_identities(smime_identities()))
         {
             Ok(config) => {
                 if let Some(prev) = test_request_id() {
@@ -1248,7 +1252,8 @@ pub fn AccountNewPage() -> Element {
                 Utc::now(),
             )
             .and_then(|c| apply_form_auth(c, &current_auth()))
-            .and_then(|c| c.with_identities(identities())),
+            .and_then(|c| c.with_identities(identities()))
+            .map(|c| c.with_smime_identities(smime_identities())),
             phase,
             test_request_id,
             status_message,
@@ -1287,6 +1292,7 @@ pub fn AccountNewPage() -> Element {
         )
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
+        .map(|c| c.with_smime_identities(smime_identities()))
         {
             Ok(config) => {
                 ctx.connection_states
@@ -1384,6 +1390,13 @@ pub fn AccountNewPage() -> Element {
                         id_prefix: "account-new",
                         extra_ca_pems: extra_ca_pems(),
                         set_extra_ca_pems: move |v| extra_ca_pems.set(v),
+                        busy: busy,
+                    }
+
+                    AccountSmimeFields {
+                        id_prefix: "account-new",
+                        identities: smime_identities(),
+                        set_identities: move |v| smime_identities.set(v),
                         busy: busy,
                     }
 
@@ -1503,6 +1516,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
     let mut identities = use_signal(Vec::<AccountIdentity>::new);
+    let mut smime_identities = use_signal(Vec::<SmimeIdentity>::new);
     let mut open_smtp = use_signal(|| false);
     let mut auth_kind = use_signal(|| AuthKind::Password);
     let mut oauth_provider = use_signal(|| Oauth2Provider::Google);
@@ -1573,6 +1587,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     extra_ca_pems.set(extra_ca_pems_to_text(&cfg.extra_ca_pems));
                     signature.set(cfg.signature.clone().unwrap_or_default());
                     identities.set(cfg.identities.clone());
+                    smime_identities.set(cfg.smime_identities.clone());
                     let loaded = FormAuth::from_config(&cfg);
                     auth_kind.set(loaded.kind);
                     oauth_provider.set(loaded.provider);
@@ -1801,6 +1816,7 @@ pub fn AccountEditPage(id: String) -> Element {
         )
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
+        .map(|c| c.with_smime_identities(smime_identities()))
         {
             Ok(config) => {
                 if let Some(prev) = test_request_id() {
@@ -1852,7 +1868,8 @@ pub fn AccountEditPage(id: String) -> Element {
                 orig.created_at,
             )
             .and_then(|c| apply_form_auth(c, &current_auth()))
-            .and_then(|c| c.with_identities(identities())),
+            .and_then(|c| c.with_identities(identities()))
+            .map(|c| c.with_smime_identities(smime_identities())),
             phase,
             test_request_id,
             status_message,
@@ -1894,6 +1911,7 @@ pub fn AccountEditPage(id: String) -> Element {
         )
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
+        .map(|c| c.with_smime_identities(smime_identities()))
         {
             Ok(c) => c,
             Err(msg) => {
@@ -2036,6 +2054,13 @@ pub fn AccountEditPage(id: String) -> Element {
                         id_prefix: "account-edit",
                         extra_ca_pems: extra_ca_pems(),
                         set_extra_ca_pems: move |v| extra_ca_pems.set(v),
+                        busy: busy,
+                    }
+
+                    AccountSmimeFields {
+                        id_prefix: "account-edit",
+                        identities: smime_identities(),
+                        set_identities: move |v| smime_identities.set(v),
                         busy: busy,
                     }
 

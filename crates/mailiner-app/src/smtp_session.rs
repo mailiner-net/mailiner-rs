@@ -308,6 +308,7 @@ mod tests {
                 remote_port: None,
             },
             extra_ca_pems: Vec::new(),
+            smime_identities: Vec::new(),
             created_at: ts,
             updated_at: ts,
         }

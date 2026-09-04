@@ -25,11 +25,11 @@ pub use imap_search::{
     CompiledSearch, MailboxSearch, SearchTerm,
 };
 pub use models::{
-    is_calendar_mime, is_rfc822_mime, primary_mime, EmailAddr, EmailAddress, Envelope,
-    EnvelopeFlag, Folder, FolderCounts, FolderListState, Group, ImapKeyword, LoadedMessage,
-    MailboxQuota, MailboxRole, MessageContent, MessageListFilter, MessagePart, MessageSort,
-    NestedMessageHeaders, PartChunk, PartKind, PgpSignatureState, PgpViewState, TextPrefix,
-    TransferEncoding,
+    is_calendar_mime, is_rfc822_mime, is_smime_mime, primary_mime, EmailAddr, EmailAddress,
+    Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group, ImapKeyword,
+    LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessageListFilter, MessagePart,
+    MessageSort, NestedMessageHeaders, PartChunk, PartKind, PgpSignatureState, PgpViewState,
+    TextPrefix, TransferEncoding,
 };
 pub use submit::{
     sanitize_envid, DsnRequest, DsnReturn, SendErrorKind, SubmitReceipt, SubmitRequest,

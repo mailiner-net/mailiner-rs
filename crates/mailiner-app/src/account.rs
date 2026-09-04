@@ -1,6 +1,6 @@
 pub use mailiner_core::ids::AccountId;
 
-use crate::account_config::AccountIdentity;
+use crate::account_config::{AccountIdentity, SmimeIdentity};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
@@ -13,6 +13,10 @@ pub struct Account {
     pub signature: Option<String>,
     /// Extra From identities (name + email aliases). Primary is `name` + `email`.
     pub identities: Vec<AccountIdentity>,
+    /// Extra CA PEMs (not secrets) reused when verifying S/MIME signer certs.
+    pub extra_ca_pems: Vec<String>,
+    /// Imported S/MIME certificates without private keys.
+    pub smime_identities: Vec<SmimeIdentity>,
 }
 
 impl Account {

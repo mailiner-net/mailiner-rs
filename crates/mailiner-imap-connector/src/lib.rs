@@ -212,6 +212,9 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
     /// Create a connector. Password is **not** stored; pass it only to [`EmailConnector::authenticate`].
+    ///
+    /// Call [`Self::connect`] with the transport, then authenticate. Session
+    /// methods on [`EmailConnector`] do not mention the stream type.
     pub fn new(account_id: AccountId, host: String, port: u16, username: String) -> Self {
         Self {
             account_id,
@@ -529,6 +532,11 @@ where
             names.insert(mailbox.name().to_string());
         }
         Ok(names)
+    }
+
+    /// Consume `stream` (TLS / STARTTLS / plain per [`ImapTlsMode`]) and wait for the greeting.
+    pub async fn connect(&self, stream: S) -> MailinerResult<()> {
+        self.ensure_connected(stream).await.map_err(Into::into)
     }
 
     async fn ensure_connected(&self, stream: S) -> Result<(), ImapError> {
@@ -1560,15 +1568,11 @@ where
 }
 
 #[async_trait]
-impl<S> EmailConnector<S> for ImapConnector<S>
+impl<S> EmailConnector for ImapConnector<S>
 where
     // `'static` required so partial-fetch streams can own `Arc<Mutex<ImapSession<S>>>`.
     S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send + Sync + 'static,
 {
-    async fn connect(&self, stream: S) -> MailinerResult<()> {
-        self.ensure_connected(stream).await.map_err(|e| e.into())
-    }
-
     async fn disconnect(&self) -> MailinerResult<()> {
         *self.list_index.lock().await = None;
         clear_selected(&self.selected_mailbox);
@@ -2751,12 +2755,8 @@ Received-SPF: pass\r\n\
         conn: &ImapConnector<tokio::io::DuplexStream>,
         stream: tokio::io::DuplexStream,
     ) {
-        EmailConnector::<tokio::io::DuplexStream>::connect(conn, stream)
-            .await
-            .unwrap();
-        EmailConnector::<tokio::io::DuplexStream>::authenticate(conn, "secret")
-            .await
-            .unwrap();
+        conn.connect(stream).await.unwrap();
+        conn.authenticate("secret").await.unwrap();
     }
 
     #[tokio::test]

@@ -89,10 +89,7 @@ Do not re-open these.
 
 ### 13. `EmailConnector` is parameterized on the stream type
 
-- Severity: suggestion
-- Where: [`crates/mailiner-core/src/connector.rs`](../crates/mailiner-core/src/connector.rs)
-- The whole trait is generic on `S` plus `async_trait`’s default `Send` futures. The live app stores a concrete `ImapConnector<WebSocketStream>`, so this is not what blocks WASM today, but `load_message` still needs a dummy `NullStream`, and you cannot hold a transport-erased connector after `connect`. `S` is only consumed by `connect`.
-- Direction: associated type, or split `connect(stream)` from a non-generic session trait used by list/fetch/stream.
+- [x] Done. `EmailConnector` is the session trait (list/fetch/stream). `connect(stream)` is inherent on `ImapConnector`. `load_message` no longer needs a dummy stream.
 
 ### 14. `MessageSort::Date` is arrival, not the Date header
 
@@ -112,4 +109,3 @@ Do not re-open these.
 ## Suggested order
 
 1. Folder-scoped `MessageId` (1) — unblock a lot of later IMAP work; do not mix with a feature PR.
-3. Slim the connector trait (13).

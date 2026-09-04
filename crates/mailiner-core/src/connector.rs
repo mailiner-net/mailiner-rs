@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -16,7 +17,7 @@ use crate::folder_name::{
 use crate::ids::{AccountId, FolderId, MessageId};
 use crate::models::{
     Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, MailboxQuota, MessageContent,
-    MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
+    MessageListFilter, MessagePart, MessageSort, PartChunk, PartKind, TransferEncoding,
 };
 
 /// Hierarchy delimiter used by [`MockConnector`] folder create/rename.
@@ -48,11 +49,12 @@ where
     /// RFC 2087 `GETQUOTAROOT` for `folder_id`. `None` if the server has no QUOTA
     /// capability, no STORAGE resource, or no finite limit.
     async fn folder_quota(&self, folder_id: &FolderId) -> Result<Option<MailboxQuota>>;
-    /// SELECT the folder, build the sort index, and return the list length.
+    /// SELECT the folder, build the sort/filter index, and return the list length.
     async fn prepare_folder_list(
         &self,
         folder_id: &FolderId,
         sort: MessageSort,
+        filter: MessageListFilter,
     ) -> Result<FolderListState>;
 
     /// Fetch envelopes for a UI index range `[start, end)`.
@@ -192,7 +194,7 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             is_read: n.is_multiple_of(3),
             is_answered: n.is_multiple_of(7),
             is_starred: n.is_multiple_of(5),
-            is_flagged: false,
+            is_flagged: n.is_multiple_of(7),
             is_draft: false,
             is_deleted: false,
             has_attachments: n.is_multiple_of(2),
@@ -200,6 +202,12 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
         });
     }
     Ok(envelopes)
+}
+
+fn mock_folder_totals(folder_id: &FolderId) -> (u64, u64) {
+    let all = mock_envelopes(folder_id, 0..100).unwrap_or_default();
+    let unread = all.iter().filter(|e| !e.is_read).count() as u64;
+    (all.len() as u64, unread)
 }
 
 /// Realistic multipart fixture used by MockConnector and UI development.
@@ -288,11 +296,15 @@ fn mock_section_bytes(section: &str) -> Vec<u8> {
 }
 
 /// Loader / UI fixture. Not a faithful IMAP session (no sort index, no dest UIDs).
-pub struct MockConnector;
+pub struct MockConnector {
+    list_filter: Mutex<MessageListFilter>,
+}
 
 impl MockConnector {
     pub fn new() -> Self {
-        Self
+        Self {
+            list_filter: Mutex::new(MessageListFilter::default()),
+        }
     }
 }
 
@@ -352,15 +364,11 @@ where
     ) -> Result<HashMap<FolderId, FolderCounts>> {
         let mut out = HashMap::new();
         for id in folder_ids {
-            let unread = if id.as_str().eq_ignore_ascii_case("inbox") {
-                3
-            } else {
-                0
-            };
+            let (total, unread) = mock_folder_totals(id);
             out.insert(
                 id.clone(),
                 FolderCounts {
-                    total_messages: 100,
+                    total_messages: total,
                     unread_messages: unread,
                 },
             );
@@ -377,12 +385,26 @@ where
 
     async fn prepare_folder_list(
         &self,
-        _folder_id: &FolderId,
+        folder_id: &FolderId,
         sort: MessageSort,
+        filter: MessageListFilter,
     ) -> Result<FolderListState> {
+        *self.list_filter.lock().expect("mock filter") = filter;
+        let all = mock_envelopes(folder_id, 0..100)?;
+        let (_, folder_unread) = mock_folder_totals(folder_id);
+        // Attachment is client-side only (no IMAP SEARCH key).
+        let server = MessageListFilter {
+            has_attachment: false,
+            ..filter
+        };
+        let total = all
+            .iter()
+            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .count();
         Ok(FolderListState {
-            total: 100,
-            unread: Some(3),
+            total,
+            folder_total: all.len(),
+            unread: Some(folder_unread as usize),
             sort,
             supports_size_sender: false,
         })
@@ -393,7 +415,19 @@ where
         folder_id: &FolderId,
         range: Range<usize>,
     ) -> Result<Vec<Envelope>> {
-        mock_envelopes(folder_id, range)
+        let filter = *self.list_filter.lock().expect("mock filter");
+        let all = mock_envelopes(folder_id, 0..100)?;
+        let server = MessageListFilter {
+            has_attachment: false,
+            ..filter
+        };
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|e| server.matches(e.is_read, e.is_flagged, e.has_attachments))
+            .collect();
+        let end = range.end.min(filtered.len());
+        let start = range.start.min(end);
+        Ok(filtered[start..end].to_vec())
     }
 
     async fn update_envelope_flags(

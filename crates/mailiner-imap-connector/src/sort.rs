@@ -88,6 +88,16 @@ pub fn sort_command(sort: MessageSort) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// IMAP SORT criteria for a sort that needs the SORT extension.
+pub fn sort_criteria(sort: MessageSort) -> Option<&'static str> {
+    match sort {
+        MessageSort::Date => Some("REVERSE DATE"),
+        MessageSort::Size => Some("REVERSE SIZE"),
+        MessageSort::Sender => Some("FROM"),
+        MessageSort::Arrival | MessageSort::Unread => None,
+    }
+}
+
 /// `UID SORT (criteria) UTF-8 query` → UIDs in sort order.
 pub async fn uid_sort<S>(
     session: &mut Session<S>,
@@ -224,5 +234,10 @@ mod tests {
             Some(("REVERSE SIZE", "ALL"))
         );
         assert_eq!(sort_command(MessageSort::Sender), Some(("FROM", "ALL")));
+        assert!(sort_criteria(MessageSort::Arrival).is_none());
+        assert!(sort_criteria(MessageSort::Unread).is_none());
+        assert_eq!(sort_criteria(MessageSort::Date), Some("REVERSE DATE"));
+        assert_eq!(sort_criteria(MessageSort::Size), Some("REVERSE SIZE"));
+        assert_eq!(sort_criteria(MessageSort::Sender), Some("FROM"));
     }
 }

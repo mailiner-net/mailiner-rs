@@ -755,6 +755,7 @@ fn MessageHeader(
                 .map(|n| n.role == MailboxRole::Trash)
         })
         .unwrap_or(false);
+    let account_id = ctx.selected_account.read().clone();
     let archive_id = crate::mailbox::find_archive_mailbox(&ctx.mailbox_nodes.read());
     let show_archive = archive_id
         .as_ref()

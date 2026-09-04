@@ -109,6 +109,8 @@ pub struct AppContext {
     pub message_sort: Signal<mailiner_core::MessageSort>,
     /// Virtualized message-list row density.
     pub message_list_density: Signal<MessageListDensity>,
+    /// Quick list filters (Unread / Flagged via SEARCH; attachment is client-side).
+    pub message_list_filter: Signal<mailiner_core::MessageListFilter>,
     /// Server advertised RFC 5256 `SORT` (Size / Sender; Date uses it when present).
     pub sort_supports_size_sender: Signal<bool>,
     /// STORAGE quota for the selected account (`None` if the server has no QUOTA).

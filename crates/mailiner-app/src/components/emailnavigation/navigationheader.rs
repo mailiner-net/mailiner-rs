@@ -53,6 +53,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let sort = *ctx.message_sort.read();
     let mut density = ctx.message_list_density;
     let current_density = *density.read();
+    let filter = *ctx.message_list_filter.read();
     let supports_size_sender = *ctx.sort_supports_size_sender.read();
     let message_total = ctx.messages.read().total_count();
     let quota = *ctx.account_quota.read();
@@ -105,6 +106,49 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if props.mode == Mode::MessageList {
+                div {
+                    class: "message-list-filters",
+                    role: "group",
+                    aria_label: "Filter messages",
+
+                    FilterChip {
+                        label: "Unread",
+                        title: "Show unread messages",
+                        active: filter.unread,
+                        on_toggle: move |_| {
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: true,
+                                flagged: false,
+                                has_attachment: false,
+                            });
+                        },
+                    }
+                    FilterChip {
+                        label: "Flagged",
+                        title: "Show flagged messages",
+                        active: filter.flagged,
+                        on_toggle: move |_| {
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: false,
+                                flagged: true,
+                                has_attachment: false,
+                            });
+                        },
+                    }
+                    FilterChip {
+                        label: "Attachment",
+                        title: "Show messages with attachments (among loaded messages)",
+                        active: filter.has_attachment,
+                        on_toggle: move |_| {
+                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                                unread: false,
+                                flagged: false,
+                                has_attachment: true,
+                            });
+                        },
+                    }
+                }
+
                 select {
                     class: "message-density",
                     aria_label: "Message list density",
@@ -215,6 +259,27 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn FilterChip(
+    label: &'static str,
+    title: &'static str,
+    active: bool,
+    on_toggle: EventHandler<MouseEvent>,
+) -> Element {
+    rsx! {
+        button {
+            r#type: "button",
+            class: "message-filter-chip",
+            class: if active { "is-active" },
+            title,
+            aria_pressed: if active { "true" } else { "false" },
+            aria_label: title,
+            onclick: move |evt| on_toggle.call(evt),
+            "{label}"
         }
     }
 }

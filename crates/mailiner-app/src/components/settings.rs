@@ -8,7 +8,7 @@ use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
 use crate::layout::reset_saved_layout;
 use crate::shortcuts::{ShortcutGroup, shortcuts_in_group};
-use crate::ui_prefs::{ComposeBodyMode, MessageListDensity};
+use crate::ui_prefs::{ComposeBodyMode, ComposePlacement, MessageListDensity};
 
 fn account_from_label(account: &Account) -> String {
     if account.name.is_empty() {
@@ -25,6 +25,7 @@ pub fn SettingsPage() -> Element {
     let mut density = ctx.message_list_density;
     let current_density = *density.read();
     let mut body_mode = use_signal(crate::ui_prefs::load_compose_body_mode);
+    let mut compose_placement = ctx.compose_placement;
     let mut default_from = use_signal(crate::ui_prefs::load_default_from_account);
     let mut allow_remote = use_signal(crate::ui_prefs::load_allow_remote_images);
     let mut layout_reset = use_signal(|| false);
@@ -106,7 +107,28 @@ pub fn SettingsPage() -> Element {
                     h2 { "Composer" }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "The composer is a plain-text editor. Rich sends an HTML alternative of the same text."
+                        "The composer is a plain-text editor. Rich sends an HTML alternative of the same text. Docked keeps the mailbox visible while you write."
+                    }
+                    div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-compose-placement", "Compose window" }
+                        select {
+                            id: "settings-compose-placement",
+                            value: "{compose_placement().as_key()}",
+                            onchange: move |evt| {
+                                if let Some(next) = ComposePlacement::from_key(&evt.value()) {
+                                    crate::ui_prefs::save_compose_placement(next);
+                                    compose_placement.set(next);
+                                }
+                            },
+                            for option in ComposePlacement::ALL {
+                                option {
+                                    value: "{option.as_key()}",
+                                    selected: option == compose_placement(),
+                                    "{option.label()}"
+                                }
+                            }
+                        }
                     }
                     div {
                         class: "onboarding-field",

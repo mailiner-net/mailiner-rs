@@ -17,7 +17,7 @@ use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
-use crate::ui_prefs::MessageListDensity;
+use crate::ui_prefs::{ComposePlacement, MessageListDensity};
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +147,8 @@ pub struct AppContext {
     pub toast: Signal<Option<Toast>>,
     /// Open compose session (`None` = closed).
     pub compose_draft: Signal<Option<ComposeSession>>,
+    /// Modal dialog vs in-flow bottom pane.
+    pub compose_placement: Signal<ComposePlacement>,
     /// Folder jumper / move-or-copy dialog (`None` = closed).
     pub mailbox_picker: Signal<Option<MailboxPickerMode>>,
     /// Bumped after a successful `ClearLocalData` wipe.

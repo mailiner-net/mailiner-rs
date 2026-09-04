@@ -31,6 +31,16 @@ pub enum ShortcutId {
     ShowHelp,
 }
 
+impl ShortcutId {
+    /// These open a new draft and would replace the one already on screen.
+    pub fn replaces_open_draft(self) -> bool {
+        matches!(
+            self,
+            Self::Compose | Self::Reply | Self::ReplyAll | Self::Forward
+        )
+    }
+}
+
 /// Help-dialog grouping (order is display order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutGroup {
@@ -351,6 +361,17 @@ mod tests {
             shortcut_for_key("f", false).map(|s| s.id),
             Some(ShortcutId::Forward)
         );
+    }
+
+    #[test]
+    fn compose_family_shortcuts_replace_an_open_draft() {
+        assert!(ShortcutId::Compose.replaces_open_draft());
+        assert!(ShortcutId::Reply.replaces_open_draft());
+        assert!(ShortcutId::ReplyAll.replaces_open_draft());
+        assert!(ShortcutId::Forward.replaces_open_draft());
+        assert!(!ShortcutId::NextMessage.replaces_open_draft());
+        assert!(!ShortcutId::JumpToFolder.replaces_open_draft());
+        assert!(!ShortcutId::Send.replaces_open_draft());
     }
 
     #[test]

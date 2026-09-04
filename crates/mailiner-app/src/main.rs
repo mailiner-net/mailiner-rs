@@ -326,6 +326,7 @@ fn App() -> Element {
     let outbox = use_signal(Vec::new);
     let toast = use_signal(|| None);
     let compose_draft = use_signal(|| None);
+    let compose_placement = use_signal(crate::ui_prefs::load_compose_placement);
     let mailbox_picker = use_signal(|| None);
     let theme = use_signal(|| {
         let pref = crate::ui_prefs::load_theme();
@@ -369,6 +370,7 @@ fn App() -> Element {
         outbox,
         toast,
         compose_draft,
+        compose_placement,
         mailbox_picker,
         sign_out_epoch,
         sign_out_pending,
@@ -526,28 +528,32 @@ fn MainView() -> Element {
 
     rsx! {
         div {
-            id: "app",
-            onmounted: move |_| {
-                crate::layout::apply_saved_layout();
-            },
-
-            EmailNavigation {}
-            SplitHandle { axis: SplitAxis::Folder }
-
+            class: "mail-shell",
             div {
-                id: "content",
+                id: "app",
+                onmounted: move |_| {
+                    crate::layout::apply_saved_layout();
+                },
 
-                ConnectionStatusBanner {}
+                EmailNavigation {}
+                SplitHandle { axis: SplitAxis::Folder }
 
-                MessageList {}
-                SplitHandle { axis: SplitAxis::List }
-                MessageView {}
+                div {
+                    id: "content",
 
-                OutboxPanel {}
+                    ConnectionStatusBanner {}
+
+                    MessageList {}
+                    SplitHandle { axis: SplitAxis::List }
+                    MessageView {}
+
+                    OutboxPanel {}
+                }
             }
+
+            ComposeOverlay {}
         }
 
-        ComposeOverlay {}
         ToastHost {}
         MailboxPickerHost {}
         MessageHeadersHost {}

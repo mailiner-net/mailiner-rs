@@ -1,7 +1,8 @@
 //! Account configuration store (secrets + connection settings).
 //!
 //! Browser persistence uses a single `localStorage` JSON blob
-//! ([`ACCOUNTS_LOCAL_STORAGE_KEY`]); IndexedDB is deferred.
+//! ([`ACCOUNTS_LOCAL_STORAGE_KEY`]). Account secrets stay in localStorage;
+//! IndexedDB is used only for the mail envelope/part cache.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -358,7 +359,7 @@ impl BrowserAccountStore<WebLocalStorage> {
     /// Open the browser `localStorage` backend.
     ///
     /// Returns [`AccountStoreError::Unavailable`] when there is no window or
-    /// storage is blocked. Async for symmetry with a future IndexedDB backend.
+    /// storage is blocked. Async for symmetry with the mail-cache IndexedDB path.
     pub async fn open() -> Result<Self, AccountStoreError> {
         Ok(Self {
             kv: WebLocalStorage::try_open()?,

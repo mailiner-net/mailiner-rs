@@ -1,4 +1,6 @@
 //! Export account settings and wipe Mailiner-owned `localStorage` keys.
+//!
+//! Envelope/part cache in IndexedDB is wiped via [`crate::mail_cache::MailCache::clear_all`].
 
 use chrono::{DateTime, Utc};
 use mailiner_core::ids::AccountId;

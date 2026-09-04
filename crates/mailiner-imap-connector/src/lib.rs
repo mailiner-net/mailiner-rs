@@ -854,7 +854,7 @@ fn mailbox_is_self_or_descendant(name: &str, ancestor: &str, delimiter: Option<&
 
 /// SELECT INBOX so DELETE/RENAME is not run against the currently selected mailbox.
 async fn select_inbox_before_mutate<S>(
-    session: &mut Session<TlsStream<S>>,
+    session: &mut Session<ImapIo<S>>,
     folder_id: &str,
 ) -> Result<(), ImapError>
 where

@@ -362,7 +362,7 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
             naive.hour() as i32,
             naive.minute() as i32,
             naive.second() as i32,
-            0.0,
+            0,
         );
         DateTime::from_timestamp_millis(js.get_time() as i64)
     }

@@ -60,8 +60,6 @@ pub fn MessageList() -> Element {
         Vec::new()
     };
     let match_count = filtered_matches.len();
-    let scanning_attachments =
-        filter.has_attachment && !fully_loaded && total > 0 && match_count == 0 && !loading;
     let has_known = if filtering {
         match_count > 0
     } else {
@@ -81,10 +79,13 @@ pub fn MessageList() -> Element {
     }
 
     use_effect(move || {
-        if !scanning_attachments {
+        let filter = *ctx.message_list_filter.read();
+        let total = ctx.messages.read().total_count();
+        let cached = ctx.messages.read().cached_count();
+        let loading = *ctx.messages_loading.read();
+        if !filter.has_attachment || cached >= total || total == 0 || loading {
             return;
         }
-        let total = ctx.messages.read().total_count();
         let Some(range) = ctx
             .messages
             .read()
@@ -240,11 +241,6 @@ pub fn MessageList() -> Element {
                     div {
                         class: "message-list-empty",
                         "No matching messages"
-                    }
-                } else if scanning_attachments {
-                    div {
-                        class: "message-list-empty",
-                        "Loading…"
                     }
                 } else if no_loaded_matches {
                     div {

@@ -2049,6 +2049,9 @@ async fn handle_select_adjacent(
                 let start = index.saturating_sub(5);
                 let end = (index + 15).min(total);
                 handle_fetch_message_range(manager, ctx, mailbox_id, start..end).await;
+                if ctx.messages.read().get(index).is_none() {
+                    return;
+                }
             }
             let matches = ctx
                 .messages
@@ -2067,7 +2070,7 @@ async fn handle_select_adjacent(
     if extend {
         apply_index_range_selection(manager, ctx, index).await;
     }
-    select_list_index(manager, ctx, index, !extend).await;
+    select_list_index(manager, ctx, index, !extend, !extend).await;
 }
 
 async fn handle_select_adjacent_filtered(
@@ -2182,7 +2185,7 @@ async fn handle_select_adjacent_unread(
         };
         match scan {
             UnreadScan::Found(index) => {
-                select_list_index(manager, ctx, index, true).await;
+                select_list_index(manager, ctx, index, true, true).await;
                 return;
             }
             UnreadScan::Hole(index) => {
@@ -2307,6 +2310,7 @@ async fn select_list_index(
     ctx: &mut AppContext,
     index: usize,
     replace_selection: bool,
+    auto_mark: bool,
 ) {
     let total = ctx.messages.read().total_count();
     if ctx.messages.read().get(index).is_none() {
@@ -2319,14 +2323,7 @@ async fn select_list_index(
     let Some(message_id) = ctx.messages.read().get(index).map(|m| m.id.clone()) else {
         return;
     };
-    handle_select_message(
-        manager,
-        ctx,
-        message_id,
-        replace_selection,
-        replace_selection,
-    )
-    .await;
+    handle_select_message(manager, ctx, message_id, auto_mark, replace_selection).await;
 }
 
 async fn select_after_removed_row(
@@ -2334,14 +2331,45 @@ async fn select_after_removed_row(
     ctx: &mut AppContext,
     removed_index: Option<usize>,
 ) {
+    select_after_removed_row_mark(manager, ctx, removed_index, true).await;
+}
+
+async fn select_after_removed_row_mark(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    removed_index: Option<usize>,
+    auto_mark: bool,
+) {
     let Some(removed_index) = removed_index else {
         return;
     };
+    let filter = *ctx.message_list_filter.peek();
     let total = ctx.messages.read().total_count();
-    let Some(index) = index_after_removal(total, removed_index) else {
+    let index = if filter.is_empty() {
+        index_after_removal(total, removed_index)
+    } else {
+        next_cached_filter_index(ctx, removed_index, filter)
+    };
+    let Some(index) = index else {
         return;
     };
-    select_list_index(manager, ctx, index, true).await;
+    select_list_index(manager, ctx, index, true, auto_mark).await;
+}
+
+fn next_cached_filter_index(
+    ctx: &AppContext,
+    removed_index: usize,
+    filter: MessageListFilter,
+) -> Option<usize> {
+    let list = ctx.messages.read();
+    let total = list.total_count();
+    let matches = |i: usize| {
+        list.get(i)
+            .is_some_and(|m| filter.matches(m.is_read, m.is_flagged, m.has_attachments))
+    };
+    (removed_index..total)
+        .find(|&i| matches(i))
+        .or_else(|| (0..removed_index).rev().find(|&i| matches(i)))
 }
 
 fn neighbor_ids(ctx: &AppContext, focus: &MessageId) -> Vec<MessageId> {
@@ -2930,7 +2958,7 @@ async fn handle_mark_read(
             ctx.selection.write().clear();
             ctx.message_view.set(MessageViewState::Empty);
             ctx.download_status.set(HashMap::new());
-            select_after_removed_row(manager, ctx, idx).await;
+            select_after_removed_row_mark(manager, ctx, idx, false).await;
         } else {
             let gone: HashSet<_> = message_ids.iter().cloned().collect();
             ctx.selection.write().remove_ids(&gone);

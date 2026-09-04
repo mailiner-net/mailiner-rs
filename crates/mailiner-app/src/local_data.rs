@@ -205,7 +205,10 @@ mod tests {
     use chrono::TimeZone;
     use mailiner_core::ids::AccountId;
 
-    use crate::account_config::{ImapSettings, ProxySettings, SmtpSettings, SmtpTlsMode};
+    use crate::account_config::{
+        AuthKind, ImapSettings, Oauth2Provider, Oauth2Settings, Oauth2Tokens, ProxySettings,
+        SmtpSettings, SmtpTlsMode,
+    };
 
     fn ts() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 9, 3, 12, 0, 0).unwrap()
@@ -218,6 +221,8 @@ mod tests {
             email: "user@example.com".into(),
             identities: Vec::new(),
             signature: None,
+            auth_kind: crate::account_config::AuthKind::Password,
+            oauth2: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),
                 993,
@@ -244,6 +249,22 @@ mod tests {
         }
     }
 
+    fn sample_oauth() -> AccountConfig {
+        let mut cfg = sample();
+        cfg.auth_kind = AuthKind::Oauth2;
+        cfg.oauth2 = Some(Oauth2Settings {
+            provider: Oauth2Provider::Google,
+            client_id: "cid".into(),
+            tenant: None,
+            tokens: Oauth2Tokens {
+                access_token: "ya29.export-secret".into(),
+                refresh_token: Some("1//export-refresh".into()),
+                expires_at: None,
+            },
+        });
+        cfg
+    }
+
     #[test]
     fn public_export_json_omits_secrets() {
         let export =
@@ -264,6 +285,17 @@ mod tests {
             "smtp password leaked: {json}"
         );
         assert!(!json.contains("proxy-token"), "proxy token leaked: {json}");
+
+        let export = AccountsExport::new(vec![sample_oauth()], None, false, ts());
+        let json = export.to_pretty_json().unwrap();
+        assert!(
+            !json.contains("ya29.export-secret"),
+            "oauth access leaked: {json}"
+        );
+        assert!(
+            !json.contains("1//export-refresh"),
+            "oauth refresh leaked: {json}"
+        );
     }
 
     #[test]

@@ -13,8 +13,8 @@ use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
     EmailNavigation, FolderSubscribeHost, MailboxPickerHost, MessageHeadersHost, MessageList,
-    MessageSourceHost, MessageView, OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost,
-    SplitAxis, SplitHandle, ToastHost,
+    MessageSourceHost, MessageView, OauthCallbackPage, OnboardingForm, OutboxPanel, SettingsPage,
+    ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{CoreEvent, InitialBootstrap, core_loop};
@@ -52,6 +52,7 @@ mod message;
 mod message_list_filter;
 mod message_loader;
 mod notifications;
+mod oauth;
 mod object_cache;
 mod offline_cache;
 mod outbox_store;
@@ -109,6 +110,8 @@ pub(crate) enum Route {
     AccountNewView {},
     #[route("/settings/accounts/:id")]
     AccountEditView { id: String },
+    #[route("/oauth/callback")]
+    OauthCallbackView {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -558,6 +561,11 @@ fn TabTitle() -> Element {
 /// Root layout: no mail chrome on loading / store error / onboarding; outlet otherwise.
 #[component]
 fn AppShell() -> Element {
+    let route = router().current::<Route>();
+    if matches!(route, Route::OauthCallbackView {}) {
+        return rsx! { Outlet::<Route> {} };
+    }
+
     let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
     let nav = use_navigator();
     let ctx = use_context::<AppContext>();
@@ -590,7 +598,10 @@ fn AppShell() -> Element {
         match state {
             AppBootstrapState::NeedsOnboarding => {
                 // Zero accounts + any non-onboarding route (incl. /settings/*) → /onboarding
-                if !matches!(route, Route::OnboardingView {}) {
+                if !matches!(
+                    route,
+                    Route::OnboardingView {} | Route::OauthCallbackView {}
+                ) {
                     nav.replace(Route::OnboardingView {});
                 }
             }
@@ -712,6 +723,12 @@ fn OnboardingView() -> Element {
     rsx! {
         OnboardingForm {}
     }
+}
+
+/// OAuth popup / same-tab redirect target. No account store required.
+#[component]
+fn OauthCallbackView() -> Element {
+    rsx! { OauthCallbackPage {} }
 }
 
 /// Minimal shell while deep-link guards redirect away from settings/main.

@@ -11,6 +11,7 @@ mod sync;
 mod tls;
 mod watch;
 
+pub use auth::{xoauth2_sasl_payload, ImapAuthKind};
 pub use sent::{
     apply_subscriptions, find_drafts_mailbox, find_sent_mailbox, folders_from_listed,
     role_from_name, special_use_from_attrs, ListedMailbox,
@@ -269,6 +270,7 @@ where
     host: String,
     port: u16,
     username: String,
+    auth_kind: ImapAuthKind,
     tls_mode: ImapTlsMode,
     /// Extra CA PEMs trusted in addition to webpki roots.
     extra_ca_pems: Vec<String>,
@@ -347,6 +349,7 @@ where
             host,
             port,
             username,
+            auth_kind: ImapAuthKind::Password,
             tls_mode: ImapTlsMode::Implicit,
             extra_ca_pems: Vec::new(),
             imap: Arc::new(Mutex::new(ImapSession::Disconnected)),
@@ -428,6 +431,12 @@ where
     /// Override the default implicit-TLS connect path.
     pub fn with_tls_mode(mut self, tls_mode: ImapTlsMode) -> Self {
         self.tls_mode = tls_mode;
+        self
+    }
+
+    /// Password (PLAIN/LOGIN) or SASL XOAUTH2. Default is password.
+    pub fn with_auth_kind(mut self, auth_kind: ImapAuthKind) -> Self {
+        self.auth_kind = auth_kind;
         self
     }
 
@@ -2077,10 +2086,16 @@ where
             let unauth_imap = std::mem::replace(&mut *imap, ImapSession::Authenticating);
             if let ImapSession::Unauthenticated(mut client) = unauth_imap {
                 let choice = match auth::query_preauth_caps(&mut client).await {
-                    Ok(caps) => caps.choice(),
+                    Ok(caps) => match self.auth_kind {
+                        ImapAuthKind::Xoauth2 => caps.choice_oauth(),
+                        ImapAuthKind::Password => caps.choice(),
+                    },
                     Err(e) => {
-                        tracing::warn!("pre-auth CAPABILITY failed ({e}); falling back to LOGIN");
-                        auth::AuthChoice::Login
+                        tracing::warn!("pre-auth CAPABILITY failed ({e}); falling back");
+                        match self.auth_kind {
+                            ImapAuthKind::Xoauth2 => auth::AuthChoice::Xoauth2,
+                            ImapAuthKind::Password => auth::AuthChoice::Login,
+                        }
                     }
                 };
                 let authenticated = match choice {
@@ -2092,17 +2107,27 @@ where
                         };
                         client.authenticate("PLAIN", sasl).await
                     }
+                    auth::AuthChoice::Xoauth2 => {
+                        info!("IMAP AUTHENTICATE XOAUTH2");
+                        let sasl = auth::SaslXoauth2 {
+                            username: &self.username,
+                            access_token: credentials,
+                        };
+                        client.authenticate("XOAUTH2", sasl).await
+                    }
                     auth::AuthChoice::Login => {
                         info!("IMAP LOGIN");
                         client.login(&self.username, credentials).await
                     }
                     auth::AuthChoice::None => {
                         *imap = ImapSession::Unauthenticated(client);
-                        return Err(ImapError::Authentication(
-                            "Server advertised no supported IMAP auth mechanism (PLAIN/LOGIN)."
-                                .into(),
-                        )
-                        .into());
+                        let msg = match self.auth_kind {
+                            ImapAuthKind::Xoauth2 => "Server advertised no AUTH=XOAUTH2.",
+                            ImapAuthKind::Password => {
+                                "Server advertised no supported IMAP auth mechanism (PLAIN/LOGIN)."
+                            }
+                        };
+                        return Err(ImapError::Authentication(msg.into()).into());
                     }
                 };
                 // Transition from the temporary Authenticating state to the Authenticated state.
@@ -3792,6 +3817,78 @@ Received-SPF: pass\r\n\
                     !msg.contains("PLAIN/LOGIN"),
                     "failed PLAIN must not look like missing mechanism: {msg}"
                 );
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn authenticate_uses_xoauth2_when_requested() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector()
+            .with_tls_mode(ImapTlsMode::None)
+            .with_auth_kind(ImapAuthKind::Xoauth2);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cap = read_cmd(&mut server, &mut buf).await;
+            assert!(cap.to_ascii_uppercase().contains("CAPABILITY"), "{cap}");
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(
+                &mut server,
+                &reply_capability(tag, " AUTH=PLAIN AUTH=XOAUTH2"),
+            )
+            .await;
+
+            let auth = read_cmd(&mut server, &mut buf).await;
+            let upper = auth.to_ascii_uppercase();
+            assert!(upper.contains("AUTHENTICATE XOAUTH2"), "{auth}");
+            assert!(!upper.contains("PLAIN"), "{auth}");
+            assert!(!upper.contains("LOGIN"), "{auth}");
+            write_all(&mut server, "+\r\n").await;
+
+            let payload = read_cmd(&mut server, &mut buf).await;
+            let decoded = mailiner_mime::base64_decode(payload.trim().as_bytes()).unwrap();
+            assert_eq!(
+                decoded,
+                xoauth2_sasl_payload("user@example.com", "ya29.access")
+            );
+            let tag = auth.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let post = read_cmd(&mut server, &mut buf).await;
+            assert!(post.to_ascii_uppercase().contains("CAPABILITY"), "{post}");
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+        });
+
+        conn.connect(client).await.unwrap();
+        conn.authenticate("ya29.access").await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn authenticate_xoauth2_errors_when_not_advertised() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector()
+            .with_tls_mode(ImapTlsMode::None)
+            .with_auth_kind(ImapAuthKind::Xoauth2);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " AUTH=PLAIN")).await;
+        });
+
+        conn.connect(client).await.unwrap();
+        let err = conn.authenticate("ya29.access").await.unwrap_err();
+        match err {
+            MailinerError::Auth(msg) => {
+                assert!(msg.contains("XOAUTH2"), "expected XOAUTH2 Auth, got {msg}");
             }
             other => panic!("expected Auth, got {other:?}"),
         }

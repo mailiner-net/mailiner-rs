@@ -9,13 +9,16 @@ use crate::AccountStoreContext;
 use crate::AppBootstrapState;
 use crate::account::AccountId;
 use crate::account_config::DEFAULT_SMTP_PORT;
-use crate::account_config::{SmtpTlsMode, dev_form_prefill, imap_tls_mode_from_legacy};
+use crate::account_config::{
+    AuthKind, Oauth2Provider, Oauth2Tokens, SmtpTlsMode, dev_form_prefill,
+    imap_tls_mode_from_legacy,
+};
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, AccountTlsFields,
-    FormField, FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome,
-    build_config_from_form, kind_label, provide_lookup_edit_guard, start_smtp_test,
-    use_form_test_status_cleanup,
+    AccountConnectionFields, AccountOauthFields, AccountSignatureFields, AccountSmtpFields,
+    AccountTlsFields, FormAuth, FormField, FormPhase, FormStatusBanner, StatusMessage,
+    apply_form_auth, apply_smtp_test_outcome, build_config_from_form, kind_label,
+    provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::connection::ConnectionState;
 use crate::context::AppContext;
@@ -60,6 +63,11 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_open = use_signal(|| false);
     let mut extra_ca_pems = use_signal(String::new);
     let mut signature = use_signal(String::new);
+    let mut auth_kind = use_signal(|| AuthKind::Password);
+    let mut oauth_provider = use_signal(|| Oauth2Provider::Google);
+    let mut oauth_client_id = use_signal(String::new);
+    let mut oauth_tenant = use_signal(String::new);
+    let mut oauth_tokens = use_signal(|| None::<Oauth2Tokens>);
     let mut unlock_passphrase = use_signal(String::new);
     let mut unlock_passphrase_confirm = use_signal(String::new);
 
@@ -177,6 +185,13 @@ pub fn OnboardingForm() -> Element {
     });
 
     let busy = !matches!(phase(), FormPhase::Idle);
+    let current_auth = move || FormAuth {
+        kind: auth_kind(),
+        provider: oauth_provider(),
+        client_id: oauth_client_id(),
+        tenant: oauth_tenant(),
+        tokens: oauth_tokens(),
+    };
 
     let on_test = move |_| {
         if !matches!(phase(), FormPhase::Idle) {
@@ -206,7 +221,9 @@ pub fn OnboardingForm() -> Element {
             &signature(),
             &extra_ca_pems(),
             Utc::now(),
-        ) {
+        )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
+        {
             Ok(config) => {
                 // Clear previous ephemeral test state if any.
                 if let Some(prev) = test_request_id() {
@@ -255,7 +272,8 @@ pub fn OnboardingForm() -> Element {
                 &signature(),
                 &extra_ca_pems(),
                 Utc::now(),
-            ),
+            )
+            .and_then(|c| apply_form_auth(c, &current_auth())),
             phase,
             test_request_id,
             status_message,
@@ -291,7 +309,9 @@ pub fn OnboardingForm() -> Element {
             &signature(),
             &extra_ca_pems(),
             Utc::now(),
-        ) {
+        )
+        .and_then(|c| apply_form_auth(c, &current_auth()))
+        {
             Ok(config) => {
                 let passphrase = unlock_passphrase();
                 let confirm = unlock_passphrase_confirm();
@@ -337,8 +357,8 @@ pub fn OnboardingForm() -> Element {
                 h1 { class: "bootstrap-title", "Welcome to Mailiner" }
                 p {
                     class: "bootstrap-muted",
-                    "Add your first email account. Use your IMAP username and password \
-                     (or provider app password). OAuth sign-in is not supported yet."
+                    "Add your first email account. Use an IMAP password (or provider \
+                     app password), or sign in with OAuth 2.0 for Gmail and Outlook."
                 }
 
                 form {
@@ -389,6 +409,23 @@ pub fn OnboardingForm() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                        hide_imap_password: auth_kind() == AuthKind::Oauth2,
+                    }
+
+                    AccountOauthFields {
+                        id_prefix: "onboarding",
+                        auth_kind: auth_kind(),
+                        set_auth_kind: move |v| auth_kind.set(v),
+                        provider: oauth_provider(),
+                        set_provider: move |v| oauth_provider.set(v),
+                        client_id: oauth_client_id(),
+                        set_client_id: move |v| oauth_client_id.set(v),
+                        tenant: oauth_tenant(),
+                        set_tenant: move |v| oauth_tenant.set(v),
+                        tokens: oauth_tokens(),
+                        set_tokens: move |v| oauth_tokens.set(v),
+                        imap_host: imap_host(),
+                        busy: busy,
                     }
 
                     AccountTlsFields {

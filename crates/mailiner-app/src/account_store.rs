@@ -606,6 +606,8 @@ mod tests {
             email: format!("{name}@example.com"),
             identities: Vec::new(),
             signature: None,
+            auth_kind: crate::account_config::AuthKind::Password,
+            oauth2: None,
             imap: ImapSettings::new(
                 "imap.example.com".into(),
                 993,

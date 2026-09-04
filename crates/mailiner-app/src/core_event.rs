@@ -6463,6 +6463,21 @@ async fn handle_send_message(
         );
         return;
     };
+    let config = match manager.ensure_oauth_fresh(config).await {
+        Ok(c) => c,
+        Err(e) => {
+            ctx.set_send_status(
+                account_id.clone(),
+                SendState::Failed {
+                    account_id,
+                    kind: SendErrorKind::Auth,
+                    message: e.message,
+                    retryable: true,
+                },
+            );
+            return;
+        }
+    };
     if let Err(err) = preflight(&config) {
         ctx.set_send_status(
             account_id.clone(),
@@ -6608,6 +6623,17 @@ async fn drain_outbox(
             let _ = outbox.upsert(&item).await;
             refresh_outbox_signal(outbox, ctx).await;
             continue;
+        };
+        let config = match manager.ensure_oauth_fresh(config).await {
+            Ok(c) => c,
+            Err(e) => {
+                item.state = OutboxItemState::Failed;
+                item.last_error_kind = Some(SendErrorKind::Auth);
+                item.last_error = Some(e.message);
+                let _ = outbox.upsert(&item).await;
+                refresh_outbox_signal(outbox, ctx).await;
+                continue;
+            }
         };
         if let Err(err) = preflight(&config) {
             item.state = OutboxItemState::Failed;

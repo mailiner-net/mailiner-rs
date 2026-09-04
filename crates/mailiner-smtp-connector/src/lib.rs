@@ -53,7 +53,15 @@ impl SmtpError {
     }
 }
 
-/// One-shot SMTP client. Password is never stored.
+/// How SMTP AUTH is performed. Password (PLAIN/LOGIN) is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SmtpAuthKind {
+    #[default]
+    Password,
+    Xoauth2,
+}
+
+/// One-shot SMTP client. Password / access token is never stored.
 pub struct SmtpConnector {
     account_id: AccountId,
     host: String,
@@ -61,6 +69,7 @@ pub struct SmtpConnector {
     port: u16,
     username: String,
     hello_name: String,
+    auth_kind: SmtpAuthKind,
     /// Extra CA PEMs trusted in addition to webpki roots.
     extra_ca_pems: Vec<String>,
 }
@@ -79,8 +88,15 @@ impl SmtpConnector {
             port,
             username,
             hello_name,
+            auth_kind: SmtpAuthKind::Password,
             extra_ca_pems: Vec::new(),
         }
+    }
+
+    /// Password (PLAIN/LOGIN) or SASL XOAUTH2. Default is password.
+    pub fn with_auth_kind(mut self, auth_kind: SmtpAuthKind) -> Self {
+        self.auth_kind = auth_kind;
+        self
     }
 
     /// Extra CA PEMs trusted in addition to the webpki root store.
@@ -268,15 +284,29 @@ impl SmtpConnector {
             SmtpError::classified(SendErrorKind::Internal, format!("EHLO parse failed: {e}"))
         })?;
 
-        let mechanism = if info.supports_auth_mechanism(Mechanism::Plain) {
-            Mechanism::Plain
-        } else if info.supports_auth_mechanism(Mechanism::Login) {
-            Mechanism::Login
-        } else {
-            return Err(SmtpError::classified(
-                SendErrorKind::Auth,
-                "Server advertised no supported AUTH mechanism (PLAIN/LOGIN).",
-            ));
+        let mechanism = match self.auth_kind {
+            SmtpAuthKind::Xoauth2 => {
+                if info.supports_auth_mechanism(Mechanism::Xoauth2) {
+                    Mechanism::Xoauth2
+                } else {
+                    return Err(SmtpError::classified(
+                        SendErrorKind::Auth,
+                        "Server advertised no AUTH=XOAUTH2.",
+                    ));
+                }
+            }
+            SmtpAuthKind::Password => {
+                if info.supports_auth_mechanism(Mechanism::Plain) {
+                    Mechanism::Plain
+                } else if info.supports_auth_mechanism(Mechanism::Login) {
+                    Mechanism::Login
+                } else {
+                    return Err(SmtpError::classified(
+                        SendErrorKind::Auth,
+                        "Server advertised no supported AUTH mechanism (PLAIN/LOGIN).",
+                    ));
+                }
+            }
         };
 
         let creds = Credentials::new(self.username.clone(), password.to_string());
@@ -971,5 +1001,67 @@ mod tests {
     fn dot_stuff_terminator_and_leading_dot_after_crlf() {
         let stuffed = dot_stuff_message(b"line1\r\n.hidden\r\nend");
         assert_eq!(stuffed, b"line1\r\n..hidden\r\nend\r\n.\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_uses_xoauth2_when_requested() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector().with_auth_kind(SmtpAuthKind::Xoauth2);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN XOAUTH2\r\n",
+            )
+            .await;
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN XOAUTH2\r\n",
+            )
+            .await;
+            let auth = read_cmd(&mut server, &mut buf).await;
+            let upper = auth.to_ascii_uppercase();
+            assert!(upper.contains("AUTH XOAUTH2"), "{auth}");
+            assert!(!upper.contains("PLAIN"), "{auth}");
+            write_all(&mut server, "235 2.7.0 Authentication successful\r\n").await;
+            let quit = read_cmd(&mut server, &mut buf).await;
+            assert!(quit.to_ascii_uppercase().contains("QUIT"), "{quit}");
+            write_all(&mut server, "221 2.0.0 Bye\r\n").await;
+        });
+
+        conn.test(client, "ya29.access").await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn xoauth2_not_advertised_is_auth_error() {
+        let (client, mut server) = duplex(16 * 1024);
+        let conn = connector().with_auth_kind(SmtpAuthKind::Xoauth2);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "220 smtp.example.com ESMTP\r\n").await;
+            let mut buf = Vec::new();
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+            let _ = read_cmd(&mut server, &mut buf).await;
+            write_all(
+                &mut server,
+                "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n",
+            )
+            .await;
+        });
+
+        let err = conn.test(client, "ya29.access").await.unwrap_err();
+        assert_eq!(err.kind(), SendErrorKind::Auth);
+        assert!(err.message().contains("XOAUTH2"), "{}", err.message());
+        let _ = server_task.await;
     }
 }

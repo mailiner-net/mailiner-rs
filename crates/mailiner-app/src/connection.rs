@@ -25,13 +25,14 @@ use gloo_timers::future::TimeoutFuture;
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::error::MailinerError;
 use mailiner_core::ids::AccountId;
-use mailiner_imap_connector::ImapConnector;
+use mailiner_imap_connector::{ImapAuthKind, ImapConnector};
 
-use crate::account_config::AccountConfig;
+use crate::account_config::{AccountConfig, AuthKind, imap_auth_secret};
 use crate::account_store::AccountStore;
 use crate::background_sync::{MAX_CONNECTED_ACCOUNTS, accounts_to_evict};
 use crate::context::AppContext;
 use crate::mail_cache::MailCache;
+use crate::oauth;
 use crate::reconnect::{is_session_death, is_session_death_message};
 use crate::websocket_stream::{WebSocketStream, WsDeathWatch};
 
@@ -269,6 +270,35 @@ impl AccountConnectionManager {
 
     pub fn config(&self, account_id: &AccountId) -> Option<&AccountConfig> {
         self.configs.get(account_id)
+    }
+
+    /// Refresh OAuth tokens when expired and persist the update.
+    ///
+    /// Returns the (possibly updated) config. Password accounts are unchanged.
+    pub async fn ensure_oauth_fresh(
+        &mut self,
+        mut config: AccountConfig,
+    ) -> Result<AccountConfig, ConnectError> {
+        if !config.uses_oauth2() {
+            return Ok(config);
+        }
+        match oauth::ensure_fresh_oauth(&mut config).await {
+            Ok(true) => {
+                self.configs.insert(config.id.clone(), config.clone());
+                if !self.memory_only.contains(&config.id)
+                    && let Err(e) = self.store.upsert(&config).await
+                {
+                    warn!("failed to persist refreshed OAuth tokens: {e}");
+                }
+                Ok(config)
+            }
+            Ok(false) => Ok(config),
+            Err(e) => Err(ConnectError {
+                kind: ConnectErrorKind::Auth,
+                message: e.user_message().to_string(),
+                retryable: true,
+            }),
+        }
     }
 
     /// Ids that are allowed in the UI without being in the store.
@@ -569,7 +599,16 @@ impl AccountConnectionManager {
         self.configs.insert(account_id.clone(), config.clone());
         set_connection_state(ctx, account_id, ConnectionState::Connecting);
 
-        let connect_result = connect_account(config, ctx).await;
+        let config = match self.ensure_oauth_fresh(config.clone()).await {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                set_connection_state(ctx, account_id, err.to_state());
+                return Err(err);
+            }
+        };
+        self.configs.insert(account_id.clone(), config.clone());
+
+        let connect_result = connect_account(&config, ctx).await;
 
         if !self.generation_matches(account_id, my_gen) {
             if let Ok((connector, _)) = connect_result {
@@ -695,7 +734,12 @@ async fn connect_account(
             .await
             .map_err(|e| classify_io_error(&e))?;
 
-        // Password is not stored on the connector — only passed to authenticate.
+        // Password / access token is not stored on the connector — only passed to authenticate.
+        let auth_kind = if config.auth_kind == AuthKind::Oauth2 {
+            ImapAuthKind::Xoauth2
+        } else {
+            ImapAuthKind::Password
+        };
         let connector = ImapConnector::new(
             account_id.clone(),
             config.imap.host.clone(),
@@ -703,6 +747,7 @@ async fn connect_account(
             config.imap.username.clone(),
         )
         .with_tls_mode(config.imap.tls_mode.to_connector())
+        .with_auth_kind(auth_kind)
         .with_extra_ca_pems(config.extra_ca_pems.clone());
 
         info!("TLS + IMAP greeting for account {}…", account_id);
@@ -713,8 +758,9 @@ async fn connect_account(
 
         set_connection_state(ctx, &account_id, ConnectionState::Authenticating);
         info!("Authenticating account {}…", account_id);
+        let secret = imap_auth_secret(config);
         connector
-            .authenticate(config.imap.password.as_str())
+            .authenticate(&secret)
             .await
             .map_err(|e| classify_mailiner_error(&e))?;
 

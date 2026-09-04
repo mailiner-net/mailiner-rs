@@ -18,8 +18,8 @@ use mailiner_composer::shell::attachment_list::{
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     AttachmentData, ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError,
-    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, flatten_addresses,
-    is_safe_image_content_type, is_valid_email_v1, plain_to_html, prepare_submit,
+    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, is_safe_image_content_type,
+    is_valid_email_v1, plain_to_html, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -29,7 +29,7 @@ use crate::draft_store::{self, session_has_content};
 use crate::recipient_suggest;
 use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
-    identity_from_stored, identity_matching_emails, list_from_choices, parse_from_choice_key,
+    identity_for_reply, identity_from_stored, list_from_choices, parse_from_choice_key,
     resolve_account_identity, resolve_compose_account_id, selected_from_choice,
     set_session_from_identity, strip_account_identities,
 };
@@ -391,16 +391,10 @@ pub fn open_reply_or_forward(
         ctx.show_toast(crate::toast::ToastAction::error("Select an account first."));
         return;
     };
-    let recipient_emails: Vec<String> = envelope
-        .to
-        .iter()
-        .chain(envelope.cc.iter())
-        .flat_map(flatten_addresses)
-        .map(|a| a.email)
-        .collect();
-    let identity = identity_from_stored(&identity_matching_emails(
+    let identity = identity_from_stored(&identity_for_reply(
         &account,
-        recipient_emails.iter().map(String::as_str),
+        envelope.to.as_ref(),
+        envelope.cc.as_ref(),
     ));
     match build_draft(
         intent,

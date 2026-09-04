@@ -1,8 +1,10 @@
 //! Composer send / Test SMTP UI state (no secrets).
 
 use mailiner_composer::FileAttachment;
+use mailiner_composer::flatten_addresses;
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument};
+use mailiner_core::EmailAddress;
 use mailiner_core::MessageId;
 use mailiner_core::submit::SendErrorKind;
 
@@ -160,6 +162,25 @@ pub fn identity_matching_emails<'a>(
         return account.primary_identity();
     }
     account.primary_identity()
+}
+
+/// From identity for Reply/Forward from the original To/Cc.
+///
+/// Aliases win over the primary even when the primary is listed first (To)
+/// and the alias is only on Cc — walking recipients in header order would
+/// otherwise lock onto the primary and ignore the alias.
+pub fn identity_for_reply(
+    account: &Account,
+    to: Option<&EmailAddress>,
+    cc: Option<&EmailAddress>,
+) -> AccountIdentity {
+    let recipient_emails: Vec<String> = to
+        .into_iter()
+        .chain(cc)
+        .flat_map(flatten_addresses)
+        .map(|a| a.email)
+        .collect();
+    identity_matching_emails(account, recipient_emails.iter().map(String::as_str))
 }
 
 /// Whether `email` is this account's primary mailbox or an extra identity.
@@ -529,6 +550,28 @@ mod tests {
             vec![AccountIdentity::new("Support", "support@example.com")],
         );
         let id = identity_matching_emails(&acc, ["work@example.com", "support@example.com"]);
+        assert_eq!(id.email, "support@example.com");
+        assert_eq!(id.display_name, "Support");
+    }
+
+    fn addr(email: &str) -> mailiner_core::EmailAddress {
+        mailiner_core::EmailAddress::List(vec![mailiner_core::EmailAddr {
+            name: None,
+            email: Some(email.into()),
+        }])
+    }
+
+    #[test]
+    fn identity_for_reply_prefers_alias_in_cc_over_primary_in_to() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let to = addr("work@example.com");
+        let cc = addr("support@example.com");
+        let id = identity_for_reply(&acc, Some(&to), Some(&cc));
         assert_eq!(id.email, "support@example.com");
         assert_eq!(id.display_name, "Support");
     }

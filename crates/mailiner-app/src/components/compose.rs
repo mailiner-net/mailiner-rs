@@ -631,7 +631,7 @@ fn toggle_original_attachments(
         if session.stashed_originals.is_empty() {
             return;
         }
-        let mut used = live_payload_bytes(&session.draft, body().len());
+        let mut used = live_payload_bytes(&session.draft, &body());
         let mut kept = Vec::new();
         let mut skipped = 0usize;
         for att in session.stashed_originals.drain(..) {

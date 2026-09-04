@@ -978,7 +978,9 @@ mod tests {
             "{}",
             d.plain_body
         );
+    }
 
+    #[test]
     fn skips_hidden_cid_inline_images() {
         let loaded = loaded_parts(vec![
             Tp::body(
@@ -1022,9 +1024,11 @@ mod tests {
                 .bytes(b"%PDF".to_vec())
                 .finish(),
         ]);
-        let reply = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
+        let reply =
+            build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(reply.attachments.is_empty());
-        let fwd = build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
+        let fwd =
+            build_draft(ComposeIntent::Forward, &id, Some(&env), Some(&loaded), None).unwrap();
         assert_eq!(fwd.attachments.len(), 1);
         assert_eq!(fwd.attachments[0].filename, "report.pdf");
     }

@@ -1,8 +1,8 @@
 //! Composer send / Test SMTP UI state (no secrets).
 
+use mailiner_composer::FileAttachment;
 use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{ComposerAddress, DraftDocument};
-use mailiner_composer::FileAttachment;
 use mailiner_core::MessageId;
 use mailiner_core::submit::SendErrorKind;
 

@@ -5,6 +5,7 @@ use super::{leaf_part, ParseContext, PartParser};
 
 pub struct TextPlainParser;
 pub struct TextHtmlParser;
+pub struct TextCalendarParser;
 
 impl PartParser for TextPlainParser {
     fn mime_types(&self) -> &[&str] {
@@ -48,6 +49,30 @@ impl PartParser for TextHtmlParser {
             &format!("{part_id}.html"),
             path,
             PartKind::TextHtml,
+            None,
+            None,
+        )]
+    }
+}
+
+impl PartParser for TextCalendarParser {
+    fn mime_types(&self) -> &[&str] {
+        &["text/calendar", "application/ics", "application/x-ics"]
+    }
+
+    fn parse(
+        &self,
+        ctx: &ParseContext<'_>,
+        part: &BodyPart,
+        part_id: &str,
+        path: &[String],
+    ) -> Vec<MessagePart> {
+        vec![leaf_part(
+            ctx.envelope_id,
+            part,
+            &format!("{part_id}.calendar"),
+            path,
+            PartKind::Calendar,
             None,
             None,
         )]

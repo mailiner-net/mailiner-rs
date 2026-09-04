@@ -42,6 +42,7 @@ impl MessageParser {
         };
         p.add(Box::new(text::TextPlainParser));
         p.add(Box::new(text::TextHtmlParser));
+        p.add(Box::new(text::TextCalendarParser));
         p.add(Box::new(multipart::MultipartAlternativeParser));
         p.add(Box::new(multipart::MultipartRelatedParser));
         p.add(Box::new(multipart::MultipartMixedParser));
@@ -107,8 +108,11 @@ impl MessageParser {
                 return result;
             }
         }
-        // Unknown leaf → attachment fallback
+        // Unknown leaf → calendar if it looks like an invite, else attachment.
         if part.type_ != "multipart" {
+            if part.is_calendar() {
+                return text::TextCalendarParser.parse(&ctx, part, part_id, path);
+            }
             return attachment::AttachmentParser.parse(&ctx, part, part_id, path);
         }
         Vec::new()
@@ -567,5 +571,116 @@ mod tests {
             .expect("deepest body");
         assert_eq!(deepest.section(), "1.1.1");
         assert_eq!(deepest.nested_in.as_deref(), Some("1.1"));
+    }
+
+    fn calendar_part(disposition_filename: Option<&str>) -> BodyPart {
+        BodyPart {
+            type_: "text".into(),
+            subtype: "calendar".into(),
+            encoding: Some("7BIT".into()),
+            parameters: [("METHOD".into(), "REQUEST".into())].into(),
+            disposition: disposition_filename.map(|name| ContentDisposition {
+                type_: "attachment".into(),
+                attributes: [("FILENAME".into(), name.into())].into(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn text_calendar_is_calendar_kind() {
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(
+            &MessageId::new(FolderId::new("INBOX"), "1"),
+            &calendar_part(None),
+        );
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].kind, PartKind::Calendar);
+        assert_eq!(parts[0].section(), "TEXT");
+        assert!(!parts[0].is_attachment);
+        assert!(parts[0].should_prefetch());
+    }
+
+    #[test]
+    fn calendar_attachment_stays_downloadable_and_prefetched() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                calendar_part(Some("invite.ics")),
+            ],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        let cal = parts
+            .iter()
+            .find(|p| p.kind == PartKind::Calendar)
+            .expect("calendar part");
+        assert_eq!(cal.section(), "2");
+        assert!(cal.is_attachment);
+        assert!(cal.should_prefetch());
+        assert_eq!(cal.filename.as_deref(), Some("invite.ics"));
+        assert_eq!(cal.content_type, "text/calendar");
+    }
+
+    #[test]
+    fn alternative_keeps_calendar_with_html() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "alternative".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "html".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                calendar_part(None),
+            ],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        assert!(parts.iter().any(|p| p.kind == PartKind::TextHtml));
+        let cal = parts
+            .iter()
+            .find(|p| p.kind == PartKind::Calendar)
+            .expect("calendar alternative");
+        assert_eq!(cal.section(), "3");
+        assert!(!cal.is_attachment);
+        assert!(cal.should_prefetch());
+    }
+
+    #[test]
+    fn ics_filename_octet_stream_is_calendar() {
+        let root = BodyPart {
+            type_: "application".into(),
+            subtype: "octet-stream".into(),
+            encoding: Some("BASE64".into()),
+            disposition: Some(ContentDisposition {
+                type_: "attachment".into(),
+                attributes: [("FILENAME".into(), "invite.ics".into())].into(),
+            }),
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].kind, PartKind::Calendar);
+        assert!(parts[0].is_attachment);
+        assert!(parts[0].should_prefetch());
     }
 }

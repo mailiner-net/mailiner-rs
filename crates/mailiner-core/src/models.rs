@@ -497,6 +497,8 @@ pub enum PartKind {
     TextPlain,
     TextHtml,
     Image,
+    /// `text/calendar` / `application/ics` invite (card in the viewer).
+    Calendar,
     #[default]
     Attachment,
 }
@@ -565,6 +567,14 @@ pub fn is_rfc822_mime(content_type: &str) -> bool {
     primary_mime(content_type).eq_ignore_ascii_case("message/rfc822")
 }
 
+/// `text/calendar` and the common `.ics` application types.
+pub fn is_calendar_mime(content_type: &str) -> bool {
+    let mime = primary_mime(content_type);
+    mime.eq_ignore_ascii_case("text/calendar")
+        || mime.eq_ignore_ascii_case("application/ics")
+        || mime.eq_ignore_ascii_case("application/x-ics")
+}
+
 impl MessagePart {
     pub fn section(&self) -> String {
         if self.path.is_empty() {
@@ -575,8 +585,18 @@ impl MessagePart {
     }
 
     /// Content parts that should be prefetched for display.
+    ///
+    /// Calendar invites are fetched even when listed as attachments so the
+    /// viewer can render a title / time / organizer card.
     pub fn should_prefetch(&self) -> bool {
-        self.is_hidden || !self.is_attachment
+        self.is_hidden
+            || !self.is_attachment
+            || self.kind == PartKind::Calendar
+            || is_calendar_mime(&self.content_type)
+    }
+
+    pub fn is_calendar(&self) -> bool {
+        self.kind == PartKind::Calendar || is_calendar_mime(&self.content_type)
     }
 
     /// Visible body (not an attachment and not a cid-only inline).
@@ -706,6 +726,18 @@ mod tests {
             super::primary_mime("message/rfc822; name=x"),
             "message/rfc822"
         );
+    }
+
+    #[test]
+    fn calendar_mime_detects_common_types() {
+        assert!(super::is_calendar_mime("text/calendar"));
+        assert!(super::is_calendar_mime("TEXT/CALENDAR; method=REQUEST"));
+        assert!(super::is_calendar_mime("application/ics"));
+        assert!(super::is_calendar_mime(
+            "application/x-ics; name=invite.ics"
+        ));
+        assert!(!super::is_calendar_mime("text/plain"));
+        assert!(!super::is_calendar_mime("application/pdf"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod account_form;
 mod accounts;
 mod attachments;
+mod calendar;
 mod compose;
 mod connection_status;
 mod emailnavigation;

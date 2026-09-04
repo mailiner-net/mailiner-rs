@@ -70,4 +70,12 @@ impl BodyPart {
     pub fn is_rfc822(&self) -> bool {
         self.type_ == "message" && self.subtype == "rfc822"
     }
+
+    /// `text/calendar` / `application/ics`, or a `*.ics` filename.
+    pub fn is_calendar(&self) -> bool {
+        crate::models::is_calendar_mime(&self.content_type())
+            || self
+                .filename()
+                .is_some_and(|n| n.to_ascii_lowercase().ends_with(".ics"))
+    }
 }

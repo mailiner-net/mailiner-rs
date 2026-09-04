@@ -425,6 +425,7 @@ mod tests {
             has_attachments: false,
             snippet: None,
             size: None,
+            auth_results: Default::default(),
         }
     }
 

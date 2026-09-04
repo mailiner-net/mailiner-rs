@@ -1835,6 +1835,25 @@ textarea.ui-input {
     border-radius: 2px;
 }
 
+.message-sender-cue {
+    margin-top: var(--space-2);
+    padding: 0.4rem 0.65rem;
+    background: var(--warning-bg);
+    border: 1px solid var(--warning-border);
+    border-radius: 4px;
+    color: var(--warning-fg);
+    font-size: var(--text-sm);
+    line-height: 1.35;
+}
+
+.message-sender-cue-line {
+    margin: 0;
+}
+
+.message-sender-cue-line + .message-sender-cue-line {
+    margin-top: 0.25rem;
+}
+
 .message-view-actions {
     display: flex;
     flex-shrink: 0;

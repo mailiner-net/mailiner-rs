@@ -44,7 +44,7 @@ Do not re-open these.
 ### 2. List index and Date/sequence paging after a remote EXPUNGE
 
 - [x] Done. Date pages by `UID SEARCH ALL` (newest UID first). Each range `SELECT`s and rebuilds the index when `EXISTS` ≠ cached total. Sequence fetch remains only if SEARCH ALL fails.
-- Still open (not required to close this item): IDLE / periodic NOOP so the UI notices EXPUNGE without a later range fetch.
+- [x] Done. Selected mailbox is kept current with IMAP IDLE (or periodic NOOP when the server does not advertise IDLE). EXISTS / EXPUNGE / FETCH refresh the open list and unread badges.
 
 ### 3. Envelope has no RFC 5322 identity / threading headers
 

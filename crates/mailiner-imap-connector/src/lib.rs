@@ -3,11 +3,13 @@ mod quota;
 mod section_path;
 mod sent;
 mod sort;
+mod watch;
 
 pub use sent::{
     apply_subscriptions, find_sent_mailbox, folders_from_listed, role_from_name,
     special_use_from_attrs, ListedMailbox,
 };
+pub use watch::{MailboxChange, MailboxWatchOutcome};
 
 use std::fmt::Debug;
 use std::io;
@@ -155,6 +157,8 @@ where
     Unauthenticated(Client<ImapIo<S>>),
     Authenticating,
     Authenticated(Session<ImapIo<S>>),
+    /// Session is owned by [`ImapConnector::watch_mailbox`].
+    Watching,
 }
 
 pub struct ImapConnector<S>
@@ -175,6 +179,8 @@ where
     has_sort: AtomicBool,
     /// RFC 2087 QUOTA advertised after LOGIN.
     has_quota: AtomicBool,
+    /// RFC 2177 IDLE advertised after LOGIN.
+    has_idle: AtomicBool,
     /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
 }
@@ -212,7 +218,53 @@ where
             structure_cache: Mutex::new(HashMap::new()),
             has_sort: AtomicBool::new(false),
             has_quota: AtomicBool::new(false),
+            has_idle: AtomicBool::new(false),
             list_index: Mutex::new(None),
+        }
+    }
+
+    /// True when the server advertised `IDLE` after LOGIN.
+    pub fn supports_idle(&self) -> bool {
+        self.has_idle.load(Ordering::Relaxed)
+    }
+
+    /// Watch `folder_id` until it changes, `cancel` resolves, or `timeout` resolves.
+    ///
+    /// Uses IMAP IDLE when advertised; otherwise waits for `timeout` then NOOPs.
+    /// The session is restored (IDLE `DONE`) before this future completes so the
+    /// caller can run other commands. `timeout` must come from the app (gloo on WASM).
+    pub async fn watch_mailbox<C, T>(
+        &self,
+        folder_id: &FolderId,
+        cancel: C,
+        timeout: T,
+    ) -> MailinerResult<MailboxWatchOutcome>
+    where
+        C: std::future::Future<Output = ()>,
+        T: std::future::Future<Output = ()>,
+    {
+        let mut imap = self.imap.lock().await;
+        let session = match std::mem::replace(&mut *imap, ImapSession::Watching) {
+            ImapSession::Authenticated(session) => session,
+            other => {
+                *imap = other;
+                return Err(ImapError::NotAuthenticated.into());
+            }
+        };
+        drop(imap);
+
+        let use_idle = self.has_idle.load(Ordering::Relaxed);
+        let finish = watch::run_watch(session, folder_id.as_str(), use_idle, cancel, timeout).await;
+
+        match finish {
+            watch::WatchFinish::Ready { session, outcome } => {
+                *self.imap.lock().await = ImapSession::Authenticated(session);
+                Ok(outcome)
+            }
+            watch::WatchFinish::Lost(err) => {
+                *self.imap.lock().await = ImapSession::Disconnected;
+                Err(err.into())
+            }
         }
     }
 
@@ -658,19 +710,23 @@ where
         session: &mut Session<ImapIo<S>>,
         has_sort: &AtomicBool,
         has_quota: &AtomicBool,
+        has_idle: &AtomicBool,
     ) {
         match session.capabilities().await {
             Ok(caps) => {
                 let sort = caps.has_str("SORT");
                 let quota = caps.has_str("QUOTA");
+                let idle = caps.has_str("IDLE");
                 has_sort.store(sort, Ordering::Relaxed);
                 has_quota.store(quota, Ordering::Relaxed);
-                info!("IMAP capabilities: SORT={sort} QUOTA={quota}");
+                has_idle.store(idle, Ordering::Relaxed);
+                info!("IMAP capabilities: SORT={sort} QUOTA={quota} IDLE={idle}");
             }
             Err(e) => {
-                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA");
+                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA/IDLE");
                 has_sort.store(false, Ordering::Relaxed);
                 has_quota.store(false, Ordering::Relaxed);
+                has_idle.store(false, Ordering::Relaxed);
             }
         }
     }
@@ -1208,7 +1264,13 @@ where
                     ImapError::Authentication(format!("Failed to login: {}", e))
                 })?);
                 if let ImapSession::Authenticated(session) = &mut *imap {
-                    Self::probe_capabilities(session, &self.has_sort, &self.has_quota).await;
+                    Self::probe_capabilities(
+                        session,
+                        &self.has_sort,
+                        &self.has_quota,
+                        &self.has_idle,
+                    )
+                    .await;
                 }
             } else {
                 return Err(MailinerError::Connector(
@@ -2513,5 +2575,203 @@ Received-SPF: pass\r\n\
         );
         assert!(err.to_string().contains("STARTTLS"), "{}", err);
         let _ = server_task.await;
+    }
+
+    fn reply_select(tag: &str) -> String {
+        format!(
+            "* 3 EXISTS\r\n* 0 RECENT\r\n* OK [UNSEEN 1] first unseen\r\n{tag} OK [READ-WRITE] SELECT\r\n"
+        )
+    }
+
+    fn reply_capability(tag: &str, extra: &str) -> String {
+        format!("* CAPABILITY IMAP4rev1{extra}\r\n{tag} OK CAPABILITY\r\n")
+    }
+
+    async fn login_plain(
+        conn: &ImapConnector<tokio::io::DuplexStream>,
+        stream: tokio::io::DuplexStream,
+    ) {
+        EmailConnector::<tokio::io::DuplexStream>::connect(conn, stream)
+            .await
+            .unwrap();
+        EmailConnector::<tokio::io::DuplexStream>::authenticate(conn, "secret")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn watch_idle_reports_exists() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let login = read_cmd(&mut server, &mut buf).await;
+            assert!(login.to_ascii_uppercase().contains("LOGIN"), "{login}");
+            let tag = login.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let cap = read_cmd(&mut server, &mut buf).await;
+            assert!(cap.to_ascii_uppercase().contains("CAPABILITY"), "{cap}");
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " IDLE")).await;
+
+            let select = read_cmd(&mut server, &mut buf).await;
+            assert!(select.to_ascii_uppercase().contains("SELECT"), "{select}");
+            let tag = select.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_select(tag)).await;
+
+            let idle = read_cmd(&mut server, &mut buf).await;
+            assert!(idle.to_ascii_uppercase().contains("IDLE"), "{idle}");
+            let idle_tag = idle.split_whitespace().next().unwrap().to_string();
+            write_all(&mut server, "+ idling\r\n* 4 EXISTS\r\n").await;
+
+            let done = read_cmd(&mut server, &mut buf).await;
+            assert!(done.to_ascii_uppercase().contains("DONE"), "{done}");
+            write_all(&mut server, &format!("{idle_tag} OK IDLE terminated\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        assert!(conn.supports_idle());
+        let outcome = conn
+            .watch_mailbox(
+                &FolderId::new("INBOX"),
+                std::future::pending::<()>(),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MailboxWatchOutcome::Changed(MailboxChange::exists())
+        );
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn watch_idle_cancel_sends_done() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let login = read_cmd(&mut server, &mut buf).await;
+            let tag = login.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " IDLE")).await;
+
+            let select = read_cmd(&mut server, &mut buf).await;
+            let tag = select.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_select(tag)).await;
+
+            let idle = read_cmd(&mut server, &mut buf).await;
+            assert!(idle.to_ascii_uppercase().contains("IDLE"), "{idle}");
+            let idle_tag = idle.split_whitespace().next().unwrap().to_string();
+            write_all(&mut server, "+ idling\r\n").await;
+
+            let done = read_cmd(&mut server, &mut buf).await;
+            assert!(done.to_ascii_uppercase().contains("DONE"), "{done}");
+            write_all(&mut server, &format!("{idle_tag} OK IDLE terminated\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        let outcome = conn
+            .watch_mailbox(
+                &FolderId::new("INBOX"),
+                std::future::ready(()),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, MailboxWatchOutcome::Cancelled);
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn watch_noop_reports_exists() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let login = read_cmd(&mut server, &mut buf).await;
+            let tag = login.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+
+            let select = read_cmd(&mut server, &mut buf).await;
+            assert!(select.to_ascii_uppercase().contains("SELECT"), "{select}");
+            let tag = select.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_select(tag)).await;
+
+            let noop = read_cmd(&mut server, &mut buf).await;
+            assert!(noop.to_ascii_uppercase().contains("NOOP"), "{noop}");
+            let tag = noop.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("* 4 EXISTS\r\n{tag} OK NOOP\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        assert!(!conn.supports_idle());
+        let outcome = conn
+            .watch_mailbox(
+                &FolderId::new("INBOX"),
+                std::future::pending::<()>(),
+                std::future::ready(()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MailboxWatchOutcome::Changed(MailboxChange::exists())
+        );
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn watch_noop_quiet_times_out() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            let login = read_cmd(&mut server, &mut buf).await;
+            let tag = login.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged in\r\n")).await;
+
+            let cap = read_cmd(&mut server, &mut buf).await;
+            let tag = cap.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, "")).await;
+
+            let select = read_cmd(&mut server, &mut buf).await;
+            let tag = select.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_select(tag)).await;
+
+            let noop = read_cmd(&mut server, &mut buf).await;
+            assert!(noop.to_ascii_uppercase().contains("NOOP"), "{noop}");
+            let tag = noop.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK NOOP\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        let outcome = conn
+            .watch_mailbox(
+                &FolderId::new("INBOX"),
+                std::future::pending::<()>(),
+                std::future::ready(()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, MailboxWatchOutcome::TimedOut);
+        server_task.await.unwrap();
     }
 }

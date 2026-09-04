@@ -315,6 +315,7 @@ fn App() -> Element {
     let sign_out_pending = use_signal(|| false);
     let sign_out_started = use_signal(|| 0u64);
     let sign_out_error = use_signal(|| None::<String>);
+    let message_drag = use_signal(|| None);
 
     let ctx = AppContext {
         accounts,
@@ -344,6 +345,7 @@ fn App() -> Element {
         sign_out_pending,
         sign_out_started,
         sign_out_error,
+        message_drag,
     };
     let ctx_clone = ctx.clone();
 

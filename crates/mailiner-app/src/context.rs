@@ -104,6 +104,17 @@ pub struct AppContext {
     pub sign_out_started: Signal<u64>,
     /// Set when the wipe failed; the confirmation stays on screen.
     pub sign_out_error: Signal<Option<String>>,
+    /// List → folder drag (`None` when idle).
+    pub message_drag: Signal<Option<MessageDrag>>,
+}
+
+/// In-progress drag of list rows onto a folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageDrag {
+    pub message_ids: Vec<MessageId>,
+    /// Folder the rows were dragged from (not whatever is selected at drop).
+    pub source_mailbox: MailboxId,
+    pub over: Option<MailboxId>,
 }
 
 impl AppContext {

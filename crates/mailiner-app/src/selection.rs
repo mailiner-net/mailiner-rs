@@ -227,6 +227,15 @@ impl MessageSelection {
     }
 }
 
+/// IDs to move when dragging `dragged`. The whole selection if it contains that row.
+pub fn drag_message_ids(selection: &MessageSelection, dragged: &MessageId) -> Vec<MessageId> {
+    if selection.contains(dragged) {
+        selection.ids_vec()
+    } else {
+        vec![dragged.clone()]
+    }
+}
+
 /// Auto-mark `\Seen` only when opening a single message.
 ///
 /// `requested` is the caller's intent (plain click / arrow, or Unread-first
@@ -447,5 +456,29 @@ mod tests {
         assert!(!s.contains(&id("gone")));
         assert_eq!(s.focus(), Some(&id("a")));
         assert_eq!(s.anchor_index(), None);
+    }
+
+    #[test]
+    fn drag_uses_full_selection_when_row_is_selected() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        s.toggle(id("b"), Some(1));
+        let ids = drag_message_ids(&s, &id("a"));
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id("a")));
+        assert!(ids.contains(&id("b")));
+    }
+
+    #[test]
+    fn drag_unselected_row_is_only_that_message() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(0));
+        assert_eq!(drag_message_ids(&s, &id("c")), vec![id("c")]);
+    }
+
+    #[test]
+    fn drag_empty_selection_is_the_row() {
+        let s = MessageSelection::default();
+        assert_eq!(drag_message_ids(&s, &id("a")), vec![id("a")]);
     }
 }

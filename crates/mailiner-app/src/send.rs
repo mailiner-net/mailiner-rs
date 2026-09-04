@@ -136,21 +136,51 @@ pub fn resolve_account_identity(
     account.primary_identity()
 }
 
-/// First identity whose email appears in `emails`, else the primary.
+/// Extra identity whose email appears in `emails`, else the primary if it does.
+///
+/// Aliases win over the primary when both are present so Reply/Forward send
+/// from the address that received the mail, not the account default.
 pub fn identity_matching_emails<'a>(
     account: &Account,
     emails: impl IntoIterator<Item = &'a str>,
 ) -> AccountIdentity {
-    let identities = account.all_identities();
-    for email in emails {
-        if let Some(id) = identities
+    let listed: Vec<&str> = emails.into_iter().collect();
+    for extra in &account.identities {
+        if listed
             .iter()
-            .find(|id| email.trim().eq_ignore_ascii_case(id.email.trim()))
+            .any(|email| email.trim().eq_ignore_ascii_case(extra.email.trim()))
         {
-            return id.clone();
+            return extra.clone();
         }
     }
+    if listed
+        .iter()
+        .any(|email| email.trim().eq_ignore_ascii_case(account.email.trim()))
+    {
+        return account.primary_identity();
+    }
     account.primary_identity()
+}
+
+/// Whether `email` is this account's primary mailbox or an extra identity.
+pub fn is_account_identity_email(account: &Account, email: &str) -> bool {
+    account
+        .all_identities()
+        .iter()
+        .any(|id| email.trim().eq_ignore_ascii_case(id.email.trim()))
+}
+
+/// Drop To/Cc/Bcc addresses that belong to `account` (all identities).
+pub fn strip_account_identities(draft: &mut DraftDocument, account: &Account) {
+    draft
+        .to
+        .retain(|a| !is_account_identity_email(account, &a.email));
+    draft
+        .cc
+        .retain(|a| !is_account_identity_email(account, &a.email));
+    draft
+        .bcc
+        .retain(|a| !is_account_identity_email(account, &a.email));
 }
 
 /// Picker row for the current session From, falling back to the account primary.
@@ -488,6 +518,56 @@ mod tests {
         assert_eq!(id.email, "support@example.com");
         let primary = identity_matching_emails(&acc, ["nobody@example.com"]);
         assert_eq!(primary.email, "work@example.com");
+    }
+
+    #[test]
+    fn identity_matching_emails_prefers_alias_over_primary() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let id = identity_matching_emails(&acc, ["work@example.com", "support@example.com"]);
+        assert_eq!(id.email, "support@example.com");
+        assert_eq!(id.display_name, "Support");
+    }
+
+    #[test]
+    fn strip_account_identities_removes_primary_and_aliases() {
+        let acc = account(
+            "w",
+            "Work",
+            "work@example.com",
+            vec![AccountIdentity::new("Support", "support@example.com")],
+        );
+        let identity = identity_from_account("Support", "support@example.com");
+        let mut draft = DraftDocument::new_empty(&identity);
+        draft.to = vec![
+            ComposerAddress::email_only("boss@example.com"),
+            ComposerAddress::email_only("work@example.com"),
+        ];
+        draft.cc = vec![
+            ComposerAddress::email_only("support@example.com"),
+            ComposerAddress::email_only("cc@example.com"),
+        ];
+        strip_account_identities(&mut draft, &acc);
+        assert_eq!(
+            draft
+                .to
+                .iter()
+                .map(|a| a.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["boss@example.com"]
+        );
+        assert_eq!(
+            draft
+                .cc
+                .iter()
+                .map(|a| a.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cc@example.com"]
+        );
     }
 
     #[test]

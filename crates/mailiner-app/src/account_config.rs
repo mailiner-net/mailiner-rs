@@ -123,7 +123,7 @@ pub fn normalize_identities(
                 i + 1
             ));
         }
-        if !id.email.contains('@') {
+        if !mailiner_composer::is_valid_email_v1(&id.email) {
             return Err(format!(
                 "Identity {} email must look like an address (user@example.com).",
                 i + 1
@@ -1384,13 +1384,15 @@ mod tests {
 
     #[test]
     fn normalize_identities_rejects_invalid_email() {
-        let err = normalize_identities(
-            vec![AccountIdentity::new("Support", "not-an-email")],
-            "Work",
-            "user@example.com",
-        )
-        .unwrap_err();
-        assert!(err.contains("look like an address"), "{err}");
+        for email in ["not-an-email", "a@b", "a@@b.com"] {
+            let err = normalize_identities(
+                vec![AccountIdentity::new("Support", email)],
+                "Work",
+                "user@example.com",
+            )
+            .unwrap_err();
+            assert!(err.contains("look like an address"), "{email}: {err}");
+        }
     }
 
     #[test]

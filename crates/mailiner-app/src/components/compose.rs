@@ -31,7 +31,7 @@ use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_stored, identity_matching_emails, list_from_choices, parse_from_choice_key,
     resolve_account_identity, resolve_compose_account_id, selected_from_choice,
-    set_session_from_identity,
+    set_session_from_identity, strip_account_identities,
 };
 use crate::ui_prefs::{ComposeBodyMode, ComposePlacement};
 
@@ -395,7 +395,6 @@ pub fn open_reply_or_forward(
         .to
         .iter()
         .chain(envelope.cc.iter())
-        .chain(envelope.bcc.iter())
         .flat_map(flatten_addresses)
         .map(|a| a.email)
         .collect();
@@ -411,6 +410,9 @@ pub fn open_reply_or_forward(
         account.signature.as_deref(),
     ) {
         Ok(mut draft) => {
+            if matches!(intent, ComposeIntent::Reply | ComposeIntent::ReplyAll) {
+                strip_account_identities(&mut draft, &account);
+            }
             let mode = crate::ui_prefs::load_compose_body_mode();
             apply_compose_body_mode(&mut draft, mode);
             if mode == ComposeBodyMode::Plain {

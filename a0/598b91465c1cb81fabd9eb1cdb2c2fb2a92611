@@ -1,0 +1,19 @@
+crates/mailiner-app/src/local_data.rs
+  s_525622e56fdf60::t_2f3f70302293ef 179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a0598b91465c1cb81fabd9eb1cdb2c2fb2a92611",
+  "prompts": {},
+  "sessions": {
+    "s_525622e56fdf60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a069f7-5d91-7923-b61d-105ff62e75bb",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

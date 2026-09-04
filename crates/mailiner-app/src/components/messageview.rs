@@ -27,7 +27,7 @@ use crate::phishing::{self, SenderCue};
 use crate::print::{PrintError, PrintHeaders, build_print_document, open_print_document};
 use crate::toast::ToastAction;
 
-use super::compose::{open_new_message_to, open_reply_or_forward};
+use super::compose::{open_imap_draft, open_new_message_to, open_reply_or_forward};
 
 /// Format a UTC date for the message header.
 fn format_date(dt: &DateTime<Utc>) -> String {
@@ -992,6 +992,16 @@ fn MessageHeader(
     let show_junk = junk_id
         .as_ref()
         .is_some_and(|id| mailbox_id.as_ref() != Some(id));
+    let in_drafts = mailbox_id
+        .as_ref()
+        .and_then(|id| {
+            ctx.mailbox_nodes
+                .read()
+                .get(id)
+                .map(|n| n.role == MailboxRole::Drafts)
+        })
+        .unwrap_or(false);
+    let is_draft = in_drafts || message.envelope.is_draft;
     let move_targets = {
         let nodes = ctx.mailbox_nodes.read();
         let roots = ctx.mailbox_roots.read();
@@ -1266,6 +1276,27 @@ fn MessageHeader(
                             }
                         },
                         "View source"
+                    }
+                    if is_draft {
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            disabled: !actions_ready,
+                            title: "Edit draft",
+                            onclick: {
+                                let message = message.clone();
+                                let mut ctx = ctx.clone();
+                                move |_| {
+                                    if let Some(loaded) = ready_loaded(&ctx, &message.id) {
+                                        open_imap_draft(
+                                            &mut ctx,
+                                            &message.envelope,
+                                            &loaded,
+                                        );
+                                    }
+                                }
+                            },
+                            "Edit draft"
+                        }
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",

@@ -7,8 +7,8 @@ mod structure_cache;
 mod watch;
 
 pub use sent::{
-    apply_subscriptions, find_sent_mailbox, folders_from_listed, role_from_name,
-    special_use_from_attrs, ListedMailbox,
+    apply_subscriptions, find_drafts_mailbox, find_sent_mailbox, folders_from_listed,
+    role_from_name, special_use_from_attrs, ListedMailbox,
 };
 pub use watch::{MailboxChange, MailboxWatchOutcome};
 
@@ -328,17 +328,112 @@ where
         Ok(find_sent_mailbox(&listed).map(str::to_string))
     }
 
+    /// LIST all mailboxes and pick Drafts (`\Drafts`, else name heuristics).
+    pub async fn find_drafts_folder(&self) -> Result<Option<String>, ImapError> {
+        let listed = self.list_all_mailboxes().await?;
+        Ok(find_drafts_mailbox(&listed).map(str::to_string))
+    }
+
     /// APPEND `rfc822` to `mailbox` with `\Seen`. Does not change the selected folder.
     pub async fn append_rfc822_seen(&self, mailbox: &str, rfc822: &[u8]) -> Result<(), ImapError> {
+        self.append_rfc822(mailbox, r"(\Seen)", rfc822).await?;
+        Ok(())
+    }
+
+    /// APPEND `rfc822` to `mailbox` with `\Draft`. Does not change the selected folder.
+    ///
+    /// Returns the new UID when the server sends `APPENDUID` (UIDPLUS).
+    pub async fn append_rfc822_draft(
+        &self,
+        mailbox: &str,
+        rfc822: &[u8],
+    ) -> Result<Option<MessageId>, ImapError> {
+        self.append_rfc822(mailbox, r"(\Draft)", rfc822).await
+    }
+
+    /// APPEND `rfc822` with `flags`. Parses `APPENDUID` when the server sends it.
+    async fn append_rfc822(
+        &self,
+        mailbox: &str,
+        flags: &str,
+        rfc822: &[u8],
+    ) -> Result<Option<MessageId>, ImapError> {
+        use tokio::io::AsyncWriteExt;
+
+        let folder_id = FolderId::new(mailbox.to_string());
+        let mailbox_q = quote_mailbox(mailbox);
         let mut imap = self.imap.lock().await;
         let ImapSession::Authenticated(session) = &mut *imap else {
             return Err(ImapError::NotAuthenticated);
         };
-        session
-            .append(mailbox, Some(r"(\Seen)"), None, rfc822)
+        let tag = session
+            .run_command(&format!("APPEND {mailbox_q} {flags} {{{}}}", rfc822.len()))
             .await
             .map_err(|e| ImapError::Imap(format!("Failed to APPEND to {mailbox}: {e}")))?;
-        Ok(())
+        let Some(res) = session
+            .read_response()
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to read APPEND response: {e}")))?
+        else {
+            return Err(ImapError::Imap(
+                "IMAP connection closed during APPEND".into(),
+            ));
+        };
+        if !matches!(res.parsed(), imap_proto::Response::Continue { .. }) {
+            return Err(ImapError::Imap(format!(
+                "Failed to APPEND to {mailbox}: expected continuation"
+            )));
+        }
+        session
+            .as_mut()
+            .write_all(rfc822)
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to write APPEND literal: {e}")))?;
+        session
+            .as_mut()
+            .write_all(b"\r\n")
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to finish APPEND literal: {e}")))?;
+        // `as_mut()` is the inner TLS/plain stream; flush that, not ImapStream.
+        session
+            .as_mut()
+            .flush()
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to flush APPEND: {e}")))?;
+
+        let mut new_uid = None;
+        loop {
+            let resp = session
+                .read_response()
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to read APPEND response: {e}")))?
+                .ok_or_else(|| ImapError::Imap("IMAP connection closed during APPEND".into()))?;
+            match resp.parsed() {
+                imap_proto::Response::Data { code, .. } => {
+                    if let Some(uid) = appenduid_dest(&folder_id, code) {
+                        new_uid = Some(uid);
+                    }
+                }
+                imap_proto::Response::Done {
+                    tag: done_tag,
+                    status,
+                    code,
+                    information,
+                } if done_tag == &tag => {
+                    if let Some(uid) = appenduid_dest(&folder_id, code) {
+                        new_uid = Some(uid);
+                    }
+                    return match status {
+                        imap_proto::Status::Ok => Ok(new_uid),
+                        _ => Err(ImapError::Imap(format!(
+                            "APPEND to {mailbox} failed: {}",
+                            information.as_deref().unwrap_or("error")
+                        ))),
+                    };
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Hierarchy delimiter from `LIST "" ""`, else the first listed mailbox.
@@ -1120,6 +1215,18 @@ fn copyuid_dest(
     match code {
         Some(imap_proto::ResponseCode::CopyUid(_, _, dest)) => {
             Some(expand_uid_set(folder_id, dest))
+        }
+        _ => None,
+    }
+}
+
+fn appenduid_dest(
+    folder_id: &FolderId,
+    code: &Option<imap_proto::ResponseCode<'_>>,
+) -> Option<MessageId> {
+    match code {
+        Some(imap_proto::ResponseCode::AppendUid(_, dest)) => {
+            expand_uid_set(folder_id, dest).into_iter().next()
         }
         _ => None,
     }
@@ -2375,6 +2482,7 @@ Received-SPF: pass\r\n\
         assert_eq!(imap_flag_atom(EnvelopeFlag::Answered), "\\Answered");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Flagged), "\\Flagged");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Deleted), "\\Deleted");
+        assert_eq!(imap_flag_atom(EnvelopeFlag::Draft), "\\Draft");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Starred), "\\Starred");
         assert_eq!(
             imap_flag_atom(EnvelopeFlag::Keyword(ImapKeyword::Important)),

@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::identity::FromIdentity;
 use crate::model::attachment::AttachmentData;
 use crate::model::{
-    dedupe_addresses, html_to_plain, validate_draft, BodyMode, ComposerAddress, DraftDocument,
-    DraftValidationError,
+    dedupe_addresses, html_to_plain, validate_draft, validate_draft_ex, BodyMode, ComposerAddress,
+    DraftDocument, DraftValidationError,
 };
 use crate::sanitize::sanitize_for_export;
 use mailiner_mime::{
@@ -59,21 +59,43 @@ pub fn prepare_submit(
     identity: &FromIdentity,
 ) -> Result<PreparedMessage, PrepareSubmitError> {
     validate_draft(draft, identity).map_err(PrepareSubmitError::Validation)?;
+    serialize_draft(draft, identity, false)
+}
 
+/// Serialize a draft for IMAP `APPEND` (`\Draft`). Empty `To` is allowed.
+///
+/// Unlike [`prepare_submit`], `Bcc:` is written into the RFC 822 so it can be
+/// restored when the draft is opened again.
+pub fn prepare_draft(
+    draft: &DraftDocument,
+    identity: &FromIdentity,
+) -> Result<PreparedMessage, PrepareSubmitError> {
+    validate_draft_ex(draft, identity, false).map_err(PrepareSubmitError::Validation)?;
+    serialize_draft(draft, identity, true)
+}
+
+fn serialize_draft(
+    draft: &DraftDocument,
+    identity: &FromIdentity,
+    include_bcc: bool,
+) -> Result<PreparedMessage, PrepareSubmitError> {
     let from = resolve_from(draft, identity);
     let mail_from = from.email.clone();
     let rcpt_to = envelope_recipients(draft);
     let message_id = generate_message_id(&identity.email);
 
-    let mut headers: Vec<(String, String)> = vec![
-        (
-            "From".into(),
-            format_mailbox(from.name.as_deref(), &from.email),
-        ),
-        ("To".into(), format_addr_list(&draft.to)),
-    ];
+    let mut headers: Vec<(String, String)> = vec![(
+        "From".into(),
+        format_mailbox(from.name.as_deref(), &from.email),
+    )];
+    if !draft.to.is_empty() {
+        headers.push(("To".into(), format_addr_list(&draft.to)));
+    }
     if !draft.cc.is_empty() {
         headers.push(("Cc".into(), format_addr_list(&draft.cc)));
+    }
+    if include_bcc && !draft.bcc.is_empty() {
+        headers.push(("Bcc".into(), format_addr_list(&draft.bcc)));
     }
     headers.push(("Subject".into(), draft.subject.clone()));
     headers.push(("Date".into(), format_rfc5322_date(Utc::now())));
@@ -431,5 +453,26 @@ mod tests {
         d.to.push(ComposerAddress::email_only("you@example.com"));
         let prepared = prepare_submit(&d, &id).unwrap();
         assert!(prepared.message_id.ends_with("@mailiner.invalid>"));
+    }
+
+    #[test]
+    fn prepare_draft_allows_empty_to_and_keeps_bcc() {
+        let mut d = DraftDocument::new_empty(&identity());
+        d.mode = BodyMode::Plain;
+        d.plain_body = "WIP".into();
+        d.subject = "Later".into();
+        d.bcc
+            .push(ComposerAddress::email_only("secret@example.com"));
+        let prepared = prepare_draft(&d, &identity()).unwrap();
+        let s = String::from_utf8_lossy(&prepared.rfc822);
+        assert!(
+            !s.to_ascii_lowercase().lines().any(|l| l.starts_with("to:")),
+            "empty To should be omitted:\n{s}"
+        );
+        assert!(
+            s.to_ascii_lowercase().contains("bcc:"),
+            "draft Bcc missing:\n{s}"
+        );
+        assert!(s.contains("WIP"));
     }
 }

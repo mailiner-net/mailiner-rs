@@ -18,9 +18,11 @@ use mailiner_composer::shell::attachment_list::{
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     AttachmentData, ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError,
-    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, is_safe_image_content_type,
-    is_valid_email_v1, plain_to_html, prepare_submit,
+    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, draft_from_stored_message,
+    is_safe_image_content_type, is_valid_email_v1, plain_to_html, prepare_draft, prepare_submit,
 };
+
+use std::collections::HashMap;
 
 use crate::account::{Account, AccountId};
 use crate::context::AppContext;
@@ -348,6 +350,7 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
             title: "New message".into(),
             draft,
             reply_source: None,
+            imap_draft: None,
             stashed_originals: Vec::new(),
         },
     );
@@ -426,12 +429,56 @@ pub fn open_reply_or_forward(
                     title: title.into(),
                     draft,
                     reply_source,
+                    imap_draft: None,
                     stashed_originals: Vec::new(),
                 },
             );
         }
         Err(e) => ctx.show_toast(crate::toast::ToastAction::error(e.to_string())),
     }
+}
+
+/// Open a stored IMAP draft for editing. Replaces any existing compose draft.
+pub fn open_imap_draft(
+    ctx: &mut AppContext,
+    envelope: &mailiner_core::Envelope,
+    loaded: &mailiner_core::models::LoadedMessage,
+) {
+    let Some(account) = resolve_compose_account(ctx, Some(&envelope.account_id)) else {
+        ctx.show_toast(crate::toast::ToastAction::error("Select an account first."));
+        return;
+    };
+    let from = envelope.from.as_ref().and_then(flatten_from_for_identity);
+    let identity = identity_from_stored(&resolve_account_identity(&account, from.as_ref()));
+    match draft_from_stored_message(&identity, envelope, loaded) {
+        Ok(mut draft) => {
+            let mode = crate::ui_prefs::load_compose_body_mode();
+            apply_compose_body_mode(&mut draft, mode);
+            if mode == ComposeBodyMode::Plain {
+                discard_rich_quote(&mut draft);
+            }
+            open_compose(
+                ctx,
+                ComposeSession {
+                    account_id: account.id,
+                    title: "Draft".into(),
+                    draft,
+                    reply_source: None,
+                    imap_draft: Some(envelope.id.clone()),
+                    stashed_originals: Vec::new(),
+                },
+            );
+        }
+        Err(e) => ctx.show_toast(crate::toast::ToastAction::error(e.to_string())),
+    }
+}
+
+fn flatten_from_for_identity(
+    from: &mailiner_core::EmailAddress,
+) -> Option<mailiner_composer::ComposerAddress> {
+    mailiner_composer::flatten_addresses(from)
+        .into_iter()
+        .next()
 }
 
 fn submit_compose(
@@ -448,11 +495,13 @@ fn submit_compose(
         return;
     }
     error.set(None);
-    let (account_id, mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
+    let (account_id, mut draft, reply_source, imap_draft) = match ctx.compose_draft.read().as_ref()
+    {
         Some(session) => (
             session.account_id.clone(),
             session.draft.clone(),
             session.reply_source.clone(),
+            session.imap_draft.clone(),
         ),
         None => {
             error.set(Some("No draft open.".into()));
@@ -518,6 +567,7 @@ fn submit_compose(
                 draft_id,
                 bcc_header: prepared.bcc_header,
                 reply_source,
+                imap_draft,
             });
         }
         Err(PrepareSubmitError::Validation(errs)) => {
@@ -726,11 +776,9 @@ fn persist_live_draft(
     bcc_draft: Signal<String>,
     subject: Signal<String>,
     body: Signal<String>,
-) {
-    let Some(session) = compose_draft.peek().clone() else {
-        return;
-    };
-    persist_session(&session_with_live_fields(
+) -> Option<ComposeSession> {
+    let session = compose_draft.peek().clone()?;
+    let live = session_with_live_fields(
         &session,
         &to.peek(),
         &to_draft.peek(),
@@ -740,7 +788,56 @@ fn persist_live_draft(
         &bcc_draft.peek(),
         &subject.peek(),
         &body.peek(),
+    );
+    persist_session(&live);
+    Some(live)
+}
+
+fn queue_imap_draft_save(
+    accounts: Signal<HashMap<AccountId, Account>>,
+    core: &Coroutine<CoreEvent>,
+    session: &ComposeSession,
+) {
+    if session
+        .draft
+        .attachments
+        .iter()
+        .any(|a| matches!(a.data, AttachmentData::Pending))
+        || session
+            .draft
+            .inline_images
+            .iter()
+            .any(|img| matches!(img.data, AttachmentData::Pending))
+    {
+        return;
+    }
+    if !session_has_content(session) {
+        if let Some(message_id) = session.imap_draft.clone() {
+            core.send(CoreEvent::DeleteImapDraft {
+                account_id: session.account_id.clone(),
+                message_id,
+            });
+        }
+        return;
+    }
+    let Some(account) = accounts.read().get(&session.account_id).cloned() else {
+        return;
+    };
+    let identity = identity_from_stored(&resolve_account_identity(
+        &account,
+        session.draft.from.as_ref(),
     ));
+    match prepare_draft(&session.draft, &identity) {
+        Ok(prepared) => {
+            core.send(CoreEvent::SaveImapDraft {
+                account_id: session.account_id.clone(),
+                draft_id: session.draft.id.as_str().to_string(),
+                rfc822: prepared.rfc822,
+                replace: session.imap_draft.clone(),
+            });
+        }
+        Err(_) => {}
+    }
 }
 
 fn close_keeping_draft(
@@ -754,10 +851,12 @@ fn close_keeping_draft(
     bcc_draft: Signal<String>,
     subject: Signal<String>,
     body: Signal<String>,
+    accounts: Signal<HashMap<AccountId, Account>>,
+    core: &Coroutine<CoreEvent>,
 ) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    persist_live_draft(
+    if let Some(live) = persist_live_draft(
         compose_draft,
         to,
         to_draft,
@@ -767,15 +866,27 @@ fn close_keeping_draft(
         bcc_draft,
         subject,
         body,
-    );
+    ) {
+        queue_imap_draft_save(accounts, core, &live);
+    }
     compose_draft.set(None);
 }
 
-fn discard_draft(mut save_gen: Signal<u32>, mut compose_draft: Signal<Option<ComposeSession>>) {
+fn discard_draft(
+    mut save_gen: Signal<u32>,
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    core: &Coroutine<CoreEvent>,
+) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    if let Some(account_id) = compose_draft.peek().as_ref().map(|s| s.account_id.clone()) {
-        draft_store::clear_draft(&account_id);
+    if let Some(session) = compose_draft.peek().as_ref() {
+        if let Some(message_id) = session.imap_draft.clone() {
+            core.send(CoreEvent::DeleteImapDraft {
+                account_id: session.account_id.clone(),
+                message_id,
+            });
+        }
+        draft_store::clear_draft(&session.account_id);
     }
     compose_draft.set(None);
 }
@@ -1389,7 +1500,7 @@ pub fn ComposeOverlay() -> Element {
                 if open_draft_id(compose_draft).as_deref() != Some(draft_id.as_str()) {
                     return;
                 }
-                persist_live_draft(
+                let _ = persist_live_draft(
                     compose_draft,
                     to,
                     to_draft,
@@ -1447,7 +1558,7 @@ pub fn ComposeOverlay() -> Element {
     let mut compose_draft = ctx.compose_draft;
     let mut compose_placement = ctx.compose_placement;
     let docked = *compose_placement.read() == ComposePlacement::Docked;
-    let close = move |_| {
+    let run_close = move || {
         close_keeping_draft(
             save_gen,
             compose_draft,
@@ -1459,10 +1570,13 @@ pub fn ComposeOverlay() -> Element {
             bcc_draft,
             subject,
             body,
+            ctx.accounts,
+            &core,
         );
     };
+    let close = move |_| run_close();
     let discard = move |_| {
-        discard_draft(save_gen, compose_draft);
+        discard_draft(save_gen, compose_draft, &core);
     };
 
     rsx! {
@@ -1485,7 +1599,7 @@ pub fn ComposeOverlay() -> Element {
                 class: if docked { "compose-dock" } else { "compose-backdrop" },
                 onclick: move |_| {
                     if !docked {
-                        compose_draft.set(None);
+                        run_close();
                     }
                 },
                 div {
@@ -1503,7 +1617,7 @@ pub fn ComposeOverlay() -> Element {
                         move |evt: KeyboardEvent| {
                             if matches!(evt.key(), Key::Escape) && !docked {
                                 evt.prevent_default();
-                                compose_draft.set(None);
+                                run_close();
                                 return;
                             }
                             if matches!(evt.key(), Key::Enter)
@@ -1582,7 +1696,7 @@ pub fn ComposeOverlay() -> Element {
                                 title: "Close",
                                 size: 20,
                                 icon: IconKind::XMark,
-                                onclick: move |_| compose_draft.set(None),
+                                onclick: close,
                             }
                         }
                     }

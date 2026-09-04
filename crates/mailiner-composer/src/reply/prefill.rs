@@ -5,6 +5,7 @@ use mailiner_core::{Envelope, LoadedMessage, MessageContent, MessagePart, PartKi
 use crate::identity::FromIdentity;
 use crate::model::attachment::{AttachmentData, AttachmentId, AttachmentSource, FileAttachment};
 use crate::model::draft::{caps, BodyMode, ComposerAddress, DraftDocument};
+use crate::model::html_to_plain;
 use crate::model::recipients::{dedupe_addresses, exclude_self, flatten_addresses};
 use crate::reply::quote::{attribution_line, quote_plain, subject_with_prefix};
 use crate::reply::signature::apply_plain_signature;
@@ -62,6 +63,74 @@ pub fn build_draft(
     };
     apply_plain_signature(&mut draft, signature);
     Ok(draft)
+}
+
+/// Rebuild a compose document from a stored IMAP draft (no quote, no signature).
+pub fn draft_from_stored_message(
+    identity: &FromIdentity,
+    env: &Envelope,
+    loaded: &LoadedMessage,
+) -> Result<DraftDocument, PrefillError> {
+    let mut draft = DraftDocument::new_empty(identity);
+    draft.to = env.to.as_ref().map(flatten_addresses).unwrap_or_default();
+    draft.cc = env.cc.as_ref().map(flatten_addresses).unwrap_or_default();
+    draft.bcc = env.bcc.as_ref().map(flatten_addresses).unwrap_or_default();
+    draft.subject = env.subject.clone().unwrap_or_default();
+    if let Some(from) = env
+        .from
+        .as_ref()
+        .map(flatten_addresses)
+        .and_then(|v| v.into_iter().next())
+    {
+        draft.from = Some(from);
+    }
+    draft.in_reply_to = env.in_reply_to.clone();
+    draft.references = env.references.clone();
+
+    match pick_body(loaded)? {
+        BodyPick::Plain(text) => {
+            draft.mode = BodyMode::Plain;
+            draft.plain_body = text;
+            draft.html_body.clear();
+            draft.plain_cache_dirty = false;
+        }
+        BodyPick::HtmlOnly(html) => {
+            apply_stored_html(&mut draft, &html, &loaded.parts, None);
+        }
+        BodyPick::HtmlWithPlain { plain, html } => {
+            apply_stored_html(&mut draft, &html, &loaded.parts, Some(&plain));
+        }
+    }
+    apply_forward_attachments(&mut draft, loaded);
+    Ok(draft)
+}
+
+fn apply_stored_html(
+    draft: &mut DraftDocument,
+    html: &str,
+    parts: &[MessagePart],
+    plain_override: Option<&str>,
+) {
+    let clean = crate::sanitize::sanitize_for_edit(html);
+    let plain_est = match plain_override {
+        Some(plain) => plain.to_string(),
+        None => html_to_plain(&clean),
+    };
+    let reserved = clean.len() as u64 + plain_est.len() as u64;
+    let remaining = caps::MAX_DRAFT_BYTES
+        .saturating_sub(draft_payload_bytes(draft))
+        .saturating_sub(reserved);
+    let rehydrated =
+        crate::reply::cid::rehydrate_cids(&clean, parts, draft.inline_images.len(), remaining);
+    draft.mode = BodyMode::Rich;
+    draft.plain_body = match plain_override {
+        Some(plain) => plain.to_string(),
+        None => html_to_plain(&rehydrated.html),
+    };
+    draft.html_body = rehydrated.html;
+    draft.plain_cache_dirty = false;
+    draft.inline_images = rehydrated.images;
+    draft.prefill_warnings.extend(rehydrated.warnings);
 }
 
 fn build_reply_like(
@@ -1101,5 +1170,44 @@ mod tests {
         let p = Tp::nameless_pdf("2").finish();
         assert_eq!(forward_filename(&p), "attachment.pdf");
         assert!(is_forwardable_attachment(&p));
+    }
+
+    #[test]
+    fn stored_draft_keeps_recipients_body_and_attachments() {
+        let id = FromIdentity::new("Me", "me@example.com");
+        let mut env = env_with_from("me@example.com");
+        env.to = Some(EmailAddress::List(vec![EmailAddr {
+            name: Some("Ada".into()),
+            email: Some("ada@example.com".into()),
+        }]));
+        env.cc = Some(EmailAddress::List(vec![EmailAddr {
+            name: None,
+            email: Some("cc@example.com".into()),
+        }]));
+        env.bcc = Some(EmailAddress::List(vec![EmailAddr {
+            name: None,
+            email: Some("secret@example.com".into()),
+        }]));
+        env.subject = Some("WIP".into());
+        env.in_reply_to = Some("<parent@example.com>".into());
+        env.references = vec!["<root@example.com>".into()];
+        let loaded = loaded_parts(vec![
+            Tp::body("1", PartKind::TextPlain, "text/plain", "hello draft").finish(),
+            Tp::file("2", "application/pdf", "note.pdf")
+                .bytes(b"%PDF".to_vec())
+                .finish(),
+        ]);
+        let d = draft_from_stored_message(&id, &env, &loaded).unwrap();
+        assert_eq!(d.subject, "WIP");
+        assert_eq!(d.to[0].email, "ada@example.com");
+        assert_eq!(d.cc[0].email, "cc@example.com");
+        assert_eq!(d.bcc[0].email, "secret@example.com");
+        assert_eq!(d.plain_body, "hello draft");
+        assert!(!d.plain_body.contains('>'), "{}", d.plain_body);
+        assert_eq!(d.attachments.len(), 1);
+        assert_eq!(d.attachments[0].filename, "note.pdf");
+        assert_eq!(d.in_reply_to.as_deref(), Some("<parent@example.com>"));
+        assert_eq!(d.references, vec!["<root@example.com>".to_string()]);
+        assert!(d.from.as_ref().is_some_and(|f| f.email == "me@example.com"));
     }
 }

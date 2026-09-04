@@ -43,8 +43,10 @@ profile can use Mailiner while a session is unlocked; clear site data to remove
 the vault.
 
 Incoming-mail filters (Settings → Filters) also live only in this browser. They
-run locally when a folder is opened or new mail arrives (IDLE / NOOP). Mailiner
-does not speak ManageSieve yet.
+run locally when a folder is opened or new mail arrives (IDLE / NOOP). Vacation
+/ out-of-office (Settings → Vacation) is local too: this browser sends the
+replies over SMTP until ManageSieve exists. Mailiner does not speak ManageSieve
+yet.
 
 Mailiner also prevents malicious emails from executing JavaScript code or loading
 remote references that could reveal details about the user to the sender.

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -11,7 +12,7 @@ use futures_channel::mpsc::{
 use futures_util::StreamExt;
 use futures_util::future::{Either, select, select_all};
 use gloo_timers::future::TimeoutFuture;
-use mailiner_composer::{AttachmentData, caps};
+use mailiner_composer::{AttachmentData, caps, prepare_submit};
 use mailiner_core::connector::EmailConnector;
 use mailiner_core::models::TransferEncoding;
 use mailiner_core::submit::{SendErrorKind, SubmitRequest};
@@ -58,7 +59,9 @@ use crate::outbox_store::{
     pick_oldest_queued,
 };
 use crate::reconnect::reconnect_backoff_ms;
-use crate::send::{ComposeSession, OutboxDisplay, SendPhase, SendState};
+use crate::send::{
+    ComposeSession, OutboxDisplay, SendPhase, SendState, identity_for_reply, identity_from_stored,
+};
 use crate::smtp_inflight::{InFlightSmtp, SmtpInflight};
 use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test};
 use crate::snippet::{SNIPPET_FETCH_OCTETS, clean_snippet};
@@ -66,6 +69,22 @@ use crate::snooze::SnoozePreset;
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, SnoozeUndo, ToastAction, UndoRequest};
 use crate::ui_prefs::{MessageListView, SnoozedMessage};
 use chrono::Utc;
+
+thread_local! {
+    static SMTP_TX: RefCell<Option<UnboundedSender<CoreEvent>>> = const { RefCell::new(None) };
+}
+
+fn bind_smtp_tx(tx: UnboundedSender<CoreEvent>) {
+    SMTP_TX.with(|cell| *cell.borrow_mut() = Some(tx));
+}
+
+fn queue_core_event(event: CoreEvent) {
+    SMTP_TX.with(|cell| {
+        if let Some(tx) = cell.borrow().as_ref() {
+            let _ = tx.unbounded_send(event);
+        }
+    });
+}
 
 pub enum CoreEvent {
     // —— mail ops ——
@@ -456,6 +475,7 @@ pub async fn core_loop(
     let mut inflight = SmtpInflight::new();
     let mut pending_event: Option<CoreEvent> = None;
     let mut pending_prefetch: Option<PrefetchJob> = None;
+    bind_smtp_tx(smtp_tx.clone());
 
     if let InitialBootstrap::Run { active } = initial_bootstrap {
         handle_bootstrap(&mut manager, &mut ctx, active).await;
@@ -1581,6 +1601,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     crate::ui_prefs::retain_pinned_messages(&known);
     crate::ui_prefs::retain_snoozed_messages(&known);
     crate::mail_rules::retain_mail_rules(&known);
+    crate::vacation::retain_vacation(&known);
     crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
@@ -2254,6 +2275,7 @@ async fn select_mailbox(
                     ctx.messages.set(list);
                     apply_list_overlays(ctx);
                     ctx.messages_loading.set(false);
+                    apply_vacation_auto_reply(ctx, &account_id, &mailbox_id);
                     apply_incoming_mail_rules(manager, ctx, &account_id, &mailbox_id).await;
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2389,6 +2411,7 @@ async fn handle_mailbox_activity(
             ctx.messages.set(list);
             apply_list_overlays(ctx);
             prune_selection_after_refresh(ctx, &old_ids, &new_ids);
+            apply_vacation_auto_reply(ctx, &account_id, &mailbox_id);
             apply_incoming_mail_rules(manager, ctx, &account_id, &mailbox_id).await;
             persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2408,6 +2431,95 @@ async fn handle_mailbox_activity(
     }
 
     refresh_other_folder_badges(manager, ctx, &account_id, Some(&mailbox_id)).await;
+}
+
+/// Queue local vacation auto-replies for newly arrived incoming mail.
+///
+/// Client-side only (not ManageSieve). Same folder skip list as mail rules.
+/// Replies go through [`CoreEvent::SendMessage`] / the SMTP outbox.
+fn apply_vacation_auto_reply(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) {
+    if !same_mail_session(ctx, account_id, mailbox_id) {
+        return;
+    }
+    let role = ctx
+        .mailbox_nodes
+        .read()
+        .get(mailbox_id)
+        .map(|n| n.role)
+        .unwrap_or(MailboxRole::Other);
+    if crate::vacation::folder_skips_vacation(role) {
+        return;
+    }
+    let mut settings = crate::vacation::load_settings(account_id);
+    let now = Utc::now();
+    if settings.enabled && settings.armed_at.is_none() {
+        settings.armed_at = Some(now);
+        crate::vacation::save_settings(account_id.clone(), settings.clone());
+    }
+    if !settings.is_active(now) {
+        return;
+    }
+    let Some(account) = ctx.accounts.read().get(account_id).cloned() else {
+        return;
+    };
+    let own: Vec<String> = account
+        .all_identities()
+        .into_iter()
+        .map(|id| id.email)
+        .collect();
+    let period = settings.period_key();
+    let replied = crate::vacation::load_replied(account_id, &period);
+    let envelopes: Vec<mailiner_core::Envelope> = ctx
+        .messages
+        .read()
+        .iter()
+        .map(|m| m.envelope.clone())
+        .collect();
+    let hits = crate::vacation::plan_vacation_hits(&settings, now, &envelopes, &own, &replied);
+    if hits.is_empty() {
+        return;
+    }
+
+    let mut sent_to = Vec::new();
+    for hit in hits {
+        let Some(envelope) = envelopes.iter().find(|e| e.id.as_uid() == hit.uid) else {
+            continue;
+        };
+        let identity = identity_from_stored(&identity_for_reply(
+            &account,
+            envelope.to.as_ref(),
+            envelope.cc.as_ref(),
+        ));
+        let draft =
+            crate::vacation::build_vacation_draft(&identity, &settings, envelope, &hit.sender);
+        let prepared = match prepare_submit(&draft, &identity) {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                warn!("vacation auto-reply prepare failed for {}: {e}", hit.sender);
+                continue;
+            }
+        };
+        queue_core_event(CoreEvent::SendMessage {
+            account_id: account_id.clone(),
+            request: SubmitRequest {
+                mail_from: prepared.envelope.mail_from,
+                rcpt_to: prepared.envelope.rcpt_to,
+                rfc822: prepared.rfc822,
+                message_id: prepared.message_id,
+                dsn: None,
+            },
+            display: OutboxDisplay {
+                subject: draft.subject,
+                to_preview: hit.sender.clone(),
+            },
+            draft_id: format!("vacation-{}", draft.id.as_str()),
+            bcc_header: None,
+            reply_source: Some(envelope.id.clone()),
+            imap_draft: None,
+        });
+        sent_to.push(hit.sender);
+    }
+    crate::vacation::mark_replied(account_id, &period, &sent_to);
 }
 
 /// Apply local incoming-mail filters to loaded envelopes (not ManageSieve).

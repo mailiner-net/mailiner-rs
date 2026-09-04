@@ -19,6 +19,7 @@ use crate::ui_prefs::{
     MESSAGE_LIST_VIEW_KEY, MESSAGE_SORT_KEY, PINNED_MESSAGES_KEY, SAVED_SEARCHES_KEY,
     SHORTCUT_MAP_KEY, SNOOZED_MESSAGES_KEY,
 };
+use crate::vacation::{VACATION_KEY, VACATION_REPLIED_KEY};
 
 /// Prefix of every Mailiner-owned `localStorage` key.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
@@ -47,6 +48,8 @@ pub const KNOWN_MAILINER_STORAGE_KEYS: &[&str] = &[
     SNOOZED_MESSAGES_KEY,
     MAIL_RULES_KEY,
     MAIL_RULES_APPLIED_KEY,
+    VACATION_KEY,
+    VACATION_REPLIED_KEY,
     FOLDER_WIDTH_KEY,
     LIST_HEIGHT_KEY,
     LIST_WIDTH_KEY,
@@ -315,6 +318,8 @@ mod tests {
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&SNOOZED_MESSAGES_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_RULES_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&MAIL_RULES_APPLIED_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&VACATION_KEY));
+        assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&VACATION_REPLIED_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&FOLDER_WIDTH_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_HEIGHT_KEY));
         assert!(KNOWN_MAILINER_STORAGE_KEYS.contains(&LIST_WIDTH_KEY));

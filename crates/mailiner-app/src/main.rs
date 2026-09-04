@@ -17,6 +17,7 @@ use crate::components::{
 use crate::context::AppContext;
 use crate::core_event::{InitialBootstrap, core_loop};
 use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
+use crate::message_loader::LoadedMessageCache;
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 
 mod account;
@@ -329,6 +330,7 @@ fn App() -> Element {
         selected_account,
         selection,
         message_view,
+        message_bodies: Rc::new(std::cell::RefCell::new(LoadedMessageCache::new())),
         download_status,
         connection_states,
         send_status,

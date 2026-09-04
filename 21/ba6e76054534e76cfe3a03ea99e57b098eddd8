@@ -1,0 +1,19 @@
+crates/mailiner-app/src/phishing.rs
+  s_1c9c21c574687c::t_28e47af45a0996 704-709,711
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "21ba6e76054534e76cfe3a03ea99e57b098eddd8",
+  "prompts": {},
+  "sessions": {
+    "s_1c9c21c574687c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a069f7-b459-7513-9e06-bffdbd736bfc",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

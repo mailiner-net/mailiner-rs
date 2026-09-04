@@ -1324,6 +1324,7 @@ a.accounts-link-btn {
 .privacy-sender-pref {
     color: var(--text-muted);
     flex-shrink: 0;
+}
 
 .folder-new {
     flex: 0 0 auto;
@@ -2163,6 +2164,8 @@ body:has(.compose-dock) .toast {
     margin: 0;
     font-size: var(--text-sm);
     color: var(--text-muted);
+}
+
 .attachment-preview-backdrop {
     position: fixed;
     inset: 0;

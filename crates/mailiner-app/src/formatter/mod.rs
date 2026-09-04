@@ -49,46 +49,77 @@ pub fn drop_inlined_payloads(parts: &mut [MessagePart], inlined_part_ids: &[Stri
 ///
 /// Referenced parts are retained up to [`mailiner_composer::caps::MAX_DRAFT_BYTES`]
 /// so a large newsletter cannot pin unbounded decoded binaries in the viewer.
-pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[String]) {
-    retain_cid_payloads_in_scope(parts, referenced_ids, None);
+///
+/// Returns `true` if any part content changed.
+pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[String]) -> bool {
+    retain_cid_payloads_in_scope(parts, referenced_ids, None)
 }
 
 /// Like [`retain_reply_cid_payloads`], but only mutates parts in `nested_in`.
 ///
 /// Other scopes are left intact so a nested `message/rfc822` can still be opened
 /// after the outer body has been formatted.
+///
+/// Returns `true` if any part content changed.
 pub fn retain_cid_payloads_in_scope(
     parts: &mut [MessagePart],
     referenced_ids: &[String],
     nested_in: Option<&str>,
-) {
+) -> bool {
     let mut kept = 0u64;
+    let mut changed = false;
     for part in parts {
-        if !part.in_scope(nested_in) {
-            continue;
+        if !keep_cid_part(part, referenced_ids, nested_in, &mut kept)
+            && !matches!(part.content, MessageContent::Empty)
+        {
+            part.content = MessageContent::Empty;
+            changed = true;
         }
-        let referenced = referenced_ids.iter().any(|id| part.id.as_str() == id);
-        if referenced {
-            let size = match &part.content {
-                MessageContent::Binary(b) => b.len() as u64,
-                MessageContent::Text(t) => t.len() as u64,
-                MessageContent::Empty => 0,
-            };
-            if kept.saturating_add(size) > mailiner_composer::caps::MAX_DRAFT_BYTES {
-                part.content = MessageContent::Empty;
-            } else {
-                kept = kept.saturating_add(size);
-            }
-            continue;
-        }
-        if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
-            continue;
-        }
-        if part.is_calendar() {
-            continue;
-        }
-        part.content = MessageContent::Empty;
     }
+    changed
+}
+
+/// `true` if [`retain_cid_payloads_in_scope`] would clear any part payload.
+///
+/// Used to avoid writing `message_view` when retention is already applied —
+/// that write retriggers the viewer format effect and freezes the page.
+pub fn cid_payloads_need_retention(
+    parts: &[MessagePart],
+    referenced_ids: &[String],
+    nested_in: Option<&str>,
+) -> bool {
+    let mut kept = 0u64;
+    parts.iter().any(|part| {
+        !keep_cid_part(part, referenced_ids, nested_in, &mut kept)
+            && !matches!(part.content, MessageContent::Empty)
+    })
+}
+
+fn keep_cid_part(
+    part: &MessagePart,
+    referenced_ids: &[String],
+    nested_in: Option<&str>,
+    kept: &mut u64,
+) -> bool {
+    if !part.in_scope(nested_in) {
+        return true;
+    }
+    if referenced_ids.iter().any(|id| part.id.as_str() == id) {
+        let size = match &part.content {
+            MessageContent::Binary(b) => b.len() as u64,
+            MessageContent::Text(t) => t.len() as u64,
+            MessageContent::Empty => 0,
+        };
+        if kept.saturating_add(size) > mailiner_composer::caps::MAX_DRAFT_BYTES {
+            return false;
+        }
+        *kept = kept.saturating_add(size);
+        return true;
+    }
+    if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
+        return true;
+    }
+    part.is_calendar()
 }
 
 impl FormatResult {
@@ -375,10 +406,21 @@ mod tests {
         let inlined = png_part("img", "<logo@x>", b"\x89PNG");
         let leftover = png_part("other", "<other@x>", b"\x89PNG extra");
         let mut parts = vec![html, inlined, leftover];
-        retain_reply_cid_payloads(&mut parts, &["img".into()]);
+        assert!(cid_payloads_need_retention(&parts, &["img".into()], None));
+        assert!(retain_reply_cid_payloads(&mut parts, &["img".into()]));
         assert!(matches!(parts[0].content, MessageContent::Text(_)));
         assert!(matches!(parts[1].content, MessageContent::Binary(_)));
         assert!(matches!(parts[2].content, MessageContent::Empty));
+        assert!(!cid_payloads_need_retention(&parts, &["img".into()], None));
+        assert!(!retain_reply_cid_payloads(&mut parts, &["img".into()]));
+    }
+
+    #[test]
+    fn retain_is_noop_for_plain_display_only() {
+        let mut parts = vec![part(PartKind::TextPlain, "text/plain", "hello")];
+        assert!(!cid_payloads_need_retention(&parts, &[], None));
+        assert!(!retain_reply_cid_payloads(&mut parts, &[]));
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
     }
 
     #[test]

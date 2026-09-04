@@ -21,7 +21,9 @@ use crate::context::{
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, MAIL_EXPORT_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
-use crate::formatter::{FormatOptions, MessageFormatter, retain_cid_payloads_in_scope};
+use crate::formatter::{
+    FormatOptions, MessageFormatter, cid_payloads_need_retention, retain_cid_payloads_in_scope,
+};
 use crate::keywords::{MessageKeywordChips, has_visible_keywords, keyword_tone};
 use crate::mail_file::{MailExportFormat, export_items_from};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
@@ -546,6 +548,20 @@ fn apply_cid_payload_retention(
     referenced: &[String],
     nested_in: Option<&str>,
 ) {
+    // The format effect reads `message_view`. `write()` dirties that signal
+    // even when parts are unchanged, which retriggers the effect forever and
+    // freezes the page (stylesheet never settles).
+    let needs_write = match &*ctx.message_view.peek() {
+        MessageViewState::Ready {
+            message_id: id,
+            loaded,
+            ..
+        } if id == message_id => cid_payloads_need_retention(&loaded.parts, referenced, nested_in),
+        _ => false,
+    };
+    if !needs_write {
+        return;
+    }
     let mut view = ctx.message_view.write();
     let MessageViewState::Ready {
         message_id: id,

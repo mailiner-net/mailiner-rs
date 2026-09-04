@@ -11,9 +11,9 @@ use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{AccountConfig, DEFAULT_SMTP_PORT, SmtpTlsMode, dev_form_prefill};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSmtpFields, FormPhase, FormStatusBanner, StatusMessage,
-    apply_smtp_test_outcome, build_config_from_form, credentials_changed, kind_label,
-    start_smtp_test, use_form_test_status_cleanup,
+    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
+    FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
+    credentials_changed, kind_label, start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -806,6 +806,7 @@ pub fn AccountNewPage() -> Element {
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
+    let mut signature = use_signal(String::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -925,6 +926,7 @@ pub fn AccountNewPage() -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -968,6 +970,7 @@ pub fn AccountNewPage() -> Element {
                 smtp_tls_mode(),
                 &smtp_remote_host(),
                 &smtp_remote_port(),
+                &signature(),
                 Utc::now(),
             ),
             phase,
@@ -1001,6 +1004,7 @@ pub fn AccountNewPage() -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             Utc::now(),
         ) {
             Ok(config) => {
@@ -1074,6 +1078,13 @@ pub fn AccountNewPage() -> Element {
                         set_smtp_open: move |v| smtp_open.set(v),
                         busy: busy,
                         open_advanced: !prefill.remote_host.is_empty() || !prefill.remote_port.is_empty(),
+                    }
+
+                    AccountSignatureFields {
+                        id_prefix: "account-new",
+                        signature: signature(),
+                        set_signature: move |v| signature.set(v),
+                        busy: busy,
                     }
 
                     AccountSmtpFields {
@@ -1173,6 +1184,7 @@ pub fn AccountEditPage(id: String) -> Element {
     let mut smtp_tls_mode = use_signal(|| SmtpTlsMode::Implicit);
     let mut smtp_remote_host = use_signal(String::new);
     let mut smtp_remote_port = use_signal(String::new);
+    let mut signature = use_signal(String::new);
     let mut open_smtp = use_signal(|| false);
 
     let mut phase = use_signal(|| FormPhase::Idle);
@@ -1234,6 +1246,7 @@ pub fn AccountEditPage(id: String) -> Element {
                         smtp_remote_port.set(String::new());
                         open_smtp.set(false);
                     }
+                    signature.set(cfg.signature.clone().unwrap_or_default());
                     original.set(Some(cfg));
                     load_state.set(EditLoadState::Ready);
                 }
@@ -1442,6 +1455,7 @@ pub fn AccountEditPage(id: String) -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             orig.created_at,
         ) {
             Ok(config) => {
@@ -1488,6 +1502,7 @@ pub fn AccountEditPage(id: String) -> Element {
                 smtp_tls_mode(),
                 &smtp_remote_host(),
                 &smtp_remote_port(),
+                &signature(),
                 orig.created_at,
             ),
             phase,
@@ -1524,6 +1539,7 @@ pub fn AccountEditPage(id: String) -> Element {
             smtp_tls_mode(),
             &smtp_remote_host(),
             &smtp_remote_port(),
+            &signature(),
             orig.created_at,
         ) {
             Ok(c) => c,
@@ -1575,6 +1591,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     ui.name = config.display_name.clone();
                     ui.email = config.email.clone();
                     ui.host = config.imap.host.clone();
+                    ui.signature = config.signature.clone();
                 }
                 core_tx.send(CoreEvent::AccountsChanged);
                 phase.set(FormPhase::Idle);
@@ -1640,6 +1657,13 @@ pub fn AccountEditPage(id: String) -> Element {
                         set_smtp_open: move |v| open_smtp.set(v),
                         busy: busy,
                         open_advanced: open_advanced,
+                    }
+
+                    AccountSignatureFields {
+                        id_prefix: "account-edit",
+                        signature: signature(),
+                        set_signature: move |v| signature.set(v),
+                        busy: busy,
                     }
 
                     AccountSmtpFields {

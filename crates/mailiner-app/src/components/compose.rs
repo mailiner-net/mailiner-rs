@@ -297,7 +297,16 @@ fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
     let preferred = crate::ui_prefs::load_default_from_account();
     let account = resolve_compose_account(ctx, preferred.as_ref())?;
     let identity = identity_from_account(account.name.clone(), account.email.clone());
-    let mut draft = DraftDocument::new_empty(&identity);
+    let mut draft = match build_draft(
+        ComposeIntent::New,
+        &identity,
+        None,
+        None,
+        account.signature.as_deref(),
+    ) {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
     apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
     Some((account, draft))
 }
@@ -343,7 +352,13 @@ pub fn open_reply_or_forward(
         return;
     };
     let identity = identity_from_account(account.name, account.email);
-    match build_draft(intent, &identity, Some(envelope), Some(loaded)) {
+    match build_draft(
+        intent,
+        &identity,
+        Some(envelope),
+        Some(loaded),
+        account.signature.as_deref(),
+    ) {
         Ok(mut draft) => {
             let mode = crate::ui_prefs::load_compose_body_mode();
             apply_compose_body_mode(&mut draft, mode);

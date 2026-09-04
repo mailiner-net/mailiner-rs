@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, ImapSettings, ProxySettings, SmtpTlsMode, default_port_for_tls_mode,
-    optional_smtp_from_tls_mode, port_for_tls_mode_change,
+    normalize_signature, optional_smtp_from_tls_mode, port_for_tls_mode_change,
 };
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
@@ -127,6 +127,7 @@ pub fn build_config_from_form(
     smtp_tls_mode: SmtpTlsMode,
     smtp_remote_host: &str,
     smtp_remote_port: &str,
+    signature: &str,
     created_at: chrono::DateTime<Utc>,
 ) -> Result<AccountConfig, String> {
     let display_name = display_name.trim();
@@ -196,6 +197,7 @@ pub fn build_config_from_form(
         id: account_id.clone(),
         display_name: display_name.to_string(),
         email: email.to_string(),
+        signature: normalize_signature(signature),
         imap: ImapSettings {
             host,
             port,
@@ -601,6 +603,42 @@ pub fn AccountConnectionFields(
     }
 }
 
+/// Optional plain-text signature (new / reply / forward drafts).
+#[component]
+pub fn AccountSignatureFields(
+    id_prefix: String,
+    signature: String,
+    set_signature: EventHandler<String>,
+    busy: bool,
+) -> Element {
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { "Signature" }
+            p {
+                class: "bootstrap-muted",
+                "Optional plain text appended to new, reply, and forward messages."
+            }
+            div {
+                class: "onboarding-field",
+                label {
+                    r#for: "{id_prefix}-signature",
+                    "Signature"
+                }
+                textarea {
+                    id: "{id_prefix}-signature",
+                    name: "{id_prefix}-signature",
+                    value: "{signature}",
+                    rows: 4,
+                    disabled: busy,
+                    placeholder: "Jane Doe",
+                    oninput: move |e| set_signature.call(e.value()),
+                }
+            }
+        }
+    }
+}
+
 /// Optional SMTP fields (collapsed advanced).
 ///
 /// Empty section persists as `smtp: None`. Leave password blank to reuse IMAP password later.
@@ -851,6 +889,7 @@ mod tests {
             smtp_tls_mode,
             smtp_remote_host,
             smtp_remote_port,
+            "",
             Utc::now(),
         )
     }

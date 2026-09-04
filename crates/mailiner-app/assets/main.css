@@ -354,7 +354,8 @@ button.flat {
 }
 
 .onboarding-field input,
-.onboarding-field select {
+.onboarding-field select,
+.onboarding-field textarea {
     font: inherit;
     font-size: 0.95rem;
     padding: 0.45rem 0.6rem;
@@ -371,15 +372,22 @@ button.flat {
     cursor: pointer;
 }
 
+.onboarding-field textarea {
+    min-height: 5.5rem;
+    resize: vertical;
+}
+
 .onboarding-field input:focus,
-.onboarding-field select:focus {
+.onboarding-field select:focus,
+.onboarding-field textarea:focus {
     outline: 2px solid color-mix(in srgb, var(--item-accent) 45%, transparent);
     outline-offset: 1px;
     border-color: var(--item-accent);
 }
 
 .onboarding-field input:disabled,
-.onboarding-field select:disabled {
+.onboarding-field select:disabled,
+.onboarding-field textarea:disabled {
     opacity: 0.65;
     background: var(--input-disabled);
     cursor: default;

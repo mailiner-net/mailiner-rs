@@ -404,6 +404,7 @@ mod tests {
             id: AccountId::new(id),
             display_name: name.into(),
             email: format!("{name}@example.com"),
+            signature: None,
             imap: ImapSettings {
                 host: "imap.example.com".into(),
                 port: 993,

@@ -210,7 +210,10 @@ pub fn MessageList() -> Element {
                         "No matching loaded messages"
                     }
                 } else if filtering {
+                    // Remount when the query changes so a prior scroll offset
+                    // cannot sit below the new (shorter) list.
                     VirtualScroll {
+                        key: "{filter_query}",
                         items: filtered_items,
                         item_height: density.item_height(),
                         buffer_size: BUFFER_SIZE,

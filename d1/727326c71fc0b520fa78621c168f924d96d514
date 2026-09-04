@@ -1,0 +1,60 @@
+crates/mailiner-app/src/account_store.rs
+  s_b64ac0c269c1b0::t_a5dadf15df93e1 407
+crates/mailiner-app/src/account.rs
+  s_b64ac0c269c1b0::t_5dbc0af4b1b44c 3-4,14-27
+crates/mailiner-app/src/components/account_form.rs
+  s_b64ac0c269c1b0::t_d6c2a4591c4f9d 9,913-1005
+  s_b64ac0c269c1b0::t_51956c0e311f40 340
+  s_b64ac0c269c1b0::t_254b0b7d1a0de7 1449-1464
+crates/mailiner-app/src/draft_store.rs
+  s_b64ac0c269c1b0::t_5466fd7b77a4aa 755,763-768,772,779-781
+  s_b64ac0c269c1b0::t_e020ea91da607a 273,297,537-563
+crates/mailiner-app/src/components/accounts.rs
+  s_b64ac0c269c1b0::t_fc25444a8369b2 1215
+  s_b64ac0c269c1b0::t_e68aad3125a86f 1633,1703-1707
+  s_b64ac0c269c1b0::t_a536b7efeb074f 1491-1493,1541-1542,1580-1582
+  s_b64ac0c269c1b0::t_c23ed436856e90 940-942,987-988
+  s_b64ac0c269c1b0::t_584ed4276852c5 1279
+  s_b64ac0c269c1b0::t_056e5a0c198606 13,17-18,817
+  s_b64ac0c269c1b0::t_9ac677873273d5 1023-1025,1101-1105
+crates/mailiner-app/assets/main.css
+  s_b64ac0c269c1b0::t_4cbc56a5f9bb02 410-433
+crates/mailiner-app/src/account_config.rs
+  s_b64ac0c269c1b0::t_2d0efcb6b6a3d9 643,647-665,1005
+  s_b64ac0c269c1b0::t_e4f28704128950 1276,1312,1330-1407
+  s_b64ac0c269c1b0::t_965f2ff659a728 47-149,161-163
+crates/mailiner-app/src/components/compose.rs
+  s_b64ac0c269c1b0::t_77d3699c5fd976 360-362
+  s_b64ac0c269c1b0::t_931d52eeea8755 1241,1277,1287,1294-1298,1303
+  s_b64ac0c269c1b0::t_27192e31744ffc 393-404
+  s_b64ac0c269c1b0::t_fe364cea6de2f8 31,2017
+  s_b64ac0c269c1b0::t_507e47ff6c5348 1300-1301
+  s_b64ac0c269c1b0::t_69198b8fffccb9 1591,1593,1597,1602-1610,1616,1618-1619,1624,1626-1628,1638
+  s_b64ac0c269c1b0::t_63b0b9c1516a1b 469,471-477
+  s_b64ac0c269c1b0::t_f2001d7201d697 327
+  s_b64ac0c269c1b0::t_7721d6938c5fd1 21-22,32-33
+crates/mailiner-app/src/local_data.rs
+  s_b64ac0c269c1b0::t_925b88df308ae4 182
+crates/mailiner-app/src/smtp_session.rs
+  s_b64ac0c269c1b0::t_cb2e0665f15ce6 267
+crates/mailiner-app/src/send.rs
+  s_b64ac0c269c1b0::t_548fc6f29dc0f4 56-185,191-195,209,212,215-216,221-228
+  s_b64ac0c269c1b0::t_e267b2fccb9c20 9-10
+  s_b64ac0c269c1b0::t_c50d76665bed01 420-531
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d1727326c71fc0b520fa78621c168f924d96d514",
+  "prompts": {},
+  "sessions": {
+    "s_b64ac0c269c1b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a46-3d9c-7b62-9bce-d9b2f0bd1d04",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

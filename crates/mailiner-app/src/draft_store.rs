@@ -294,7 +294,7 @@ impl PersistedComposeDraft {
             reply_source: self.reply_source,
             draft: DraftDocument {
                 id: DraftId(self.draft_id),
-                from: self.from.as_ref().map(ComposerAddress::from),
+                from: None,
                 to: self.to.iter().map(ComposerAddress::from).collect(),
                 cc: self.cc.iter().map(ComposerAddress::from).collect(),
                 bcc: self.bcc.iter().map(ComposerAddress::from).collect(),

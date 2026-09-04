@@ -1,0 +1,19 @@
+crates/mailiner-core/src/imap_search.rs
+  s_312d42d1c61716::t_a7460863ac1ae5 489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "edaef32c90038a6e2e57f60db303bda425dd0e0f",
+  "prompts": {},
+  "sessions": {
+    "s_312d42d1c61716": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06a73-e9dd-7a03-8f96-f6e1a431f1f0",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

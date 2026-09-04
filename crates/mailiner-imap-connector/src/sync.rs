@@ -639,7 +639,8 @@ mod tests {
     #[test]
     fn expand_vanished_ranges() {
         assert_eq!(expand_uid_ranges(&[1..=3, 8..=8]), vec![1, 2, 3, 8]);
-        assert!(expand_uid_ranges(&[1..=2_000_000]).is_empty());
+        let huge = 1u32..=2_000_000;
+        assert!(expand_uid_ranges(std::slice::from_ref(&huge)).is_empty());
     }
 
     fn prior(uids: &[u32], sort: MessageSort) -> FolderSyncState {

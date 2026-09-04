@@ -3997,8 +3997,6 @@ Received-SPF: pass\r\n\
             } else if upper.contains("UID SEARCH") {
                 if upper.contains("UNSEEN") {
                     write_all(&mut server, &reply_search(tag, "1")).await;
-                } else if upper.contains("ALL") {
-                    write_all(&mut server, &reply_search(tag, "1 2 3")).await;
                 } else {
                     write_all(&mut server, &reply_search(tag, "1 2 3")).await;
                 }

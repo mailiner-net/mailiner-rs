@@ -101,15 +101,17 @@ pub struct AppContext {
     pub mailbox_roots: Signal<Vec<MailboxId>>,
     /// Sparse cache of envelopes for the selected mailbox (order = [`Self::message_sort`]).
     pub messages: Signal<SparseList<Arc<Message>>>,
-    /// Client-side subject/from filter over loaded rows (empty = show all).
+    /// Search-box draft (not applied until Enter / Search).
     pub list_text_filter: Signal<String>,
+    /// Applied IMAP SEARCH query for the open folder (empty = whole folder).
+    pub list_search_query: Signal<String>,
     /// True while SELECT / EXISTS is in flight for the selected mailbox.
     pub messages_loading: Signal<bool>,
     /// Active list sort (may fall back if the server lacks IMAP SORT).
     pub message_sort: Signal<mailiner_core::MessageSort>,
     /// Virtualized message-list row density.
     pub message_list_density: Signal<MessageListDensity>,
-    /// Quick list filters (Unread / Flagged via SEARCH; attachment is client-side).
+    /// Quick list filters (Unread / Flagged via SEARCH; attachment chip is client-side).
     pub message_list_filter: Signal<mailiner_core::MessageListFilter>,
     /// Server advertised RFC 5256 `SORT` (Size / Sender; Date uses it when present).
     pub sort_supports_size_sender: Signal<bool>,

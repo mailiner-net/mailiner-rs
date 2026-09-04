@@ -2403,8 +2403,28 @@ body:has(.compose-dock) .toast {
 }
 
 .message-list-filter .ui-input {
+    flex: 1;
+    min-width: 0;
     font-size: var(--text-sm);
     padding: 0.3rem 0.5rem;
+}
+
+.message-list-search-btn {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--foreground);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.3rem 0.55rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.message-list-search-btn:hover {
+    background: var(--item-hover-background);
 }
 
 .message-list-filter-count {

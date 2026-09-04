@@ -12,9 +12,7 @@ use crate::core_event::CoreEvent;
 use crate::keywords::MessageKeywordChips;
 use crate::mailbox::MailboxId;
 use crate::message::Message;
-use crate::message_list_filter::{
-    message_matches_filter, message_matches_text_filter, text_filter_is_active,
-};
+use crate::message_list_filter::message_matches_filter;
 use crate::selection::drag_message_ids;
 use chrono::{DateTime, Utc};
 
@@ -46,15 +44,14 @@ pub fn MessageList() -> Element {
     let selected_n = ctx.selection.read().len();
     let mut list_text_filter = ctx.list_text_filter;
     let filter_query = list_text_filter.read().clone();
-    let filtering_text = text_filter_is_active(&filter_query);
-    let filtering = filtering_text || filter.has_attachment;
+    let search_query = ctx.list_search_query.read().clone();
+    let search_active = mailiner_core::mailbox_search_is_active(&search_query);
+    let filtering = filter.has_attachment;
     let filtered_matches: Vec<Arc<Message>> = if filtering {
         ctx.messages
             .read()
             .iter()
-            .filter(|m| {
-                message_matches_text_filter(m, &filter_query) && message_matches_filter(m, filter)
-            })
+            .filter(|m| message_matches_filter(m, filter))
             .cloned()
             .collect()
     } else {
@@ -141,21 +138,50 @@ pub fn MessageList() -> Element {
                     input {
                         class: "ui-input",
                         r#type: "search",
+                        id: "mailbox-search",
                         value: "{filter_query}",
-                        placeholder: "Filter subject or from",
-                        aria_label: "Filter loaded messages by subject or from",
-                        title: "Filter loaded messages by subject or from (no server search)",
+                        placeholder: "Search this folder",
+                        aria_label: "Search this folder",
+                        title: "IMAP search (Enter). from: to: subject: body: after: before: is:unread is:flagged has:attachment",
                         autocomplete: "off",
                         spellcheck: false,
                         oninput: move |evt| list_text_filter.set(evt.value()),
                         onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key() == Key::Escape && !list_text_filter.peek().is_empty() {
+                            if evt.key() == Key::Enter {
+                                evt.prevent_default();
+                                let query = list_text_filter.peek().clone();
+                                let _ = core_tx.send(CoreEvent::ApplyMailboxSearch { query });
+                            } else if evt.key() == Key::Escape
+                                && (!list_text_filter.peek().is_empty()
+                                    || mailiner_core::mailbox_search_is_active(
+                                        ctx.list_search_query.peek().as_str(),
+                                    ))
+                            {
                                 evt.prevent_default();
                                 list_text_filter.set(String::new());
+                                let _ = core_tx.send(CoreEvent::ApplyMailboxSearch {
+                                    query: String::new(),
+                                });
                             }
                         },
                     }
-                    if filtering {
+                    button {
+                        r#type: "button",
+                        class: "message-list-search-btn",
+                        title: "Search this folder (Enter)",
+                        onclick: move |_| {
+                            let query = list_text_filter.peek().clone();
+                            let _ = core_tx.send(CoreEvent::ApplyMailboxSearch { query });
+                        },
+                        "Search"
+                    }
+                    if search_active {
+                        span {
+                            class: "message-list-filter-count",
+                            aria_live: "polite",
+                            "{total} results"
+                        }
+                    } else if filtering {
                         span {
                             class: "message-list-filter-count",
                             aria_live: "polite",
@@ -231,14 +257,14 @@ pub fn MessageList() -> Element {
                 } else if loading {
                     div {
                         class: "message-list-empty",
-                        "Loading…"
+                        if search_active { "Searching…" } else { "Loading…" }
                     }
-                } else if total == 0 && filter.is_empty() && !filtering_text {
+                } else if total == 0 && filter.is_empty() && !search_active {
                     div {
                         class: "message-list-empty",
                         "No messages"
                     }
-                } else if total == 0 && !filter.is_empty() && !filter.has_attachment {
+                } else if total == 0 && (search_active || !filter.is_empty()) && !filter.has_attachment {
                     div {
                         class: "message-list-empty",
                         "No matching messages"
@@ -249,10 +275,10 @@ pub fn MessageList() -> Element {
                         "No matching loaded messages"
                     }
                 } else if filtering {
-                    // Remount when the query or attachment chip changes so a
-                    // prior scroll offset cannot sit below the new list.
+                    // Remount when the attachment chip changes so a prior
+                    // scroll offset cannot sit below the new list.
                     VirtualScroll {
-                        key: "{filter_query}-{filter.has_attachment}",
+                        key: "attach-{filter.has_attachment}",
                         items: filtered_items,
                         item_height: density.item_height(),
                         buffer_size: BUFFER_SIZE,
@@ -266,6 +292,7 @@ pub fn MessageList() -> Element {
                     }
                 } else {
                     VirtualScroll {
+                        key: "search-{search_query}",
                         items: ctx.messages,
                         item_height: density.item_height(),
                         buffer_size: BUFFER_SIZE,

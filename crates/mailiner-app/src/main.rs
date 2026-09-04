@@ -312,6 +312,7 @@ fn App() -> Element {
 
     let messages = use_signal(|| SparseList::new(0));
     let list_text_filter = use_signal(String::new);
+    let list_search_query = use_signal(String::new);
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
@@ -354,6 +355,7 @@ fn App() -> Element {
         mailbox_roots,
         messages,
         list_text_filter,
+        list_search_query,
         messages_loading,
         message_sort,
         message_list_density,

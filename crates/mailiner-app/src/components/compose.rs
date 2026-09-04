@@ -17,9 +17,12 @@ use mailiner_composer::shell::attachment_list::{
 };
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
-    AttachmentData, ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError,
-    SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, draft_from_stored_message,
-    is_safe_image_content_type, is_valid_email_v1, plain_to_html, prepare_draft, prepare_submit,
+    AttachmentData, ComposeIntent, EDITOR_HOST_ID, EditorCommand, FileAttachment, InlineImage,
+    PrepareSubmitError, SAFE_IMAGE_ACCEPT, apply_preferred_mode, build_draft, caps,
+    capture_live_body, default_toolbar, discard_rich_quote, draft_from_stored_message,
+    editor_img_tag, exec_editor_command, insert_editor_html, is_safe_image_content_type,
+    is_valid_email_v1, mount_editor, prepare_draft, prepare_export_bodies, prepare_submit,
+    read_editor_html, set_editor_enabled, switch_body_mode,
 };
 use mailiner_core::DsnRequest;
 
@@ -90,28 +93,16 @@ fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
     })
 }
 
-/// Apply the settings default. The overlay is a textarea; Rich sends an HTML
-/// alternative of that text (reply HTML quotes are re-derived from the plain body).
-fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
+fn pref_to_body_mode(mode: ComposeBodyMode) -> BodyMode {
     match mode {
-        ComposeBodyMode::Plain => {
-            draft.mode = BodyMode::Plain;
-            draft.html_body.clear();
-            draft.plain_cache_dirty = false;
-        }
-        ComposeBodyMode::Rich => {
-            draft.mode = BodyMode::Rich;
-            draft.html_body = plain_to_html(&draft.plain_body);
-            draft.plain_cache_dirty = false;
-        }
+        ComposeBodyMode::Plain => BodyMode::Plain,
+        ComposeBodyMode::Rich => BodyMode::Rich,
     }
 }
 
-fn compose_body_mode_from_draft(draft: &DraftDocument) -> ComposeBodyMode {
-    match draft.mode {
-        BodyMode::Plain => ComposeBodyMode::Plain,
-        BodyMode::Rich => ComposeBodyMode::Rich,
-    }
+/// Apply the settings default when opening a draft. Prefill HTML is kept in Rich.
+fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
+    apply_preferred_mode(draft, pref_to_body_mode(mode));
 }
 
 fn find_unquoted(s: &str, needle: char) -> Option<usize> {
@@ -274,6 +265,8 @@ struct ComposeForm {
     bcc: RecipientList,
     subject: Signal<String>,
     body: Signal<String>,
+    html: Signal<String>,
+    mode: Signal<BodyMode>,
 }
 
 fn apply_draft_fields(draft: &DraftDocument, form: &mut ComposeForm) {
@@ -282,6 +275,51 @@ fn apply_draft_fields(draft: &DraftDocument, form: &mut ComposeForm) {
     form.bcc.apply(&draft.bcc);
     form.subject.set(draft.subject.clone());
     form.body.set(draft.plain_body.clone());
+    form.html.set(draft.html_body.clone());
+    form.mode.set(draft.mode);
+}
+
+fn live_html_snapshot(fallback: &str) -> String {
+    read_editor_html(EDITOR_HOST_ID).unwrap_or_else(|| fallback.to_string())
+}
+
+fn apply_mode_toggle(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    mut body: Signal<String>,
+    mut html: Signal<String>,
+    mut mode: Signal<BodyMode>,
+    next: BodyMode,
+) {
+    if *mode.peek() == next {
+        return;
+    }
+    let live_html = if *mode.peek() == BodyMode::Rich {
+        live_html_snapshot(&html.peek())
+    } else {
+        String::new()
+    };
+    let Some(session) = compose_draft.peek().clone() else {
+        return;
+    };
+    let switched = switch_body_mode(&session.draft, &body.peek(), &live_html, next);
+    mode.set(switched.mode);
+    body.set(switched.plain.clone());
+    html.set(switched.html.clone());
+    let mut slot = compose_draft.write();
+    if let Some(session) = slot.as_mut() {
+        session.draft.mode = switched.mode;
+        session.draft.plain_body = switched.plain;
+        session.draft.html_body = switched.html;
+        if switched.mode == BodyMode::Plain {
+            discard_rich_quote(&mut session.draft);
+            session.draft.plain_body = body.peek().clone();
+        }
+        session.draft.touch();
+    }
+}
+
+fn run_toolbar_command(command: EditorCommand) {
+    let _ = exec_editor_command(EDITOR_HOST_ID, command, None);
 }
 
 fn compose_send_state(ctx: &AppContext) -> Option<SendState> {
@@ -411,11 +449,7 @@ pub fn open_reply_or_forward(
             if matches!(intent, ComposeIntent::Reply | ComposeIntent::ReplyAll) {
                 strip_account_identities(&mut draft, &account);
             }
-            let mode = crate::ui_prefs::load_compose_body_mode();
-            apply_compose_body_mode(&mut draft, mode);
-            if mode == ComposeBodyMode::Plain {
-                discard_rich_quote(&mut draft);
-            }
+            apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
             let title = match intent {
                 ComposeIntent::Forward => "Forward",
                 ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",
@@ -453,11 +487,7 @@ pub fn open_imap_draft(
     let identity = identity_from_stored(&resolve_account_identity(&account, from.as_ref()));
     match draft_from_stored_message(&identity, envelope, loaded) {
         Ok(mut draft) => {
-            let mode = crate::ui_prefs::load_compose_body_mode();
-            apply_compose_body_mode(&mut draft, mode);
-            if mode == ComposeBodyMode::Plain {
-                discard_rich_quote(&mut draft);
-            }
+            apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
             open_compose(
                 ctx,
                 ComposeSession {
@@ -515,7 +545,6 @@ fn submit_compose(
         return;
     };
     let identity = identity_from_stored(&resolve_account_identity(&account, draft.from.as_ref()));
-    let mode = compose_body_mode_from_draft(&draft);
     if draft
         .from
         .as_ref()
@@ -523,13 +552,9 @@ fn submit_compose(
     {
         draft.from = Some(composer_address_from_identity(&identity));
     }
-    draft.plain_body = form.body.peek().clone();
     draft.subject = form.subject.peek().clone();
-    apply_compose_body_mode(&mut draft, mode);
-    if !draft.inline_images.is_empty() {
-        draft.html_body = html_for_plain_with_inlines(&draft.plain_body, &draft.inline_images);
-        draft.plain_cache_dirty = false;
-    }
+    let live_html = live_html_snapshot(&form.html.peek());
+    prepare_export_bodies(&mut draft, &form.body.peek(), &live_html);
     draft.to = form.to.take_committed();
     draft.cc = form.cc.take_committed();
     draft.bcc = form.bcc.take_committed();
@@ -605,10 +630,15 @@ enum AttachKind {
 }
 
 fn live_payload_bytes(draft: &DraftDocument, live_plain: &str) -> u64 {
-    let live_html_len = if draft.mode == BodyMode::Rich {
-        plain_to_html(live_plain).len() as u64
-    } else {
-        0
+    let live_html_len = match draft.mode {
+        BodyMode::Rich => live_html_snapshot(&draft.html_body).len() as u64,
+        BodyMode::Plain => {
+            if draft.inline_images.is_empty() {
+                0
+            } else {
+                html_for_plain_with_inlines(live_plain, &draft.inline_images).len() as u64
+            }
+        }
     };
     draft_payload_bytes(draft)
         .saturating_sub(draft.plain_body.len() as u64)
@@ -758,13 +788,21 @@ fn session_with_live_fields(
     bcc_draft: &str,
     subject: &str,
     body: &str,
+    html: &str,
+    mode: BodyMode,
 ) -> ComposeSession {
     let mut session = session.clone();
     session.draft.to = commit_input(to, to_draft, true).0;
     session.draft.cc = commit_input(cc, cc_draft, true).0;
     session.draft.bcc = commit_input(bcc, bcc_draft, true).0;
     session.draft.subject = subject.to_string();
-    session.draft.plain_body = body.to_string();
+    session.draft.mode = mode;
+    let live_html = if mode == BodyMode::Rich {
+        live_html_snapshot(html)
+    } else {
+        String::new()
+    };
+    capture_live_body(&mut session.draft, body, &live_html);
     session.draft.touch();
     session
 }
@@ -779,6 +817,8 @@ fn persist_live_draft(
     bcc_draft: Signal<String>,
     subject: Signal<String>,
     body: Signal<String>,
+    html: Signal<String>,
+    mode: Signal<BodyMode>,
 ) -> Option<ComposeSession> {
     let session = compose_draft.peek().clone()?;
     let live = session_with_live_fields(
@@ -791,6 +831,8 @@ fn persist_live_draft(
         &bcc_draft.peek(),
         &subject.peek(),
         &body.peek(),
+        &html.peek(),
+        *mode.peek(),
     );
     persist_session(&live);
     Some(live)
@@ -854,6 +896,8 @@ fn close_keeping_draft(
     bcc_draft: Signal<String>,
     subject: Signal<String>,
     body: Signal<String>,
+    html: Signal<String>,
+    mode: Signal<BodyMode>,
     accounts: Signal<HashMap<AccountId, Account>>,
     core: &Coroutine<CoreEvent>,
 ) {
@@ -869,6 +913,8 @@ fn close_keeping_draft(
         bcc_draft,
         subject,
         body,
+        html,
+        mode,
     ) {
         queue_imap_draft_save(accounts, core, &live);
     }
@@ -1084,7 +1130,16 @@ fn attach_one_bytes(
         }
         AttachKind::Inline => {
             let image = inline_image(Some(item.filename), item.content_type, item.bytes);
-            push_inline_on_draft(compose_draft, draft_id, image, body)
+            let tag = editor_img_tag(&image);
+            let rich = compose_draft
+                .peek()
+                .as_ref()
+                .is_some_and(|s| s.draft.mode == BodyMode::Rich);
+            let pushed = push_inline_on_draft(compose_draft, draft_id, image, body);
+            if matches!(pushed, PushAttachment::Added) && rich {
+                let _ = insert_editor_html(EDITOR_HOST_ID, &tag);
+            }
+            pushed
         }
     };
     match pushed {
@@ -1325,6 +1380,9 @@ pub fn ComposeOverlay() -> Element {
     let bcc_draft = use_signal(String::new);
     let mut subject = use_signal(String::new);
     let mut body = use_signal(String::new);
+    let html = use_signal(String::new);
+    let mode = use_signal(|| BodyMode::Plain);
+    let mut html_tick = use_signal(|| 0u32);
     let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let last_draft_id = use_signal(|| None::<String>);
@@ -1353,6 +1411,8 @@ pub fn ComposeOverlay() -> Element {
         },
         subject,
         body,
+        html,
+        mode,
     };
     let mut include_original = use_signal(|| true);
     let mut notify_success = use_signal(|| false);
@@ -1496,6 +1556,8 @@ pub fn ComposeOverlay() -> Element {
                 bcc_draft(),
                 subject(),
                 body(),
+                html_tick(),
+                mode(),
             );
             let generation = *save_gen.peek() + 1;
             save_gen.set(generation);
@@ -1519,6 +1581,8 @@ pub fn ComposeOverlay() -> Element {
                     bcc_draft,
                     subject,
                     body,
+                    html,
+                    mode,
                 );
             });
         });
@@ -1564,7 +1628,7 @@ pub fn ComposeOverlay() -> Element {
     }
 
     let no_account = ctx.accounts.read().is_empty();
-    let mut compose_draft = ctx.compose_draft;
+    let compose_draft = ctx.compose_draft;
     let mut compose_placement = ctx.compose_placement;
     let docked = *compose_placement.read() == ComposePlacement::Docked;
     let run_close = move || {
@@ -1579,6 +1643,8 @@ pub fn ComposeOverlay() -> Element {
             bcc_draft,
             subject,
             body,
+            html,
+            mode,
             ctx.accounts,
             &core,
         );
@@ -1587,6 +1653,14 @@ pub fn ComposeOverlay() -> Element {
     let discard = move |_| {
         discard_draft(save_gen, compose_draft, &core);
     };
+    let rich = mode() == BodyMode::Rich;
+    {
+        use_effect(move || {
+            if mode() == BodyMode::Rich {
+                set_editor_enabled(EDITOR_HOST_ID, !sending);
+            }
+        });
+    }
 
     rsx! {
         if !open {
@@ -1824,16 +1898,99 @@ pub fn ComposeOverlay() -> Element {
                             oninput: move |e| subject.set(e.value()),
                         }
                     }
-                    label {
+                    div {
                         class: "ui-field ui-field-grow",
-                        span { "Message" }
-                        textarea {
-                            class: "ui-input",
-                            spellcheck: spellcheck_attr(SpellcheckField::Body),
-                            value: body(),
-                            disabled: sending,
-                            rows: 10,
-                            oninput: move |e| body.set(e.value()),
+                        div {
+                            class: "compose-body-head",
+                            span { "Message" }
+                            div {
+                                class: "compose-mode-toggle",
+                                role: "group",
+                                aria_label: "Message format",
+                                button {
+                                    class: if !rich { "compose-mode-btn is-active" } else { "compose-mode-btn" },
+                                    r#type: "button",
+                                    aria_pressed: if !rich { "true" } else { "false" },
+                                    disabled: sending,
+                                    onclick: move |_| {
+                                        apply_mode_toggle(
+                                            compose_draft,
+                                            body,
+                                            html,
+                                            mode,
+                                            BodyMode::Plain,
+                                        );
+                                    },
+                                    "Plain"
+                                }
+                                button {
+                                    class: if rich { "compose-mode-btn is-active" } else { "compose-mode-btn" },
+                                    r#type: "button",
+                                    aria_pressed: if rich { "true" } else { "false" },
+                                    disabled: sending,
+                                    onclick: move |_| {
+                                        apply_mode_toggle(
+                                            compose_draft,
+                                            body,
+                                            html,
+                                            mode,
+                                            BodyMode::Rich,
+                                        );
+                                    },
+                                    "Rich"
+                                }
+                            }
+                        }
+                        if rich {
+                            div {
+                                class: "compose-rich",
+                                div {
+                                    class: "compose-toolbar",
+                                    role: "toolbar",
+                                    aria_label: "Formatting",
+                                    for item in default_toolbar().iter().copied() {
+                                        button {
+                                            class: "compose-toolbar-btn",
+                                            r#type: "button",
+                                            title: "{item.title}",
+                                            aria_label: "{item.title}",
+                                            disabled: sending,
+                                            onmousedown: move |evt| evt.prevent_default(),
+                                            onclick: move |_| {
+                                                run_toolbar_command(item.command);
+                                            },
+                                            "{item.label}"
+                                        }
+                                    }
+                                }
+                                div {
+                                    id: EDITOR_HOST_ID,
+                                    class: "compose-editor-host",
+                                    key: "{last_draft_id().unwrap_or_default()}-rich",
+                                    onmounted: move |_| {
+                                        let html = html.peek().clone();
+                                        let images = compose_draft
+                                            .peek()
+                                            .as_ref()
+                                            .map(|s| s.draft.inline_images.clone())
+                                            .unwrap_or_default();
+                                        mount_editor(EDITOR_HOST_ID, &html, &images);
+                                        set_editor_enabled(EDITOR_HOST_ID, !sending);
+                                    },
+                                    oninput: move |_| {
+                                        html_tick.set(html_tick() + 1);
+                                    },
+                                }
+                            }
+                        } else {
+                            textarea {
+                                class: "ui-input",
+                                spellcheck: spellcheck_attr(SpellcheckField::Body),
+                                value: body(),
+                                disabled: sending,
+                                rows: 10,
+                                oninput: move |e| body.set(e.value()),
+                            }
                         }
                     }
                     div {
@@ -2185,37 +2342,42 @@ mod tests {
     }
 
     #[test]
-    fn apply_rich_builds_html_from_plain() {
+    fn apply_rich_keeps_prefilled_html() {
         let mut draft = empty_draft();
+        draft.mode = BodyMode::Rich;
+        draft.plain_body = "Quoted HTML".into();
+        draft.html_body = "<p>Quoted <b>HTML</b></p>".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        assert_eq!(draft.mode, BodyMode::Rich);
+        assert!(draft.html_body.contains("Quoted"), "{}", draft.html_body);
+        assert!(
+            draft.html_body.contains("<b>") || draft.html_body.contains("<strong>"),
+            "{}",
+            draft.html_body
+        );
+    }
+
+    #[test]
+    fn apply_rich_builds_html_from_plain_source() {
+        let mut draft = empty_draft();
+        draft.mode = BodyMode::Plain;
         draft.plain_body = "Hello\n\nWorld".into();
+        draft.html_body.clear();
         apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
         assert_eq!(draft.mode, BodyMode::Rich);
-        assert_eq!(draft.html_body, plain_to_html("Hello\n\nWorld"));
-        assert!(draft.html_body.contains("<p>Hello</p>"));
-        assert!(draft.html_body.contains("<p>World</p>"));
+        assert!(draft.html_body.contains("Hello"), "{}", draft.html_body);
+        assert!(draft.html_body.contains("World"), "{}", draft.html_body);
     }
 
     #[test]
-    fn submit_uses_draft_mode_not_current_pref() {
+    fn live_payload_counts_stored_rich_html() {
         let mut draft = empty_draft();
-        draft.plain_body = "Hi".into();
-        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
-        let mode = compose_body_mode_from_draft(&draft);
-        draft.plain_body = "Hi there".into();
-        apply_compose_body_mode(&mut draft, mode);
-        assert_eq!(draft.mode, BodyMode::Rich);
-        assert_eq!(draft.html_body, plain_to_html("Hi there"));
-    }
-
-    #[test]
-    fn live_payload_counts_current_rich_html() {
-        let mut draft = empty_draft();
+        draft.mode = BodyMode::Plain;
         draft.plain_body = "Hi".into();
         apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
         let opened = draft_payload_bytes(&draft);
         let live = live_payload_bytes(&draft, "Hi there");
-        let expected_html = plain_to_html("Hi there").len() as u64;
-        assert!(live > opened);
-        assert_eq!(live, "Hi there".len() as u64 + expected_html);
+        assert_eq!(live, "Hi there".len() as u64 + draft.html_body.len() as u64);
+        assert!(live >= opened);
     }
 }

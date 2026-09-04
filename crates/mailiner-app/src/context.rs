@@ -272,6 +272,16 @@ impl AppContext {
 
     /// Wipe session UI after a full local-data delete (onboarding is next).
     pub fn reset_after_sign_out(&mut self) {
+        self.reset_session_ui();
+        self.mail_layout.set(MailLayout::default());
+    }
+
+    /// Drop in-memory mail/secrets after locking the vault. Prefs stay put.
+    pub fn reset_after_lock(&mut self) {
+        self.reset_session_ui();
+    }
+
+    fn reset_session_ui(&mut self) {
         self.accounts.write().clear();
         self.selected_account.set(None);
         self.mailbox_nodes.write().clear();
@@ -296,7 +306,6 @@ impl AppContext {
         self.outbox.write().clear();
         self.toast.set(None);
         self.compose_draft.set(None);
-        self.mail_layout.set(MailLayout::default());
         self.mailbox_picker.set(None);
     }
 

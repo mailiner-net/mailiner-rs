@@ -31,11 +31,13 @@ You can use our proxy, or run your own, to prevent the email server operator fro
 tracking your location based on where you are connecting from — all traffic will
 look like it comes from the proxy.
 
-Account settings (including the IMAP password and proxy token), the local
-address book, and recent compose recipients are stored only in this browser on
-this device (localStorage).
-Mailiner has no server account. Anyone with access to this browser profile can
-read those secrets; clear site data to remove them.
+Account settings, the local address book, and recent compose recipients are
+stored only in this browser on this device (localStorage). Mailiner has no
+server account. IMAP/SMTP passwords and proxy tokens can be encrypted at rest
+with an optional unlock passphrase (WebCrypto AES-GCM, PBKDF2-SHA-256). Without
+a passphrase they remain plaintext in origin storage. Anyone with this browser
+profile can use Mailiner while a session is unlocked; clear site data to remove
+the vault.
 
 Mailiner also prevents malicious emails from executing JavaScript code or loading
 remote references that could reveal details about the user to the sender.

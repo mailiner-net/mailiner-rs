@@ -16,6 +16,7 @@ mod shortcuts;
 mod split;
 mod theme;
 mod toast;
+mod unlock;
 pub mod virtual_scroll;
 
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
@@ -31,3 +32,4 @@ pub use settings::SettingsPage;
 pub use shortcuts::ShortcutsHost;
 pub use split::{SplitAxis, SplitHandle};
 pub use toast::ToastHost;
+pub use unlock::UnlockForm;

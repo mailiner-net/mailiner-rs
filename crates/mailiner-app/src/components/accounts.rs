@@ -13,6 +13,7 @@ use crate::account_config::{
     AccountConfig, AccountIdentity, DEFAULT_SMTP_PORT, ImapTlsMode, SmtpTlsMode, dev_form_prefill,
     imap_tls_mode_from_legacy,
 };
+use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
     AccountConnectionFields, AccountIdentitiesFields, AccountSignatureFields, AccountSmtpFields,
     FormPhase, FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form,
@@ -242,13 +243,19 @@ pub fn AccountsSettingsPage() -> Element {
                     }
                 }
 
+                VaultSettings {
+                    store_ctx,
+                    action_error,
+                    bootstrap,
+                }
+
                 p {
                     class: "onboarding-disclosure bootstrap-muted accounts-security-note",
-                    "Security: IMAP passwords and proxy tokens are stored only in this browser \
-                     (localStorage). Mailiner has no server-side account. Anyone with access to \
-                     this browser profile can read stored credentials. On a shared device, use a \
-                     locked profile or clear site data when finished. Multi-tab edits are \
-                     last-write-wins."
+                    "Security: IMAP passwords and proxy tokens stay in this browser \
+                     (localStorage). An optional unlock passphrase encrypts them at rest with \
+                     WebCrypto AES-GCM. Anyone with this browser profile can still use Mailiner \
+                     while it is unlocked. On a shared device, lock the vault or clear site data \
+                     when finished. Multi-tab edits are last-write-wins."
                 }
 
                 section {
@@ -437,6 +444,245 @@ fn PrivacyPrefsSection() -> Element {
 enum DataConfirm {
     FullBackup,
     SignOut,
+}
+
+#[component]
+fn VaultSettings(
+    store_ctx: Signal<Option<AccountStoreContext>>,
+    mut action_error: Signal<Option<String>>,
+    mut bootstrap: Signal<AppBootstrapState>,
+) -> Element {
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let mut vault_tick = use_signal(|| 0u32);
+    let _ = vault_tick();
+    let state = store_ctx()
+        .map(|s| s.0.vault_state())
+        .unwrap_or(VaultState::Plaintext);
+
+    let mut current = use_signal(String::new);
+    let mut next = use_signal(String::new);
+    let mut confirm = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+
+    rsx! {
+        section {
+            class: "onboarding-section vault-section",
+            h2 { class: "accounts-data-title", "Unlock passphrase" }
+            p {
+                class: "bootstrap-muted",
+                match state {
+                    VaultState::Plaintext => {
+                        "Secrets are stored in plaintext in this browser. Set a passphrase to \
+                         encrypt IMAP/SMTP passwords and proxy tokens at rest."
+                    }
+                    VaultState::Unlocked => {
+                        "Stored secrets are encrypted. Lock this session, change the passphrase, \
+                         or remove encryption. Mailiner cannot recover a forgotten passphrase."
+                    }
+                    VaultState::Locked => {
+                        "Stored secrets are encrypted. Unlock is required before they can be used."
+                    }
+                }
+            }
+
+            match state {
+                VaultState::Plaintext => rsx! {
+                    crate::components::account_form::FormField {
+                        label: "New passphrase",
+                        id: "vault-new-passphrase",
+                        value: next(),
+                        oninput: move |v| next.set(v),
+                        input_type: "password",
+                        autocomplete: "new-password",
+                        disabled: busy(),
+                    }
+                    crate::components::account_form::FormField {
+                        label: "Confirm passphrase",
+                        id: "vault-confirm-passphrase",
+                        value: confirm(),
+                        oninput: move |v| confirm.set(v),
+                        input_type: "password",
+                        autocomplete: "new-password",
+                        disabled: busy(),
+                    }
+                    div {
+                        class: "settings-actions",
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                let passphrase = next();
+                                if passphrase != confirm() {
+                                    action_error.set(Some(
+                                        "Passphrase and confirmation do not match.".into(),
+                                    ));
+                                    return;
+                                }
+                                if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+                                    action_error.set(Some(format!(
+                                        "Passphrase must be at least {MIN_PASSPHRASE_CHARS} characters."
+                                    )));
+                                    return;
+                                }
+                                let Some(store) = store_ctx() else {
+                                    action_error.set(Some("Account storage is not available.".into()));
+                                    return;
+                                };
+                                busy.set(true);
+                                action_error.set(None);
+                                spawn(async move {
+                                    match store.0.set_passphrase(&passphrase).await {
+                                        Ok(()) => {
+                                            current.set(String::new());
+                                            next.set(String::new());
+                                            confirm.set(String::new());
+                                            busy.set(false);
+                                            vault_tick.set(vault_tick() + 1);
+                                            action_error.set(None);
+                                        }
+                                        Err(e) => {
+                                            busy.set(false);
+                                            action_error.set(Some(e.to_string()));
+                                        }
+                                    }
+                                });
+                            },
+                            if busy() { "Encrypting…" } else { "Encrypt stored secrets" }
+                        }
+                    }
+                },
+                VaultState::Unlocked => rsx! {
+                    crate::components::account_form::FormField {
+                        label: "Current passphrase",
+                        id: "vault-current-passphrase",
+                        value: current(),
+                        oninput: move |v| current.set(v),
+                        input_type: "password",
+                        autocomplete: "current-password",
+                        disabled: busy(),
+                    }
+                    crate::components::account_form::FormField {
+                        label: "New passphrase",
+                        id: "vault-change-passphrase",
+                        value: next(),
+                        oninput: move |v| next.set(v),
+                        input_type: "password",
+                        autocomplete: "new-password",
+                        disabled: busy(),
+                    }
+                    crate::components::account_form::FormField {
+                        label: "Confirm new passphrase",
+                        id: "vault-change-confirm",
+                        value: confirm(),
+                        oninput: move |v| confirm.set(v),
+                        input_type: "password",
+                        autocomplete: "new-password",
+                        disabled: busy(),
+                    }
+                    div {
+                        class: "settings-actions",
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                let Some(store) = store_ctx() else {
+                                    action_error.set(Some("Account storage is not available.".into()));
+                                    return;
+                                };
+                                busy.set(true);
+                                action_error.set(None);
+                                core_tx.send(CoreEvent::LockSecrets);
+                                store.0.lock_session();
+                                bootstrap.set(AppBootstrapState::NeedsUnlock);
+                                busy.set(false);
+                            },
+                            "Lock now"
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                let old = current();
+                                let new = next();
+                                if new != confirm() {
+                                    action_error.set(Some(
+                                        "New passphrase and confirmation do not match.".into(),
+                                    ));
+                                    return;
+                                }
+                                if new.chars().count() < MIN_PASSPHRASE_CHARS {
+                                    action_error.set(Some(format!(
+                                        "Passphrase must be at least {MIN_PASSPHRASE_CHARS} characters."
+                                    )));
+                                    return;
+                                }
+                                let Some(store) = store_ctx() else {
+                                    action_error.set(Some("Account storage is not available.".into()));
+                                    return;
+                                };
+                                busy.set(true);
+                                action_error.set(None);
+                                spawn(async move {
+                                    match store.0.change_passphrase(&old, &new).await {
+                                        Ok(()) => {
+                                            current.set(String::new());
+                                            next.set(String::new());
+                                            confirm.set(String::new());
+                                            busy.set(false);
+                                            vault_tick.set(vault_tick() + 1);
+                                            action_error.set(None);
+                                        }
+                                        Err(e) => {
+                                            busy.set(false);
+                                            action_error.set(Some(e.to_string()));
+                                        }
+                                    }
+                                });
+                            },
+                            if busy() { "Saving…" } else { "Change passphrase" }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "onboarding-btn onboarding-btn-secondary accounts-btn-danger",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                let old = current();
+                                let Some(store) = store_ctx() else {
+                                    action_error.set(Some("Account storage is not available.".into()));
+                                    return;
+                                };
+                                busy.set(true);
+                                action_error.set(None);
+                                spawn(async move {
+                                    match store.0.remove_passphrase(&old).await {
+                                        Ok(()) => {
+                                            current.set(String::new());
+                                            next.set(String::new());
+                                            confirm.set(String::new());
+                                            busy.set(false);
+                                            vault_tick.set(vault_tick() + 1);
+                                            action_error.set(None);
+                                        }
+                                        Err(e) => {
+                                            busy.set(false);
+                                            action_error.set(Some(e.to_string()));
+                                        }
+                                    }
+                                });
+                            },
+                            if busy() { "Removing…" } else { "Remove encryption" }
+                        }
+                    }
+                },
+                VaultState::Locked => rsx! {
+                    p { class: "bootstrap-muted", "Unlock the store to change this." }
+                },
+            }
+        }
+    }
 }
 
 async fn download_accounts_export(

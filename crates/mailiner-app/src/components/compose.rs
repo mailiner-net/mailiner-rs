@@ -9,6 +9,7 @@ use super::recipient_field::RecipientField;
 use wasm_bindgen::JsCast;
 
 use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
+use mailiner_composer::identity::FromIdentity;
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
     draft_payload_bytes, file_attachment, html_for_plain_with_inlines, human_size, image_filename,
@@ -23,6 +24,7 @@ use mailiner_composer::{
 use crate::account::{Account, AccountId};
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::draft_store::{self, session_has_content};
 use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_account, resolve_compose_account_id, set_session_from_account,
@@ -234,6 +236,16 @@ struct RecipientList {
     draft: Signal<String>,
 }
 
+const DRAFT_SAVE_DEBOUNCE_MS: u32 = 300;
+
+fn join_address_emails(addrs: &[ComposerAddress]) -> String {
+    addrs
+        .iter()
+        .map(|a| a.email.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl RecipientList {
     fn apply(&mut self, addrs: &[ComposerAddress]) {
         self.chips.set(addrs.to_vec());
@@ -270,8 +282,21 @@ fn compose_send_state(ctx: &AppContext) -> Option<SendState> {
     ctx.send_status.read().get(&account_id).cloned()
 }
 
+fn persist_session(session: &ComposeSession) {
+    if session_has_content(session) {
+        draft_store::save_draft(&session.account_id, session);
+    } else {
+        draft_store::clear_draft(&session.account_id);
+    }
+}
+
+fn apply_current_from(session: &mut ComposeSession, identity: &FromIdentity) {
+    session.draft.from = Some(composer_address_from_identity(identity));
+}
+
 /// Open a new / reply / forward session. Replaces any existing compose draft.
 pub fn open_compose(ctx: &mut AppContext, session: ComposeSession) {
+    persist_session(&session);
     ctx.compose_draft.set(Some(session));
 }
 
@@ -323,8 +348,18 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
     );
 }
 
-/// Open a blank compose for the selected account.
+/// Open the saved draft for the compose account, or a blank compose.
 pub fn open_new_message(ctx: &mut AppContext) {
+    let preferred = crate::ui_prefs::load_default_from_account();
+    if let Some(account) = resolve_compose_account(ctx, preferred.as_ref()) {
+        if let Some(mut session) = draft_store::load_draft(&account.id) {
+            let identity = identity_from_account(account.name.clone(), account.email.clone());
+            session.account_id = account.id;
+            apply_current_from(&mut session, &identity);
+            ctx.compose_draft.set(Some(session));
+            return;
+        }
+    }
     let Some((account, draft)) = new_message_draft(ctx) else {
         return;
     };
@@ -567,6 +602,102 @@ fn remove_inline(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
     session.draft.inline_images.retain(|a| a.id.0 != id);
     if session.draft.inline_images.len() != before {
         session.draft.touch();
+    }
+}
+
+fn session_with_live_fields(
+    session: &ComposeSession,
+    to: &[ComposerAddress],
+    to_draft: &str,
+    cc: &[ComposerAddress],
+    cc_draft: &str,
+    bcc: &[ComposerAddress],
+    bcc_draft: &str,
+    subject: &str,
+    body: &str,
+) -> ComposeSession {
+    let mut session = session.clone();
+    session.draft.to = commit_input(to, to_draft, true).0;
+    session.draft.cc = commit_input(cc, cc_draft, true).0;
+    session.draft.bcc = commit_input(bcc, bcc_draft, true).0;
+    session.draft.subject = subject.to_string();
+    session.draft.plain_body = body.to_string();
+    session.draft.touch();
+    session
+}
+
+fn persist_live_draft(
+    compose_draft: Signal<Option<ComposeSession>>,
+    to: Signal<Vec<ComposerAddress>>,
+    to_draft: Signal<String>,
+    cc: Signal<Vec<ComposerAddress>>,
+    cc_draft: Signal<String>,
+    bcc: Signal<Vec<ComposerAddress>>,
+    bcc_draft: Signal<String>,
+    subject: Signal<String>,
+    body: Signal<String>,
+) {
+    let Some(session) = compose_draft.peek().clone() else {
+        return;
+    };
+    persist_session(&session_with_live_fields(
+        &session,
+        &to.peek(),
+        &to_draft.peek(),
+        &cc.peek(),
+        &cc_draft.peek(),
+        &bcc.peek(),
+        &bcc_draft.peek(),
+        &subject.peek(),
+        &body.peek(),
+    ));
+}
+
+fn close_keeping_draft(
+    mut save_gen: Signal<u32>,
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    to: Signal<Vec<ComposerAddress>>,
+    to_draft: Signal<String>,
+    cc: Signal<Vec<ComposerAddress>>,
+    cc_draft: Signal<String>,
+    bcc: Signal<Vec<ComposerAddress>>,
+    bcc_draft: Signal<String>,
+    subject: Signal<String>,
+    body: Signal<String>,
+) {
+    let next = *save_gen.peek() + 1;
+    save_gen.set(next);
+    persist_live_draft(
+        compose_draft,
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+    );
+    compose_draft.set(None);
+}
+
+fn discard_draft(mut save_gen: Signal<u32>, mut compose_draft: Signal<Option<ComposeSession>>) {
+    let next = *save_gen.peek() + 1;
+    save_gen.set(next);
+    if let Some(account_id) = compose_draft.peek().as_ref().map(|s| s.account_id.clone()) {
+        draft_store::clear_draft(&account_id);
+    }
+    compose_draft.set(None);
+}
+
+async fn sleep_ms(ms: u32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(ms).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
     }
 }
 
@@ -980,6 +1111,7 @@ pub fn ComposeOverlay() -> Element {
     let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let last_draft_id = use_signal(|| None::<String>);
+    let save_gen = use_signal(|| 0u32);
     // Local only: per-account `send_status` stays `Sending` after the dialog
     // closes (outbox drain) and must not disable a newly opened draft.
     let submitting = use_signal(|| false);
@@ -1085,6 +1217,54 @@ pub fn ComposeOverlay() -> Element {
         });
     }
 
+    // Debounced autosave of the open draft (text + attachments).
+    {
+        let ctx = ctx.clone();
+        let mut save_gen = save_gen;
+        use_effect(move || {
+            let Some(session) = ctx.compose_draft.read().as_ref().cloned() else {
+                return;
+            };
+            if last_draft_id() != Some(session.draft.id.as_str().to_string()) {
+                return;
+            }
+            let _ = (
+                to(),
+                to_draft(),
+                cc(),
+                cc_draft(),
+                bcc(),
+                bcc_draft(),
+                subject(),
+                body(),
+            );
+            let generation = *save_gen.peek() + 1;
+            save_gen.set(generation);
+            let draft_id = session.draft.id.as_str().to_string();
+            let compose_draft = ctx.compose_draft;
+            spawn(async move {
+                sleep_ms(DRAFT_SAVE_DEBOUNCE_MS).await;
+                if save_gen() != generation {
+                    return;
+                }
+                if open_draft_id(compose_draft).as_deref() != Some(draft_id.as_str()) {
+                    return;
+                }
+                persist_live_draft(
+                    compose_draft,
+                    to,
+                    to_draft,
+                    cc,
+                    cc_draft,
+                    bcc,
+                    bcc_draft,
+                    subject,
+                    body,
+                );
+            });
+        });
+    }
+
     // Persist failed for *this* draft — allow retry. Ignore stale Failed
     // from an older send so a second click cannot enqueue a duplicate.
     {
@@ -1109,7 +1289,21 @@ pub fn ComposeOverlay() -> Element {
     let no_account = ctx.accounts.read().is_empty();
     let mut compose_draft = ctx.compose_draft;
     let close = move |_| {
-        compose_draft.set(None);
+        close_keeping_draft(
+            save_gen,
+            compose_draft,
+            to,
+            to_draft,
+            cc,
+            cc_draft,
+            bcc,
+            bcc_draft,
+            subject,
+            body,
+        );
+    };
+    let discard = move |_| {
+        discard_draft(save_gen, compose_draft);
     };
 
     rsx! {
@@ -1464,10 +1658,16 @@ pub fn ComposeOverlay() -> Element {
                     div {
                         class: "ui-dialog-actions",
                         button {
+                            class: "ui-btn ui-btn-danger",
+                            disabled: sending,
+                            onclick: discard,
+                            "Discard"
+                        }
+                        button {
                             class: "ui-btn ui-btn-secondary",
                             disabled: sending,
                             onclick: close,
-                            "Cancel"
+                            "Close"
                         }
                         button {
                             class: "ui-btn ui-btn-primary",

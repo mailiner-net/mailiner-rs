@@ -10,7 +10,7 @@ use crate::account::AccountId;
 /// Open compose session (owned by [`crate::context::AppContext::compose_draft`]).
 #[derive(Clone, Debug)]
 pub struct ComposeSession {
-    /// Account used for From identity and SMTP/IMAP send (independent of the open folder).
+    /// Account this session was opened for (From / SMTP; independent of the open folder).
     pub account_id: AccountId,
     /// Dialog title (`New message`, `Reply`, `Forward`).
     pub title: String,

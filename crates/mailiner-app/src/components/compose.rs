@@ -21,6 +21,7 @@ use mailiner_composer::{
     SAFE_IMAGE_ACCEPT, build_draft, caps, discard_rich_quote, draft_from_stored_message,
     is_safe_image_content_type, is_valid_email_v1, plain_to_html, prepare_draft, prepare_submit,
 };
+use mailiner_core::DsnRequest;
 
 use std::collections::HashMap;
 
@@ -490,6 +491,7 @@ fn submit_compose(
     mut submitted_id: Signal<Option<String>>,
     attaching: Signal<bool>,
     forward_fetching: Signal<bool>,
+    dsn: Option<DsnRequest>,
 ) {
     if submitting() || attaching() || forward_fetching() {
         return;
@@ -562,6 +564,7 @@ fn submit_compose(
                     rcpt_to: prepared.envelope.rcpt_to,
                     rfc822: prepared.rfc822,
                     message_id: prepared.message_id,
+                    dsn,
                 },
                 display,
                 draft_id,
@@ -1352,6 +1355,8 @@ pub fn ComposeOverlay() -> Element {
         body,
     };
     let mut include_original = use_signal(|| true);
+    let mut notify_success = use_signal(|| false);
+    let mut notify_failure = use_signal(|| false);
 
     let (open, title, listed_files, from_account_id, from_addr, has_originals, prefill_warnings) = {
         let slot = ctx.compose_draft.read();
@@ -1430,6 +1435,8 @@ pub fn ComposeOverlay() -> Element {
         let mut forward_fetching = forward_fetching;
         let mut attach_gen = attach_gen;
         let mut include_original = include_original;
+        let mut notify_success = notify_success;
+        let mut notify_failure = notify_failure;
         use_effect(move || match ctx.compose_draft.read().as_ref() {
             Some(session) => {
                 let id = session.draft.id.as_str().to_string();
@@ -1442,6 +1449,8 @@ pub fn ComposeOverlay() -> Element {
                     let next = *attach_gen.peek() + 1;
                     attach_gen.set(next);
                     include_original.set(true);
+                    notify_success.set(false);
+                    notify_failure.set(false);
                     submitted_id.set(None);
                     attaching.set(false);
                     if has_pending_forward_fetch(session) {
@@ -1633,6 +1642,7 @@ pub fn ComposeOverlay() -> Element {
                                     submitted_id,
                                     attaching,
                                     forward_fetching,
+                                    DsnRequest::new(notify_success(), notify_failure()),
                                 );
                             }
                         }
@@ -1987,6 +1997,30 @@ pub fn ComposeOverlay() -> Element {
                             }
                         }
                     }
+                    div {
+                        class: "compose-dsn",
+                        title: "Requests a delivery status notification (DSN) if the server advertises it.",
+                        label {
+                            class: "compose-dsn-opt",
+                            input {
+                                r#type: "checkbox",
+                                checked: notify_success(),
+                                disabled: sending,
+                                onchange: move |e| notify_success.set(e.checked()),
+                            }
+                            "Notify on successful delivery"
+                        }
+                        label {
+                            class: "compose-dsn-opt",
+                            input {
+                                r#type: "checkbox",
+                                checked: notify_failure(),
+                                disabled: sending,
+                                onchange: move |e| notify_failure.set(e.checked()),
+                            }
+                            "Notify on delivery failure"
+                        }
+                    }
                     if let Some(err) = error() {
                         p { class: "ui-alert-error", "{err}" }
                     }
@@ -2022,6 +2056,7 @@ pub fn ComposeOverlay() -> Element {
                                         submitted_id,
                                         attaching,
                                         forward_fetching,
+                                        DsnRequest::new(notify_success(), notify_failure()),
                                     );
                                 }
                             },

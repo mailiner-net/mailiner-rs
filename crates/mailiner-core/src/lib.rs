@@ -30,4 +30,6 @@ pub use models::{
     MessageContent, MessageListFilter, MessagePart, MessageSort, NestedMessageHeaders, PartChunk,
     PartKind, TextPrefix, TransferEncoding,
 };
-pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};
+pub use submit::{
+    sanitize_envid, DsnRequest, DsnReturn, SendErrorKind, SubmitReceipt, SubmitRequest,
+};

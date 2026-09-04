@@ -1861,6 +1861,28 @@ body:has(.compose-dock) .toast {
     accent-color: var(--item-accent);
 }
 
+.compose-dsn {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.25rem;
+}
+
+.compose-dsn-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.compose-dsn-opt input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: var(--item-accent);
+}
+
 .compose-prefill-note {
     margin: 0;
     font-size: var(--text-sm);

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use mailiner_core::ids::{AccountId, MessageId};
-use mailiner_core::submit::{SendErrorKind, SubmitRequest};
+use mailiner_core::submit::{DsnRequest, SendErrorKind, SubmitRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -69,6 +69,9 @@ pub struct OutboxItem {
     /// Original message to mark `\Answered` after a successful Reply / Reply All.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_source: Option<MessageId>,
+    /// RFC 3461 DSN options captured at Send. Applied only if the server advertises DSN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsn: Option<DsnRequest>,
     pub message_id: String,
     pub subject: String,
     pub to_preview: String,
@@ -108,6 +111,7 @@ impl OutboxItem {
             rfc822_b64: base64::engine::general_purpose::STANDARD.encode(&request.rfc822),
             bcc_header: None,
             reply_source: None,
+            dsn: request.dsn.clone(),
             message_id: request.message_id.clone(),
             subject,
             to_preview,
@@ -126,6 +130,7 @@ impl OutboxItem {
             rcpt_to: self.rcpt_to.clone(),
             rfc822: self.rfc822()?,
             message_id: self.message_id.clone(),
+            dsn: self.dsn.clone(),
         })
     }
 
@@ -438,6 +443,7 @@ mod tests {
             rcpt_to: vec!["you@example.com".into()],
             rfc822: vec![b'x'; n],
             message_id: "<id@example.com>".into(),
+            dsn: None,
         }
     }
 
@@ -613,5 +619,37 @@ mod tests {
         let items = store.list().await.unwrap();
         let next = pick_oldest_queued(&items, &[], std::slice::from_ref(&older.id)).unwrap();
         assert_eq!(next.id, newer.id);
+    }
+
+    #[tokio::test]
+    async fn dsn_round_trip() {
+        let store = BrowserOutboxStore::<MemoryKvStore>::open_memory();
+        let mut request = req(8);
+        request.dsn = mailiner_core::DsnRequest::new(true, false);
+        let item = OutboxItem::from_request(
+            AccountId::new("a"),
+            &request,
+            "Hi".into(),
+            "you@example.com".into(),
+        )
+        .unwrap();
+        store.upsert(&item).await.unwrap();
+        let back = store.get(&item.id).await.unwrap().unwrap();
+        let restored = back.to_request().unwrap();
+        let dsn = restored.dsn.expect("dsn");
+        assert!(dsn.notify_success);
+        assert!(!dsn.notify_failure);
+    }
+
+    #[test]
+    fn missing_dsn_deserializes_as_none() {
+        let json = r#"{
+            "id":"x","account_id":"a","mail_from":"me@x.com","rcpt_to":["you@x.com"],
+            "rfc822_b64":"eA==","message_id":"<id@x.com>","subject":"Hi","to_preview":"you",
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+            "attempts":0,"last_error_kind":null,"last_error":null,"state":"queued"
+        }"#;
+        let item: OutboxItem = serde_json::from_str(json).unwrap();
+        assert!(item.dsn.is_none());
     }
 }

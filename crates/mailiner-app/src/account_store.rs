@@ -12,6 +12,10 @@ use mailiner_core::ids::AccountId;
 use serde::{Deserialize, Serialize};
 
 use crate::account_config::{ACCOUNT_STORE_SCHEMA_VERSION, AccountConfig};
+use crate::account_vault::{
+    SecretsVault, VaultKey, VaultState, apply_secrets, decode_vault_salt, decrypt_secrets,
+    encrypt_secrets, extract_secrets, validate_passphrase,
+};
 
 /// `localStorage` key for the v1 account-configs blob.
 pub const ACCOUNTS_LOCAL_STORAGE_KEY: &str = "mailiner.accounts.v1";
@@ -23,6 +27,12 @@ pub enum AccountStoreError {
     Unavailable,
     /// JSON or schema serialization failure.
     Serialization(String),
+    /// Vault is present and this session has not unlocked it.
+    Locked,
+    /// Passphrase did not decrypt the vault (or was empty on unlock).
+    WrongPassphrase,
+    /// New passphrase is shorter than [`crate::account_vault::MIN_PASSPHRASE_CHARS`].
+    InvalidPassphrase,
     /// Other backend-specific failure.
     Other(String),
 }
@@ -32,6 +42,13 @@ impl fmt::Display for AccountStoreError {
         match self {
             Self::Unavailable => write!(f, "account storage is unavailable"),
             Self::Serialization(msg) => write!(f, "account store serialization error: {msg}"),
+            Self::Locked => write!(f, "account store is locked"),
+            Self::WrongPassphrase => write!(f, "incorrect unlock passphrase"),
+            Self::InvalidPassphrase => write!(
+                f,
+                "passphrase must be at least {} characters",
+                crate::account_vault::MIN_PASSPHRASE_CHARS
+            ),
             Self::Other(msg) => write!(f, "account store error: {msg}"),
         }
     }
@@ -56,6 +73,19 @@ pub trait AccountStore {
     async fn delete(&self, id: &AccountId) -> Result<(), AccountStoreError>;
     async fn get_active_id(&self) -> Result<Option<AccountId>, AccountStoreError>;
     async fn set_active_id(&self, id: Option<&AccountId>) -> Result<(), AccountStoreError>;
+
+    /// Whether secrets are plaintext, locked, or unlocked in this session.
+    fn vault_state(&self) -> VaultState;
+    /// Derive the session key and verify it decrypts the vault.
+    async fn unlock(&self, passphrase: &str) -> Result<(), AccountStoreError>;
+    /// Forget the session key. Disk is unchanged.
+    fn lock_session(&self);
+    /// Wrap existing plaintext secrets. Fails if a vault is already present.
+    async fn set_passphrase(&self, passphrase: &str) -> Result<(), AccountStoreError>;
+    /// Re-wrap with a new passphrase. Requires the current one.
+    async fn change_passphrase(&self, current: &str, new: &str) -> Result<(), AccountStoreError>;
+    /// Decrypt and write plaintext secrets again. Requires the current passphrase.
+    async fn remove_passphrase(&self, current: &str) -> Result<(), AccountStoreError>;
 }
 
 /// In-memory store for unit tests and session-only fallback.
@@ -114,6 +144,34 @@ impl AccountStore for InMemoryAccountStore {
         *self.active_id.borrow_mut() = id.cloned();
         Ok(())
     }
+
+    fn vault_state(&self) -> VaultState {
+        VaultState::Plaintext
+    }
+
+    async fn unlock(&self, _passphrase: &str) -> Result<(), AccountStoreError> {
+        Ok(())
+    }
+
+    fn lock_session(&self) {}
+
+    async fn set_passphrase(&self, _passphrase: &str) -> Result<(), AccountStoreError> {
+        Err(AccountStoreError::Other(
+            "passphrase encryption is not available for this store".into(),
+        ))
+    }
+
+    async fn change_passphrase(&self, _current: &str, _new: &str) -> Result<(), AccountStoreError> {
+        Err(AccountStoreError::Other(
+            "passphrase encryption is not available for this store".into(),
+        ))
+    }
+
+    async fn remove_passphrase(&self, _current: &str) -> Result<(), AccountStoreError> {
+        Err(AccountStoreError::Other(
+            "passphrase encryption is not available for this store".into(),
+        ))
+    }
 }
 
 // ── Persisted blob schema (localStorage JSON v1) ────────────────────────────
@@ -126,6 +184,12 @@ pub struct AccountsStoreBlob {
     pub schema_version: u32,
     pub active_account_id: Option<AccountId>,
     pub accounts: Vec<AccountConfig>,
+    /// Present when IMAP/SMTP passwords and proxy tokens are passphrase-wrapped.
+    ///
+    /// Absent on existing schema-1 blobs (plaintext secrets in `accounts`).
+    /// Serde ignores this field on older readers, so schema_version stays 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<SecretsVault>,
 }
 
 impl AccountsStoreBlob {
@@ -135,6 +199,7 @@ impl AccountsStoreBlob {
             schema_version: ACCOUNT_STORE_SCHEMA_VERSION,
             active_account_id: None,
             accounts: Vec::new(),
+            vault: None,
         }
     }
 
@@ -286,6 +351,7 @@ impl fmt::Debug for WebLocalStorage {
 /// Tests: [`BrowserAccountStore::with_kv`] + [`MemoryKvStore`].
 pub struct BrowserAccountStore<K: StringKvStore = WebLocalStorage> {
     kv: K,
+    session: RefCell<Option<VaultKey>>,
 }
 
 impl BrowserAccountStore<WebLocalStorage> {
@@ -296,6 +362,7 @@ impl BrowserAccountStore<WebLocalStorage> {
     pub async fn open() -> Result<Self, AccountStoreError> {
         Ok(Self {
             kv: WebLocalStorage::try_open()?,
+            session: RefCell::new(None),
         })
     }
 }
@@ -305,6 +372,7 @@ impl BrowserAccountStore<MemoryKvStore> {
     pub fn open_memory() -> Self {
         Self {
             kv: MemoryKvStore::new(),
+            session: RefCell::new(None),
         }
     }
 }
@@ -312,10 +380,13 @@ impl BrowserAccountStore<MemoryKvStore> {
 impl<K: StringKvStore> BrowserAccountStore<K> {
     /// Wrap an arbitrary [`StringKvStore`] (tests, alternate backends).
     pub fn with_kv(kv: K) -> Self {
-        Self { kv }
+        Self {
+            kv,
+            session: RefCell::new(None),
+        }
     }
 
-    fn load_blob(&self) -> Result<AccountsStoreBlob, AccountStoreError> {
+    fn load_raw_blob(&self) -> Result<AccountsStoreBlob, AccountStoreError> {
         match self.kv.get_item(ACCOUNTS_LOCAL_STORAGE_KEY)? {
             None => Ok(AccountsStoreBlob::empty()),
             Some(s) if s.trim().is_empty() => Ok(AccountsStoreBlob::empty()),
@@ -323,9 +394,45 @@ impl<K: StringKvStore> BrowserAccountStore<K> {
         }
     }
 
-    fn save_blob(&self, blob: &AccountsStoreBlob) -> Result<(), AccountStoreError> {
-        let json = blob.encode()?;
+    async fn load_blob(&self) -> Result<AccountsStoreBlob, AccountStoreError> {
+        let mut blob = self.load_raw_blob()?;
+        if let Some(vault) = blob.vault.as_ref() {
+            let key = self
+                .session
+                .borrow()
+                .clone()
+                .ok_or(AccountStoreError::Locked)?;
+            let secrets = decrypt_secrets(&key, vault).await?;
+            apply_secrets(&mut blob.accounts, &secrets);
+        }
+        Ok(blob)
+    }
+
+    async fn save_blob(&self, blob: &AccountsStoreBlob) -> Result<(), AccountStoreError> {
+        let mut to_write = blob.clone();
+        let session_key = self.session.borrow().clone();
+        if let Some(key) = session_key {
+            let secrets = extract_secrets(&to_write.accounts);
+            for acc in &mut to_write.accounts {
+                acc.redact_secrets();
+            }
+            to_write.vault = Some(encrypt_secrets(&key, &secrets).await?);
+        } else {
+            if to_write.vault.is_some() {
+                return Err(AccountStoreError::Locked);
+            }
+            to_write.vault = None;
+        }
+        let json = to_write.encode()?;
         self.kv.set_item(ACCOUNTS_LOCAL_STORAGE_KEY, &json)
+    }
+
+    fn require_unlocked_for_write(&self) -> Result<(), AccountStoreError> {
+        let blob = self.load_raw_blob()?;
+        if blob.vault.is_some() && self.session.borrow().is_none() {
+            return Err(AccountStoreError::Locked);
+        }
+        Ok(())
     }
 }
 
@@ -340,46 +447,138 @@ impl<K: StringKvStore> fmt::Debug for BrowserAccountStore<K> {
 #[async_trait(?Send)]
 impl<K: StringKvStore> AccountStore for BrowserAccountStore<K> {
     async fn list(&self) -> Result<Vec<AccountConfig>, AccountStoreError> {
-        let mut blob = self.load_blob()?;
+        let mut blob = self.load_blob().await?;
         AccountsStoreBlob::sort_accounts(&mut blob.accounts);
         Ok(blob.accounts)
     }
 
     async fn get(&self, id: &AccountId) -> Result<Option<AccountConfig>, AccountStoreError> {
-        let blob = self.load_blob()?;
+        let blob = self.load_blob().await?;
         Ok(blob.accounts.into_iter().find(|a| &a.id == id))
     }
 
     async fn upsert(&self, config: &AccountConfig) -> Result<(), AccountStoreError> {
-        let mut blob = self.load_blob()?;
+        self.require_unlocked_for_write()?;
+        let mut blob = self.load_blob().await?;
         if let Some(slot) = blob.accounts.iter_mut().find(|a| a.id == config.id) {
             *slot = config.clone();
         } else {
             blob.accounts.push(config.clone());
         }
         blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
-        self.save_blob(&blob)
+        self.save_blob(&blob).await
     }
 
     async fn delete(&self, id: &AccountId) -> Result<(), AccountStoreError> {
-        let mut blob = self.load_blob()?;
+        self.require_unlocked_for_write()?;
+        let mut blob = self.load_blob().await?;
         blob.accounts.retain(|a| &a.id != id);
         if blob.active_account_id.as_ref() == Some(id) {
             blob.active_account_id = None;
         }
         blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
-        self.save_blob(&blob)
+        self.save_blob(&blob).await
     }
 
     async fn get_active_id(&self) -> Result<Option<AccountId>, AccountStoreError> {
-        Ok(self.load_blob()?.active_account_id)
+        // Active pointer is outside the vault so unlock UI can still read it.
+        Ok(self.load_raw_blob()?.active_account_id)
     }
 
     async fn set_active_id(&self, id: Option<&AccountId>) -> Result<(), AccountStoreError> {
-        let mut blob = self.load_blob()?;
+        self.require_unlocked_for_write()?;
+        let mut blob = self.load_blob().await?;
         blob.active_account_id = id.cloned();
         blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
-        self.save_blob(&blob)
+        self.save_blob(&blob).await
+    }
+
+    fn vault_state(&self) -> VaultState {
+        match self.load_raw_blob() {
+            Ok(blob) if blob.vault.is_some() => {
+                if self.session.borrow().is_some() {
+                    VaultState::Unlocked
+                } else {
+                    VaultState::Locked
+                }
+            }
+            _ => VaultState::Plaintext,
+        }
+    }
+
+    async fn unlock(&self, passphrase: &str) -> Result<(), AccountStoreError> {
+        let blob = self.load_raw_blob()?;
+        let vault = blob.vault.as_ref().ok_or(AccountStoreError::Other(
+            "account store is not encrypted".into(),
+        ))?;
+        let salt = decode_vault_salt(vault)?;
+        let key = VaultKey::derive(passphrase, &salt, vault.iterations).await?;
+        decrypt_secrets(&key, vault).await?;
+        *self.session.borrow_mut() = Some(key);
+        Ok(())
+    }
+
+    fn lock_session(&self) {
+        *self.session.borrow_mut() = None;
+    }
+
+    async fn set_passphrase(&self, passphrase: &str) -> Result<(), AccountStoreError> {
+        validate_passphrase(passphrase)?;
+        match self.vault_state() {
+            VaultState::Plaintext => {}
+            VaultState::Locked => return Err(AccountStoreError::Locked),
+            VaultState::Unlocked => {
+                return Err(AccountStoreError::Other(
+                    "account store is already encrypted".into(),
+                ));
+            }
+        }
+        let blob = self.load_blob().await?;
+        let key = VaultKey::generate(passphrase).await?;
+        *self.session.borrow_mut() = Some(key);
+        if let Err(e) = self.save_blob(&blob).await {
+            *self.session.borrow_mut() = None;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    async fn change_passphrase(&self, current: &str, new: &str) -> Result<(), AccountStoreError> {
+        validate_passphrase(new)?;
+        if self.vault_state() == VaultState::Plaintext {
+            return Err(AccountStoreError::Other(
+                "account store is not encrypted".into(),
+            ));
+        }
+        self.unlock(current).await?;
+        let blob = self.load_blob().await?;
+        let previous = self.session.borrow().clone();
+        let key = VaultKey::generate(new).await?;
+        *self.session.borrow_mut() = Some(key);
+        if let Err(e) = self.save_blob(&blob).await {
+            *self.session.borrow_mut() = previous;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    async fn remove_passphrase(&self, current: &str) -> Result<(), AccountStoreError> {
+        if self.vault_state() == VaultState::Plaintext {
+            return Err(AccountStoreError::Other(
+                "account store is not encrypted".into(),
+            ));
+        }
+        self.unlock(current).await?;
+        let mut blob = self.load_blob().await?;
+        let previous = self.session.borrow().clone();
+        *self.session.borrow_mut() = None;
+        blob.vault = None;
+        blob.schema_version = ACCOUNT_STORE_SCHEMA_VERSION;
+        if let Err(e) = self.save_blob(&blob).await {
+            *self.session.borrow_mut() = previous;
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
@@ -795,5 +994,174 @@ mod tests {
             let err = BrowserAccountStore::open().await.unwrap_err();
             assert_eq!(err, AccountStoreError::Unavailable);
         });
+    }
+
+    #[test]
+    fn browser_store_plaintext_blob_has_no_vault_field() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+        });
+        let raw = store
+            .kv
+            .get_item(ACCOUNTS_LOCAL_STORAGE_KEY)
+            .unwrap()
+            .expect("blob");
+        assert!(
+            !raw.contains("\"vault\""),
+            "plaintext blob must stay schema-1 compatible: {raw}"
+        );
+        assert!(raw.contains("\"password\":\"pw\""));
+        assert_eq!(store.vault_state(), VaultState::Plaintext);
+    }
+
+    #[test]
+    fn browser_store_set_passphrase_strips_secrets_from_disk() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            let mut cfg = sample_config("a1", "alice");
+            cfg.smtp = Some(crate::account_config::SmtpSettings::new(
+                "smtp.example.com".into(),
+                465,
+                "alice@example.com".into(),
+                Some("smtp-secret".into()),
+                crate::account_config::SmtpTlsMode::Implicit,
+            ));
+            store.upsert(&cfg).await.unwrap();
+            store.set_passphrase("correct-horse").await.unwrap();
+            assert_eq!(store.vault_state(), VaultState::Unlocked);
+
+            let raw = store
+                .kv
+                .get_item(ACCOUNTS_LOCAL_STORAGE_KEY)
+                .unwrap()
+                .expect("blob");
+            assert!(raw.contains("\"vault\""), "vault missing: {raw}");
+            assert!(
+                !raw.contains("\"password\":\"pw\""),
+                "imap password still plaintext: {raw}"
+            );
+            assert!(
+                !raw.contains("\"token\":\"t\""),
+                "proxy token still plaintext: {raw}"
+            );
+            assert!(
+                !raw.contains("smtp-secret"),
+                "smtp password still plaintext: {raw}"
+            );
+            assert!(
+                raw.contains("\"schema_version\":1"),
+                "schema must stay 1: {raw}"
+            );
+
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.imap.password, "pw");
+            assert_eq!(
+                got.smtp.as_ref().and_then(|s| s.password.as_deref()),
+                Some("smtp-secret")
+            );
+            assert_eq!(got.proxy.token, "t");
+        });
+    }
+
+    #[test]
+    fn browser_store_lock_blocks_reads_until_unlock() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+            store.set_passphrase("correct-horse").await.unwrap();
+            store.lock_session();
+            assert_eq!(store.vault_state(), VaultState::Locked);
+            assert_eq!(store.list().await.unwrap_err(), AccountStoreError::Locked);
+            assert_eq!(
+                store.get(&AccountId::new("a1")).await.unwrap_err(),
+                AccountStoreError::Locked
+            );
+            assert_eq!(
+                store
+                    .upsert(&sample_config("a1", "alice"))
+                    .await
+                    .unwrap_err(),
+                AccountStoreError::Locked
+            );
+
+            let err = store.unlock("wrong-pass-word").await.unwrap_err();
+            assert_eq!(err, AccountStoreError::WrongPassphrase);
+            assert_eq!(store.vault_state(), VaultState::Locked);
+
+            store.unlock("correct-horse").await.unwrap();
+            assert_eq!(store.vault_state(), VaultState::Unlocked);
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.imap.password, "pw");
+        });
+    }
+
+    #[test]
+    fn browser_store_remove_passphrase_restores_plaintext() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+            store.set_passphrase("correct-horse").await.unwrap();
+            store.remove_passphrase("correct-horse").await.unwrap();
+            assert_eq!(store.vault_state(), VaultState::Plaintext);
+            let raw = store
+                .kv
+                .get_item(ACCOUNTS_LOCAL_STORAGE_KEY)
+                .unwrap()
+                .expect("blob");
+            assert!(!raw.contains("\"vault\""), "vault left behind: {raw}");
+            assert!(raw.contains("\"password\":\"pw\""));
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.imap.password, "pw");
+        });
+    }
+
+    #[test]
+    fn browser_store_change_passphrase() {
+        let store = BrowserAccountStore::open_memory();
+        block_on(async {
+            store.upsert(&sample_config("a1", "alice")).await.unwrap();
+            store.set_passphrase("correct-horse").await.unwrap();
+            store
+                .change_passphrase("correct-horse", "new-passphrase")
+                .await
+                .unwrap();
+            store.lock_session();
+            assert_eq!(
+                store.unlock("correct-horse").await.unwrap_err(),
+                AccountStoreError::WrongPassphrase
+            );
+            store.unlock("new-passphrase").await.unwrap();
+            let got = store.get(&AccountId::new("a1")).await.unwrap().unwrap();
+            assert_eq!(got.imap.password, "pw");
+        });
+    }
+
+    #[test]
+    fn existing_plaintext_blob_loads_without_migration() {
+        let kv = MemoryKvStore::new();
+        kv.set_item(
+            ACCOUNTS_LOCAL_STORAGE_KEY,
+            r#"{
+                "schema_version": 1,
+                "active_account_id": "a1",
+                "accounts": []
+            }"#,
+        )
+        .unwrap();
+        let store = BrowserAccountStore::with_kv(kv);
+        assert_eq!(store.vault_state(), VaultState::Plaintext);
+        block_on(async {
+            assert!(store.list().await.unwrap().is_empty());
+            assert_eq!(store.get_active_id().await.unwrap().unwrap().as_str(), "a1");
+        });
+    }
+
+    #[test]
+    fn set_passphrase_rejects_short() {
+        let store = BrowserAccountStore::open_memory();
+        let err = block_on(store.set_passphrase("short")).unwrap_err();
+        assert_eq!(err, AccountStoreError::InvalidPassphrase);
+        assert_eq!(store.vault_state(), VaultState::Plaintext);
     }
 }

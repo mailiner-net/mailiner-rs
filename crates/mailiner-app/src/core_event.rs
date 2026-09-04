@@ -289,6 +289,9 @@ pub enum CoreEvent {
     /// Sign-out: drop every connector and cached config (secrets).
     ClearLocalData,
 
+    /// Forget the vault session key and drop in-memory secrets / connectors.
+    LockSecrets,
+
     SendMessage {
         account_id: AccountId,
         request: SubmitRequest,
@@ -459,6 +462,10 @@ pub async fn core_loop(
                 // (would recreate outbox/cache keys after the wipe).
                 inflight.take_all();
                 handle_clear_local_data(&mut manager, &mut ctx, outbox.as_ref()).await;
+            }
+            CoreEvent::LockSecrets => {
+                inflight.take_all();
+                handle_lock_secrets(&mut manager, &mut ctx).await;
             }
             CoreEvent::SelectMailbox(mailbox_id) => {
                 handle_select_mailbox(&manager, &mut ctx, mailbox_id, true).await;
@@ -5070,6 +5077,12 @@ async fn handle_test_smtp(
         reply_source: None,
     });
     spawn_test(config, request_id, generation, cancel_rx, smtp_tx.clone());
+}
+
+async fn handle_lock_secrets(manager: &mut AccountConnectionManager, ctx: &mut AppContext) {
+    manager.disconnect_all(ctx).await;
+    manager.store().lock_session();
+    ctx.reset_after_lock();
 }
 
 async fn handle_clear_local_data(

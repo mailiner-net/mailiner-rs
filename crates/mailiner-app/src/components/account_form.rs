@@ -903,9 +903,10 @@ pub fn AccountConnectionFields(
         p {
             class: "onboarding-disclosure bootstrap-muted",
             "Your IMAP password is stored only in this browser on this device. \
-             Mailiner has no server account. Anyone with access to this browser \
-             profile (or a compromised page on this origin) can read it. Use a \
-             private device; clear site data to remove it."
+             Mailiner has no server account. Optionally protect stored passwords \
+             and proxy tokens with an unlock passphrase. Anyone with this browser \
+             profile can still use Mailiner while it is unlocked. Use a private \
+             device; clear site data to remove it."
         }
     }
 }

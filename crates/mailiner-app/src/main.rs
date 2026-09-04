@@ -8,6 +8,7 @@ use mailiner_core::ids::AccountId;
 use crate::account_store::{
     AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
 };
+use crate::account_vault::VaultState;
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
     AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
@@ -24,6 +25,7 @@ use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
 mod account;
 mod account_config;
 mod account_store;
+mod account_vault;
 mod address_book;
 mod autodiscover;
 mod components;
@@ -67,6 +69,8 @@ pub enum AppBootstrapState {
     LoadingStore,
     /// Zero accounts. Only onboarding is valid.
     NeedsOnboarding,
+    /// Vault present; session key not yet derived.
+    NeedsUnlock,
     /// Accounts loaded from store; main app allowed.
     Ready,
     /// localStorage unavailable or unreadable.
@@ -204,6 +208,19 @@ async fn run_bootstrap(
 
     store_ctx.set(Some(AccountStoreContext(store.clone())));
 
+    if store.vault_state() == VaultState::Locked {
+        info!("Bootstrap: encrypted store → NeedsUnlock");
+        ctx.accounts.set(HashMap::new());
+        ctx.selected_account.set(None);
+        bootstrap.set(AppBootstrapState::NeedsUnlock);
+        return BootstrapOutcome {
+            store,
+            outbox,
+            cache,
+            initial_bootstrap: InitialBootstrap::Skip,
+        };
+    }
+
     let list = match store.list().await {
         Ok(list) => list,
         Err(e) => {
@@ -260,7 +277,7 @@ async fn run_bootstrap(
 }
 
 /// Resolve active account: stored id if valid, else first by `created_at` ascending.
-async fn resolve_active_id(
+pub(crate) async fn resolve_active_id(
     store: &dyn AccountStore,
     accounts: &[crate::account_config::AccountConfig],
 ) -> Option<AccountId> {
@@ -490,7 +507,9 @@ fn AppShell() -> Element {
                     nav.replace(Route::MainView {});
                 }
             }
-            AppBootstrapState::LoadingStore | AppBootstrapState::StoreError { .. } => {}
+            AppBootstrapState::LoadingStore
+            | AppBootstrapState::NeedsUnlock
+            | AppBootstrapState::StoreError { .. } => {}
         }
     });
 
@@ -519,6 +538,9 @@ fn AppShell() -> Element {
                     }
                 }
             }
+        },
+        AppBootstrapState::NeedsUnlock => rsx! {
+            crate::components::UnlockForm {}
         },
         // Onboarding and settings share the outlet; mail chrome is only in MainView.
         AppBootstrapState::NeedsOnboarding | AppBootstrapState::Ready => rsx! {

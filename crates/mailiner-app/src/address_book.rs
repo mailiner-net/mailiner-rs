@@ -118,6 +118,7 @@ impl From<AccountStoreError> for AddressBookError {
             AccountStoreError::Serialization(msg) | AccountStoreError::Other(msg) => {
                 Self::Serialization(msg)
             }
+            other => Self::Serialization(other.to_string()),
         }
     }
 }

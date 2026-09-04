@@ -4,12 +4,14 @@ use chrono::Utc;
 use dioxus::prelude::*;
 use uuid::Uuid;
 
+use crate::AccountStoreContext;
 use crate::AppBootstrapState;
 use crate::account::AccountId;
 use crate::account_config::DEFAULT_SMTP_PORT;
 use crate::account_config::{SmtpTlsMode, dev_form_prefill, imap_tls_mode_from_legacy};
+use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormPhase,
+    AccountConnectionFields, AccountSignatureFields, AccountSmtpFields, FormField, FormPhase,
     FormStatusBanner, StatusMessage, apply_smtp_test_outcome, build_config_from_form, kind_label,
     provide_lookup_edit_guard, start_smtp_test, use_form_test_status_cleanup,
 };
@@ -22,6 +24,7 @@ use crate::core_event::CoreEvent;
 pub fn OnboardingForm() -> Element {
     let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
     let mut ctx = use_context::<AppContext>();
+    let store_ctx = use_context::<Signal<Option<AccountStoreContext>>>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
 
     let prefill = use_hook(dev_form_prefill);
@@ -54,6 +57,8 @@ pub fn OnboardingForm() -> Element {
     let mut smtp_remote_port = use_signal(String::new);
     let mut smtp_open = use_signal(|| false);
     let mut signature = use_signal(String::new);
+    let mut unlock_passphrase = use_signal(String::new);
+    let mut unlock_passphrase_confirm = use_signal(String::new);
 
     let mut phase = use_signal(|| FormPhase::Idle);
     let mut status_message = use_signal(|| None::<StatusMessage>);
@@ -268,6 +273,33 @@ pub fn OnboardingForm() -> Element {
             Utc::now(),
         ) {
             Ok(config) => {
+                let passphrase = unlock_passphrase();
+                let confirm = unlock_passphrase_confirm();
+                if !passphrase.is_empty() || !confirm.is_empty() {
+                    if passphrase != confirm {
+                        status_message.set(Some(StatusMessage::error(
+                            "Validation",
+                            "Unlock passphrase and confirmation do not match.",
+                        )));
+                        return;
+                    }
+                    if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+                        status_message.set(Some(StatusMessage::error(
+                            "Validation",
+                            format!(
+                                "Unlock passphrase must be at least {MIN_PASSPHRASE_CHARS} characters."
+                            ),
+                        )));
+                        return;
+                    }
+                }
+                let Some(store) = store_ctx() else {
+                    status_message.set(Some(StatusMessage::error(
+                        "Storage",
+                        "Account storage is not available.",
+                    )));
+                    return;
+                };
                 // Replace any stale Error/Ready with Connecting for this form id
                 // so a retry is not terminated by the previous attempt's state.
                 ctx.connection_states
@@ -276,7 +308,21 @@ pub fn OnboardingForm() -> Element {
                 save_seen_progress.set(true);
                 phase.set(FormPhase::Saving);
                 status_message.set(Some(StatusMessage::info("Connecting…")));
-                core_tx.send(CoreEvent::CommitNewAccount { config });
+                spawn(async move {
+                    if !passphrase.is_empty()
+                        && store.0.vault_state() == VaultState::Plaintext
+                        && let Err(e) = store.0.set_passphrase(&passphrase).await
+                    {
+                        status_message.set(Some(StatusMessage::error(
+                            "Passphrase",
+                            format!("Could not encrypt stored secrets: {e}"),
+                        )));
+                        phase.set(FormPhase::Idle);
+                        save_seen_progress.set(false);
+                        return;
+                    }
+                    core_tx.send(CoreEvent::CommitNewAccount { config });
+                });
             }
             Err(msg) => {
                 status_message.set(Some(StatusMessage::error("Validation", &msg)));
@@ -367,6 +413,34 @@ pub fn OnboardingForm() -> Element {
                         set_smtp_tls_mode: move |v| smtp_tls_mode.set(v),
                         busy: busy,
                         open: smtp_open(),
+                    }
+
+                    fieldset {
+                        class: "onboarding-section",
+                        legend { "Unlock passphrase (optional)" }
+                        p {
+                            class: "bootstrap-muted",
+                            "Encrypt IMAP/SMTP passwords and the proxy token in this browser. \
+                             You will enter it once per session. Mailiner cannot recover it."
+                        }
+                        FormField {
+                            label: "Unlock passphrase",
+                            id: "onboarding-unlock-passphrase",
+                            value: unlock_passphrase(),
+                            oninput: move |v| unlock_passphrase.set(v),
+                            input_type: "password",
+                            autocomplete: "new-password",
+                            disabled: busy,
+                        }
+                        FormField {
+                            label: "Confirm passphrase",
+                            id: "onboarding-unlock-passphrase-confirm",
+                            value: unlock_passphrase_confirm(),
+                            oninput: move |v| unlock_passphrase_confirm.set(v),
+                            input_type: "password",
+                            autocomplete: "new-password",
+                            disabled: busy,
+                        }
                     }
 
                     FormStatusBanner { message: status_message() }

@@ -79,13 +79,27 @@ web-sys = { version = "0.3", features = [
     "ShadowRootMode",
     "ScrollBehavior",
     "ScrollToOptions",
+    "AesGcmParams",
+    "AesKeyGenParams",
+    "Crypto",
+    "CryptoKey",
+    "Pbkdf2Params",
     "Storage",
+    "SubtleCrypto",
     "SupportedType",
     "Url",
     "WebSocket",
     "Window",
 ] }
 tokio = { workspace = true }
+
+# Host-only AES-GCM + PBKDF2 so unit tests exercise the same vault format.
+# The WASM build uses WebCrypto instead (smaller binary, browser-audited).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+rand = "0.8"
 
 [features]
 default = ["web"]

@@ -17,7 +17,7 @@ use crate::components::{
     SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
-use crate::core_event::{InitialBootstrap, core_loop};
+use crate::core_event::{CoreEvent, InitialBootstrap, core_loop};
 use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
 use crate::message_loader::LoadedMessageCache;
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
@@ -59,6 +59,7 @@ mod shortcuts;
 mod smtp_inflight;
 mod smtp_session;
 mod snippet;
+mod snooze;
 mod source;
 mod toast;
 mod ui_prefs;
@@ -400,6 +401,8 @@ fn App() -> Element {
     let show_all_folders = use_signal(crate::ui_prefs::load_show_all_folders);
     let pinned_uids = use_signal(Vec::new);
     let sr_status = use_signal(String::new);
+    let snoozed_messages = use_signal(Vec::new);
+    let snooze_picker_open = use_signal(|| false);
 
     let ctx = AppContext {
         accounts,
@@ -448,6 +451,8 @@ fn App() -> Element {
         show_all_folders,
         pinned_uids,
         sr_status,
+        snoozed_messages,
+        snooze_picker_open,
     };
     let ctx_clone = ctx.clone();
 
@@ -477,6 +482,16 @@ fn App() -> Element {
             )
             .await;
         }
+    });
+
+    let snooze_tx = _tx;
+    use_hook(move || {
+        spawn(async move {
+            loop {
+                gloo_timers::future::TimeoutFuture::new(15_000).await;
+                let _ = snooze_tx.send(CoreEvent::SweepSnooze);
+            }
+        });
     });
 
     rsx! {

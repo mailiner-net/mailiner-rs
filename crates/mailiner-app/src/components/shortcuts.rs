@@ -225,6 +225,12 @@ fn run_shortcut(
                 message_ids,
             });
         }
+        ShortcutId::Snooze => {
+            if require_toggle_target(ctx).is_none() {
+                return;
+            }
+            ctx.snooze_picker_open.set(true);
+        }
         ShortcutId::ShowHelp => {
             help_open.set(true);
         }

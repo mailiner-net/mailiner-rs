@@ -34,6 +34,7 @@ pub enum ShortcutId {
     ToggleStar,
     ToggleFlag,
     TogglePin,
+    Snooze,
     ShowHelp,
 }
 
@@ -67,6 +68,7 @@ impl ShortcutId {
                 | Self::ToggleStar
                 | Self::ToggleFlag
                 | Self::TogglePin
+                | Self::Snooze
                 | Self::ShowHelp
         )
     }
@@ -100,6 +102,7 @@ impl ShortcutId {
             Self::ToggleStar => "toggle_star",
             Self::ToggleFlag => "toggle_flag",
             Self::TogglePin => "toggle_pin",
+            Self::Snooze => "snooze",
             Self::ShowHelp => "show_help",
         }
     }
@@ -133,6 +136,7 @@ impl ShortcutId {
             "toggle_star" => Some(Self::ToggleStar),
             "toggle_flag" => Some(Self::ToggleFlag),
             "toggle_pin" => Some(Self::TogglePin),
+            "snooze" => Some(Self::Snooze),
             "show_help" => Some(Self::ShowHelp),
             _ => None,
         }
@@ -362,6 +366,15 @@ pub const GLOBAL_SHORTCUTS: &[Shortcut] = &[
         require_shift: false,
         label: "B",
         description: "Pin or unpin message",
+        group: ShortcutGroup::Mail,
+    },
+    // H is hide-until / snooze.
+    Shortcut {
+        id: ShortcutId::Snooze,
+        keys: &["h", "H"],
+        require_shift: false,
+        label: "H",
+        description: "Snooze message",
         group: ShortcutGroup::Mail,
     },
     Shortcut {
@@ -774,6 +787,8 @@ mod tests {
         assert_eq!(lookup("f", false), Some(ShortcutId::Forward));
         assert_eq!(lookup("b", false), Some(ShortcutId::TogglePin));
         assert_eq!(lookup("B", true), Some(ShortcutId::TogglePin));
+        assert_eq!(lookup("h", false), Some(ShortcutId::Snooze));
+        assert_eq!(lookup("H", true), Some(ShortcutId::Snooze));
         assert_eq!(lookup("p", false), Some(ShortcutId::PrevUnread));
     }
 

@@ -55,7 +55,10 @@ use crate::send::{ComposeSession, OutboxDisplay, SendPhase, SendState};
 use crate::smtp_inflight::{InFlightSmtp, SmtpInflight};
 use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit, spawn_test};
 use crate::snippet::{SNIPPET_FETCH_OCTETS, clean_snippet};
-use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, ToastAction, UndoRequest};
+use crate::snooze::SnoozePreset;
+use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, SnoozeUndo, ToastAction, UndoRequest};
+use crate::ui_prefs::SnoozedMessage;
+use chrono::Utc;
 
 pub enum CoreEvent {
     // —— mail ops ——
@@ -141,6 +144,15 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
     },
+    /// Hide the given messages until a preset time (local overlay).
+    SnoozeMessages {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        message_ids: Vec<MessageId>,
+        preset: SnoozePreset,
+    },
+    /// Drop expired snoozes, notify, and refresh the open folder if needed.
+    SweepSnooze,
     /// Toggle a built-in custom IMAP keyword on the given messages.
     ToggleKeyword {
         account_id: AccountId,
@@ -636,6 +648,25 @@ pub async fn core_loop(
                 message_ids,
             } => {
                 handle_toggle_pin(&mut ctx, account_id, mailbox_id, message_ids);
+            }
+            CoreEvent::SnoozeMessages {
+                account_id,
+                mailbox_id,
+                message_ids,
+                preset,
+            } => {
+                handle_snooze_messages(
+                    &manager,
+                    &mut ctx,
+                    account_id,
+                    mailbox_id,
+                    message_ids,
+                    preset,
+                )
+                .await;
+            }
+            CoreEvent::SweepSnooze => {
+                handle_sweep_snooze(&manager, &mut ctx).await;
             }
             CoreEvent::ToggleKeyword {
                 account_id,
@@ -1479,6 +1510,7 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     ctx.saved_searches
         .set(crate::ui_prefs::load_saved_searches());
     crate::ui_prefs::retain_pinned_messages(&known);
+    crate::ui_prefs::retain_snoozed_messages(&known);
     crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
@@ -1680,13 +1712,13 @@ pub(crate) fn apply_hydrated(ctx: &mut AppContext, hydrated: HydratedAccount) {
     if let Some(mailbox_id) = hydrated.selected_mailbox {
         ctx.selected_mailbox.set(Some(mailbox_id));
     }
-    sync_pinned_uids(ctx);
+    sync_list_overlays(ctx);
     match hydrated.messages {
         Some(msgs) => {
             let mut list = SparseList::new(msgs.total);
             list.insert_batch(0, msgs.prefix);
             ctx.messages.set(list);
-            apply_pins_to_messages(ctx);
+            apply_list_overlays(ctx);
             ctx.messages_loading.set(false);
         }
         None => {
@@ -1703,7 +1735,7 @@ fn apply_cached_message_list(ctx: &mut AppContext, cached: &CachedMessageList) {
     let mut list = SparseList::new(ui.total);
     list.insert_batch(0, ui.prefix);
     ctx.messages.set(list);
-    apply_pins_to_messages(ctx);
+    apply_list_overlays(ctx);
     ctx.messages_loading.set(false);
 }
 
@@ -2007,7 +2039,7 @@ async fn select_mailbox(
         ctx.download_status.set(HashMap::new());
         ctx.clear_attachment_downloads();
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
-        sync_pinned_uids(ctx);
+        sync_list_overlays(ctx);
         let sort = *ctx.message_sort.peek();
         let account = ctx.selected_account.read().clone();
         // Cached prefixes are unfiltered; skip them when SEARCH is narrowing the folder.
@@ -2034,8 +2066,8 @@ async fn select_mailbox(
         }
     } else {
         ctx.selected_mailbox.set(Some(mailbox_id.clone()));
-        sync_pinned_uids(ctx);
-        apply_pins_to_messages(ctx);
+        sync_list_overlays(ctx);
+        apply_list_overlays(ctx);
         ctx.messages_loading.set(false);
     }
 
@@ -2096,7 +2128,7 @@ async fn select_mailbox(
                     let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
                     list.insert_batch(0, batch);
                     ctx.messages.set(list);
-                    apply_pins_to_messages(ctx);
+                    apply_list_overlays(ctx);
                     ctx.messages_loading.set(false);
                     persist_selected_messages(manager.cache(), ctx, &account_id).await;
                     persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2230,7 +2262,7 @@ async fn handle_mailbox_activity(
             let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             list.insert_batch(0, batch);
             ctx.messages.set(list);
-            apply_pins_to_messages(ctx);
+            apply_list_overlays(ctx);
             prune_selection_after_refresh(ctx, &old_ids, &new_ids);
             persist_selected_messages(manager.cache(), ctx, &account_id).await;
             persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -2560,7 +2592,7 @@ async fn handle_fetch_message_range(
             let prefix_before = contiguous_loaded_prefix_len(&ctx.messages.read());
             let batch = messages_from_envelopes(envelopes, &ctx.messages.read());
             ctx.messages.write().insert_batch(range.start, batch);
-            apply_pins_to_messages(ctx);
+            apply_list_overlays(ctx);
             // Only rewrite localStorage when the contiguous cached prefix grew.
             let prefix_grew = contiguous_loaded_prefix_len(&ctx.messages.read()) > prefix_before;
             if prefix_grew {
@@ -3555,6 +3587,81 @@ fn sync_pinned_uids(ctx: &mut AppContext) {
     ctx.pinned_uids.set(pins);
 }
 
+fn sync_snoozed_messages(ctx: &mut AppContext) {
+    let entries = match (
+        ctx.selected_account.peek().as_ref(),
+        ctx.selected_mailbox.peek().as_ref(),
+    ) {
+        (Some(account_id), Some(mailbox_id)) => {
+            crate::ui_prefs::load_snoozed_messages(account_id, mailbox_id)
+        }
+        _ => Vec::new(),
+    };
+    ctx.snoozed_messages.set(entries);
+}
+
+fn sync_list_overlays(ctx: &mut AppContext) {
+    sync_pinned_uids(ctx);
+    sync_snoozed_messages(ctx);
+}
+
+fn apply_list_overlays(ctx: &mut AppContext) {
+    apply_pins_to_messages(ctx);
+    hide_active_snoozes(ctx);
+}
+
+fn hide_active_snoozes(ctx: &mut AppContext) {
+    let now = Utc::now();
+    let uids = crate::snooze::active_uids(&ctx.snoozed_messages.peek(), now);
+    if uids.is_empty() {
+        return;
+    }
+    hide_rows_locally(ctx, &uids);
+}
+
+/// Remove matching rows from the list without changing IMAP folder counts.
+fn hide_rows_locally(ctx: &mut AppContext, uids: &[String]) -> Vec<RemovedMessage> {
+    let uidset: HashSet<&str> = uids.iter().map(String::as_str).collect();
+    if uidset.is_empty() {
+        return Vec::new();
+    }
+    let focus = ctx.selection.read().focus().cloned();
+    let focus_hidden = focus
+        .as_ref()
+        .is_some_and(|id| uidset.contains(id.as_uid()));
+    let taken = ctx
+        .messages
+        .write()
+        .take_matching(|m| uidset.contains(m.id.as_uid()));
+    if taken.is_empty() {
+        return Vec::new();
+    }
+    if !focus_hidden {
+        let mut indices: Vec<usize> = taken.iter().map(|(i, _)| *i).collect();
+        indices.sort_unstable();
+        indices.reverse();
+        let mut selection = ctx.selection.write();
+        for i in indices {
+            selection.note_removed_at(i);
+        }
+    }
+    let gone: HashSet<MessageId> = taken.iter().map(|(_, m)| m.id.clone()).collect();
+    ctx.selection.write().remove_ids(&gone);
+    if focus_hidden {
+        ctx.selection.write().clear();
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.message_headers.set(MessageHeadersState::Closed);
+        ctx.message_source.set(MessageSourceState::Closed);
+        ctx.clear_nested_rfc822();
+        ctx.download_status.set(HashMap::new());
+        ctx.clear_attachment_downloads();
+    }
+    taken
+        .into_iter()
+        .map(|(index, message)| RemovedMessage { index, message })
+        .collect()
+}
+
 fn apply_pins_to_messages(ctx: &mut AppContext) {
     let pins = ctx.pinned_uids.peek().clone();
     if pins.is_empty() {
@@ -3626,7 +3733,191 @@ fn handle_toggle_pin(
     }
     let next = crate::ui_prefs::toggle_pinned_uids(&account_id, &mailbox_id, &ordered, pin);
     ctx.pinned_uids.set(next);
-    apply_pins_to_messages(ctx);
+    apply_list_overlays(ctx);
+}
+
+async fn handle_snooze_messages(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    message_ids: Vec<MessageId>,
+    preset: SnoozePreset,
+) {
+    if message_ids.is_empty()
+        || message_ids
+            .iter()
+            .any(|id| id.folder_id().as_str() != mailbox_id.as_str())
+    {
+        return;
+    }
+    if !same_mail_session(ctx, &account_id, &mailbox_id) {
+        return;
+    }
+    let until = preset.until(Utc::now());
+    let mut entries = Vec::new();
+    let mut ordered_ids: Vec<MessageId> = Vec::new();
+    {
+        let list = ctx.messages.read();
+        for msg in list.iter() {
+            if message_ids.iter().any(|id| id == &msg.id)
+                && !ordered_ids.iter().any(|id| id == &msg.id)
+            {
+                ordered_ids.push(msg.id.clone());
+                entries.push(SnoozedMessage {
+                    uid: msg.id.as_uid().to_string(),
+                    until,
+                    subject: msg.subject.clone(),
+                });
+            }
+        }
+    }
+    for id in &message_ids {
+        if !ordered_ids.iter().any(|existing| existing == id) {
+            ordered_ids.push(id.clone());
+            entries.push(SnoozedMessage {
+                uid: id.as_uid().to_string(),
+                until,
+                subject: String::new(),
+            });
+        }
+    }
+    let uids: Vec<String> = entries.iter().map(|e| e.uid.clone()).collect();
+    let next = crate::ui_prefs::snooze_messages(&account_id, &mailbox_id, &entries);
+    ctx.snoozed_messages.set(next);
+    ctx.snooze_picker_open.set(false);
+    let removed_sel = ctx.selection.read().focus().and_then(|id| {
+        if !uids.iter().any(|uid| uid == id.as_uid()) {
+            return None;
+        }
+        ctx.selection
+            .read()
+            .focus_at_index()
+            .or_else(|| ctx.messages.read().position(|m| m.id == *id))
+    });
+    let snapshots = hide_rows_locally(ctx, &uids);
+    ctx.show_toast(ToastAction::snoozed(
+        crate::snooze::format_until(until),
+        SnoozeUndo {
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            uids: uids.clone(),
+            snapshots,
+        },
+    ));
+    select_after_removed_row(manager, ctx, removed_sel).await;
+    persist_selected_messages(manager.cache(), ctx, &account_id).await;
+    set_later_keyword(manager, ctx, &account_id, &mailbox_id, &ordered_ids, true).await;
+}
+
+async fn handle_sweep_snooze(manager: &AccountConnectionManager, ctx: &mut AppContext) {
+    let expired = crate::ui_prefs::take_expired_snoozes(Utc::now());
+    if expired.is_empty() {
+        return;
+    }
+    sync_snoozed_messages(ctx);
+    let current_account = ctx.selected_account.peek().clone();
+    let current_mailbox = ctx.selected_mailbox.peek().clone();
+    let refresh = expired.iter().any(|row| {
+        current_account.as_ref() == Some(&row.account_id)
+            && current_mailbox.as_ref() == Some(&row.mailbox_id)
+    });
+    let first = expired[0].clone();
+    let extra = expired.len().saturating_sub(1);
+    if *ctx.notify_inbox.peek()
+        && crate::notifications::current_permission()
+            == crate::notifications::NotifyPermission::Granted
+    {
+        crate::notifications::show_snooze_notification(&first.subject);
+    }
+    let subject = if extra == 0 {
+        first.subject
+    } else {
+        format!("{} (+{extra} more)", subject_or_fallback(&first.subject))
+    };
+    ctx.show_toast(ToastAction::snooze_ended(
+        first.account_id,
+        first.mailbox_id,
+        first.uid,
+        subject,
+    ));
+    for row in &expired {
+        if row.uid.is_empty() {
+            continue;
+        }
+        let id = MessageId::new(FolderId::new(row.mailbox_id.to_string()), row.uid.clone());
+        set_later_keyword(manager, ctx, &row.account_id, &row.mailbox_id, &[id], false).await;
+    }
+    if refresh {
+        if let (Some(account_id), Some(mailbox_id)) = (current_account, current_mailbox) {
+            handle_mailbox_activity(manager, ctx, account_id, mailbox_id).await;
+        }
+    }
+}
+
+fn subject_or_fallback(subject: &str) -> String {
+    let trimmed = subject.trim();
+    if trimmed.is_empty() {
+        "Snoozed message".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+async fn handle_open_snoozed_message(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    uid: String,
+) {
+    if uid.is_empty() {
+        return;
+    }
+    if ctx.selected_account.peek().as_ref() != Some(&account_id) {
+        ctx.show_toast(ToastAction::info(
+            "Switch to that account to open the message",
+        ));
+        return;
+    }
+    if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
+        handle_select_mailbox(manager, ctx, mailbox_id.clone(), true).await;
+    }
+    if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
+        return;
+    }
+    let message_id = MessageId::new(FolderId::new(mailbox_id.to_string()), uid);
+    ctx.set_mobile_pane(MobilePane::after_select_message());
+    handle_select_message(manager, ctx, message_id, true, true).await;
+}
+
+async fn set_later_keyword(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+    message_ids: &[MessageId],
+    on: bool,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    let core_ids = core_message_ids(message_ids);
+    if let Err(e) = connector
+        .update_envelope_flags(
+            &folder_id,
+            &core_ids,
+            &[(EnvelopeFlag::Keyword(ImapKeyword::Later), on)],
+        )
+        .await
+    {
+        warn!("optional $Later keyword update failed: {e}");
+        note_selected_imap_error(manager, ctx, &e);
+    }
 }
 
 fn same_mail_session(ctx: &AppContext, account_id: &AccountId, mailbox_id: &MailboxId) -> bool {
@@ -3787,7 +4078,7 @@ async fn relocate_unread_sort_rows(
                 list.relocate(from, to);
             }
             drop(list);
-            apply_pins_to_messages(ctx);
+            apply_list_overlays(ctx);
         }
         Err(e) => {
             warn!("unread-sort relocate failed: {e}");
@@ -4489,6 +4780,44 @@ async fn handle_undo(manager: &AccountConnectionManager, ctx: &mut AppContext, u
                     ctx.show_toast(ToastAction::error(format!("Could not undo: {e}")));
                 }
             }
+        }
+        UndoRequest::Unsnooze(undo) => {
+            if !selected_account_is(ctx, &undo.account_id) {
+                ctx.show_toast(ToastAction::error(
+                    "Undo is not available after switching accounts",
+                ));
+                return;
+            }
+            let next =
+                crate::ui_prefs::unsnooze_messages(&undo.account_id, &undo.mailbox_id, &undo.uids);
+            if ctx.selected_mailbox.read().as_ref() == Some(&undo.mailbox_id) {
+                ctx.snoozed_messages.set(next);
+                restore_snapshots(ctx, &undo.mailbox_id, undo.snapshots, None);
+            }
+            ctx.show_toast(ToastAction::info("Undone"));
+            persist_selected_messages(manager.cache(), ctx, &undo.account_id).await;
+            let ids: Vec<MessageId> = undo
+                .uids
+                .iter()
+                .filter(|uid| !uid.is_empty())
+                .map(|uid| MessageId::new(FolderId::new(undo.mailbox_id.to_string()), uid.clone()))
+                .collect();
+            set_later_keyword(
+                manager,
+                ctx,
+                &undo.account_id,
+                &undo.mailbox_id,
+                &ids,
+                false,
+            )
+            .await;
+        }
+        UndoRequest::OpenSnoozed {
+            account_id,
+            mailbox_id,
+            uid,
+        } => {
+            handle_open_snoozed_message(manager, ctx, account_id, mailbox_id, uid).await;
         }
     }
 }

@@ -24,6 +24,7 @@ pub enum IconKind {
     PaperAirplane,
     PaperClip,
     Pin,
+    Clock,
     PencilSquare,
     Photo,
     Star,
@@ -105,6 +106,10 @@ fn spec(kind: IconKind) -> PathSpec {
         },
         IconKind::Pin => PathSpec {
             d: "M6.32 2.577a49.255 49.255 0 0 1 11.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 0 1-1.085.67L12 18.089l-7.165 3.583A.75.75 0 0 1 3.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93Z",
+            evenodd: true,
+        },
+        IconKind::Clock => PathSpec {
+            d: "M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25ZM12.75 6a.75.75 0 0 0-1.5 0v6c0 .414.336.75.75.75h4.5a.75.75 0 0 0 0-1.5h-3.75V6Z",
             evenodd: true,
         },
         IconKind::Photo => PathSpec {

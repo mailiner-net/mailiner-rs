@@ -18,7 +18,9 @@ use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
-use crate::ui_prefs::{ComposePlacement, MailLayout, MessageListDensity, SavedSearch};
+use crate::ui_prefs::{
+    ComposePlacement, MailLayout, MessageListDensity, SavedSearch, SnoozedMessage,
+};
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +188,10 @@ pub struct AppContext {
     pub pinned_uids: Signal<Vec<String>>,
     /// Screen-reader live status (new mail). Empty string is silent.
     pub sr_status: Signal<String>,
+    /// Snoozed rows for the open account+mailbox (local hide-until overlay).
+    pub snoozed_messages: Signal<Vec<SnoozedMessage>>,
+    /// Viewer snooze-preset menu (also opened by the **H** shortcut).
+    pub snooze_picker_open: Signal<bool>,
 }
 
 /// In-progress drag of list rows onto a folder.
@@ -328,6 +334,8 @@ impl AppContext {
         self.compose_draft.set(None);
         self.mailbox_picker.set(None);
         self.pinned_uids.set(Vec::new());
+        self.snoozed_messages.set(Vec::new());
+        self.snooze_picker_open.set(false);
         self.mobile_pane.set(MobilePane::default());
     }
 

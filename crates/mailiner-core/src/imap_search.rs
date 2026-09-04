@@ -539,7 +539,7 @@ mod tests {
         assert!(c.needs_utf8);
         assert_eq!(
             c.uid_search_query(),
-            format!(r#"CHARSET UTF-8 OR OR SUBJECT "über" FROM "über" TEXT "über""#)
+            r#"CHARSET UTF-8 OR OR SUBJECT "über" FROM "über" TEXT "über""#
         );
         assert_eq!(
             c.sort_query(),

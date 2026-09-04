@@ -1,0 +1,64 @@
+crates/mailiner-smtp-connector/src/tls.rs
+  s_0b4daff6c08ac0::t_d2e3add87a6317 1-133
+crates/mailiner-app/src/account_store.rs
+  s_0b4daff6c08ac0::t_17fbd5597d6d2c 622
+crates/mailiner-app/src/account_config.rs
+  s_0b4daff6c08ac0::t_9e9628f723ab0d 31-32
+  s_0b4daff6c08ac0::t_c34f4285da3c62 43,710-711
+  s_0b4daff6c08ac0::t_642c8ea97a3726 174-178
+  s_0b4daff6c08ac0::t_24152c2cf5d3e8 764-786
+  s_0b4daff6c08ac0::t_bfef116ad83c11 1043
+  s_0b4daff6c08ac0::t_8245d4f5b71df7 1392-1489
+crates/mailiner-app/src/account_vault.rs
+  s_0b4daff6c08ac0::t_9aac99c83809ab 492
+crates/mailiner-app/src/connection.rs
+  s_0b4daff6c08ac0::t_e4ccf2fc6deaec 665-666
+crates/mailiner-imap-connector/src/lib.rs
+  s_0b4daff6c08ac0::t_e050456347a031 10,17,272-273
+  s_0b4daff6c08ac0::t_75ee8741bf082d 38
+  s_0b4daff6c08ac0::t_7bc85f84510a00 325,395-400,407
+crates/mailiner-app/src/smtp_session.rs
+  s_0b4daff6c08ac0::t_71962f574db669 220-221
+  s_0b4daff6c08ac0::t_9277799e41056b 284
+crates/mailiner-imap-connector/src/tls.rs
+  s_0b4daff6c08ac0::t_0b5bcb87c2a181 1-133
+crates/mailiner-app/src/components/account_form.rs
+  s_0b4daff6c08ac0::t_63c03fdaea9a84 10-11
+  s_0b4daff6c08ac0::t_3dc0d35ac17168 271,357
+  s_0b4daff6c08ac0::t_176bb193b32496 378
+  s_0b4daff6c08ac0::t_3fbd27a4675819 1014-1101
+  s_0b4daff6c08ac0::t_df996841e2a6a8 1413
+  s_0b4daff6c08ac0::t_1aff21d686f454 1544-1631
+crates/mailiner-app/src/components/accounts.rs
+  s_0b4daff6c08ac0::t_4c4c34197f9896 14,19-21,1062
+  s_0b4daff6c08ac0::t_88b9179420c164 1186,1234,1271
+  s_0b4daff6c08ac0::t_2a84b0c618ff54 1351-1357,1471,1536,1965-1969
+  s_0b4daff6c08ac0::t_7f8900c43a6f42 1749,1840
+  s_0b4daff6c08ac0::t_46223d1cbef28a 1800
+crates/mailiner-app/src/local_data.rs
+  s_0b4daff6c08ac0::t_355145d28f35e5 215
+crates/mailiner-app/src/components/onboarding.rs
+  s_0b4daff6c08ac0::t_0f7244bf98f8c1 15-18,61
+  s_0b4daff6c08ac0::t_a34eeb74bdf10f 207
+  s_0b4daff6c08ac0::t_e6c2666b3e3c5e 256
+  s_0b4daff6c08ac0::t_2fdf8026f5e0cd 292,394-398
+crates/mailiner-smtp-connector/src/lib.rs
+  s_0b4daff6c08ac0::t_b5c9bf08d56e24 3-6,64-65,82,86-91,106
+  s_0b4daff6c08ac0::t_088d31e444138a 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2b290f65dd9bbf465fd98732a606f34013eb2993",
+  "prompts": {},
+  "sessions": {
+    "s_0b4daff6c08ac0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06ad6-0aab-73a1-9f15-f7837d41e3c6",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

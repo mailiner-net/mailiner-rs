@@ -6,14 +6,18 @@ use dioxus::prelude::*;
 use super::icons::{Icon, IconButton, IconKind};
 use super::recipient_field::RecipientField;
 
+use wasm_bindgen::JsCast;
+
 use mailiner_composer::editor::{SpellcheckField, spellcheck_attr};
 use mailiner_composer::model::draft::{BodyMode, ComposerAddress, DraftDocument};
 use mailiner_composer::shell::attachment_list::{
-    draft_payload_bytes, file_attachment, human_size, resolve_content_type, would_exceed_draft_cap,
+    draft_payload_bytes, file_attachment, html_for_plain_with_inlines, human_size, image_filename,
+    inline_image, looks_like_inline_image, resolve_content_type, would_exceed_draft_cap,
 };
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
-    ComposeIntent, FileAttachment, PrepareSubmitError, build_draft, caps, prepare_submit,
+    ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError, SAFE_IMAGE_ACCEPT, build_draft,
+    caps, is_safe_image_content_type, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -366,9 +370,14 @@ fn submit_compose(
     };
     draft.mode = BodyMode::Plain;
     draft.from = Some(composer_address_from_identity(&identity));
-    draft.html_body.clear();
     draft.plain_body = form.body.peek().clone();
     draft.subject = form.subject.peek().clone();
+    if draft.inline_images.is_empty() {
+        draft.html_body.clear();
+    } else {
+        draft.html_body = html_for_plain_with_inlines(&draft.plain_body, &draft.inline_images);
+        draft.plain_cache_dirty = false;
+    }
     draft.to = form.to.take_committed();
     draft.cc = form.cc.take_committed();
     draft.bcc = form.bcc.take_committed();
@@ -420,6 +429,12 @@ enum PushAttachment {
     TooLarge,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttachKind {
+    File,
+    Inline,
+}
+
 fn live_payload_bytes(draft: &DraftDocument, live_plain_len: usize) -> u64 {
     draft_payload_bytes(draft)
         .saturating_sub(draft.plain_body.len() as u64)
@@ -465,6 +480,46 @@ fn remove_attachment(mut compose_draft: Signal<Option<ComposeSession>>, id: &str
     }
 }
 
+fn push_inline_on_draft(
+    mut compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    image: InlineImage,
+    body: Signal<String>,
+) -> PushAttachment {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return PushAttachment::Stale;
+    };
+    if session.draft.id.as_str() != draft_id {
+        return PushAttachment::Stale;
+    }
+    if session.draft.inline_images.len() >= caps::MAX_INLINES {
+        return PushAttachment::TooMany;
+    }
+    let extra = match &image.data {
+        mailiner_composer::AttachmentData::Bytes(b) => b.len() as u64,
+        mailiner_composer::AttachmentData::Pending => 0,
+    };
+    if would_exceed_draft_cap(live_payload_bytes(&session.draft, body().len()), extra) {
+        return PushAttachment::TooLarge;
+    }
+    session.draft.inline_images.push(image);
+    session.draft.touch();
+    PushAttachment::Added
+}
+
+fn remove_inline(mut compose_draft: Signal<Option<ComposeSession>>, id: &str) {
+    let mut slot = compose_draft.write();
+    let Some(session) = slot.as_mut() else {
+        return;
+    };
+    let before = session.draft.inline_images.len();
+    session.draft.inline_images.retain(|a| a.id.0 != id);
+    if session.draft.inline_images.len() != before {
+        session.draft.touch();
+    }
+}
+
 fn oversize_message(filename: &str) -> String {
     let max_mib = caps::MAX_FILE_BYTES / (1024 * 1024);
     format!("\"{filename}\" is larger than {max_mib} MiB.")
@@ -474,9 +529,17 @@ fn too_many_message() -> String {
     format!("You can attach at most {} files.", caps::MAX_ATTACHMENTS)
 }
 
+fn too_many_inlines_message() -> String {
+    format!("You can insert at most {} images.", caps::MAX_INLINES)
+}
+
 fn oversize_draft_message() -> String {
     let max_mib = caps::MAX_DRAFT_BYTES / (1024 * 1024);
     format!("Attachments would exceed the {max_mib} MiB draft limit.")
+}
+
+fn not_an_image_message(filename: &str) -> String {
+    format!("\"{filename}\" is not a PNG, JPEG, GIF, WebP, or BMP image.")
 }
 
 fn set_attach_error_if_current(
@@ -490,45 +553,190 @@ fn set_attach_error_if_current(
     }
 }
 
+struct IncomingBytes {
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+fn draft_slot_counts(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    live_plain_len: usize,
+) -> Option<(usize, usize, u64)> {
+    compose_draft
+        .read()
+        .as_ref()
+        .filter(|s| s.draft.id.as_str() == draft_id)
+        .map(|s| {
+            (
+                s.draft.attachments.len(),
+                s.draft.inline_images.len(),
+                live_payload_bytes(&s.draft, live_plain_len),
+            )
+        })
+}
+
+fn same_open_draft(compose_draft: Signal<Option<ComposeSession>>, draft_id: &str) -> bool {
+    open_draft_id(compose_draft).as_deref() == Some(draft_id)
+}
+
+enum PreRead {
+    Read,
+    Skip,
+    Stop,
+}
+
+fn pre_read_fits(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    body: Signal<String>,
+    kind: AttachKind,
+    declared: u64,
+    first_err: &mut Option<String>,
+) -> PreRead {
+    let (_, max_count, too_many) = kind_limits(kind);
+    let Some((file_count, inline_count, used)) =
+        draft_slot_counts(compose_draft, draft_id, body().len())
+    else {
+        return PreRead::Stop;
+    };
+    let count = match kind {
+        AttachKind::File => file_count,
+        AttachKind::Inline => inline_count,
+    };
+    if count >= max_count {
+        first_err.get_or_insert_with(too_many);
+        return PreRead::Stop;
+    }
+    if would_exceed_draft_cap(used, declared) {
+        first_err.get_or_insert_with(oversize_draft_message);
+        return PreRead::Skip;
+    }
+    PreRead::Read
+}
+
+fn kind_limits(kind: AttachKind) -> (u64, usize, fn() -> String) {
+    match kind {
+        AttachKind::File => (
+            caps::MAX_FILE_BYTES,
+            caps::MAX_ATTACHMENTS,
+            too_many_message,
+        ),
+        AttachKind::Inline => (
+            caps::MAX_INLINE_BYTES,
+            caps::MAX_INLINES,
+            too_many_inlines_message,
+        ),
+    }
+}
+
+enum AttachStep {
+    Continue,
+    Stop,
+}
+
+fn attach_one_bytes(
+    compose_draft: Signal<Option<ComposeSession>>,
+    draft_id: &str,
+    mut item: IncomingBytes,
+    body: Signal<String>,
+    kind: AttachKind,
+    inline_index: &mut usize,
+    first_err: &mut Option<String>,
+) -> AttachStep {
+    if !same_open_draft(compose_draft, draft_id) {
+        return AttachStep::Stop;
+    }
+    if kind == AttachKind::Inline {
+        item.filename = image_filename(&item.filename, &item.content_type, *inline_index);
+        *inline_index += 1;
+        if !looks_like_inline_image(&item.filename, Some(&item.content_type)) {
+            first_err.get_or_insert_with(|| not_an_image_message(&item.filename));
+            return AttachStep::Continue;
+        }
+    }
+    let size = item.bytes.len() as u64;
+    let (max_one, max_count, too_many) = kind_limits(kind);
+    if size > max_one {
+        first_err.get_or_insert_with(|| oversize_message(&item.filename));
+        return AttachStep::Continue;
+    }
+    let Some((file_count, inline_count, used)) =
+        draft_slot_counts(compose_draft, draft_id, body().len())
+    else {
+        return AttachStep::Stop;
+    };
+    let count = match kind {
+        AttachKind::File => file_count,
+        AttachKind::Inline => inline_count,
+    };
+    if count >= max_count {
+        first_err.get_or_insert_with(too_many);
+        return AttachStep::Stop;
+    }
+    if would_exceed_draft_cap(used, size) {
+        first_err.get_or_insert_with(oversize_draft_message);
+        return AttachStep::Continue;
+    }
+    let pushed = match kind {
+        AttachKind::File => {
+            let attachment = file_attachment(item.filename, item.content_type, item.bytes);
+            push_attachment_on_draft(compose_draft, draft_id, attachment, body)
+        }
+        AttachKind::Inline => {
+            let image = inline_image(Some(item.filename), item.content_type, item.bytes);
+            push_inline_on_draft(compose_draft, draft_id, image, body)
+        }
+    };
+    match pushed {
+        PushAttachment::Added => AttachStep::Continue,
+        PushAttachment::TooMany => {
+            first_err.get_or_insert_with(too_many);
+            AttachStep::Stop
+        }
+        PushAttachment::Stale => AttachStep::Stop,
+        PushAttachment::TooLarge => {
+            first_err.get_or_insert_with(oversize_draft_message);
+            AttachStep::Continue
+        }
+    }
+}
+
 async fn attach_selected_files(
     ctx: AppContext,
     files: Vec<dioxus::html::FileData>,
     body: Signal<String>,
     error: Signal<Option<String>>,
+    kind: AttachKind,
 ) {
     let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
         return;
     };
     let mut first_err = None::<String>;
+    let mut inline_index = 0usize;
+    let (max_one, _, _) = kind_limits(kind);
     for file in files {
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
         let filename = file.name();
         let declared = file.size();
-        if declared > caps::MAX_FILE_BYTES {
+        if declared > max_one {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
         }
-        let live_plain_len = body().len();
-        let Some((count, used)) = ctx
-            .compose_draft
-            .read()
-            .as_ref()
-            .filter(|s| s.draft.id.as_str() == draft_id)
-            .map(|s| {
-                (
-                    s.draft.attachments.len(),
-                    live_payload_bytes(&s.draft, live_plain_len),
-                )
-            })
-        else {
-            break;
-        };
-        if count >= caps::MAX_ATTACHMENTS {
-            first_err.get_or_insert_with(too_many_message);
-            break;
-        }
-        if would_exceed_draft_cap(used, declared) {
-            first_err.get_or_insert_with(oversize_draft_message);
-            continue;
+        match pre_read_fits(
+            ctx.compose_draft,
+            &draft_id,
+            body,
+            kind,
+            declared,
+            &mut first_err,
+        ) {
+            PreRead::Read => {}
+            PreRead::Skip => continue,
+            PreRead::Stop => break,
         }
         let bytes = match file.read_bytes().await {
             Ok(b) => b,
@@ -537,23 +745,169 @@ async fn attach_selected_files(
                 continue;
             }
         };
-        if bytes.len() as u64 > caps::MAX_FILE_BYTES {
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
+        if bytes.len() as u64 > max_one {
             first_err.get_or_insert_with(|| oversize_message(&filename));
             continue;
         }
         let content_type = resolve_content_type(&filename, file.content_type().as_deref());
-        let attachment = file_attachment(filename, content_type, bytes.to_vec());
-        match push_attachment_on_draft(ctx.compose_draft, &draft_id, attachment, body) {
-            PushAttachment::Added => {}
-            PushAttachment::TooMany => {
-                first_err.get_or_insert_with(too_many_message);
-                break;
+        match attach_one_bytes(
+            ctx.compose_draft,
+            &draft_id,
+            IncomingBytes {
+                filename,
+                content_type,
+                bytes: bytes.to_vec(),
+            },
+            body,
+            kind,
+            &mut inline_index,
+            &mut first_err,
+        ) {
+            AttachStep::Continue => {}
+            AttachStep::Stop => break,
+        }
+    }
+    if let Some(msg) = first_err {
+        set_attach_error_if_current(ctx.compose_draft, &draft_id, error, msg);
+    }
+}
+
+fn clipboard_data_transfer(evt: &dioxus::html::ClipboardEvent) -> Option<web_sys::DataTransfer> {
+    let raw = evt.data().downcast::<web_sys::Event>()?.clone();
+    raw.dyn_into::<web_sys::ClipboardEvent>()
+        .ok()?
+        .clipboard_data()
+}
+
+fn clipboard_has_text(dt: &web_sys::DataTransfer) -> bool {
+    if dt
+        .get_data("text/plain")
+        .ok()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return true;
+    }
+    let types = dt.types();
+    (0..types.length()).any(|i| {
+        types.get(i).as_string().is_some_and(|t| {
+            t.eq_ignore_ascii_case("text/plain") || t.eq_ignore_ascii_case("text/html")
+        })
+    })
+}
+
+fn is_clipboard_image(file: &web_sys::File) -> bool {
+    let ty = file.type_();
+    if is_safe_image_content_type(&ty) {
+        return true;
+    }
+    ty.is_empty() && looks_like_inline_image(&file.name(), None)
+}
+
+fn collect_clipboard_images(dt: &web_sys::DataTransfer) -> Vec<web_sys::File> {
+    let mut out = Vec::new();
+    if let Some(list) = dt.files() {
+        for i in 0..list.length() {
+            if let Some(file) = list.item(i) {
+                if is_clipboard_image(&file) {
+                    out.push(file);
+                }
             }
-            PushAttachment::Stale => break,
-            PushAttachment::TooLarge => {
-                first_err.get_or_insert_with(oversize_draft_message);
+        }
+    }
+    if !out.is_empty() {
+        return out;
+    }
+    let items = dt.items();
+    for i in 0..items.length() {
+        let Some(item) = items.get(i) else {
+            continue;
+        };
+        if item.kind() != "file" || !is_safe_image_content_type(&item.type_()) {
+            continue;
+        }
+        if let Ok(Some(file)) = item.get_as_file() {
+            out.push(file);
+        }
+    }
+    out
+}
+
+async fn read_web_file_bytes(file: &web_sys::File) -> Result<Vec<u8>, ()> {
+    let blob: web_sys::Blob = file.clone().into();
+    let buf = wasm_bindgen_futures::JsFuture::from(blob.array_buffer())
+        .await
+        .map_err(|_| ())?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
+}
+
+async fn attach_web_images(
+    ctx: AppContext,
+    files: Vec<web_sys::File>,
+    body: Signal<String>,
+    error: Signal<Option<String>>,
+) {
+    let Some(draft_id) = open_draft_id(ctx.compose_draft) else {
+        return;
+    };
+    let mut first_err = None::<String>;
+    let mut inline_index = 0usize;
+    for file in files {
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
+        let filename = file.name();
+        let declared = file.size() as u64;
+        if declared > caps::MAX_INLINE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        match pre_read_fits(
+            ctx.compose_draft,
+            &draft_id,
+            body,
+            AttachKind::Inline,
+            declared,
+            &mut first_err,
+        ) {
+            PreRead::Read => {}
+            PreRead::Skip => continue,
+            PreRead::Stop => break,
+        }
+        let bytes = match read_web_file_bytes(&file).await {
+            Ok(b) => b,
+            Err(()) => {
+                first_err.get_or_insert_with(|| format!("Could not read \"{filename}\"."));
                 continue;
             }
+        };
+        if !same_open_draft(ctx.compose_draft, &draft_id) {
+            return;
+        }
+        if bytes.len() as u64 > caps::MAX_INLINE_BYTES {
+            first_err.get_or_insert_with(|| oversize_message(&filename));
+            continue;
+        }
+        let reported = file.type_();
+        let content_type =
+            resolve_content_type(&filename, Some(reported.as_str()).filter(|s| !s.is_empty()));
+        match attach_one_bytes(
+            ctx.compose_draft,
+            &draft_id,
+            IncomingBytes {
+                filename,
+                content_type,
+                bytes,
+            },
+            body,
+            AttachKind::Inline,
+            &mut inline_index,
+            &mut first_err,
+        ) {
+            AttachStep::Continue => {}
+            AttachStep::Stop => break,
         }
     }
     if let Some(msg) = first_err {
@@ -583,6 +937,7 @@ pub fn ComposeOverlay() -> Element {
     let mut attaching = use_signal(|| false);
     let mut attach_gen = use_signal(|| 0u32);
     let mut attach_input_gen = use_signal(|| 0u32);
+    let mut image_input_gen = use_signal(|| 0u32);
     let mut form = ComposeForm {
         to: RecipientList {
             chips: to,
@@ -600,19 +955,39 @@ pub fn ComposeOverlay() -> Element {
         body,
     };
 
-    let (open, title, attachments, from_account_id) = {
+    let (open, title, listed_files, from_account_id) = {
         let slot = ctx.compose_draft.read();
         match slot.as_ref() {
-            Some(s) => (
-                true,
-                s.title.clone(),
-                s.draft
+            Some(s) => {
+                let mut listed = s
+                    .draft
                     .attachments
                     .iter()
-                    .map(|a| (a.id.0.clone(), a.filename.clone(), a.size))
-                    .collect::<Vec<_>>(),
-                Some(s.account_id.clone()),
-            ),
+                    .map(|a| {
+                        (
+                            format!("att-{}", a.id.0),
+                            a.id.0.clone(),
+                            a.filename.clone(),
+                            a.size,
+                            false,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                listed.extend(s.draft.inline_images.iter().map(|img| {
+                    let size = match &img.data {
+                        mailiner_composer::AttachmentData::Bytes(b) => b.len() as u64,
+                        mailiner_composer::AttachmentData::Pending => 0,
+                    };
+                    (
+                        format!("img-{}", img.id.0),
+                        img.id.0.clone(),
+                        img.filename.clone().unwrap_or_else(|| "image".into()),
+                        size,
+                        true,
+                    )
+                }));
+                (true, s.title.clone(), listed, Some(s.account_id.clone()))
+            }
             None => (false, "New message".to_string(), Vec::new(), None),
         }
     };
@@ -732,6 +1107,36 @@ pub fn ComposeOverlay() -> Element {
                                     attaching,
                                 );
                             }
+                        }
+                    },
+                    onpaste: {
+                        let ctx = ctx.clone();
+                        move |evt: ClipboardEvent| {
+                            if sending || attaching() {
+                                return;
+                            }
+                            let Some(dt) = clipboard_data_transfer(&evt) else {
+                                return;
+                            };
+                            let files = collect_clipboard_images(&dt);
+                            if files.is_empty() {
+                                return;
+                            }
+                            if !clipboard_has_text(&dt) {
+                                evt.prevent_default();
+                            }
+                            error.set(None);
+                            let generation = attach_gen() + 1;
+                            attach_gen.set(generation);
+                            attaching.set(true);
+                            let ctx = ctx.clone();
+                            let mut attaching = attaching;
+                            spawn(async move {
+                                attach_web_images(ctx, files, body, error).await;
+                                if attach_gen() == generation {
+                                    attaching.set(false);
+                                }
+                            });
                         }
                     },
                     div {
@@ -866,51 +1271,108 @@ pub fn ComposeOverlay() -> Element {
                     }
                     div {
                         class: "compose-attachments",
-                        label {
-                            class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
-                            title: "Attach files",
-                            input {
-                                key: "{attach_input_gen()}",
-                                class: "compose-attach-input",
-                                r#type: "file",
-                                multiple: true,
-                                disabled: busy,
-                                aria_label: "Attach files",
-                                onchange: {
-                                    let ctx = ctx.clone();
-                                    move |evt: FormEvent| {
-                                        if sending || attaching() {
-                                            return;
-                                        }
-                                        let files = evt.files();
-                                        attach_input_gen.set(attach_input_gen() + 1);
-                                        if files.is_empty() {
-                                            return;
-                                        }
-                                        error.set(None);
-                                        let generation = attach_gen() + 1;
-                                        attach_gen.set(generation);
-                                        attaching.set(true);
+                        div {
+                            class: "compose-attach-actions",
+                            label {
+                                class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
+                                title: "Attach files",
+                                input {
+                                    key: "{attach_input_gen()}",
+                                    class: "compose-attach-input",
+                                    r#type: "file",
+                                    multiple: true,
+                                    disabled: busy,
+                                    aria_label: "Attach files",
+                                    onchange: {
                                         let ctx = ctx.clone();
-                                        let mut attaching = attaching;
-                                        spawn(async move {
-                                            attach_selected_files(ctx, files, body, error).await;
-                                            if attach_gen() == generation {
-                                                attaching.set(false);
+                                        move |evt: FormEvent| {
+                                            if sending || attaching() {
+                                                return;
                                             }
-                                        });
-                                    }
-                                },
+                                            let files = evt.files();
+                                            attach_input_gen.set(attach_input_gen() + 1);
+                                            if files.is_empty() {
+                                                return;
+                                            }
+                                            error.set(None);
+                                            let generation = attach_gen() + 1;
+                                            attach_gen.set(generation);
+                                            attaching.set(true);
+                                            let ctx = ctx.clone();
+                                            let mut attaching = attaching;
+                                            spawn(async move {
+                                                attach_selected_files(
+                                                    ctx,
+                                                    files,
+                                                    body,
+                                                    error,
+                                                    AttachKind::File,
+                                                )
+                                                .await;
+                                                if attach_gen() == generation {
+                                                    attaching.set(false);
+                                                }
+                                            });
+                                        }
+                                    },
+                                }
+                                Icon { size: 16, icon: IconKind::PaperClip }
+                                "Attach"
                             }
-                            Icon { size: 16, icon: IconKind::PaperClip }
-                            "Attach"
+                            label {
+                                class: if busy { "compose-attach is-disabled" } else { "compose-attach" },
+                                title: "Insert image",
+                                input {
+                                    key: "{image_input_gen()}",
+                                    class: "compose-attach-input",
+                                    r#type: "file",
+                                    multiple: true,
+                                    accept: SAFE_IMAGE_ACCEPT,
+                                    disabled: busy,
+                                    aria_label: "Insert image",
+                                    onchange: {
+                                        let ctx = ctx.clone();
+                                        move |evt: FormEvent| {
+                                            if sending || attaching() {
+                                                return;
+                                            }
+                                            let files = evt.files();
+                                            image_input_gen.set(image_input_gen() + 1);
+                                            if files.is_empty() {
+                                                return;
+                                            }
+                                            error.set(None);
+                                            let generation = attach_gen() + 1;
+                                            attach_gen.set(generation);
+                                            attaching.set(true);
+                                            let ctx = ctx.clone();
+                                            let mut attaching = attaching;
+                                            spawn(async move {
+                                                attach_selected_files(
+                                                    ctx,
+                                                    files,
+                                                    body,
+                                                    error,
+                                                    AttachKind::Inline,
+                                                )
+                                                .await;
+                                                if attach_gen() == generation {
+                                                    attaching.set(false);
+                                                }
+                                            });
+                                        }
+                                    },
+                                }
+                                Icon { size: 16, icon: IconKind::Photo }
+                                "Insert image"
+                            }
                         }
-                        if !attachments.is_empty() {
+                        if !listed_files.is_empty() {
                             ul {
                                 class: "compose-attachment-list",
-                                for (id, filename, size) in attachments {
+                                for (key, id, filename, size, is_inline) in listed_files {
                                     li {
-                                        key: "{id}",
+                                        key: "{key}",
                                         class: "compose-attachment",
                                         span {
                                             class: "compose-attachment-name",
@@ -919,6 +1381,9 @@ pub fn ComposeOverlay() -> Element {
                                         }
                                         span {
                                             class: "compose-attachment-size",
+                                            if is_inline {
+                                                "image · "
+                                            }
                                             "{human_size(size)}"
                                         }
                                         button {
@@ -932,7 +1397,11 @@ pub fn ComposeOverlay() -> Element {
                                                     if sending {
                                                         return;
                                                     }
-                                                    remove_attachment(compose_draft, &id);
+                                                    if is_inline {
+                                                        remove_inline(compose_draft, &id);
+                                                    } else {
+                                                        remove_attachment(compose_draft, &id);
+                                                    }
                                                 }
                                             },
                                             Icon { size: 14, icon: IconKind::XMark }

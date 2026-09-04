@@ -402,6 +402,27 @@ mod tests {
     }
 
     #[test]
+    fn plain_with_inlines_emits_related_cid() {
+        let mut d = minimal();
+        d.inline_images
+            .push(crate::shell::attachment_list::inline_image(
+                Some("dot.png".into()),
+                "image/png",
+                b"PNG".to_vec(),
+            ));
+        d.html_body = crate::shell::attachment_list::html_for_plain_with_inlines(
+            &d.plain_body,
+            &d.inline_images,
+        );
+        let prepared = prepare_submit(&d, &identity()).unwrap();
+        let s = String::from_utf8_lossy(&prepared.rfc822);
+        assert!(s.contains("multipart/related"));
+        assert!(s.contains("Content-ID: <img-"));
+        assert!(s.contains("cid:img-"));
+        assert!(s.contains("Hello"));
+    }
+
+    #[test]
     fn localhost_email_uses_invalid_domain() {
         let id = FromIdentity::new("X", "root@127.0.0.1");
         let mut d = DraftDocument::new_empty(&id);

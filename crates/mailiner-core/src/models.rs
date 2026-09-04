@@ -514,7 +514,7 @@ pub enum MessageContent {
 }
 
 /// Viewer-oriented message part (parser / loader / formatter).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePart {
     /// Stable logical id for UI keys, e.g. `".alternative.1.html"`.
     pub id: MessagePartId,
@@ -535,9 +535,34 @@ pub struct MessagePart {
     pub is_attachment: bool,
     /// True for cid-inlined images (and parts hidden after cid resolution).
     pub is_hidden: bool,
+    /// Section of the enclosing `message/rfc822` part, if this part is nested.
+    #[serde(default)]
+    pub nested_in: Option<String>,
+    /// IMAP envelope of this `message/rfc822` part (From/To/Subject/Date).
+    #[serde(default)]
+    pub nested_headers: Option<NestedMessageHeaders>,
     pub content: MessageContent,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Viewer headers for a nested `message/rfc822` (from IMAP BODYSTRUCTURE ENVELOPE).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct NestedMessageHeaders {
+    pub subject: Option<String>,
+    pub from: Option<EmailAddress>,
+    pub to: Option<EmailAddress>,
+    pub cc: Option<EmailAddress>,
+    pub date: Option<DateTime<Utc>>,
+}
+
+/// Type/subtype of a Content-Type value, ignoring parameters.
+pub fn primary_mime(content_type: &str) -> &str {
+    content_type.split(';').next().unwrap_or("").trim()
+}
+
+pub fn is_rfc822_mime(content_type: &str) -> bool {
+    primary_mime(content_type).eq_ignore_ascii_case("message/rfc822")
 }
 
 impl MessagePart {
@@ -558,6 +583,20 @@ impl MessagePart {
     pub fn is_display_part(&self) -> bool {
         !self.is_attachment && !self.is_hidden
     }
+
+    pub fn is_rfc822(&self) -> bool {
+        is_rfc822_mime(&self.content_type)
+    }
+
+    /// Top-level part of the outer message (not inside a `message/rfc822`).
+    pub fn is_top_level(&self) -> bool {
+        self.nested_in.is_none()
+    }
+
+    /// True when this part belongs to `nested_in` (`None` = outer message).
+    pub fn in_scope(&self, nested_in: Option<&str>) -> bool {
+        self.nested_in.as_deref() == nested_in
+    }
 }
 
 /// Aggregate returned by the message load pipeline.
@@ -573,11 +612,39 @@ impl LoadedMessage {
     pub fn attachments(&self) -> impl Iterator<Item = &MessagePart> {
         self.parts
             .iter()
-            .filter(|p| p.is_attachment && !p.is_hidden)
+            .filter(|p| p.is_top_level() && p.is_attachment && !p.is_hidden)
     }
 
     pub fn content_parts(&self) -> impl Iterator<Item = &MessagePart> {
-        self.parts.iter().filter(|p| p.is_display_part())
+        self.parts
+            .iter()
+            .filter(|p| p.is_top_level() && p.is_display_part())
+    }
+
+    /// Attachments of the outer message (`None`) or a nested `message/rfc822`.
+    pub fn attachments_in_scope<'a>(
+        &'a self,
+        nested_in: Option<&'a str>,
+    ) -> impl Iterator<Item = &'a MessagePart> + 'a {
+        self.parts
+            .iter()
+            .filter(move |p| p.in_scope(nested_in) && p.is_attachment && !p.is_hidden)
+    }
+
+    /// Parts that belong to the nested `message/rfc822` at `section`.
+    pub fn nested_parts<'a>(
+        &'a self,
+        section: &'a str,
+    ) -> impl Iterator<Item = &'a MessagePart> + 'a {
+        self.parts
+            .iter()
+            .filter(move |p| p.nested_in.as_deref() == Some(section))
+    }
+
+    pub fn rfc822_part(&self, section: &str) -> Option<&MessagePart> {
+        self.parts
+            .iter()
+            .find(|p| p.is_rfc822() && p.section() == section)
     }
 }
 
@@ -628,6 +695,17 @@ mod tests {
         assert!(MailboxRole::Trash.sort_rank() < MailboxRole::Junk.sort_rank());
         assert!(MailboxRole::Junk.sort_rank() < MailboxRole::Other.sort_rank());
         assert_eq!(MailboxRole::Junk.label(), Some("Junk"));
+    }
+
+    #[test]
+    fn rfc822_mime_ignores_parameters() {
+        assert!(super::is_rfc822_mime("message/rfc822"));
+        assert!(super::is_rfc822_mime("Message/RFC822; name=note.eml"));
+        assert!(!super::is_rfc822_mime("text/plain"));
+        assert_eq!(
+            super::primary_mime("message/rfc822; name=x"),
+            "message/rfc822"
+        );
     }
 
     #[test]

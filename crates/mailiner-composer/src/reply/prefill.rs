@@ -172,7 +172,7 @@ pub fn discard_rich_quote(draft: &mut DraftDocument) {
 /// Includes non-inline file attachments (`is_attachment && !is_hidden`).
 /// Skips cid/inline images already represented in the quoted body.
 pub fn is_forwardable_attachment(part: &MessagePart) -> bool {
-    part.is_attachment && !part.is_hidden
+    part.is_top_level() && part.is_attachment && !part.is_hidden
 }
 
 fn apply_forward_attachments(draft: &mut DraftDocument, loaded: &LoadedMessage) {
@@ -490,6 +490,8 @@ mod tests {
                 size: text.len() as u64,
                 is_attachment: false,
                 is_hidden: false,
+                nested_in: None,
+                nested_headers: None,
                 content: MessageContent::Text(text.into()),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
@@ -517,6 +519,8 @@ mod tests {
             size: html.len() as u64,
             is_attachment: false,
             is_hidden: false,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Text(html.into()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -549,6 +553,8 @@ mod tests {
             size: bytes.len() as u64,
             is_attachment: true,
             is_hidden: true,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Binary(bytes.to_vec()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -898,6 +904,8 @@ mod tests {
                 size: self.size,
                 is_attachment: self.is_attachment,
                 is_hidden: self.is_hidden,
+                nested_in: None,
+                nested_headers: None,
                 content: self.content,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),

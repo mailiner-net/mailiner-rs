@@ -677,6 +677,8 @@ pub fn mock_text_part(envelope_id: MessageId, part_id: &str, text: &str) -> Mess
         size: text.len() as u64,
         is_attachment: false,
         is_hidden: false,
+        nested_in: None,
+        nested_headers: None,
         content: MessageContent::Text(text.to_string()),
         created_at: now,
         updated_at: now,

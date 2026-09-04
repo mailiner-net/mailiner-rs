@@ -44,11 +44,29 @@ pub fn drop_inlined_payloads(parts: &mut [MessagePart], inlined_part_ids: &[Stri
 
 /// Keep referenced CID payloads for reply/forward; drop the rest.
 ///
+/// Only the outer message is considered. Nested `message/rfc822` parts stay so
+/// they can still be opened after the outer body is formatted.
+///
 /// Referenced parts are retained up to [`mailiner_composer::caps::MAX_DRAFT_BYTES`]
 /// so a large newsletter cannot pin unbounded decoded binaries in the viewer.
 pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[String]) {
+    retain_cid_payloads_in_scope(parts, referenced_ids, None);
+}
+
+/// Like [`retain_reply_cid_payloads`], but only mutates parts in `nested_in`.
+///
+/// Other scopes are left intact so a nested `message/rfc822` can still be opened
+/// after the outer body has been formatted.
+pub fn retain_cid_payloads_in_scope(
+    parts: &mut [MessagePart],
+    referenced_ids: &[String],
+    nested_in: Option<&str>,
+) {
     let mut kept = 0u64;
     for part in parts {
+        if !part.in_scope(nested_in) {
+            continue;
+        }
         let referenced = referenced_ids.iter().any(|id| part.id.as_str() == id);
         if referenced {
             let size = match &part.content {
@@ -63,8 +81,6 @@ pub fn retain_reply_cid_payloads(parts: &mut [MessagePart], referenced_ids: &[St
             }
             continue;
         }
-        // Keep only the visible text body. Drop unreferenced images and
-        // hidden/attached text so they cannot bypass the CID budget.
         if part.is_display_part() && matches!(part.kind, PartKind::TextPlain | PartKind::TextHtml) {
             continue;
         }
@@ -97,19 +113,38 @@ impl MessageFormatter {
     }
 
     /// Prefer HTML unless `prefer_plain`. Falls back to the first formatable part.
+    ///
+    /// Formats the outer message (`nested_in = None`).
     pub fn format(&mut self, parts: &[MessagePart]) -> Option<FormatResult> {
+        self.format_scope(parts, None)
+    }
+
+    /// Prefer HTML unless `prefer_plain`. `nested_in` selects the outer message
+    /// (`None`) or a `message/rfc822` section.
+    pub fn format_scope(
+        &mut self,
+        parts: &[MessagePart],
+        nested_in: Option<&str>,
+    ) -> Option<FormatResult> {
         let preferred = if self.options.prefer_plain {
             PartKind::TextPlain
         } else {
             PartKind::TextHtml
         };
         if let Some(result) = self.format_first(
-            parts.iter().filter(|p| !p.is_hidden && p.kind == preferred),
+            parts
+                .iter()
+                .filter(|p| p.in_scope(nested_in) && !p.is_hidden && p.kind == preferred),
             parts,
         ) {
             return Some(result);
         }
-        self.format_first(parts.iter().filter(|p| !p.is_hidden), parts)
+        self.format_first(
+            parts
+                .iter()
+                .filter(|p| p.in_scope(nested_in) && !p.is_hidden),
+            parts,
+        )
     }
 
     fn format_first<'a>(
@@ -173,6 +208,8 @@ mod tests {
             size: text.len() as u64,
             is_attachment: false,
             is_hidden: false,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Text(text.into()),
             created_at: now,
             updated_at: now,
@@ -282,6 +319,8 @@ mod tests {
             size: bytes.len() as u64,
             is_attachment: true,
             is_hidden: true,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Binary(bytes.to_vec()),
             created_at: now,
             updated_at: now,
@@ -370,6 +409,42 @@ mod tests {
         retain_reply_cid_payloads(&mut parts, &[]);
         assert!(matches!(parts[0].content, MessageContent::Text(_)));
         assert!(matches!(parts[1].content, MessageContent::Empty));
+    }
+
+    #[test]
+    fn format_skips_nested_rfc822_body() {
+        let mut nested = part(PartKind::TextHtml, "text/html", "<p>INNER</p>");
+        nested.nested_in = Some("2".into());
+        let outer = part(PartKind::TextPlain, "text/plain", "OUTER");
+        let mut f = MessageFormatter::with_defaults();
+        let r = f.format(&[nested.clone(), outer]).unwrap();
+        assert!(r.html.contains("OUTER"));
+        assert!(!r.html.contains("INNER"));
+
+        let inner = f.format_scope(&[nested], Some("2")).unwrap();
+        assert!(inner.html.contains("INNER"));
+    }
+
+    #[test]
+    fn retain_in_scope_leaves_other_scopes() {
+        let mut nested = part(PartKind::TextHtml, "text/html", "<p>INNER</p>");
+        nested.nested_in = Some("2".into());
+        nested.id = mailiner_core::ids::MessagePartId::new("inner");
+        let mut img = png_part("img", "<logo@x>", b"\x89PNG");
+        img.nested_in = Some("2".into());
+        let mut parts = vec![
+            part(PartKind::TextPlain, "text/plain", "OUTER"),
+            nested,
+            img,
+        ];
+        retain_cid_payloads_in_scope(&mut parts, &[], None);
+        assert!(matches!(parts[0].content, MessageContent::Text(_)));
+        assert!(matches!(parts[1].content, MessageContent::Text(_)));
+        assert!(matches!(parts[2].content, MessageContent::Binary(_)));
+
+        retain_cid_payloads_in_scope(&mut parts, &[], Some("2"));
+        assert!(matches!(parts[1].content, MessageContent::Text(_)));
+        assert!(matches!(parts[2].content, MessageContent::Empty));
     }
 
     #[test]

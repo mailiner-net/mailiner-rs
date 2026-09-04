@@ -25,8 +25,9 @@ pub use imap_search::{
     CompiledSearch, MailboxSearch, SearchTerm,
 };
 pub use models::{
-    EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder, FolderCounts, FolderListState, Group,
-    ImapKeyword, LoadedMessage, MailboxQuota, MailboxRole, MessageContent, MessageListFilter,
-    MessagePart, MessageSort, PartChunk, PartKind, TextPrefix, TransferEncoding,
+    is_rfc822_mime, primary_mime, EmailAddr, EmailAddress, Envelope, EnvelopeFlag, Folder,
+    FolderCounts, FolderListState, Group, ImapKeyword, LoadedMessage, MailboxQuota, MailboxRole,
+    MessageContent, MessageListFilter, MessagePart, MessageSort, NestedMessageHeaders, PartChunk,
+    PartKind, TextPrefix, TransferEncoding,
 };
 pub use submit::{SendErrorKind, SubmitReceipt, SubmitRequest};

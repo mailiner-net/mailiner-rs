@@ -435,6 +435,8 @@ mod tests {
             size: bytes.len() as u64,
             is_attachment: true,
             is_hidden: true,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Binary(bytes.to_vec()),
             created_at: Utc::now(),
             updated_at: Utc::now(),

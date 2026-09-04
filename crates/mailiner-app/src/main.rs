@@ -326,6 +326,7 @@ fn App() -> Element {
     let download_status = use_signal(HashMap::new);
     let attachment_blobs = use_signal(HashMap::new);
     let attachment_preview = use_signal(|| None);
+    let nested_rfc822 = use_signal(Vec::new);
     let send_status = use_signal(HashMap::new);
     let smtp_test_status = use_signal(HashMap::new);
     let smtp_test_abandoned = use_signal(HashSet::new);
@@ -372,6 +373,7 @@ fn App() -> Element {
         download_status,
         attachment_blobs,
         attachment_preview,
+        nested_rfc822,
         connection_states,
         send_status,
         smtp_test_status,

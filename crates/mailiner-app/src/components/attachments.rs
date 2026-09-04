@@ -23,6 +23,7 @@ struct AttachmentRow {
     wire_size: Option<u64>,
     encoding: TransferEncoding,
     description: Option<String>,
+    is_rfc822: bool,
 }
 
 #[component]
@@ -33,6 +34,7 @@ pub fn AttachmentsFooter() -> Element {
     let mailbox = ctx.selected_mailbox.read().clone();
 
     let selected_account = ctx.selected_account.read().clone();
+    let nested_in = ctx.nested_rfc822.read().last().cloned();
     let prepared = match (view, mailbox, selected_account) {
         (
             MessageViewState::Ready {
@@ -44,9 +46,7 @@ pub fn AttachmentsFooter() -> Element {
             Some(selected),
         ) if account_id == selected => {
             let rows: Vec<AttachmentRow> = loaded
-                .parts
-                .iter()
-                .filter(|p| p.is_attachment && !p.is_hidden)
+                .attachments_in_scope(nested_in.as_deref())
                 .map(|p| AttachmentRow {
                     section: p.section(),
                     filename: crate::download::attachment_filename(
@@ -59,6 +59,7 @@ pub fn AttachmentsFooter() -> Element {
                     wire_size: p.original_size,
                     encoding: p.encoding,
                     description: p.description.clone(),
+                    is_rfc822: p.is_rfc822(),
                 })
                 .collect();
             if rows.is_empty() {
@@ -250,7 +251,8 @@ fn AttachmentItem(
     };
 
     let row_for_click = row.clone();
-    let can_preview = preview_kind(&row.content_type).is_some();
+    let can_open_rfc822 = row.is_rfc822;
+    let can_preview = !can_open_rfc822 && preview_kind(&row.content_type).is_some();
     let section_for_preview = row.section.clone();
     let filename_for_preview = row.filename.clone();
     let content_type_for_preview = row.content_type.clone();
@@ -259,6 +261,7 @@ fn AttachmentItem(
     let message_for_preview = message_id.clone();
     let encoding = row.encoding;
     let size_hint = row.wire_size;
+    let section_for_open = row.section.clone();
 
     rsx! {
         li {
@@ -276,6 +279,18 @@ fn AttachmentItem(
                 }
                 div {
                     class: "attachment-item-actions",
+                    if can_open_rfc822 {
+                        button {
+                            class: "attachment-preview-btn",
+                            r#type: "button",
+                            title: "Open forwarded message",
+                            onclick: {
+                                let ctx = ctx.clone();
+                                move |_| ctx.open_nested_rfc822(section_for_open.clone())
+                            },
+                            "Open"
+                        }
+                    }
                     if can_preview {
                         button {
                             class: "attachment-preview-btn",
@@ -424,6 +439,7 @@ mod tests {
             wire_size: Some(16),
             encoding: TransferEncoding::Base64,
             description: None,
+            is_rfc822: false,
         }
     }
 

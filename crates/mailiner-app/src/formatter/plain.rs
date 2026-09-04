@@ -126,6 +126,8 @@ mod tests {
             size: text.len() as u64,
             is_attachment: false,
             is_hidden: false,
+            nested_in: None,
+            nested_headers: None,
             content: MessageContent::Text(text.into()),
             created_at: now,
             updated_at: now,

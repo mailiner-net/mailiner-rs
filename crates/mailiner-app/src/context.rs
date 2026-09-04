@@ -137,6 +137,8 @@ pub struct AppContext {
     pub attachment_blobs: Signal<HashMap<String, String>>,
     /// Open attachment preview (`None` = closed).
     pub attachment_preview: Signal<Option<AttachmentPreview>>,
+    /// Stack of `message/rfc822` section paths being viewed (outer → inner).
+    pub nested_rfc822: Signal<Vec<String>>,
     /// Per-account connection lifecycle (no secrets).
     pub connection_states: Signal<HashMap<AccountId, ConnectionState>>,
     /// Per-account composer send outcome (one SMTP op may run per account).
@@ -211,6 +213,30 @@ impl AppContext {
         preview_sig.set(Some(preview));
     }
 
+    /// Open a nested `message/rfc822` in the viewer. Pushes onto the stack.
+    pub fn open_nested_rfc822(&self, section: String) {
+        if section.is_empty() {
+            return;
+        }
+        let mut stack = self.nested_rfc822;
+        let mut guard = stack.write();
+        if guard.last() == Some(&section) {
+            return;
+        }
+        guard.push(section);
+    }
+
+    /// Pop the innermost nested message.
+    pub fn close_nested_rfc822(&self) {
+        let mut stack = self.nested_rfc822;
+        stack.write().pop();
+    }
+
+    pub fn clear_nested_rfc822(&self) {
+        let mut stack = self.nested_rfc822;
+        stack.write().clear();
+    }
+
     /// Hide the preview dialog and revoke that attachment's object URL.
     pub fn close_attachment_preview(&self) {
         let mut preview_sig = self.attachment_preview;
@@ -261,6 +287,7 @@ impl AppContext {
         self.message_view.set(MessageViewState::Empty);
         self.message_headers.set(MessageHeadersState::Closed);
         self.message_source.set(MessageSourceState::Closed);
+        self.clear_nested_rfc822();
         self.download_status.write().clear();
         self.connection_states.write().clear();
         self.send_status.write().clear();

@@ -3,6 +3,7 @@
 mod attachment;
 mod image;
 mod multipart;
+mod rfc822;
 mod text;
 
 use chrono::Utc;
@@ -45,6 +46,7 @@ impl MessageParser {
         p.add(Box::new(multipart::MultipartRelatedParser));
         p.add(Box::new(multipart::MultipartMixedParser));
         p.add(Box::new(image::ImageParser));
+        p.add(Box::new(rfc822::MessageRfc822Parser));
         p.add(Box::new(attachment::AttachmentParser));
         p
     }
@@ -187,6 +189,8 @@ pub(crate) fn leaf_part(
             is_att
         },
         is_hidden,
+        nested_in: None,
+        nested_headers: None,
         content: MessageContent::Empty,
         created_at: now,
         updated_at: now,
@@ -351,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn message_rfc822_as_attachment() {
+    fn message_rfc822_root_is_nested_body() {
         let root = BodyPart {
             type_: "message".into(),
             subtype: "rfc822".into(),
@@ -359,14 +363,209 @@ mod tests {
             nested_message: Some(Box::new(BodyPart {
                 type_: "text".into(),
                 subtype: "plain".into(),
+                encoding: Some("7BIT".into()),
                 ..Default::default()
             })),
             ..Default::default()
         };
         let parser = MessageParser::with_defaults();
-        // message/rfc822 is not text/image/multipart — falls through to attachment
+        // Root message/rfc822 is the message itself — only the nested body.
         let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
         assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0].kind, PartKind::Attachment);
+        assert_eq!(parts[0].kind, PartKind::TextPlain);
+        assert_eq!(parts[0].section(), "1");
+        assert!(parts[0].nested_in.is_none());
+    }
+
+    fn rfc822_fixture() -> BodyPart {
+        use mailiner_core::models::{EmailAddr, EmailAddress, NestedMessageHeaders};
+
+        BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![
+                BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                },
+                BodyPart {
+                    type_: "message".into(),
+                    subtype: "rfc822".into(),
+                    encoding: Some("7BIT".into()),
+                    disposition: Some(ContentDisposition {
+                        type_: "ATTACHMENT".into(),
+                        attributes: [("FILENAME".into(), "note.eml".into())].into(),
+                    }),
+                    nested_headers: Some(NestedMessageHeaders {
+                        subject: Some("Inner subject".into()),
+                        from: Some(EmailAddress::List(vec![EmailAddr {
+                            name: Some("Ada".into()),
+                            email: Some("ada@example.com".into()),
+                        }])),
+                        to: None,
+                        cc: None,
+                        date: None,
+                    }),
+                    nested_message: Some(Box::new(BodyPart {
+                        type_: "multipart".into(),
+                        subtype: "mixed".into(),
+                        subparts: vec![
+                            BodyPart {
+                                type_: "text".into(),
+                                subtype: "html".into(),
+                                encoding: Some("7BIT".into()),
+                                ..Default::default()
+                            },
+                            BodyPart {
+                                type_: "application".into(),
+                                subtype: "pdf".into(),
+                                encoding: Some("BASE64".into()),
+                                disposition: Some(ContentDisposition {
+                                    type_: "ATTACHMENT".into(),
+                                    attributes: [("FILENAME".into(), "inner.pdf".into())].into(),
+                                }),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn message_rfc822_nested_parts_use_imap_sections() {
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(
+            &MessageId::new(FolderId::new("INBOX"), "1"),
+            &rfc822_fixture(),
+        );
+
+        let outer = parts
+            .iter()
+            .find(|p| p.kind == PartKind::TextPlain && p.is_top_level())
+            .expect("outer plain");
+        assert_eq!(outer.section(), "1");
+
+        let rfc822 = parts
+            .iter()
+            .find(|p| p.is_rfc822() && p.is_top_level())
+            .expect("rfc822 attachment");
+        assert_eq!(rfc822.section(), "2");
+        assert!(rfc822.is_attachment);
+        assert_eq!(rfc822.filename.as_deref(), Some("note.eml"));
+        assert_eq!(
+            rfc822
+                .nested_headers
+                .as_ref()
+                .and_then(|h| h.subject.as_deref()),
+            Some("Inner subject")
+        );
+
+        let inner_html = parts
+            .iter()
+            .find(|p| p.kind == PartKind::TextHtml)
+            .expect("nested html");
+        assert_eq!(inner_html.section(), "2.1");
+        assert_eq!(inner_html.nested_in.as_deref(), Some("2"));
+        assert!(!inner_html.is_attachment);
+        assert!(inner_html.should_prefetch());
+
+        let inner_pdf = parts
+            .iter()
+            .find(|p| p.filename.as_deref() == Some("inner.pdf"))
+            .expect("nested pdf");
+        assert_eq!(inner_pdf.section(), "2.2");
+        assert_eq!(inner_pdf.nested_in.as_deref(), Some("2"));
+        assert!(inner_pdf.is_attachment);
+        assert!(!inner_pdf.should_prefetch());
+
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|p| p.is_top_level() && p.is_attachment && !p.is_hidden)
+                .count(),
+            1,
+            "only the .eml should be a top-level attachment"
+        );
+    }
+
+    #[test]
+    fn message_rfc822_single_part_nested_uses_n_dot_1() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![BodyPart {
+                type_: "message".into(),
+                subtype: "rfc822".into(),
+                encoding: Some("7BIT".into()),
+                nested_message: Some(Box::new(BodyPart {
+                    type_: "text".into(),
+                    subtype: "plain".into(),
+                    encoding: Some("7BIT".into()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        let inner = parts
+            .iter()
+            .find(|p| p.kind == PartKind::TextPlain)
+            .expect("nested plain");
+        assert_eq!(inner.section(), "1.1");
+        assert_eq!(inner.nested_in.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn message_rfc822_nested_of_nested_keeps_inner_owner() {
+        let root = BodyPart {
+            type_: "multipart".into(),
+            subtype: "mixed".into(),
+            subparts: vec![BodyPart {
+                type_: "message".into(),
+                subtype: "rfc822".into(),
+                encoding: Some("7BIT".into()),
+                nested_message: Some(Box::new(BodyPart {
+                    type_: "multipart".into(),
+                    subtype: "mixed".into(),
+                    subparts: vec![BodyPart {
+                        type_: "message".into(),
+                        subtype: "rfc822".into(),
+                        encoding: Some("7BIT".into()),
+                        nested_message: Some(Box::new(BodyPart {
+                            type_: "text".into(),
+                            subtype: "plain".into(),
+                            encoding: Some("7BIT".into()),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let parser = MessageParser::with_defaults();
+        let parts = parser.parse(&MessageId::new(FolderId::new("INBOX"), "1"), &root);
+        let inner_rfc = parts
+            .iter()
+            .find(|p| p.is_rfc822() && p.section() == "1.1")
+            .expect("inner rfc822");
+        assert_eq!(inner_rfc.nested_in.as_deref(), Some("1"));
+        let deepest = parts
+            .iter()
+            .find(|p| p.kind == PartKind::TextPlain)
+            .expect("deepest body");
+        assert_eq!(deepest.section(), "1.1.1");
+        assert_eq!(deepest.nested_in.as_deref(), Some("1.1"));
     }
 }

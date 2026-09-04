@@ -26,6 +26,9 @@ pub struct BodyPart {
     pub subparts: Vec<BodyPart>,
     /// Nested structure for `message/rfc822` when present.
     pub nested_message: Option<Box<BodyPart>>,
+    /// IMAP ENVELOPE of a nested `message/rfc822` (From/To/Subject/Date).
+    #[serde(default)]
+    pub nested_headers: Option<crate::models::NestedMessageHeaders>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -62,5 +65,9 @@ impl BodyPart {
             .as_ref()
             .and_then(|d| d.attributes.get("FILENAME"))
             .map(|s| s.as_str())
+    }
+
+    pub fn is_rfc822(&self) -> bool {
+        self.type_ == "message" && self.subtype == "rfc822"
     }
 }

@@ -51,6 +51,7 @@ mod send;
 mod shortcuts;
 mod smtp_inflight;
 mod smtp_session;
+mod snippet;
 mod source;
 mod toast;
 mod ui_prefs;

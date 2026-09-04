@@ -35,7 +35,7 @@ use mailiner_core::{
     is_inbox_mailbox, join_mailbox_path, mailbox_parent_and_leaf, rename_mailbox_path, AccountId,
     BodyPart, EmailAddr, EmailAddress, EmailConnector, Envelope, EnvelopeFlag, Folder,
     FolderCounts, FolderId, FolderListState, Group, MailboxQuota, MailinerError, MessageId,
-    MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult,
+    MessageListFilter, MessageSort, PartChunk, PartStream, Result as MailinerResult, TextPrefix,
 };
 use std::collections::HashMap;
 
@@ -510,6 +510,7 @@ where
             is_deleted,
             has_attachments,
             size: fetch.size.map(|s| s as u64),
+            snippet: None,
         })
     }
 
@@ -873,6 +874,27 @@ fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> (bool, bool, bool, 
         is_draft,
         is_deleted,
     )
+}
+
+struct SnippetPlan {
+    id: MessageId,
+    section: String,
+    encoding: String,
+    content_type: String,
+    charset: Option<String>,
+    is_html: bool,
+}
+
+fn snippet_plan(id: &MessageId, root: &BodyPart) -> Option<SnippetPlan> {
+    let leaf = bodystructure::first_preview_text(root)?;
+    Some(SnippetPlan {
+        id: id.clone(),
+        section: leaf.section,
+        encoding: leaf.part.encoding.clone().unwrap_or_else(|| "7BIT".into()),
+        content_type: leaf.part.content_type(),
+        charset: leaf.part.charset().map(str::to_string),
+        is_html: leaf.part.subtype == "html",
+    })
 }
 
 fn require_folder(folder_id: &FolderId, ids: &[MessageId]) -> Result<(), ImapError> {
@@ -1745,6 +1767,122 @@ where
             map.insert(section.clone(), bytes);
         }
         Ok(map)
+    }
+
+    async fn fetch_text_prefixes(
+        &self,
+        folder_id: &FolderId,
+        message_ids: &[MessageId],
+        max_octets: usize,
+    ) -> MailinerResult<HashMap<MessageId, TextPrefix>> {
+        require_folder(folder_id, message_ids)?;
+        if message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let max_octets = max_octets.clamp(1, 8 * 1024);
+
+        let mut plans = Vec::new();
+        let mut missing = Vec::new();
+        let mut out = HashMap::new();
+        {
+            let cache = self.structure_cache.lock().await;
+            for id in message_ids {
+                match cache.get(&(folder_id.clone(), id.clone())) {
+                    Some(root) => match snippet_plan(id, root) {
+                        Some(plan) => plans.push(plan),
+                        None => {
+                            out.insert(id.clone(), TextPrefix::empty());
+                        }
+                    },
+                    None => missing.push(id.clone()),
+                }
+            }
+        }
+        for id in missing {
+            match self.get_body_structure(folder_id, &id).await {
+                Ok(root) => match snippet_plan(&id, &root) {
+                    Some(plan) => plans.push(plan),
+                    None => {
+                        out.insert(id, TextPrefix::empty());
+                    }
+                },
+                Err(e) => {
+                    tracing::debug!("snippet BODYSTRUCTURE {} failed: {e}", id.as_uid());
+                }
+            }
+        }
+        if plans.is_empty() {
+            return Ok(out);
+        }
+
+        let mut by_section: std::collections::BTreeMap<String, Vec<SnippetPlan>> =
+            std::collections::BTreeMap::new();
+        for plan in plans {
+            by_section
+                .entry(plan.section.clone())
+                .or_default()
+                .push(plan);
+        }
+
+        let mut imap = self.imap.lock().await;
+        let ImapSession::Authenticated(session) = &mut *imap else {
+            return Err(ImapError::NotAuthenticated.into());
+        };
+        session
+            .select(folder_id.as_str())
+            .await
+            .map_err(|e| ImapError::Imap(format!("Failed to select folder: {e}")))?;
+
+        for (section, group) in by_section {
+            let uids = group
+                .iter()
+                .map(|p| p.id.as_uid().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let query = format!("(BODY.PEEK[{section}]<0.{max_octets}>)");
+            let mut fetch = session
+                .uid_fetch(&uids, &query)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to fetch snippet: {e}")))?;
+            let mut by_uid: HashMap<String, SnippetPlan> = group
+                .into_iter()
+                .map(|p| (p.id.as_uid().to_string(), p))
+                .collect();
+            while let Some(result) = fetch.next().await {
+                let fetch =
+                    result.map_err(|e| ImapError::Imap(format!("Failed to fetch snippet: {e}")))?;
+                let Some(uid) = fetch.uid else {
+                    continue;
+                };
+                let Some(plan) = by_uid.remove(&uid.to_string()) else {
+                    continue;
+                };
+                let Ok(bytes) = Self::extract_section_bytes(&fetch, &section) else {
+                    continue;
+                };
+                match mailiner_mime::decode_content(
+                    &bytes,
+                    &plan.encoding,
+                    &plan.content_type,
+                    plan.charset.as_deref(),
+                ) {
+                    Ok(mailiner_mime::DecodedContent::Text(text)) => {
+                        out.insert(
+                            plan.id,
+                            TextPrefix {
+                                text,
+                                is_html: plan.is_html,
+                            },
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::debug!("snippet decode {} failed: {e}", plan.id.as_uid());
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     async fn stream_raw_part(

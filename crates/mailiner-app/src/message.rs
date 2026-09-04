@@ -23,6 +23,8 @@ pub struct Message {
     pub is_answered: bool,
     pub is_starred: bool,
     pub is_flagged: bool,
+    /// List-preview snippet (`None` = not fetched yet).
+    pub snippet: Option<String>,
     /// Original IMAP envelope for reply/forward prefill.
     pub envelope: Envelope,
 }
@@ -183,6 +185,7 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
+            snippet: None,
         };
         let msg = Message::from(envelope.clone());
         assert_eq!(msg.cc.as_deref(), Some("Cc Name <cc@example.com>"));
@@ -238,11 +241,13 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
+            snippet: Some("Hello preview".into()),
         };
         let msg = Message::from(envelope);
         assert!(msg.is_answered);
         assert!(msg.is_starred);
         assert!(msg.is_flagged);
+        assert_eq!(msg.snippet.as_deref(), Some("Hello preview"));
     }
 
     #[test]
@@ -309,6 +314,7 @@ mod tests {
             is_deleted: false,
             has_attachments: false,
             size: None,
+            snippet: None,
         };
         let msg = Message::from(envelope);
         assert_eq!(msg.sender_email(), Some("ada@example.com"));
@@ -338,6 +344,7 @@ impl From<Envelope> for Message {
             is_answered: envelope.is_answered,
             is_starred: envelope.is_starred,
             is_flagged: envelope.is_flagged,
+            snippet: envelope.snippet.clone(),
             envelope,
         }
     }

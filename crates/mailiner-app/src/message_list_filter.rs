@@ -160,6 +160,7 @@ mod tests {
             is_deleted: false,
             has_attachments,
             size: None,
+            snippet: None,
         };
         Message::from(envelope)
     }

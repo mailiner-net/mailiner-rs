@@ -371,6 +371,9 @@ pub struct Envelope {
     /// RFC822.SIZE when the server sent it.
     #[serde(default)]
     pub size: Option<u64>,
+    /// Cached list-preview snippet (not IMAP ENVELOPE). Short cleaned text.
+    #[serde(default)]
+    pub snippet: Option<String>,
 }
 
 /// MIME Content-Transfer-Encoding.
@@ -496,6 +499,26 @@ impl LoadedMessage {
 
     pub fn content_parts(&self) -> impl Iterator<Item = &MessagePart> {
         self.parts.iter().filter(|p| p.is_display_part())
+    }
+}
+
+/// Decoded prefix of the first text part (`BODY.PEEK[section]<0.N>`).
+///
+/// Missing from a [`crate::connector::EmailConnector::fetch_text_prefixes`]
+/// map means the peek failed and the caller should retry. An empty `text`
+/// means there is no preview (no text part).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextPrefix {
+    pub text: String,
+    pub is_html: bool,
+}
+
+impl TextPrefix {
+    pub fn empty() -> Self {
+        Self {
+            text: String::new(),
+            is_html: false,
+        }
     }
 }
 

@@ -41,7 +41,7 @@ use crate::download::{
 use crate::layout::MobilePane;
 use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
-    hydrate_account,
+    hydrate_account, load_cached_loaded_message, persist_loaded_parts,
 };
 use crate::mail_file::{
     ExportMessageItem, MAX_EXPORT_MESSAGES, MailExportFormat, Rfc822Message, pack_export_named,
@@ -3337,7 +3337,9 @@ async fn run_one_prefetch(
     let folder_id = FolderId::new(job.mailbox_id.to_string());
     match load_message(connector, &folder_id, &id).await {
         Ok(loaded) => {
-            ctx.message_bodies.borrow_mut().insert(id, Arc::new(loaded));
+            let loaded = Arc::new(loaded);
+            persist_loaded_parts(manager.cache(), &job.account_id, &loaded).await;
+            ctx.message_bodies.borrow_mut().insert(id, loaded);
         }
         Err(e) => {
             warn!("prefetch {id} failed: {e}");
@@ -3383,11 +3385,6 @@ async fn handle_select_message(
         return;
     }
 
-    ctx.clear_attachment_downloads();
-    ctx.message_view.set(MessageViewState::Loading {
-        message_id: message_id.clone(),
-    });
-
     let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
         ctx.message_view.set(MessageViewState::Error {
             message_id: message_id.clone(),
@@ -3403,11 +3400,36 @@ async fn handle_select_message(
         });
         return;
     };
-    let Some(connector) = manager.get(&account_id) else {
-        ctx.message_view.set(MessageViewState::Error {
+
+    let persisted = load_cached_loaded_message(manager.cache(), &account_id, &message_id).await;
+    if let Some(loaded) = persisted.clone() {
+        let loaded = Arc::new(loaded);
+        ctx.message_bodies
+            .borrow_mut()
+            .insert(message_id.clone(), loaded.clone());
+        ctx.message_view.set(MessageViewState::Ready {
+            account_id: account_id.clone(),
             message_id: message_id.clone(),
-            message: "Not connected".into(),
+            loaded,
         });
+        if manager.get(&account_id).is_none() {
+            return;
+        }
+        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
+    } else {
+        ctx.clear_attachment_downloads();
+        ctx.message_view.set(MessageViewState::Loading {
+            message_id: message_id.clone(),
+        });
+    }
+
+    let Some(connector) = manager.get(&account_id) else {
+        if persisted.is_none() {
+            ctx.message_view.set(MessageViewState::Error {
+                message_id: message_id.clone(),
+                message: "Not connected".into(),
+            });
+        }
         return;
     };
 
@@ -3421,6 +3443,7 @@ async fn handle_select_message(
     match load_message(connector, &folder_id, &message_id).await {
         Ok(loaded) => {
             let loaded = Arc::new(loaded);
+            persist_loaded_parts(manager.cache(), &account_id, &loaded).await;
             ctx.message_bodies
                 .borrow_mut()
                 .insert(message_id.clone(), loaded.clone());
@@ -3437,6 +3460,9 @@ async fn handle_select_message(
             maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
         }
         Err(e) => {
+            if persisted.is_some() {
+                return;
+            }
             if ctx.selection.read().focus() != Some(&message_id) {
                 return;
             }
@@ -6551,6 +6577,9 @@ async fn handle_clear_local_data(
 
     // After the current handler has finished: no in-flight persist can land
     // after this wipe.
+    if let Err(e) = manager.cache().clear_all().await {
+        warn!("mail cache clear_all failed: {e}");
+    }
     let wipe_err = crate::local_data::clear_mailiner_local_storage().err();
     if let Some(e) = wipe_err {
         warn!("clear_mailiner_local_storage failed: {e}");

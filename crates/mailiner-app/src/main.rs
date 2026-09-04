@@ -38,6 +38,8 @@ mod download;
 mod draft_store;
 mod formatter;
 mod headers;
+#[cfg(target_arch = "wasm32")]
+mod idb;
 mod keywords;
 mod layout;
 mod local_data;
@@ -49,6 +51,8 @@ mod message;
 mod message_list_filter;
 mod message_loader;
 mod notifications;
+mod object_cache;
+mod offline_cache;
 mod outbox_store;
 mod phishing;
 mod pin;
@@ -210,13 +214,7 @@ async fn run_bootstrap(
         }
     };
 
-    let cache: Rc<dyn MailCache> = match BrowserMailCache::open().await {
-        Ok(s) => Rc::new(s),
-        Err(e) => {
-            warn!("BrowserMailCache open failed ({e}); using in-memory mail cache");
-            Rc::new(InMemoryMailCache::new())
-        }
-    };
+    let cache: Rc<dyn MailCache> = open_mail_cache().await;
 
     let store: Rc<dyn AccountStore> = match BrowserAccountStore::open().await {
         Ok(s) => Rc::new(s),
@@ -307,6 +305,26 @@ async fn run_bootstrap(
         outbox,
         cache,
         initial_bootstrap: InitialBootstrap::Run { active },
+    }
+}
+
+/// IndexedDB first (envelopes + parts); localStorage prefixes if IDB is blocked.
+async fn open_mail_cache() -> Rc<dyn MailCache> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match crate::idb::open_indexed_db_mail_cache().await {
+            Ok(cache) => return Rc::new(cache),
+            Err(e) => {
+                warn!("IndexedDB mail cache unavailable ({e}); falling back to localStorage");
+            }
+        }
+    }
+    match BrowserMailCache::open().await {
+        Ok(s) => Rc::new(s),
+        Err(e) => {
+            warn!("BrowserMailCache open failed ({e}); using in-memory mail cache");
+            Rc::new(InMemoryMailCache::new())
+        }
     }
 }
 

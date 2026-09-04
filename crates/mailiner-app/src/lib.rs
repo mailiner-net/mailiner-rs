@@ -11,6 +11,8 @@ pub mod download;
 pub mod draft_store;
 pub mod formatter;
 pub mod headers;
+#[cfg(target_arch = "wasm32")]
+pub mod idb;
 pub mod keywords;
 pub mod layout;
 pub mod local_data;
@@ -22,6 +24,8 @@ pub mod message;
 pub mod message_list_filter;
 pub mod message_loader;
 pub mod notifications;
+pub mod object_cache;
+pub mod offline_cache;
 pub mod outbox_store;
 pub mod phishing;
 pub mod pin;

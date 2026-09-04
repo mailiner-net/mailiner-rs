@@ -1,7 +1,8 @@
 //! Local mailbox-tree and message-list cache.
 //!
 //! Persistence is abstract via [`MailCache`] so the browser can use
-//! `localStorage` while host unit tests use an in-memory backend.
+//! IndexedDB ([`crate::object_cache::ObjectStoreMailCache`]) or `localStorage`,
+//! while host unit tests use an in-memory backend.
 //!
 //! Message lists are stored as a **contiguous prefix** (indices `0..n`) so
 //! virtual-scroll incremental loading is unchanged: holes beyond the prefix
@@ -15,8 +16,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dioxus::logger::tracing::warn;
-use mailiner_core::ids::AccountId;
-use mailiner_core::models::{Envelope, Folder, FolderCounts, MessageSort};
+use mailiner_core::ids::{AccountId, MessageId};
+use mailiner_core::models::{
+    Envelope, Folder, FolderCounts, LoadedMessage, MessagePart, MessageSort,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::account_store::{AccountStoreError, MemoryKvStore, StringKvStore, WebLocalStorage};
@@ -84,6 +87,80 @@ pub trait MailCache {
 
     /// Drop cache rows for accounts that are no longer known.
     async fn retain_accounts(&self, known: &HashSet<AccountId>) -> Result<(), AccountStoreError>;
+
+    /// Persist decoded parts for a recently opened message.
+    ///
+    /// Default is a no-op so localStorage backends (tight quota) can skip bodies.
+    async fn save_parts(
+        &self,
+        account_id: &AccountId,
+        message_id: &MessageId,
+        parts: &[MessagePart],
+    ) -> Result<(), AccountStoreError> {
+        let _ = (account_id, message_id, parts);
+        Ok(())
+    }
+
+    /// Load previously opened parts. `None` on a miss.
+    async fn load_parts(
+        &self,
+        account_id: &AccountId,
+        message_id: &MessageId,
+    ) -> Result<Option<Vec<MessagePart>>, AccountStoreError> {
+        let _ = (account_id, message_id);
+        Ok(None)
+    }
+
+    /// Drop every persisted row (sign-out / clear local data).
+    async fn clear_all(&self) -> Result<(), AccountStoreError> {
+        Ok(())
+    }
+}
+
+/// Rebuild a [`LoadedMessage`] from cached parts when they include a body.
+pub fn loaded_message_from_parts(
+    message_id: &MessageId,
+    parts: Vec<MessagePart>,
+) -> Option<LoadedMessage> {
+    let has_body = parts.iter().any(|p| {
+        p.is_display_part() && !matches!(p.content, mailiner_core::models::MessageContent::Empty)
+    });
+    if !has_body {
+        return None;
+    }
+    Some(LoadedMessage {
+        envelope_id: message_id.clone(),
+        folder_id: message_id.folder_id().clone(),
+        parts,
+    })
+}
+
+/// Load a cached body for offline / instant reopen.
+pub async fn load_cached_loaded_message(
+    cache: &dyn MailCache,
+    account_id: &AccountId,
+    message_id: &MessageId,
+) -> Option<LoadedMessage> {
+    let parts = cache
+        .load_parts(account_id, message_id)
+        .await
+        .ok()
+        .flatten()?;
+    loaded_message_from_parts(message_id, parts)
+}
+
+/// Persist parts after a successful FETCH. Failures are logged, not fatal.
+pub async fn persist_loaded_parts(
+    cache: &dyn MailCache,
+    account_id: &AccountId,
+    loaded: &LoadedMessage,
+) {
+    if let Err(e) = cache
+        .save_parts(account_id, &loaded.envelope_id, &loaded.parts)
+        .await
+    {
+        warn!("mail cache save parts failed: {e}");
+    }
 }
 
 /// Folder LIST + STATUS snapshot for one account.
@@ -322,6 +399,23 @@ impl MailCacheBlob {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty()
+    }
+
+    /// Copy folder trees and message prefixes into `dest` (IndexedDB import).
+    pub async fn replay_into(&self, dest: &dyn MailCache) -> Result<(), AccountStoreError> {
+        for (account_id, acc) in &self.accounts {
+            if let Some(tree) = &acc.folders {
+                dest.save_folders(account_id, tree).await?;
+            }
+            for list in acc.messages.values() {
+                dest.save_messages(account_id, list).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn encode(&self) -> Result<String, AccountStoreError> {
         serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
     }
@@ -538,6 +632,11 @@ impl MailCache for InMemoryMailCache {
         self.blob.borrow_mut().retain_accounts(known);
         Ok(())
     }
+
+    async fn clear_all(&self) -> Result<(), AccountStoreError> {
+        *self.blob.borrow_mut() = MailCacheBlob::empty();
+        Ok(())
+    }
 }
 
 // ── Browser / StringKvStore backend ─────────────────────────────────────────
@@ -575,6 +674,11 @@ impl<K: StringKvStore> BrowserMailCache<K> {
             Some(s) if s.trim().is_empty() => Ok(MailCacheBlob::empty()),
             Some(s) => MailCacheBlob::decode(&s),
         }
+    }
+
+    /// Snapshot used to import a leftover localStorage blob into IndexedDB.
+    pub fn snapshot_blob(&self) -> Result<MailCacheBlob, AccountStoreError> {
+        self.load_blob()
     }
 
     fn save_blob(&self, blob: &mut MailCacheBlob) -> Result<(), AccountStoreError> {
@@ -682,6 +786,11 @@ impl<K: StringKvStore> MailCache for BrowserMailCache<K> {
             Ok(())
         })
     }
+
+    async fn clear_all(&self) -> Result<(), AccountStoreError> {
+        let mut empty = MailCacheBlob::empty();
+        self.save_blob(&mut empty)
+    }
 }
 
 #[cfg(test)]
@@ -766,6 +875,13 @@ mod tests {
     }
 
     // ── Blob helpers ────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_blob_and_memory_kv_snapshot() {
+        assert!(MailCacheBlob::empty().is_empty());
+        let cache = BrowserMailCache::<MemoryKvStore>::open_memory();
+        assert!(cache.snapshot_blob().unwrap().is_empty());
+    }
 
     #[test]
     fn storage_key_is_versioned() {
@@ -1232,5 +1348,112 @@ mod tests {
             MAX_CACHED_FOLDERS
         );
         assert!(!blob.accounts.get(&acc).unwrap().messages.contains_key("F0"));
+    }
+
+    #[test]
+    fn loaded_message_from_parts_requires_display_body() {
+        let id = MessageId::new(FolderId::new("INBOX"), "1");
+        assert!(loaded_message_from_parts(&id, vec![]).is_none());
+
+        let now = ts();
+        let empty = mailiner_core::models::MessagePart {
+            id: mailiner_core::ids::MessagePartId::new("TEXT"),
+            envelope_id: id.clone(),
+            path: vec![],
+            kind: mailiner_core::models::PartKind::TextPlain,
+            content_type: "text/plain".into(),
+            charset: None,
+            content_id: None,
+            description: None,
+            filename: None,
+            encoding: mailiner_core::models::TransferEncoding::SevenBit,
+            original_size: None,
+            size: 0,
+            is_attachment: false,
+            is_hidden: false,
+            nested_in: None,
+            nested_headers: None,
+            content: mailiner_core::models::MessageContent::Empty,
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(loaded_message_from_parts(&id, vec![empty.clone()]).is_none());
+
+        let mut body = empty;
+        body.content = mailiner_core::models::MessageContent::Text("hi".into());
+        let loaded = loaded_message_from_parts(&id, vec![body]).unwrap();
+        assert_eq!(loaded.envelope_id, id);
+        assert_eq!(loaded.folder_id.as_str(), "INBOX");
+    }
+
+    #[tokio::test]
+    async fn blob_replay_into_memory_cache() {
+        let acc = AccountId::new("acc");
+        let mut blob = MailCacheBlob::empty();
+        blob.set_folders(
+            &acc,
+            CachedFolderTree::new(
+                vec![folder("acc", "INBOX", "INBOX", MailboxRole::Inbox)],
+                HashMap::new(),
+            ),
+        );
+        blob.set_messages(&acc, list_for("INBOX", 2, 2, MessageSort::Arrival));
+
+        let dest = InMemoryMailCache::new();
+        blob.replay_into(&dest).await.unwrap();
+        assert_eq!(
+            dest.load_folders(&acc)
+                .await
+                .unwrap()
+                .unwrap()
+                .folders
+                .len(),
+            1
+        );
+        assert_eq!(
+            dest.load_messages(
+                &acc,
+                &MailboxId::from("INBOX".to_string()),
+                MessageSort::Arrival
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .envelopes
+            .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_parts_default_to_miss() {
+        let cache = InMemoryMailCache::new();
+        let acc = AccountId::new("acc");
+        let id = MessageId::new(FolderId::new("INBOX"), "1");
+        cache.save_parts(&acc, &id, &[]).await.unwrap();
+        assert!(cache.load_parts(&acc, &id).await.unwrap().is_none());
+        assert!(
+            load_cached_loaded_message(&cache, &acc, &id)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_clear_all() {
+        let cache = InMemoryMailCache::new();
+        let acc = AccountId::new("acc");
+        cache
+            .save_folders(
+                &acc,
+                &CachedFolderTree::new(
+                    vec![folder("acc", "INBOX", "INBOX", MailboxRole::Inbox)],
+                    HashMap::new(),
+                ),
+            )
+            .await
+            .unwrap();
+        cache.clear_all().await.unwrap();
+        assert!(cache.load_folders(&acc).await.unwrap().is_none());
     }
 }

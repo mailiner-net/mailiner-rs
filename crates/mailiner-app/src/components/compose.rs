@@ -24,6 +24,181 @@ use crate::send::{
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
 
+fn looks_like_email(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
+}
+
+fn needs_quotes(name: &str) -> bool {
+    name.contains([',', '<', '>', '"', '\\']) || looks_like_email(name)
+}
+
+fn quote_display_name(name: &str) -> String {
+    format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn format_composer_address(addr: &ComposerAddress) -> String {
+    match addr
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        Some(name) if needs_quotes(name) => {
+            format!("{} <{}>", quote_display_name(name), addr.email)
+        }
+        Some(name) => format!("{name} <{}>", addr.email),
+        None => addr.email.clone(),
+    }
+}
+
+fn join_address_list(addrs: &[ComposerAddress]) -> String {
+    addrs
+        .iter()
+        .map(format_composer_address)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let name = name.trim();
+    Some(ComposerAddress {
+        name: if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        },
+        email: email.to_string(),
+    })
+}
+
+fn find_unquoted(s: &str, needle: char) -> Option<usize> {
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_quotes => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            c if c == needle && !in_quotes => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
+    let s = s.trim();
+    if !s.ends_with('"') {
+        return None;
+    }
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut quote_start = None;
+    let mut decoded = String::new();
+    for (i, c) in s.char_indices() {
+        if escaped {
+            decoded.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_quotes => escaped = true,
+            '"' if !in_quotes => {
+                in_quotes = true;
+                quote_start = Some(i);
+                decoded.clear();
+            }
+            '"' if in_quotes => in_quotes = false,
+            _ if in_quotes => decoded.push(c),
+            _ => {}
+        }
+    }
+    if in_quotes {
+        return None;
+    }
+    let start = quote_start?;
+    let prefix = s[..start].trim().trim_end_matches(',').trim();
+    Some((prefix, decoded))
+}
+
+/// Last comma-separated token before `<email>` is the display name.
+/// Earlier email-like tokens are sibling recipients.
+fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
+    let before = before.trim();
+    if before.is_empty() {
+        return String::new();
+    }
+    if let Some((bare, quoted)) = split_trailing_quoted(before) {
+        // Only a comma (not whitespace) separates a sibling mailbox from this name.
+        // `alice@example.com "Alice"` is one display name; `bob@example.com, "Alice"`
+        // is a sibling plus a quoted name.
+        let has_sibling_comma = find_unquoted(before, ',').is_some();
+        let mut name_prefix = String::new();
+        for part in bare.split(',') {
+            if name_prefix.is_empty() && has_sibling_comma && looks_like_email(part) {
+                out.push(ComposerAddress::email_only(part.trim()));
+            } else if name_prefix.is_empty() {
+                name_prefix = part.to_string();
+            } else {
+                name_prefix.push(',');
+                name_prefix.push_str(part);
+            }
+        }
+        let name_prefix = name_prefix.trim();
+        if name_prefix.is_empty() {
+            return quoted;
+        }
+        return format!("{name_prefix} {quoted}");
+    }
+    let parts: Vec<&str> = before.split(',').collect();
+    let mut name_from = parts.len().saturating_sub(1);
+    while name_from > 0 && !looks_like_email(parts[name_from - 1]) {
+        name_from -= 1;
+    }
+    for part in &parts[..name_from] {
+        let part = part.trim();
+        if !part.is_empty() {
+            out.push(ComposerAddress::email_only(part));
+        }
+    }
+    parts[name_from..].join(",")
+}
+
+/// Parse a compose field. Named mailboxes (`Name <email>`) keep the display name.
+fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
+    let mut out = Vec::new();
+    let mut rest = raw.trim();
+    while !rest.is_empty() {
+        if let Some(open) = find_unquoted(rest, '<')
+            && let Some(close_rel) = rest[open..].find('>')
+        {
+            let close = open + close_rel;
+            let name = take_display_name(&rest[..open], &mut out);
+            if let Some(addr) = named_composer_address(&name, &rest[open + 1..close]) {
+                out.push(addr);
+            }
+            rest = rest[close + 1..].trim_start_matches(',').trim();
+            continue;
+        }
+        out.extend(
+            rest.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ComposerAddress::email_only),
+        );
+        break;
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 struct RecipientList {
     chips: Signal<Vec<ComposerAddress>>,
@@ -84,15 +259,16 @@ fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> O
     listed.into_iter().find(|a| a.id == id)
 }
 
-/// Open a blank compose for the selected account.
-pub fn open_new_message(ctx: &mut AppContext) {
+fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
     let selected = ctx.selected_account.read().clone();
-    let Some(account) = resolve_compose_account(ctx, selected.as_ref()) else {
-        return;
-    };
-    let identity = identity_from_account(account.name, account.email);
+    let account = resolve_compose_account(ctx, selected.as_ref())?;
+    let identity = identity_from_account(account.name.clone(), account.email.clone());
     let mut draft = DraftDocument::new_empty(&identity);
     draft.mode = BodyMode::Plain;
+    Some((account, draft))
+}
+
+fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) {
     open_compose(
         ctx,
         ComposeSession {
@@ -102,6 +278,23 @@ pub fn open_new_message(ctx: &mut AppContext) {
             reply_source: None,
         },
     );
+}
+
+/// Open a blank compose for the selected account.
+pub fn open_new_message(ctx: &mut AppContext) {
+    let Some((account, draft)) = new_message_draft(ctx) else {
+        return;
+    };
+    open_new_draft(ctx, account, draft);
+}
+
+/// Open a new message with To prefilled from a viewer address.
+pub fn open_new_message_to(ctx: &mut AppContext, to: ComposerAddress) {
+    let Some((account, mut draft)) = new_message_draft(ctx) else {
+        return;
+    };
+    draft.to.push(to);
+    open_new_draft(ctx, account, draft);
 }
 
 /// Prefill Reply or Forward from a loaded message.
@@ -792,5 +985,97 @@ pub fn ComposeOverlay() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_composer_address_keeps_name() {
+        assert_eq!(
+            format_composer_address(&ComposerAddress {
+                name: Some("Ada".into()),
+                email: "ada@example.com".into(),
+            }),
+            "Ada <ada@example.com>"
+        );
+        assert_eq!(
+            format_composer_address(&ComposerAddress::email_only("solo@example.com")),
+            "solo@example.com"
+        );
+        assert_eq!(
+            format_composer_address(&ComposerAddress {
+                name: Some("alice@example.com".into()),
+                email: "alice@work.com".into(),
+            }),
+            "\"alice@example.com\" <alice@work.com>"
+        );
+    }
+
+    #[test]
+    fn parse_address_list_roundtrips_named_and_bare() {
+        let parsed = parse_address_list(
+            "Ada Lovelace <ada@example.com>, bob@example.com, \"Cc\" <cc@example.com>",
+        );
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].name.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(parsed[0].email, "ada@example.com");
+        assert_eq!(parsed[1].name, None);
+        assert_eq!(parsed[1].email, "bob@example.com");
+        assert_eq!(parsed[2].name.as_deref(), Some("Cc"));
+        assert_eq!(parsed[2].email, "cc@example.com");
+
+        let comma_name = parse_address_list("Lovelace, Ada <ada@example.com>");
+        assert_eq!(comma_name.len(), 1);
+        assert_eq!(comma_name[0].name.as_deref(), Some("Lovelace, Ada"));
+        assert_eq!(comma_name[0].email, "ada@example.com");
+
+        let joined = join_address_list(&parsed);
+        assert_eq!(
+            joined,
+            "Ada Lovelace <ada@example.com>, bob@example.com, Cc <cc@example.com>"
+        );
+        assert_eq!(parse_address_list(&joined), parsed);
+    }
+
+    #[test]
+    fn parse_address_list_keeps_email_like_display_name() {
+        let unquoted = parse_address_list("alice@example.com <alice@work.com>");
+        assert_eq!(unquoted.len(), 1);
+        assert_eq!(unquoted[0].name.as_deref(), Some("alice@example.com"));
+        assert_eq!(unquoted[0].email, "alice@work.com");
+
+        let quoted = parse_address_list("\"alice@example.com\" <alice@work.com>");
+        assert_eq!(quoted, unquoted);
+
+        let mixed = parse_address_list("bob@example.com, \"alice@example.com\" <alice@work.com>");
+        assert_eq!(mixed.len(), 2);
+        assert_eq!(mixed[0].email, "bob@example.com");
+        assert_eq!(mixed[1].name.as_deref(), Some("alice@example.com"));
+        assert_eq!(mixed[1].email, "alice@work.com");
+
+        assert_eq!(parse_address_list(&join_address_list(&unquoted)), unquoted);
+
+        let nickname = parse_address_list(r#"John "Johnny" <john@example.com>"#);
+        assert_eq!(nickname.len(), 1);
+        assert_eq!(nickname[0].name.as_deref(), Some("John Johnny"));
+        assert_eq!(nickname[0].email, "john@example.com");
+
+        // Email-like display name + quoted nickname is one mailbox, not two.
+        let email_nickname = parse_address_list(r#"alice@example.com "Alice" <alice@work.com>"#);
+        assert_eq!(email_nickname.len(), 1);
+        assert_eq!(
+            email_nickname[0].name.as_deref(),
+            Some("alice@example.com Alice")
+        );
+        assert_eq!(email_nickname[0].email, "alice@work.com");
+    }
+
+    #[test]
+    fn parse_address_list_skips_empty_mailbox() {
+        assert!(parse_address_list("No Mail <>").is_empty());
+        assert!(parse_address_list("  ,  ").is_empty());
     }
 }

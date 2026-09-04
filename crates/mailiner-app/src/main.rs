@@ -39,6 +39,7 @@ mod message_loader;
 mod notifications;
 mod outbox_store;
 mod print;
+mod provider_preset;
 mod reconnect;
 mod selection;
 mod send;

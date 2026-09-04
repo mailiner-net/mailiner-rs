@@ -12,6 +12,9 @@ use crate::account_config::{
 use crate::connection::ConnectErrorKind;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
+use crate::provider_preset::{
+    PresetFormFields, ProviderPreset, apply_email_change, apply_preset, matching_preset,
+};
 use crate::send::{SendState, send_kind_label};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -339,7 +342,8 @@ pub fn FormField(
 }
 
 /// Identity + IMAP + proxy fieldsets. Shared by onboarding and accounts.
-/// SMTP is a separate [`AccountSmtpFields`] section.
+/// SMTP is a separate [`AccountSmtpFields`] section; host/port/TLS setters
+/// are accepted here so a provider preset can fill both sides.
 #[component]
 pub fn AccountConnectionFields(
     id_prefix: String,
@@ -355,6 +359,10 @@ pub fn AccountConnectionFields(
     remote_port: String,
     smtp_remote_host: String,
     smtp_remote_port: String,
+    smtp_host: String,
+    smtp_port: String,
+    smtp_username: String,
+    smtp_use_tls: bool,
     set_display_name: EventHandler<String>,
     set_email: EventHandler<String>,
     set_imap_host: EventHandler<String>,
@@ -367,6 +375,11 @@ pub fn AccountConnectionFields(
     set_remote_port: EventHandler<String>,
     set_smtp_remote_host: EventHandler<String>,
     set_smtp_remote_port: EventHandler<String>,
+    set_smtp_host: EventHandler<String>,
+    set_smtp_port: EventHandler<String>,
+    set_smtp_username: EventHandler<String>,
+    set_smtp_use_tls: EventHandler<bool>,
+    set_smtp_open: EventHandler<bool>,
     busy: bool,
     #[props(default)] open_advanced: bool,
 ) -> Element {
@@ -396,8 +409,35 @@ pub fn AccountConnectionFields(
             FormField {
                 label: "Email",
                 id: "{id_prefix}-email",
-                value: email,
-                oninput: move |v| set_email.call(v),
+                value: email.clone(),
+                oninput: {
+                    let previous_email = email.clone();
+                    let imap_username = imap_username.clone();
+                    let smtp_username = smtp_username.clone();
+                    let smtp_host = smtp_host.clone();
+                    move |v: String| {
+                        let mut next = PresetFormFields {
+                            imap_host: String::new(),
+                            imap_port: String::new(),
+                            imap_username: imap_username.clone(),
+                            smtp_host: smtp_host.clone(),
+                            smtp_port: String::new(),
+                            smtp_username: smtp_username.clone(),
+                            smtp_use_tls: true,
+                        };
+                        apply_email_change(&previous_email, &v, &mut next);
+                        set_email.call(v);
+                        if next.imap_username != imap_username {
+                            set_imap_username.call(next.imap_username);
+                        }
+                        if next.smtp_username != smtp_username {
+                            set_smtp_username.call(next.smtp_username);
+                        }
+                        if next.smtp_host != smtp_host {
+                            set_smtp_host.call(next.smtp_host);
+                        }
+                    }
+                },
                 input_type: "email",
                 autocomplete: "email",
                 disabled: busy,
@@ -407,6 +447,33 @@ pub fn AccountConnectionFields(
         fieldset {
             class: "onboarding-section",
             legend { "IMAP" }
+            ProviderPresetSelect {
+                id: "{id_prefix}-provider",
+                email: email.clone(),
+                fields: PresetFormFields {
+                    imap_host: imap_host.clone(),
+                    imap_port: imap_port.clone(),
+                    imap_username: imap_username.clone(),
+                    smtp_host: smtp_host.clone(),
+                    smtp_port: smtp_port.clone(),
+                    smtp_username: smtp_username.clone(),
+                    smtp_use_tls,
+                },
+                on_apply: move |next: PresetFormFields| {
+                    let open_smtp = !next.smtp_host.trim().is_empty();
+                    set_imap_host.call(next.imap_host);
+                    set_imap_port.call(next.imap_port);
+                    set_imap_username.call(next.imap_username);
+                    set_smtp_host.call(next.smtp_host);
+                    set_smtp_port.call(next.smtp_port);
+                    set_smtp_username.call(next.smtp_username);
+                    set_smtp_use_tls.call(next.smtp_use_tls);
+                    if open_smtp {
+                        set_smtp_open.call(true);
+                    }
+                },
+                busy: busy,
+            }
             FormField {
                 label: "Host",
                 id: "{id_prefix}-imap-host",
@@ -667,6 +734,59 @@ pub fn AccountSmtpFields(
                          on port 587."
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Provider dropdown. Selecting a named preset fills IMAP/SMTP host/port/TLS
+/// and usernames-from-email when empty; email and passwords stay untouched.
+#[component]
+fn ProviderPresetSelect(
+    id: String,
+    email: String,
+    fields: PresetFormFields,
+    on_apply: EventHandler<PresetFormFields>,
+    busy: bool,
+) -> Element {
+    // Independent of field matching so Custom stays selected after a named fill.
+    let mut chosen = use_signal(|| matching_preset(&fields));
+    let matched = matching_preset(&fields);
+    let selected = if chosen() != ProviderPreset::Custom && matched != chosen() {
+        ProviderPreset::Custom
+    } else {
+        chosen()
+    };
+    rsx! {
+        div {
+            class: "onboarding-field",
+            label {
+                r#for: "{id}",
+                "Provider"
+            }
+            select {
+                id: "{id}",
+                name: "{id}",
+                value: "{selected.as_key()}",
+                disabled: busy,
+                onchange: move |e| {
+                    let preset = ProviderPreset::from_key(&e.value());
+                    chosen.set(preset);
+                    let mut next = fields.clone();
+                    apply_preset(preset, &email, &mut next);
+                    on_apply.call(next);
+                },
+                for option in ProviderPreset::ALL {
+                    option {
+                        value: "{option.as_key()}",
+                        selected: *option == selected,
+                        "{option.label()}"
+                    }
+                }
+            }
+            p {
+                class: "bootstrap-muted onboarding-preset-hint",
+                "Fills IMAP and SMTP host, port, and TLS. Email and password are not changed."
             }
         }
     }

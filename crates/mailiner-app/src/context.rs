@@ -265,6 +265,7 @@ impl AppContext {
         self.outbox.write().clear();
         self.toast.set(None);
         self.compose_draft.set(None);
+        self.mail_layout.set(MailLayout::default());
         self.mailbox_picker.set(None);
     }
 

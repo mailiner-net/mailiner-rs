@@ -1172,30 +1172,44 @@ a.accounts-link-btn {
     background: var(--item-accent);
 }
 
-/* List + viewer wrapper. Stacked (column) is the default; classic is row.
-   Standalone so the asset pipeline keeps flex-direction. */
-.mail-panes {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
+/* Classic three-column: banner and outbox span the content area; list | viewer
+   sit in the middle row. Standalone so the asset pipeline keeps display/grid. */
+#app.layout-classic #content {
+    display: grid;
+    grid-template-columns: var(--message-list-width) 6px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-#app.layout-classic .mail-panes {
-    flex-direction: row;
+#app.layout-classic #content > .connection-banner {
+    grid-column: 1 / -1;
+    grid-row: 1;
 }
 
-#app.layout-classic #messagelist {
-    flex: 0 0 var(--message-list-width);
+#app.layout-classic #content > #messagelist {
+    grid-column: 1;
+    grid-row: 2;
+    flex: none;
     min-height: 0;
     border-bottom: none;
     border-right: 1px solid var(--sidebar-border);
 }
 
-#app.layout-classic #messageview {
+#app.layout-classic #content > .split-handle {
+    grid-column: 2;
+    grid-row: 2;
+    width: auto;
+    align-self: stretch;
+}
+
+#app.layout-classic #content > #messageview {
+    grid-column: 3;
+    grid-row: 2;
     min-width: 0;
+}
+
+#app.layout-classic #content > .outbox-panel {
+    grid-column: 1 / -1;
+    grid-row: 3;
 }
 
 /* —— Shared UI primitives (keep above the nested #app block) —— */

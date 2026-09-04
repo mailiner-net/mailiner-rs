@@ -557,12 +557,9 @@ fn MainView() -> Element {
 
                     ConnectionStatusBanner {}
 
-                    div {
-                        class: "mail-panes",
-                        MessageList {}
-                        SplitHandle { axis: list_axis }
-                        MessageView {}
-                    }
+                    MessageList {}
+                    SplitHandle { axis: list_axis }
+                    MessageView {}
 
                     OutboxPanel {}
                 }

@@ -777,6 +777,42 @@ a.accounts-link-btn {
     gap: 0.65rem;
 }
 
+/* —— General settings (`/settings`) —— */
+.settings-card {
+    max-width: 40rem;
+}
+
+.settings-section {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--sidebar-border);
+}
+
+.settings-section h2 {
+    margin: 0 0 0.35rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.settings-hint {
+    margin: 0 0 0.75rem;
+}
+
+.settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.settings-reset-note {
+    margin: 0.5rem 0 0;
+}
+
+.settings-shortcut-group {
+    margin-top: 0.75rem;
+}
+
 /* Nav header: account name + settings gear */
 .pane-header-title {
     flex: 1 1 auto;
@@ -1159,6 +1195,12 @@ textarea.ui-input {
 
 .compose-dialog {
     width: min(40rem, 94vw);
+}
+
+.compose-from {
+    margin: 0 0 0.35rem;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
 }
 
 .compose-to-row {

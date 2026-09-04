@@ -17,7 +17,7 @@ use mailiner_composer::shell::attachment_list::{
 use mailiner_composer::shell::recipient_field::commit_input;
 use mailiner_composer::{
     ComposeIntent, FileAttachment, InlineImage, PrepareSubmitError, SAFE_IMAGE_ACCEPT, build_draft,
-    caps, is_safe_image_content_type, prepare_submit,
+    caps, is_safe_image_content_type, plain_to_html, prepare_submit,
 };
 
 use crate::account::{Account, AccountId};
@@ -27,6 +27,7 @@ use crate::send::{
     ComposeSession, OutboxDisplay, SendState, composer_address_from_identity, from_account_label,
     identity_from_account, resolve_compose_account_id, set_session_from_account,
 };
+use crate::ui_prefs::ComposeBodyMode;
 
 fn looks_like_email(s: &str) -> bool {
     let s = s.trim();
@@ -78,6 +79,30 @@ fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
         },
         email: email.to_string(),
     })
+}
+
+/// Apply the settings default. The overlay is a textarea; Rich sends an HTML
+/// alternative of that text (reply HTML quotes are re-derived from the plain body).
+fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
+    match mode {
+        ComposeBodyMode::Plain => {
+            draft.mode = BodyMode::Plain;
+            draft.html_body.clear();
+            draft.plain_cache_dirty = false;
+        }
+        ComposeBodyMode::Rich => {
+            draft.mode = BodyMode::Rich;
+            draft.html_body = plain_to_html(&draft.plain_body);
+            draft.plain_cache_dirty = false;
+        }
+    }
+}
+
+fn compose_body_mode_from_draft(draft: &DraftDocument) -> ComposeBodyMode {
+    match draft.mode {
+        BodyMode::Plain => ComposeBodyMode::Plain,
+        BodyMode::Rich => ComposeBodyMode::Rich,
+    }
 }
 
 fn find_unquoted(s: &str, needle: char) -> Option<usize> {
@@ -269,11 +294,11 @@ fn resolve_compose_account(ctx: &AppContext, preferred: Option<&AccountId>) -> O
 }
 
 fn new_message_draft(ctx: &AppContext) -> Option<(Account, DraftDocument)> {
-    let selected = ctx.selected_account.read().clone();
-    let account = resolve_compose_account(ctx, selected.as_ref())?;
+    let preferred = crate::ui_prefs::load_default_from_account();
+    let account = resolve_compose_account(ctx, preferred.as_ref())?;
     let identity = identity_from_account(account.name.clone(), account.email.clone());
     let mut draft = DraftDocument::new_empty(&identity);
-    draft.mode = BodyMode::Plain;
+    apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
     Some((account, draft))
 }
 
@@ -320,7 +345,7 @@ pub fn open_reply_or_forward(
     let identity = identity_from_account(account.name, account.email);
     match build_draft(intent, &identity, Some(envelope), Some(loaded)) {
         Ok(mut draft) => {
-            draft.mode = BodyMode::Plain;
+            apply_compose_body_mode(&mut draft, crate::ui_prefs::load_compose_body_mode());
             let title = match intent {
                 ComposeIntent::Forward => "Forward",
                 ComposeIntent::Reply | ComposeIntent::ReplyAll => "Reply",
@@ -355,31 +380,28 @@ fn submit_compose(
         return;
     }
     error.set(None);
-    let Some(account_id) = ctx
-        .compose_draft
-        .read()
-        .as_ref()
-        .map(|s| s.account_id.clone())
-    else {
-        error.set(Some("Select an account first.".into()));
-        return;
+    let (account_id, mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
+        Some(session) => (
+            session.account_id.clone(),
+            session.draft.clone(),
+            session.reply_source.clone(),
+        ),
+        None => {
+            error.set(Some("Select an account first.".into()));
+            return;
+        }
     };
     let Some(account) = ctx.accounts.read().get(&account_id).cloned() else {
         error.set(Some("Account not found.".into()));
         return;
     };
     let identity = identity_from_account(account.name.clone(), account.email.clone());
-    let (mut draft, reply_source) = match ctx.compose_draft.read().as_ref() {
-        Some(session) => (session.draft.clone(), session.reply_source.clone()),
-        None => (DraftDocument::new_empty(&identity), None),
-    };
-    draft.mode = BodyMode::Plain;
+    let mode = compose_body_mode_from_draft(&draft);
     draft.from = Some(composer_address_from_identity(&identity));
     draft.plain_body = form.body.peek().clone();
     draft.subject = form.subject.peek().clone();
-    if draft.inline_images.is_empty() {
-        draft.html_body.clear();
-    } else {
+    apply_compose_body_mode(&mut draft, mode);
+    if !draft.inline_images.is_empty() {
         draft.html_body = html_for_plain_with_inlines(&draft.plain_body, &draft.inline_images);
         draft.plain_cache_dirty = false;
     }
@@ -440,10 +462,17 @@ enum AttachKind {
     Inline,
 }
 
-fn live_payload_bytes(draft: &DraftDocument, live_plain_len: usize) -> u64 {
+fn live_payload_bytes(draft: &DraftDocument, live_plain: &str) -> u64 {
+    let live_html_len = if draft.mode == BodyMode::Rich {
+        plain_to_html(live_plain).len() as u64
+    } else {
+        0
+    };
     draft_payload_bytes(draft)
         .saturating_sub(draft.plain_body.len() as u64)
-        .saturating_add(live_plain_len as u64)
+        .saturating_sub(draft.html_body.len() as u64)
+        .saturating_add(live_plain.len() as u64)
+        .saturating_add(live_html_len)
 }
 
 fn push_attachment_on_draft(
@@ -462,10 +491,7 @@ fn push_attachment_on_draft(
     if session.draft.attachments.len() >= caps::MAX_ATTACHMENTS {
         return PushAttachment::TooMany;
     }
-    if would_exceed_draft_cap(
-        live_payload_bytes(&session.draft, body().len()),
-        attachment.size,
-    ) {
+    if would_exceed_draft_cap(live_payload_bytes(&session.draft, &body()), attachment.size) {
         return PushAttachment::TooLarge;
     }
     session.draft.attachments.push(attachment);
@@ -505,7 +531,7 @@ fn push_inline_on_draft(
         mailiner_composer::AttachmentData::Bytes(b) => b.len() as u64,
         mailiner_composer::AttachmentData::Pending => 0,
     };
-    if would_exceed_draft_cap(live_payload_bytes(&session.draft, body().len()), extra) {
+    if would_exceed_draft_cap(live_payload_bytes(&session.draft, &body()), extra) {
         return PushAttachment::TooLarge;
     }
     session.draft.inline_images.push(image);
@@ -567,7 +593,7 @@ struct IncomingBytes {
 fn draft_slot_counts(
     compose_draft: Signal<Option<ComposeSession>>,
     draft_id: &str,
-    live_plain_len: usize,
+    live_plain: &str,
 ) -> Option<(usize, usize, u64)> {
     compose_draft
         .read()
@@ -577,7 +603,7 @@ fn draft_slot_counts(
             (
                 s.draft.attachments.len(),
                 s.draft.inline_images.len(),
-                live_payload_bytes(&s.draft, live_plain_len),
+                live_payload_bytes(&s.draft, live_plain),
             )
         })
 }
@@ -602,7 +628,7 @@ fn pre_read_fits(
 ) -> PreRead {
     let (_, max_count, too_many) = kind_limits(kind);
     let Some((file_count, inline_count, used)) =
-        draft_slot_counts(compose_draft, draft_id, body().len())
+        draft_slot_counts(compose_draft, draft_id, &body())
     else {
         return PreRead::Stop;
     };
@@ -668,7 +694,7 @@ fn attach_one_bytes(
         return AttachStep::Continue;
     }
     let Some((file_count, inline_count, used)) =
-        draft_slot_counts(compose_draft, draft_id, body().len())
+        draft_slot_counts(compose_draft, draft_id, &body())
     else {
         return AttachStep::Stop;
     };
@@ -1545,5 +1571,55 @@ mod tests {
     fn parse_address_list_skips_empty_mailbox() {
         assert!(parse_address_list("No Mail <>").is_empty());
         assert!(parse_address_list("  ,  ").is_empty());
+    }
+
+    fn empty_draft() -> DraftDocument {
+        DraftDocument::new_empty(&identity_from_account("Me", "me@example.com"))
+    }
+
+    #[test]
+    fn apply_plain_clears_html() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hello".into();
+        draft.html_body = "<p>old</p>".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Plain);
+        assert_eq!(draft.mode, BodyMode::Plain);
+        assert!(draft.html_body.is_empty());
+        assert_eq!(draft.plain_body, "Hello");
+    }
+
+    #[test]
+    fn apply_rich_builds_html_from_plain() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hello\n\nWorld".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        assert_eq!(draft.mode, BodyMode::Rich);
+        assert_eq!(draft.html_body, plain_to_html("Hello\n\nWorld"));
+        assert!(draft.html_body.contains("<p>Hello</p>"));
+        assert!(draft.html_body.contains("<p>World</p>"));
+    }
+
+    #[test]
+    fn submit_uses_draft_mode_not_current_pref() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hi".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        let mode = compose_body_mode_from_draft(&draft);
+        draft.plain_body = "Hi there".into();
+        apply_compose_body_mode(&mut draft, mode);
+        assert_eq!(draft.mode, BodyMode::Rich);
+        assert_eq!(draft.html_body, plain_to_html("Hi there"));
+    }
+
+    #[test]
+    fn live_payload_counts_current_rich_html() {
+        let mut draft = empty_draft();
+        draft.plain_body = "Hi".into();
+        apply_compose_body_mode(&mut draft, ComposeBodyMode::Rich);
+        let opened = draft_payload_bytes(&draft);
+        let live = live_payload_bytes(&draft, "Hi there");
+        let expected_html = plain_to_html("Hi there").len() as u64;
+        assert!(live > opened);
+        assert_eq!(live, "Hi there".len() as u64 + expected_html);
     }
 }

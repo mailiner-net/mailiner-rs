@@ -54,6 +54,12 @@ pub fn reset_list_height() {
     persist_layout();
 }
 
+/// Clear persisted pane sizes. Safe from settings (no `#app` chrome).
+pub fn reset_saved_layout() {
+    #[cfg(target_arch = "wasm32")]
+    wasm::clear_saved();
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::*;
@@ -101,6 +107,15 @@ mod wasm {
         if let Some(style) = app_style() {
             let _ = style.set_property("--message-list-height", &format!("{pct:.1}%"));
         }
+    }
+
+    pub fn clear_saved() {
+        if let Some(storage) = storage() {
+            let _ = storage.remove_item(FOLDER_WIDTH_KEY);
+            let _ = storage.remove_item(LIST_HEIGHT_KEY);
+        }
+        set_folder_width_px(FOLDER_WIDTH_DEFAULT);
+        set_list_height_pct(LIST_HEIGHT_DEFAULT);
     }
 
     pub fn persist() {

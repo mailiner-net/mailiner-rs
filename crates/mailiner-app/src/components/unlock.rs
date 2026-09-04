@@ -30,7 +30,7 @@ pub fn UnlockForm() -> Element {
     let wiping = *ctx.sign_out_pending.read();
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",

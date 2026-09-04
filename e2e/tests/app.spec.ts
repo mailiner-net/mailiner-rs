@@ -5,12 +5,14 @@ test('empty store shows first-run onboarding', async ({ page }) => {
 
   // Empty localStorage → NeedsOnboarding → /onboarding (no mail chrome #app).
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
+  await expect(page.getByRole('main')).toBeVisible();
   await expect(page.locator('.onboarding-shell')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Look up servers' })).toBeVisible();
   await expect(page.getByLabel('Unlock passphrase')).toBeVisible();
   await expect(page.locator('#app')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Skip to message' })).toHaveCount(0);
 });
 
 test('viewport meta enables device-width media queries', async ({ page }) => {
@@ -126,6 +128,7 @@ test('encrypted store shows unlock instead of mail chrome', async ({ page }) => 
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Unlock accounts' })).toBeVisible();
+  await expect(page.getByRole('main')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unlock' })).toBeVisible();
   await expect(page.locator('#app')).toHaveCount(0);
 });

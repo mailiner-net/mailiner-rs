@@ -161,6 +161,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
     let filtered_ids: Vec<MailboxId> = filtered.iter().map(|e| e.id.clone()).collect();
 
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "picker-backdrop",
             onclick: move |_| close(()),

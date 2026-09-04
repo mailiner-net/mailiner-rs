@@ -60,7 +60,7 @@ pub fn AccountsSettingsPage() -> Element {
     });
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card accounts-card",
@@ -1285,7 +1285,7 @@ pub fn AccountNewPage() -> Element {
     };
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
@@ -1654,7 +1654,7 @@ pub fn AccountEditPage(id: String) -> Element {
     match load_state() {
         EditLoadState::Loading => {
             return rsx! {
-                div {
+                main {
                     class: "bootstrap-shell",
                     p { class: "bootstrap-muted", "Loading account…" }
                 }
@@ -1662,7 +1662,7 @@ pub fn AccountEditPage(id: String) -> Element {
         }
         EditLoadState::Missing => {
             return rsx! {
-                div {
+                main {
                     class: "bootstrap-shell",
                     div {
                         class: "bootstrap-card",
@@ -1678,7 +1678,7 @@ pub fn AccountEditPage(id: String) -> Element {
         }
         EditLoadState::Error(msg) => {
             return rsx! {
-                div {
+                main {
                     class: "bootstrap-shell",
                     div {
                         class: "bootstrap-card bootstrap-error",
@@ -1887,7 +1887,7 @@ pub fn AccountEditPage(id: String) -> Element {
     };
 
     rsx! {
-        div {
+        main {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",

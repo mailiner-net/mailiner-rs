@@ -184,6 +184,8 @@ pub struct AppContext {
     pub show_all_folders: Signal<bool>,
     /// Pinned IMAP UIDs for the open account+mailbox (local overlay, pin order).
     pub pinned_uids: Signal<Vec<String>>,
+    /// Screen-reader live status (new mail). Empty string is silent.
+    pub sr_status: Signal<String>,
 }
 
 /// In-progress drag of list rows onto a folder.
@@ -269,6 +271,12 @@ impl AppContext {
         download_status.set(HashMap::new());
     }
 
+    /// Announce `message` to assistive tech via the mail-chrome live region.
+    pub fn announce(&self, message: impl Into<String>) {
+        let mut sr_status = self.sr_status;
+        sr_status.set(message.into());
+    }
+
     pub fn show_toast(&self, action: ToastAction) {
         let mut toast = self.toast;
         let id = toast
@@ -316,6 +324,7 @@ impl AppContext {
         self.smtp_test_abandoned.write().clear();
         self.outbox.write().clear();
         self.toast.set(None);
+        self.sr_status.set(String::new());
         self.compose_draft.set(None);
         self.mailbox_picker.set(None);
         self.pinned_uids.set(Vec::new());

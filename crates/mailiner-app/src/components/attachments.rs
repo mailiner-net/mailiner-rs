@@ -361,6 +361,7 @@ fn AttachmentPreviewDialog() -> Element {
     let filename = preview.filename.clone();
     let url = preview.object_url.clone();
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "attachment-preview-backdrop",
             onclick: {

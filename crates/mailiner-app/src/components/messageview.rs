@@ -407,8 +407,10 @@ pub fn MessageView() -> Element {
                 .and_then(|m| m.sender_email().map(str::to_string))
         });
     rsx! {
-        section {
+        main {
             id: "messageview",
+            tabindex: "-1",
+            aria_label: "Message",
 
             match &view {
                 MessageViewState::Empty => rsx! {
@@ -472,6 +474,8 @@ pub fn MessageView() -> Element {
                     div {
                         id: MESSAGE_CONTENT_ID,
                         class: "mlnr-msg-host",
+                        tabindex: "0",
+                        aria_label: "Message body",
                         // Host stays empty in RSX — content is mounted into shadow DOM.
                     }
 
@@ -1855,6 +1859,7 @@ fn MessageHeadersDialog(state: MessageHeadersState) -> Element {
     };
 
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "picker-backdrop headers-backdrop",
             onclick: {
@@ -1995,6 +2000,7 @@ fn MessageSourceDialog(state: MessageSourceState) -> Element {
     };
 
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "picker-backdrop source-backdrop",
             onclick: {

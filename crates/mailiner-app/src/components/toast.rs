@@ -79,6 +79,8 @@ pub fn ToastHost() -> Element {
         div {
             class: "toast",
             role: "status",
+            aria_live: "polite",
+            aria_atomic: "true",
             onmouseenter: move |_| hovered.set(true),
             onmouseleave: move |_| hovered.set(false),
             div {

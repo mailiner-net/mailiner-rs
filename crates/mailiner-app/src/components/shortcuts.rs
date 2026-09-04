@@ -363,6 +363,7 @@ pub fn ShortcutsHost() -> Element {
 #[component]
 fn ShortcutHelp(onclose: EventHandler<MouseEvent>) -> Element {
     rsx! {
+        crate::a11y::RestoreFocus {}
         div {
             class: "picker-backdrop shortcut-backdrop",
             onclick: move |evt| onclose.call(evt),

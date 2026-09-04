@@ -160,6 +160,8 @@ pub fn MailboxTreeView() -> Element {
         }
         div {
             id: "mailboxtreeview",
+            role: "tree",
+            aria_label: "Mailboxes",
             class: if drop_active { "drop-active" },
 
             if no_matches {
@@ -272,6 +274,19 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 class: if is_selected { "selected" },
                 class: if is_drop_target { "drop-target" },
                 class: if !subscribed { "unsubscribed" },
+                role: "treeitem",
+                aria_selected: if is_selected { "true" } else { "false" },
+                aria_expanded: if has_visible_children {
+                    Some(if show_children { "true" } else { "false" })
+                } else {
+                    None
+                },
+                tabindex: if selectable { "0" } else { "-1" },
+                aria_label: if mailbox.unread_count > 0 {
+                    format!("{}, {} unread", mailbox.title(), mailbox.unread_count)
+                } else {
+                    mailbox.title().to_string()
+                },
 
                 onclick: {
                     let mailbox_id = mailbox_id.clone();
@@ -369,6 +384,23 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         });
                     }
                 },
+                onkeydown: {
+                    let mailbox_id = mailbox_id.clone();
+                    move |evt: KeyboardEvent| {
+                        if !selectable {
+                            return;
+                        }
+                        let activate = match evt.key() {
+                            Key::Enter => true,
+                            Key::Character(c) if c == " " => true,
+                            _ => false,
+                        };
+                        if activate {
+                            evt.prevent_default();
+                            let _ = core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
+                        }
+                    }
+                },
                 oncontextmenu: move |evt: MouseEvent| {
                     evt.prevent_default();
                     evt.stop_propagation();
@@ -385,6 +417,7 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         class: "flat mailbox-chevron",
                         icon: if show_children { IconKind::ChevronDown } else { IconKind::ChevronRight },
                         size: 16,
+                        title: if show_children { "Collapse folder" } else { "Expand folder" },
                         onclick: move |e: MouseEvent| {
                             children_visible.set(!children_visible());
                             e.stop_propagation();

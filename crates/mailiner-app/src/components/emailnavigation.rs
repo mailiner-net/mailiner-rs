@@ -13,8 +13,9 @@ use crate::components::emailnavigation::navigationheader::Mode;
 #[component]
 pub fn EmailNavigation() -> Element {
     rsx! {
-        section {
+        nav {
             id: "emailnavigation",
+            aria_label: "Folders",
 
             NavigationHeader {
                 mode: Mode::MailboxTreeView,

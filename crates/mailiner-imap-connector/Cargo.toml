@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+async-channel = "2"
 async-imap = { git = "https://github.com/mailiner-net/async-imap", branch = "main", default-features = false, features = ["runtime-tokio"] }
 tokio = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }

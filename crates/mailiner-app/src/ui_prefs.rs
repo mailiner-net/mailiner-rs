@@ -6,7 +6,9 @@
 use std::collections::{HashMap, HashSet};
 
 use mailiner_core::ids::AccountId;
+use mailiner_core::mailbox_search_is_active;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[cfg(target_arch = "wasm32")]
 use crate::account_store::WebLocalStorage;
@@ -497,6 +499,13 @@ pub const SHORTCUT_MAP_KEY: &str = "mailiner.ui.shortcuts.v1";
 /// Schema version for [`ShortcutMapBlob`].
 pub const SHORTCUT_MAP_SCHEMA_VERSION: u32 = 1;
 
+/// `localStorage` key for saved IMAP searches (virtual folders).
+pub const SAVED_SEARCHES_KEY: &str = "mailiner.ui.savedSearches.v1";
+/// Schema version for [`SavedSearchesBlob`].
+pub const SAVED_SEARCHES_SCHEMA_VERSION: u32 = 1;
+/// Cap on remembered searches (evict the oldest on insert).
+pub const MAX_SAVED_SEARCHES: usize = 50;
+
 /// One remapped binding. `key` is a `KeyboardEvent.key` value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutBinding {
@@ -536,6 +545,166 @@ impl ShortcutMapBlob {
             )));
         }
         Ok(blob)
+    }
+}
+
+/// One user-saved IMAP search, shown as a virtual folder in the tree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedSearch {
+    pub id: String,
+    pub name: String,
+    pub query: String,
+    pub account_id: AccountId,
+    /// IMAP folder id the search was saved against.
+    pub mailbox_id: String,
+}
+
+impl SavedSearch {
+    pub fn mailbox(&self) -> MailboxId {
+        MailboxId::from(self.mailbox_id.clone())
+    }
+
+    /// True when `query` matches the name or IMAP query (folder-filter box).
+    pub fn matches_filter(&self, query: &str) -> bool {
+        let words: Vec<String> = query
+            .split_whitespace()
+            .map(|w| w.to_ascii_lowercase())
+            .collect();
+        if words.is_empty() {
+            return true;
+        }
+        let name = self.name.to_ascii_lowercase();
+        let q = self.query.to_ascii_lowercase();
+        words
+            .iter()
+            .all(|w| name.contains(w.as_str()) || q.contains(w.as_str()))
+    }
+}
+
+/// Why [`SavedSearchesBlob::add`] refused a search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveSearchError {
+    EmptyQuery,
+}
+
+/// Persisted virtual folders. Order is insertion order (oldest first).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SavedSearchesBlob {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub searches: Vec<SavedSearch>,
+}
+
+impl SavedSearchesBlob {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: SAVED_SEARCHES_SCHEMA_VERSION,
+            searches: Vec::new(),
+        }
+    }
+
+    pub fn encode(&self) -> Result<String, AccountStoreError> {
+        serde_json::to_string(self).map_err(|e| AccountStoreError::Serialization(e.to_string()))
+    }
+
+    pub fn decode(json: &str) -> Result<Self, AccountStoreError> {
+        let blob: Self = serde_json::from_str(json)
+            .map_err(|e| AccountStoreError::Serialization(e.to_string()))?;
+        if blob.schema_version > SAVED_SEARCHES_SCHEMA_VERSION {
+            return Err(AccountStoreError::Serialization(format!(
+                "unsupported saved-searches schema_version {} (max supported {})",
+                blob.schema_version, SAVED_SEARCHES_SCHEMA_VERSION
+            )));
+        }
+        Ok(blob)
+    }
+
+    pub fn get(&self, id: &str) -> Option<&SavedSearch> {
+        self.searches.iter().find(|s| s.id == id)
+    }
+
+    pub fn for_account(&self, account_id: &AccountId) -> Vec<SavedSearch> {
+        self.searches
+            .iter()
+            .filter(|s| &s.account_id == account_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Insert or refresh a search for this account + folder + query.
+    ///
+    /// An existing row is renamed when `name` is non-empty. The oldest row is
+    /// dropped when the cap is reached.
+    pub fn add(
+        &mut self,
+        name: &str,
+        query: &str,
+        account_id: AccountId,
+        mailbox_id: &MailboxId,
+    ) -> Result<SavedSearch, SaveSearchError> {
+        let query = query.trim().to_string();
+        if !mailbox_search_is_active(&query) {
+            return Err(SaveSearchError::EmptyQuery);
+        }
+        let name = {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                query.clone()
+            } else {
+                trimmed.to_string()
+            }
+        };
+        let mailbox = mailbox_id.as_str();
+        if let Some(existing) = self
+            .searches
+            .iter_mut()
+            .find(|s| s.account_id == account_id && s.mailbox_id == mailbox && s.query == query)
+        {
+            existing.name = name;
+            self.schema_version = SAVED_SEARCHES_SCHEMA_VERSION;
+            return Ok(existing.clone());
+        }
+        if self.searches.len() >= MAX_SAVED_SEARCHES {
+            self.searches.remove(0);
+        }
+        let search = SavedSearch {
+            id: Uuid::new_v4().to_string(),
+            name,
+            query,
+            account_id,
+            mailbox_id: mailbox.to_string(),
+        };
+        self.searches.push(search.clone());
+        self.schema_version = SAVED_SEARCHES_SCHEMA_VERSION;
+        Ok(search)
+    }
+
+    pub fn rename(&mut self, id: &str, name: &str) -> Option<SavedSearch> {
+        let search = self.searches.iter_mut().find(|s| s.id == id)?;
+        let trimmed = name.trim();
+        search.name = if trimmed.is_empty() {
+            search.query.clone()
+        } else {
+            trimmed.to_string()
+        };
+        self.schema_version = SAVED_SEARCHES_SCHEMA_VERSION;
+        Some(search.clone())
+    }
+
+    pub fn remove(&mut self, id: &str) -> bool {
+        let before = self.searches.len();
+        self.searches.retain(|s| s.id != id);
+        if self.searches.len() != before {
+            self.schema_version = SAVED_SEARCHES_SCHEMA_VERSION;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn retain_accounts(&mut self, known: &HashSet<AccountId>) {
+        self.searches.retain(|s| known.contains(&s.account_id));
+        self.schema_version = SAVED_SEARCHES_SCHEMA_VERSION;
     }
 }
 
@@ -1046,6 +1215,67 @@ pub fn save_shortcut_map(blob: &ShortcutMapBlob) {
     let mut stored = blob.clone();
     stored.schema_version = SHORTCUT_MAP_SCHEMA_VERSION;
     let _ = with_kv(|kv| kv.set_item(SHORTCUT_MAP_KEY, &stored.encode()?));
+}
+
+fn load_saved_searches_blob(
+    kv: &dyn StringKvStore,
+) -> Result<SavedSearchesBlob, AccountStoreError> {
+    match kv.get_item(SAVED_SEARCHES_KEY)? {
+        None => Ok(SavedSearchesBlob::empty()),
+        Some(s) if s.trim().is_empty() => Ok(SavedSearchesBlob::empty()),
+        Some(s) => SavedSearchesBlob::decode(&s),
+    }
+}
+
+fn save_saved_searches_blob(
+    kv: &dyn StringKvStore,
+    blob: &SavedSearchesBlob,
+) -> Result<(), AccountStoreError> {
+    kv.set_item(SAVED_SEARCHES_KEY, &blob.encode()?)
+}
+
+/// All saved searches, or an empty list if storage is missing / unreadable.
+pub fn load_saved_searches() -> Vec<SavedSearch> {
+    with_kv(load_saved_searches_blob)
+        .unwrap_or_else(SavedSearchesBlob::empty)
+        .searches
+}
+
+fn mutate_saved_searches<T>(f: impl FnOnce(&mut SavedSearchesBlob) -> T) -> Option<T> {
+    with_kv(|kv| {
+        let mut blob = load_saved_searches_blob(kv)?;
+        let out = f(&mut blob);
+        save_saved_searches_blob(kv, &blob)?;
+        Ok(out)
+    })
+}
+
+/// Persist a search for the open folder. Same account + folder + query updates
+/// the name instead of inserting a duplicate.
+pub fn add_saved_search(
+    name: &str,
+    query: &str,
+    account_id: AccountId,
+    mailbox_id: &MailboxId,
+) -> Result<SavedSearch, SaveSearchError> {
+    let result = mutate_saved_searches(|blob| blob.add(name, query, account_id, mailbox_id));
+    match result {
+        Some(inner) => inner,
+        None => Err(SaveSearchError::EmptyQuery),
+    }
+}
+
+pub fn rename_saved_search(id: &str, name: &str) -> Option<SavedSearch> {
+    mutate_saved_searches(|blob| blob.rename(id, name)).flatten()
+}
+
+pub fn remove_saved_search(id: &str) -> bool {
+    mutate_saved_searches(|blob| blob.remove(id)).unwrap_or(false)
+}
+
+/// Drop saved searches whose account is no longer known.
+pub fn retain_saved_searches(known: &HashSet<AccountId>) {
+    let _ = mutate_saved_searches(|blob| blob.retain_accounts(known));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1714,6 +1944,172 @@ mod tests {
                 .expect("set future");
         });
         assert!(load_shortcut_map().remaps.is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn saved_searches_key_is_versioned() {
+        assert_eq!(SAVED_SEARCHES_KEY, "mailiner.ui.savedSearches.v1");
+        assert_eq!(SAVED_SEARCHES_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn saved_searches_encode_decode_roundtrip() {
+        let mut blob = SavedSearchesBlob::empty();
+        let acc = AccountId::new("acc-1");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let saved = blob
+            .add("Boss unread", "from:boss is:unread", acc, &inbox)
+            .expect("add");
+        assert!(!saved.id.is_empty());
+        assert_eq!(saved.mailbox().as_str(), "INBOX");
+
+        let json = blob.encode().expect("encode");
+        assert!(json.contains("\"schema_version\":1"), "json={json}");
+        assert!(json.contains("from:boss is:unread"), "json={json}");
+        let back = SavedSearchesBlob::decode(&json).expect("decode");
+        assert_eq!(back, blob);
+        assert_eq!(
+            back.get(&saved.id).map(|s| s.name.as_str()),
+            Some("Boss unread")
+        );
+    }
+
+    #[test]
+    fn saved_searches_decode_rejects_future_schema() {
+        let json = r#"{"schema_version":99,"searches":[]}"#;
+        let err = SavedSearchesBlob::decode(json).unwrap_err();
+        match err {
+            AccountStoreError::Serialization(msg) => {
+                assert!(
+                    msg.contains("unsupported") && msg.contains("99"),
+                    "msg={msg}"
+                );
+            }
+            other => panic!("expected Serialization, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn saved_search_add_rejects_empty_query() {
+        let mut blob = SavedSearchesBlob::empty();
+        let acc = AccountId::new("acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        assert_eq!(
+            blob.add("x", "   ", acc.clone(), &inbox),
+            Err(SaveSearchError::EmptyQuery)
+        );
+        assert_eq!(
+            blob.add("x", "after:nope", acc, &inbox),
+            Err(SaveSearchError::EmptyQuery)
+        );
+        assert!(blob.searches.is_empty());
+    }
+
+    #[test]
+    fn saved_search_add_defaults_name_and_dedupes() {
+        let mut blob = SavedSearchesBlob::empty();
+        let acc = AccountId::new("acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let first = blob.add("", "from:ada", acc.clone(), &inbox).expect("add");
+        assert_eq!(first.name, "from:ada");
+        let again = blob
+            .add("Ada", "from:ada", acc.clone(), &inbox)
+            .expect("dedupe");
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.name, "Ada");
+        assert_eq!(blob.searches.len(), 1);
+
+        let other_folder = blob
+            .add("Ada", "from:ada", acc, &MailboxId::from("Sent".to_string()))
+            .expect("other folder");
+        assert_ne!(other_folder.id, first.id);
+        assert_eq!(blob.searches.len(), 2);
+    }
+
+    #[test]
+    fn saved_search_rename_remove_and_retain() {
+        let mut blob = SavedSearchesBlob::empty();
+        let keep = AccountId::new("keep");
+        let gone = AccountId::new("gone");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let a = blob.add("A", "from:a", keep.clone(), &inbox).expect("a");
+        let b = blob.add("B", "from:b", gone, &inbox).expect("b");
+        assert_eq!(
+            blob.rename(&a.id, "  Ada  ").map(|s| s.name),
+            Some("Ada".into())
+        );
+        assert_eq!(
+            blob.rename(&a.id, "  ").map(|s| s.name),
+            Some("from:a".into())
+        );
+        assert!(blob.remove(&b.id));
+        assert!(!blob.remove("missing"));
+        blob.retain_accounts(&HashSet::from([keep.clone()]));
+        assert_eq!(blob.for_account(&keep).len(), 1);
+        assert!(blob.get(&b.id).is_none());
+    }
+
+    #[test]
+    fn saved_search_cap_evicts_oldest() {
+        let mut blob = SavedSearchesBlob::empty();
+        let acc = AccountId::new("acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let first = blob
+            .add("first", "from:first", acc.clone(), &inbox)
+            .expect("first");
+        for i in 0..MAX_SAVED_SEARCHES - 1 {
+            blob.add(&format!("n{i}"), &format!("from:u{i}"), acc.clone(), &inbox)
+                .expect("fill");
+        }
+        assert_eq!(blob.searches.len(), MAX_SAVED_SEARCHES);
+        blob.add("new", "from:new", acc, &inbox).expect("overflow");
+        assert_eq!(blob.searches.len(), MAX_SAVED_SEARCHES);
+        assert!(blob.get(&first.id).is_none());
+        assert!(blob.searches.iter().any(|s| s.query == "from:new"));
+    }
+
+    #[test]
+    fn saved_search_matches_filter() {
+        let search = SavedSearch {
+            id: "1".into(),
+            name: "Boss unread".into(),
+            query: "from:boss is:unread".into(),
+            account_id: AccountId::new("acc"),
+            mailbox_id: "INBOX".into(),
+        };
+        assert!(search.matches_filter(""));
+        assert!(search.matches_filter("  boss  "));
+        assert!(search.matches_filter("unread boss"));
+        assert!(search.matches_filter("from:boss"));
+        assert!(!search.matches_filter("invoice"));
+    }
+
+    #[test]
+    fn saved_searches_load_save_roundtrip() {
+        host_kv::reset();
+        assert!(load_saved_searches().is_empty());
+        let acc = AccountId::new("host-acc");
+        let inbox = MailboxId::from("INBOX".to_string());
+        let saved =
+            add_saved_search("Work", "from:work is:unread", acc.clone(), &inbox).expect("save");
+        assert_eq!(load_saved_searches(), vec![saved.clone()]);
+        assert_eq!(
+            rename_saved_search(&saved.id, "Office").map(|s| s.name),
+            Some("Office".into())
+        );
+        assert!(remove_saved_search(&saved.id));
+        assert!(load_saved_searches().is_empty());
+
+        add_saved_search("Gone", "from:x", acc.clone(), &inbox).expect("save");
+        retain_saved_searches(&HashSet::new());
+        assert!(load_saved_searches().is_empty());
+
+        host_kv::with(|kv| {
+            kv.set_item(SAVED_SEARCHES_KEY, "not-json")
+                .expect("set garbage");
+        });
+        assert!(load_saved_searches().is_empty());
         host_kv::reset();
     }
 }

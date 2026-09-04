@@ -330,6 +330,8 @@ fn App() -> Element {
     let messages = use_signal(|| SparseList::new(0));
     let list_text_filter = use_signal(String::new);
     let list_search_query = use_signal(String::new);
+    let saved_searches = use_signal(crate::ui_prefs::load_saved_searches);
+    let active_saved_search = use_signal(|| None::<String>);
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
@@ -375,6 +377,8 @@ fn App() -> Element {
         messages,
         list_text_filter,
         list_search_query,
+        saved_searches,
+        active_saved_search,
         messages_loading,
         message_sort,
         message_list_density,

@@ -41,6 +41,26 @@ pub struct EmailNavigationHeaderProps {
     pub mode: Mode,
 }
 
+/// Narrow-viewport back control. Hidden on desktop by CSS.
+#[component]
+pub fn MobileBackButton() -> Element {
+    let ctx = use_context::<AppContext>();
+    rsx! {
+        button {
+            r#type: "button",
+            class: "mobile-back",
+            title: "Back",
+            aria_label: "Back",
+            onclick: move |_| ctx.mobile_back(),
+            Icon {
+                size: 20,
+                icon: IconKind::ChevronLeft,
+            }
+            "Back"
+        }
+    }
+}
+
 #[component]
 pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     let ctx = use_context::<AppContext>();
@@ -66,6 +86,10 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
     rsx! {
         header {
             class: "pane-header",
+
+            if props.mode == Mode::MessageList {
+                MobileBackButton {}
+            }
 
             Icon {
                 size: 24,

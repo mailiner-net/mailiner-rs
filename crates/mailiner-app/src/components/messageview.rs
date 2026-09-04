@@ -12,6 +12,7 @@ use mailiner_core::{AuthResults, AuthVerdict, ImapKeyword};
 
 use crate::account::AccountId;
 use crate::components::attachments::AttachmentsFooter;
+use crate::components::emailnavigation::MobileBackButton;
 use crate::components::icons::{IconButton, IconKind};
 use crate::context::{
     AppContext, MailboxPickerMode, MessageHeadersState, MessageSourceState, MessageViewState,
@@ -410,6 +411,7 @@ pub fn MessageView() -> Element {
 
             match &view {
                 MessageViewState::Empty => rsx! {
+                    MobileBackButton {}
                     div {
                         class: "message-view-empty",
                         "Select a message"
@@ -418,6 +420,8 @@ pub fn MessageView() -> Element {
                 MessageViewState::Loading { .. } => rsx! {
                     if let Some(env) = envelope {
                         MessageHeader { message: env, prefer_plain, formatted_html }
+                    } else {
+                        MobileBackButton {}
                     }
                     div {
                         class: "message-view-loading",
@@ -427,6 +431,8 @@ pub fn MessageView() -> Element {
                 MessageViewState::Error { message, .. } => rsx! {
                     if let Some(env) = envelope {
                         MessageHeader { message: env, prefer_plain, formatted_html }
+                    } else {
+                        MobileBackButton {}
                     }
                     div {
                         class: "message-view-error",
@@ -851,6 +857,7 @@ fn NestedRfc822Header(
             class: "message-view-header nested-rfc822-header",
             div {
                 class: "nested-rfc822-bar",
+                MobileBackButton {}
                 button {
                     class: "ui-btn ui-btn-secondary nested-rfc822-back",
                     r#type: "button",
@@ -1100,6 +1107,7 @@ fn MessageHeader(
             class: "message-view-header",
             div {
                 class: "message-view-headline",
+                MobileBackButton {}
                 h2 {
                     class: "message-view-subject",
                     title: "{message.subject}",

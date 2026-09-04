@@ -1,5 +1,57 @@
 //! Mail chrome layout: persisted pane sizes applied as CSS variables on `#app`.
 
+/// CSS `max-width` (px) at or below which mail chrome is one pane at a time.
+///
+/// Covers phones and typical tablet portrait (iPad 768). At 1024px and up the
+/// desktop stacked / classic chrome stays in place.
+pub const SINGLE_PANE_MAX_WIDTH_PX: f64 = 1023.0;
+
+/// Which mail pane is full-screen on a narrow viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MobilePane {
+    /// Folder tree.
+    #[default]
+    Folders,
+    /// Message list for the selected folder.
+    List,
+    /// Open message.
+    Viewer,
+}
+
+impl MobilePane {
+    /// Class on `#app` so narrow-viewport CSS can hide the other panes.
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::Folders => "pane-folders",
+            Self::List => "pane-list",
+            Self::Viewer => "pane-viewer",
+        }
+    }
+
+    /// One step toward the folder tree (viewer → list → folders).
+    pub fn back(self) -> Self {
+        match self {
+            Self::Viewer => Self::List,
+            Self::List | Self::Folders => Self::Folders,
+        }
+    }
+
+    /// Opening a folder shows the message list, even if a row is auto-selected.
+    pub fn after_select_mailbox() -> Self {
+        Self::List
+    }
+
+    /// Opening a message (tap / keyboard) shows the viewer.
+    pub fn after_select_message() -> Self {
+        Self::Viewer
+    }
+}
+
+/// `true` when `width_px` should use the single-pane chrome.
+pub fn is_single_pane_width(width_px: f64) -> bool {
+    width_px > 0.0 && width_px <= SINGLE_PANE_MAX_WIDTH_PX
+}
+
 pub const FOLDER_WIDTH_KEY: &str = "mailiner.layout.folderWidthPx";
 pub const LIST_HEIGHT_KEY: &str = "mailiner.layout.listHeightPct";
 pub const LIST_WIDTH_KEY: &str = "mailiner.layout.listWidthPx";
@@ -203,5 +255,29 @@ mod tests {
         assert_eq!(clamp_list_width_px(80.0), LIST_WIDTH_MIN);
         assert_eq!(clamp_list_width_px(999.0), LIST_WIDTH_MAX);
         assert_eq!(clamp_list_width_px(340.0), 340.0);
+    }
+
+    #[test]
+    fn single_pane_covers_phone_and_tablet_portrait() {
+        assert!(is_single_pane_width(390.0));
+        assert!(is_single_pane_width(430.0));
+        assert!(is_single_pane_width(768.0));
+        assert!(is_single_pane_width(820.0));
+        assert!(is_single_pane_width(SINGLE_PANE_MAX_WIDTH_PX));
+        assert!(!is_single_pane_width(1024.0));
+        assert!(!is_single_pane_width(1280.0));
+        assert!(!is_single_pane_width(0.0));
+    }
+
+    #[test]
+    fn mobile_pane_classes_and_back() {
+        assert_eq!(MobilePane::Folders.css_class(), "pane-folders");
+        assert_eq!(MobilePane::List.css_class(), "pane-list");
+        assert_eq!(MobilePane::Viewer.css_class(), "pane-viewer");
+        assert_eq!(MobilePane::Viewer.back(), MobilePane::List);
+        assert_eq!(MobilePane::List.back(), MobilePane::Folders);
+        assert_eq!(MobilePane::Folders.back(), MobilePane::Folders);
+        assert_eq!(MobilePane::after_select_mailbox(), MobilePane::List);
+        assert_eq!(MobilePane::after_select_message(), MobilePane::Viewer);
     }
 }

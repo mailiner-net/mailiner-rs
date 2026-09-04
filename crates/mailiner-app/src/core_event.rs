@@ -38,6 +38,7 @@ use crate::download::{
     DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAX_DOWNLOAD_BYTES,
     StreamingBlobDownload, is_previewable_content_type,
 };
+use crate::layout::MobilePane;
 use crate::mail_cache::{
     CachedFolderTree, CachedMessageList, HydratedAccount, MailCache, contiguous_envelope_prefix,
     hydrate_account,
@@ -528,6 +529,7 @@ pub async fn core_loop(
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
             }
             CoreEvent::SelectMessage(message_id) => {
+                ctx.set_mobile_pane(MobilePane::after_select_message());
                 handle_select_message(&manager, &mut ctx, message_id, true, true).await;
             }
             CoreEvent::SelectListClick {
@@ -536,10 +538,12 @@ pub async fn core_loop(
                 extend,
                 toggle,
             } => {
+                ctx.set_mobile_pane(MobilePane::after_select_message());
                 handle_select_list_click(&manager, &mut ctx, message_id, index, extend, toggle)
                     .await;
             }
             CoreEvent::SelectAdjacent { delta, extend } => {
+                ctx.set_mobile_pane(MobilePane::after_select_message());
                 handle_select_adjacent(&manager, &mut ctx, delta, extend).await;
             }
             CoreEvent::SelectAllKnown => {
@@ -552,6 +556,7 @@ pub async fn core_loop(
                 handle_select_known(&manager, &mut ctx, KnownSelect::Invert).await;
             }
             CoreEvent::SelectAdjacentUnread { delta } => {
+                ctx.set_mobile_pane(MobilePane::after_select_message());
                 handle_select_adjacent_unread(&manager, &mut ctx, delta).await;
             }
             CoreEvent::MarkRead {
@@ -1917,6 +1922,9 @@ async fn handle_select_mailbox(
     {
         return;
     }
+
+    // Folder open stays on the list even when the first row is auto-selected.
+    ctx.set_mobile_pane(MobilePane::after_select_mailbox());
 
     if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
         ctx.list_text_filter.set(String::new());

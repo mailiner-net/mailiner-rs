@@ -66,7 +66,7 @@ pub fn SettingsPage() -> Element {
                     h2 { "Appearance" }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "List density and mail layout apply immediately. Pane sizes reset the next time you open mail."
+                        "List density and mail layout apply immediately on desktop. Phone and tablet widths show one pane at a time. Pane sizes reset the next time you open mail."
                     }
                     div {
                         class: "onboarding-field",

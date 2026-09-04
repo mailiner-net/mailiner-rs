@@ -196,6 +196,7 @@ button.flat {
     flex-direction: column;
     width: 100%;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
 }
 
@@ -231,6 +232,7 @@ button.flat {
     align-items: center;
     justify-content: center;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 2rem;
     box-sizing: border-box;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -2839,6 +2841,98 @@ body:has(.compose-dock) .toast {
     gap: 0.45rem;
     font-size: var(--text-sm);
     cursor: pointer;
+}
+
+/* Hidden on desktop; shown in the single-pane media query below. */
+.mobile-back {
+    display: none;
+}
+
+/* Phone + tablet portrait: one pane at a time (folders → list → viewer).
+   Keep 1023px in sync with layout::SINGLE_PANE_MAX_WIDTH_PX.
+   Standalone so the asset pipeline keeps the rules (nested-only blocks drop). */
+@media (max-width: 1023px) {
+    .mobile-back {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        flex: 0 0 auto;
+        font: inherit;
+        font-size: var(--text-sm);
+        font-weight: 600;
+        color: var(--item-accent);
+        background: none;
+        border: none;
+        padding: 4px 6px 4px 0;
+        margin: 0;
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+    }
+
+    .mobile-back:hover,
+    .mobile-back:focus-visible {
+        background: var(--item-hover-background);
+    }
+
+    #messageview > .mobile-back {
+        margin: var(--space-2) var(--space-3);
+        align-self: flex-start;
+    }
+
+    #app.pane-folders #emailnavigation {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+    }
+
+    #app.pane-folders > .split-handle,
+    #app.pane-folders #content {
+        display: none;
+    }
+
+    #app.pane-list #emailnavigation,
+    #app.pane-list > .split-handle,
+    #app.pane-viewer #emailnavigation,
+    #app.pane-viewer > .split-handle {
+        display: none;
+    }
+
+    #app.pane-list #content,
+    #app.pane-viewer #content,
+    #app.layout-classic.pane-list #content,
+    #app.layout-classic.pane-viewer #content {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-width: 0;
+        width: 100%;
+    }
+
+    #app.pane-list #content > .split-handle,
+    #app.pane-list #content > #messageview,
+    #app.pane-viewer #content > .split-handle,
+    #app.pane-viewer #content > #messagelist {
+        display: none;
+    }
+
+    #app.pane-list #content > #messagelist,
+    #app.layout-classic.pane-list #content > #messagelist {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+        border-bottom: none;
+        border-right: none;
+        width: 100%;
+    }
+
+    #app.pane-viewer #content > #messageview,
+    #app.layout-classic.pane-viewer #content > #messageview {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        width: 100%;
+    }
 }
 
 /* Nested mail-chrome rules. Do not append new top-level CSS after this. */

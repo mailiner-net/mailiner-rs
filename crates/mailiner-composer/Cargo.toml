@@ -5,6 +5,7 @@ edition = "2021"
 description = "Email draft model, plain/rich body editors, and composer shell for Mailiner"
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
 mailiner-core = { path = "../mailiner-core" }
 mailiner-html = { path = "../mailiner-html" }
@@ -12,7 +13,25 @@ mailiner-mime = { path = "../mailiner-mime" }
 regex = "1"
 thiserror = "2.0"
 uuid = { version = "1.16", features = ["v4", "js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "ClipboardEvent",
+    "DataTransfer",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlDocument",
+    "HtmlElement",
+    "Node",
+    "Range",
+    "Selection",
+    "ShadowRoot",
+    "ShadowRootInit",
+    "ShadowRootMode",
+    "Window",
+] }
 
 [features]
 default = []
-web = []
+web = ["dep:wasm-bindgen", "dep:web-sys"]

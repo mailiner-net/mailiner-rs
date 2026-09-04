@@ -35,7 +35,7 @@ percent-encoding = "2"
 
 mailiner-imap-connector = { path = "../mailiner-imap-connector" }
 mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
-mailiner-composer = { path = "../mailiner-composer" }
+mailiner-composer = { path = "../mailiner-composer", features = ["web"] }
 futures-channel = "0.3"
 futures-executor = "0.3"
 wasm-bindgen-futures = "0.4"

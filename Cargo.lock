@@ -3334,6 +3334,7 @@ dependencies = [
 name = "mailiner-composer"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "mailiner-core",
  "mailiner-html",
@@ -3341,6 +3342,8 @@ dependencies = [
  "regex",
  "thiserror 2.0.12",
  "uuid",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

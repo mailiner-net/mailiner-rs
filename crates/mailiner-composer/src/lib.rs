@@ -28,6 +28,12 @@ pub mod reply;
 pub mod sanitize;
 pub mod shell;
 
+pub use editor::rich::editor_img_tag;
+pub use editor::{
+    default_toolbar, exec_editor_command, focus_editor, insert_editor_html, mount_editor,
+    normalize_link_href, prompt_link_href, read_editor_html, set_editor_enabled, EditorCommand,
+    ToolbarItem, EDITOR_HOST_ID,
+};
 pub use export::{
     prepare_draft, prepare_submit, PrepareSubmitError, PreparedMessage, SubmitEnvelope,
 };
@@ -46,6 +52,10 @@ pub use reply::{
 };
 pub use sanitize::{
     is_safe_image_content_type, sanitize_for_edit, sanitize_for_export, SAFE_IMAGE_ACCEPT,
+};
+pub use shell::{
+    apply_preferred_mode, capture_live_body, editor_mount_html, prepare_export_bodies,
+    switch_body_mode, SwitchBodyResult,
 };
 
 /// Crate version string (for diagnostics / about UI).

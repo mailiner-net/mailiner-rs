@@ -9,6 +9,7 @@ use mailiner_core::models::LoadedMessage;
 use crate::account::{Account, AccountId};
 use crate::components::virtual_scroll::SparseList;
 use crate::connection::ConnectionState;
+use crate::conversation::ConversationId;
 use crate::download::{DownloadStatus, revoke_object_url};
 use crate::layout::MobilePane;
 use crate::mailbox::{MailboxId, MailboxNode};
@@ -19,7 +20,7 @@ use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
 use crate::ui_prefs::{
-    ComposePlacement, MailLayout, MessageListDensity, SavedSearch, SnoozedMessage,
+    ComposePlacement, MailLayout, MessageListDensity, MessageListView, SavedSearch, SnoozedMessage,
 };
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
@@ -118,6 +119,10 @@ pub struct AppContext {
     pub message_sort: Signal<mailiner_core::MessageSort>,
     /// Virtualized message-list row density.
     pub message_list_density: Signal<MessageListDensity>,
+    /// Flat list vs conversation grouping of loaded envelopes.
+    pub message_list_view: Signal<MessageListView>,
+    /// Expanded conversation ids in the open folder (session-only).
+    pub expanded_conversations: Signal<HashSet<ConversationId>>,
     /// Quick list filters (Unread / Flagged via SEARCH; attachment chip is client-side).
     pub message_list_filter: Signal<mailiner_core::MessageListFilter>,
     /// Server advertised RFC 5256 `SORT` (Size / Sender; Date uses it when present).
@@ -336,6 +341,7 @@ impl AppContext {
         self.pinned_uids.set(Vec::new());
         self.snoozed_messages.set(Vec::new());
         self.snooze_picker_open.set(false);
+        self.expanded_conversations.write().clear();
         self.mobile_pane.set(MobilePane::default());
     }
 

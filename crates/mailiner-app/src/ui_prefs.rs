@@ -23,6 +23,45 @@ pub const MESSAGE_SORT_KEY: &str = "mailiner.ui.messageSort";
 /// `localStorage` key for the message-list row density.
 pub const MESSAGE_LIST_DENSITY_KEY: &str = "mailiner.ui.messageListDensity";
 
+/// `localStorage` key for flat vs conversation list view.
+pub const MESSAGE_LIST_VIEW_KEY: &str = "mailiner.ui.messageListView";
+
+/// How the message list groups rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MessageListView {
+    /// One row per message (original list).
+    #[default]
+    Flat,
+    /// One row per conversation (loaded folder only).
+    Conversations,
+}
+
+impl MessageListView {
+    pub const ALL: [Self; 2] = [Self::Flat, Self::Conversations];
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Conversations => "conversations",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "flat" => Some(Self::Flat),
+            "conversations" => Some(Self::Conversations),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Flat => "Messages",
+            Self::Conversations => "Conversations",
+        }
+    }
+}
+
 /// `localStorage` key: show unsubscribed folders in the tree / pickers.
 pub const SHOW_ALL_FOLDERS_KEY: &str = "mailiner.ui.showAllFolders";
 
@@ -1179,6 +1218,21 @@ pub fn save_message_list_density(density: MessageListDensity) {
     let _ = with_kv(|kv| kv.set_item(MESSAGE_LIST_DENSITY_KEY, density.as_key()));
 }
 
+pub fn load_message_list_view() -> MessageListView {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(MESSAGE_LIST_VIEW_KEY)?
+            .as_deref()
+            .and_then(MessageListView::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_message_list_view(view: MessageListView) {
+    let _ = with_kv(|kv| kv.set_item(MESSAGE_LIST_VIEW_KEY, view.as_key()));
+}
+
 pub fn load_theme() -> ThemePref {
     with_kv(|kv| {
         Ok(kv
@@ -1845,6 +1899,32 @@ mod tests {
                 .expect("set unknown density");
         });
         assert_eq!(load_message_list_density(), MessageListDensity::Comfortable);
+        host_kv::reset();
+    }
+
+    #[test]
+    fn message_list_view_encode_decode_roundtrip() {
+        for view in MessageListView::ALL {
+            assert_eq!(MessageListView::from_key(view.as_key()), Some(view));
+        }
+        assert_eq!(MessageListView::from_key("nope"), None);
+        assert_eq!(MessageListView::default(), MessageListView::Flat);
+    }
+
+    #[test]
+    fn message_list_view_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_message_list_view(), MessageListView::Flat);
+        save_message_list_view(MessageListView::Conversations);
+        assert_eq!(load_message_list_view(), MessageListView::Conversations);
+        save_message_list_view(MessageListView::Flat);
+        assert_eq!(load_message_list_view(), MessageListView::Flat);
+
+        host_kv::with(|kv| {
+            kv.set_item(MESSAGE_LIST_VIEW_KEY, "nope")
+                .expect("set unknown view");
+        });
+        assert_eq!(load_message_list_view(), MessageListView::Flat);
         host_kv::reset();
     }
 

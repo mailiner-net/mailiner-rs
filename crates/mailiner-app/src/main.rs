@@ -33,6 +33,7 @@ mod background_sync;
 mod components;
 mod connection;
 mod context;
+mod conversation;
 mod core_event;
 mod download;
 mod draft_store;
@@ -368,6 +369,8 @@ fn App() -> Element {
     let messages_loading = use_signal(|| false);
     let message_sort = use_signal(crate::ui_prefs::load_message_sort);
     let message_list_density = use_signal(crate::ui_prefs::load_message_list_density);
+    let message_list_view = use_signal(crate::ui_prefs::load_message_list_view);
+    let expanded_conversations = use_signal(HashSet::new);
     let message_list_filter = use_signal(crate::ui_prefs::load_message_list_filter);
     let sort_supports_size_sender = use_signal(|| false);
     let account_quota = use_signal(|| None);
@@ -419,6 +422,8 @@ fn App() -> Element {
         messages_loading,
         message_sort,
         message_list_density,
+        message_list_view,
+        expanded_conversations,
         message_list_filter,
         sort_supports_size_sender,
         account_quota,

@@ -14,7 +14,8 @@ use crate::shortcuts::{
     reset_shortcut,
 };
 use crate::ui_prefs::{
-    ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity, ShortcutMapBlob,
+    ComposeBodyMode, ComposePlacement, MailLayout, MessageListDensity, MessageListView,
+    ShortcutMapBlob,
 };
 use mailiner_core::ImapKeyword;
 
@@ -32,6 +33,9 @@ pub fn SettingsPage() -> Element {
     let ctx = use_context::<AppContext>();
     let mut density = ctx.message_list_density;
     let current_density = *density.read();
+    let mut list_view = ctx.message_list_view;
+    let current_view = *list_view.read();
+    let mut expanded_conversations = ctx.expanded_conversations;
     let mut mail_layout = ctx.mail_layout;
     let current_layout = *mail_layout.read();
     let mut body_mode = use_signal(crate::ui_prefs::load_compose_body_mode);
@@ -87,6 +91,30 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == current_density,
+                                    "{option.label()}"
+                                }
+                            }
+                        }
+                    }
+                    div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-list-view", "Message list grouping" }
+                        select {
+                            id: "settings-list-view",
+                            value: "{current_view.as_key()}",
+                            onchange: move |evt| {
+                                if let Some(next) = MessageListView::from_key(&evt.value()) {
+                                    crate::ui_prefs::save_message_list_view(next);
+                                    list_view.set(next);
+                                    if next == MessageListView::Flat {
+                                        expanded_conversations.write().clear();
+                                    }
+                                }
+                            },
+                            for option in MessageListView::ALL {
+                                option {
+                                    value: "{option.as_key()}",
+                                    selected: option == current_view,
                                     "{option.label()}"
                                 }
                             }

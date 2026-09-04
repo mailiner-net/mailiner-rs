@@ -34,6 +34,9 @@ use crate::connection::{
 use crate::context::{
     AppContext, AttachmentPreview, MessageHeadersState, MessageSourceState, MessageViewState,
 };
+use crate::conversation::{
+    ConversationRow, flatten_conversations, group_conversations, row_index_for_message,
+};
 use crate::download::{
     DownloadStatus, EML_DOWNLOAD_KEY, FinishedAttachment, MAIL_EXPORT_KEY, MAIL_IMPORT_KEY,
     MAX_DOWNLOAD_BYTES, StreamingBlobDownload, is_previewable_content_type, save_bytes_download,
@@ -48,6 +51,7 @@ use crate::mail_file::{
 };
 use crate::mailbox::{MailboxId, apply_live_folder_state, live_refresh_end};
 use crate::message::{Message, MessageId, next_flag_value};
+use crate::message_list_filter::message_matches_filter;
 use crate::message_loader::{adjacent_neighbor_indices, load_message};
 use crate::outbox_store::{
     MAX_OUTBOX_AUTO_ATTEMPTS, OutboxId, OutboxItem, OutboxItemState, OutboxListEntry, OutboxStore,
@@ -60,7 +64,7 @@ use crate::smtp_session::{SEND_TIMEOUT_MS, SmtpOutcome, preflight, spawn_submit,
 use crate::snippet::{SNIPPET_FETCH_OCTETS, clean_snippet};
 use crate::snooze::SnoozePreset;
 use crate::toast::{DismissCommit, MoveUndo, RemovedMessage, SnoozeUndo, ToastAction, UndoRequest};
-use crate::ui_prefs::SnoozedMessage;
+use crate::ui_prefs::{MessageListView, SnoozedMessage};
 use chrono::Utc;
 
 pub enum CoreEvent {
@@ -2128,6 +2132,9 @@ async fn select_mailbox(
     ctx.set_mobile_pane(MobilePane::after_select_mailbox());
 
     let mailbox_changed = ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id);
+    if mailbox_changed {
+        ctx.expanded_conversations.write().clear();
+    }
     let leaving_saved = !from_saved_search && ctx.active_saved_search.peek().is_some();
     if !from_saved_search {
         ctx.active_saved_search.set(None);
@@ -2954,6 +2961,105 @@ fn adjacent_fetch_range(index: usize, total: usize) -> Range<usize> {
     index.saturating_sub(5)..(index + 15).min(total)
 }
 
+fn conversation_rows_from_ctx(ctx: &AppContext) -> Vec<ConversationRow> {
+    let filter = *ctx.message_list_filter.peek();
+    let loaded: Vec<Arc<Message>> = ctx
+        .messages
+        .read()
+        .iter()
+        .filter(|m| !filter.has_attachment || message_matches_filter(m, filter))
+        .cloned()
+        .collect();
+    let conversations = group_conversations(loaded, ctx.pinned_uids.peek().as_slice());
+    flatten_conversations(&conversations, &ctx.expanded_conversations.peek())
+}
+
+async fn handle_select_adjacent_conversation(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    delta: i32,
+    extend: bool,
+) {
+    let rows = conversation_rows_from_ctx(ctx);
+    if rows.is_empty() {
+        return;
+    }
+    let current = ctx
+        .selection
+        .read()
+        .focus()
+        .and_then(|id| row_index_for_message(&rows, id));
+    let Some(index) = adjacent_index(rows.len(), current, delta) else {
+        return;
+    };
+    let message_id = rows[index].select_target().id.clone();
+    if extend {
+        let anchor = ctx
+            .selection
+            .read()
+            .anchor_index()
+            .and_then(|i| ctx.messages.read().get(i).map(|m| m.id.clone()))
+            .or_else(|| ctx.selection.read().focus().cloned())
+            .and_then(|id| row_index_for_message(&rows, &id))
+            .unwrap_or(index);
+        let (lo, hi) = if anchor <= index {
+            (anchor, index)
+        } else {
+            (index, anchor)
+        };
+        let ids: Vec<MessageId> = rows[lo..=hi]
+            .iter()
+            .flat_map(ConversationRow::selected_ids)
+            .collect();
+        let source_index = ctx.messages.read().position(|m| m.id == message_id);
+        ctx.selection
+            .write()
+            .set_range(ids, message_id.clone(), source_index);
+        snapshot_selection_unread(ctx);
+        handle_select_message(manager, ctx, message_id, false, false).await;
+        return;
+    }
+    handle_select_message(manager, ctx, message_id, true, true).await;
+}
+
+async fn handle_select_adjacent_unread_conversation(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    delta: i32,
+) {
+    let rows = conversation_rows_from_ctx(ctx);
+    if rows.is_empty() {
+        ctx.show_toast(ToastAction::info(if delta > 0 {
+            "No next unread message"
+        } else {
+            "No previous unread message"
+        }));
+        return;
+    }
+    let current = ctx
+        .selection
+        .read()
+        .focus()
+        .and_then(|id| row_index_for_message(&rows, id));
+    let mut from = current;
+    loop {
+        let Some(index) = adjacent_index(rows.len(), from, delta) else {
+            ctx.show_toast(ToastAction::info(if delta > 0 {
+                "No next unread message"
+            } else {
+                "No previous unread message"
+            }));
+            return;
+        };
+        if rows[index].is_unread() {
+            let message_id = rows[index].select_target().id.clone();
+            handle_select_message(manager, ctx, message_id, true, true).await;
+            return;
+        }
+        from = Some(index);
+    }
+}
+
 async fn handle_select_adjacent(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
@@ -2964,6 +3070,10 @@ async fn handle_select_adjacent(
         return;
     }
     if *ctx.messages_loading.peek() {
+        return;
+    }
+    if *ctx.message_list_view.peek() == MessageListView::Conversations {
+        handle_select_adjacent_conversation(manager, ctx, delta, extend).await;
         return;
     }
     // Server SEARCH already narrowed the list; only attachment stays client-side.
@@ -3072,6 +3182,10 @@ async fn handle_select_adjacent_unread(
     if *ctx.messages_loading.peek() {
         return;
     }
+    if *ctx.message_list_view.peek() == MessageListView::Conversations {
+        handle_select_adjacent_unread_conversation(manager, ctx, delta).await;
+        return;
+    }
     let mut from = unread_scan_start(ctx, delta);
     loop {
         let total = ctx.messages.read().total_count();
@@ -3118,6 +3232,36 @@ async fn handle_select_list_click(
     extend: bool,
     toggle: bool,
 ) {
+    if *ctx.message_list_view.peek() == MessageListView::Conversations && extend {
+        let rows = conversation_rows_from_ctx(ctx);
+        let Some(end) = row_index_for_message(&rows, &message_id) else {
+            handle_select_message(manager, ctx, message_id, false, false).await;
+            return;
+        };
+        let anchor = ctx
+            .selection
+            .read()
+            .anchor_index()
+            .and_then(|i| ctx.messages.read().get(i).map(|m| m.id.clone()))
+            .or_else(|| ctx.selection.read().focus().cloned())
+            .and_then(|id| row_index_for_message(&rows, &id))
+            .unwrap_or(end);
+        let (lo, hi) = if anchor <= end {
+            (anchor, end)
+        } else {
+            (end, anchor)
+        };
+        let ids: Vec<MessageId> = rows[lo..=hi]
+            .iter()
+            .flat_map(ConversationRow::selected_ids)
+            .collect();
+        ctx.selection
+            .write()
+            .set_range(ids, message_id.clone(), Some(index));
+        snapshot_selection_unread(ctx);
+        handle_select_message(manager, ctx, message_id, false, false).await;
+        return;
+    }
     if extend {
         apply_index_range_selection(manager, ctx, index).await;
         handle_select_message(manager, ctx, message_id, false, false).await;

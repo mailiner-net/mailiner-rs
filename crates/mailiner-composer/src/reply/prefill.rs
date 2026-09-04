@@ -610,7 +610,8 @@ mod tests {
             r#"<p>Hi <img src="cid:logo@x"></p>"#,
             vec![cid_png("logo@x", &png)],
         );
-        let mut d = build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
+        let mut d =
+            build_draft(ComposeIntent::Reply, &id, Some(&env), Some(&loaded), None).unwrap();
         assert!(!d.inline_images.is_empty());
         assert!(!d.html_body.is_empty());
         discard_rich_quote(&mut d);

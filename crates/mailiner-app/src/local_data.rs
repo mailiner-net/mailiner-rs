@@ -176,6 +176,7 @@ mod tests {
             id: AccountId::new("acc-1"),
             display_name: "Work".into(),
             email: "user@example.com".into(),
+            signature: None,
             imap: ImapSettings {
                 host: "imap.example.com".into(),
                 port: 993,

@@ -61,7 +61,7 @@ fn confirm_empty_trash() -> bool {
         web_sys::window()
             .and_then(|window| {
                 window
-                    .confirm_with_message("Permanently delete all messages in Trash?")
+                    .confirm_with_message(&crate::i18n::t("list.empty_trash_confirm"))
                     .ok()
             })
             .unwrap_or(false)
@@ -91,14 +91,14 @@ pub fn MobileBackButton() -> Element {
         button {
             r#type: "button",
             class: "mobile-back",
-            title: "Back",
-            aria_label: "Back",
+            title: crate::i18n::t("nav.back"),
+            aria_label: crate::i18n::t("nav.back"),
             onclick: move |_| ctx.mobile_back(),
             Icon {
                 size: 20,
                 icon: IconKind::ChevronLeft,
             }
-            "Back"
+            {crate::i18n::t("nav.back")}
         }
     }
 }
@@ -160,18 +160,18 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 class: "pane-header-title",
                 if props.mode == Mode::MessageList {
                     if unified_selected {
-                        span { "All inboxes" }
+                        span { {crate::i18n::t("list.all_inboxes")} }
                     } else if let Some(mailbox) = current_mailbox {
-                        span { "{mailbox.title()}" }
+                        span { "{mailbox.display_title()}" }
                     } else {
-                        span { "Messages" }
+                        span { {crate::i18n::t("list.messages")} }
                     }
                 } else if let Some(account) = current_account {
                     // Account name → settings list (switch / manage accounts).
                     Link {
                         to: Route::AccountsSettingsView {},
                         class: "pane-header-account-link",
-                        title: "Manage accounts",
+                        title: crate::i18n::t("nav.manage_accounts"),
                         "{account.name}"
                     }
                     if let Some(quota) = quota {
@@ -185,8 +185,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                     Link {
                         to: Route::AccountsSettingsView {},
                         class: "pane-header-account-link",
-                        title: "Manage accounts",
-                        "Accounts"
+                        title: crate::i18n::t("nav.manage_accounts"),
+                        {crate::i18n::t("nav.accounts")}
                     }
                 }
             }
@@ -195,11 +195,11 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 div {
                     class: "message-list-filters",
                     role: "group",
-                    aria_label: "Filter messages",
+                    aria_label: crate::i18n::t("list.filter"),
 
                     FilterChip {
-                        label: "Unread",
-                        title: "Show unread messages",
+                        label: crate::i18n::t("list.unread"),
+                        title: crate::i18n::t("list.unread_title"),
                         active: filter.unread,
                         on_toggle: move |_| {
                             let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
@@ -210,8 +210,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         },
                     }
                     FilterChip {
-                        label: "Flagged",
-                        title: "Show flagged messages",
+                        label: crate::i18n::t("list.flagged"),
+                        title: crate::i18n::t("list.flagged_title"),
                         active: filter.flagged,
                         on_toggle: move |_| {
                             let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
@@ -222,8 +222,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         },
                     }
                     FilterChip {
-                        label: "Attachment",
-                        title: "Show messages with attachments (among loaded messages)",
+                        label: crate::i18n::t("list.attachment"),
+                        title: crate::i18n::t("list.attachment_title"),
                         active: filter.has_attachment,
                         on_toggle: move |_| {
                             let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
@@ -237,8 +237,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
 
                 select {
                     class: "message-view-mode",
-                    aria_label: "Message list view",
-                    title: "Group messages into conversations",
+                    aria_label: crate::i18n::t("list.view"),
+                    title: crate::i18n::t("list.view_title"),
                     value: "{current_view.as_key()}",
                     onchange: move |evt| {
                         if let Some(next) = MessageListView::from_key(&evt.value()) {
@@ -253,15 +253,15 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         option {
                             value: "{option.as_key()}",
                             selected: option == current_view,
-                            "{option.label()}"
+                            {crate::i18n::t(option.label_key())}
                         }
                     }
                 }
 
                 select {
                     class: "message-density",
-                    aria_label: "Message list density",
-                    title: "List density",
+                    aria_label: crate::i18n::t("list.density"),
+                    title: crate::i18n::t("list.density_title"),
                     value: "{current_density.as_key()}",
                     onchange: move |evt| {
                         if let Some(next) = MessageListDensity::from_key(&evt.value()) {
@@ -273,15 +273,15 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         option {
                             value: "{option.as_key()}",
                             selected: option == current_density,
-                            "{option.label()}"
+                            {crate::i18n::t(option.label_key())}
                         }
                     }
                 }
 
                 select {
                     class: "message-sort",
-                    aria_label: "Sort messages",
-                    title: "Sort messages",
+                    aria_label: crate::i18n::t("list.sort"),
+                    title: crate::i18n::t("list.sort"),
                     value: "{sort.as_key()}",
                     onchange: move |evt| {
                         if let Some(next) = MessageSort::from_key(&evt.value()) {
@@ -294,13 +294,13 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             selected: option == sort,
                             disabled: option.needs_sort_capability() && !supports_size_sender,
                             title: if option == MessageSort::Date && !supports_size_sender {
-                                "IMAP SORT unavailable; using arrival order (not the Date header)"
+                                crate::i18n::t("list.sort_date_fallback")
                             } else if option.needs_sort_capability() && !supports_size_sender {
-                                "This server does not support IMAP SORT"
+                                crate::i18n::t("list.sort_unavailable")
                             } else {
-                                ""
+                                String::new()
                             },
-                            "{option.label()}"
+                            {crate::i18n::message_sort_label(option)}
                         }
                     }
                 }
@@ -316,7 +316,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         } else {
                             "folder-new mail-import is-disabled"
                         },
-                        title: "Import .eml or mbox into this folder",
+                        title: crate::i18n::t("list.import_title"),
                         input {
                             key: "{import_input_gen()}",
                             class: "compose-attach-input",
@@ -324,7 +324,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             multiple: true,
                             accept: ".eml,.mbox,message/rfc822,application/mbox",
                             disabled: !can_import,
-                            aria_label: "Import .eml or mbox",
+                            aria_label: crate::i18n::t("list.import_title"),
                             onchange: {
                                 let ctx = ctx.clone();
                                 let mailbox_id = mailbox_id.clone();
@@ -348,7 +348,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                                 }
                             },
                         }
-                        if import_busy { "Importing…" } else { "Import" }
+                        if import_busy { {crate::i18n::t("list.importing")} } else { {crate::i18n::t("list.import")} }
                     }
                 }
             }
@@ -359,8 +359,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 {
                     button {
                         class: "empty-trash",
-                        title: "Permanently delete all messages in Trash",
-                        aria_label: "Empty Trash",
+                        title: crate::i18n::t("list.empty_trash_confirm"),
+                        aria_label: crate::i18n::t("list.empty_trash"),
                         onclick: move |_| {
                             if !confirm_empty_trash() {
                                 return;
@@ -370,7 +370,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                                 mailbox_id: mailbox_id.clone(),
                             });
                         },
-                        "Empty Trash"
+                        {crate::i18n::t("list.empty_trash")}
                     }
                 }
             }
@@ -379,10 +379,10 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 if let Some(account_id) = current_account_id.clone() {
                     button {
                         class: "folder-new",
-                        title: "Create a new folder",
-                        aria_label: "New folder",
+                        title: crate::i18n::t("folder.new"),
+                        aria_label: crate::i18n::t("folder.new"),
                         onclick: move |_| {
-                            let Some(name) = prompt_folder_name("New folder name", "") else {
+                            let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
                                 return;
                             };
                             let _ = core_tx.send(CoreEvent::CreateFolder {
@@ -391,24 +391,24 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                                 name,
                             });
                         },
-                        "New folder"
+                        {crate::i18n::t("folder.new")}
                     }
                 }
                 ThemeSelect { class: "theme-select pane-header-theme", }
                 button {
                     class: "folder-subscribe-btn",
-                    title: "Choose which folders appear in the tree",
-                    aria_label: "Folder subscriptions",
+                    title: crate::i18n::t("nav.subscriptions_title"),
+                    aria_label: crate::i18n::t("nav.subscriptions"),
                     onclick: move |_| {
                         folder_subscribe_open.set(true);
                     },
-                    "Folders"
+                    {crate::i18n::t("nav.subscriptions")}
                 }
                 Link {
                     to: Route::SettingsView {},
                     class: "pane-header-settings",
-                    title: "Settings",
-                    aria_label: "Settings",
+                    title: crate::i18n::t("nav.settings"),
+                    aria_label: crate::i18n::t("nav.settings"),
                     Icon {
                         size: 22,
                         icon: IconKind::Cog6Tooth,
@@ -421,8 +421,8 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
 
 #[component]
 fn FilterChip(
-    label: &'static str,
-    title: &'static str,
+    label: String,
+    title: String,
     active: bool,
     on_toggle: EventHandler<MouseEvent>,
 ) -> Element {
@@ -431,9 +431,9 @@ fn FilterChip(
             r#type: "button",
             class: "message-filter-chip",
             class: if active { "is-active" },
-            title,
+            title: "{title}",
             aria_pressed: if active { "true" } else { "false" },
-            aria_label: title,
+            aria_label: "{title}",
             onclick: move |evt| on_toggle.call(evt),
             "{label}"
         }

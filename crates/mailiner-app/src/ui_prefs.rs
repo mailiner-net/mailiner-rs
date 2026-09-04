@@ -60,6 +60,13 @@ impl MessageListView {
             Self::Conversations => "Conversations",
         }
     }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Flat => "prefs.view_flat",
+            Self::Conversations => "prefs.view_conversations",
+        }
+    }
 }
 
 /// `localStorage` key: show unsubscribed folders in the tree / pickers.
@@ -103,6 +110,14 @@ impl MessageListDensity {
         }
     }
 
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Compact => "prefs.density_compact",
+            Self::Cozy => "prefs.density_cozy",
+            Self::Comfortable => "prefs.density_comfortable",
+        }
+    }
+
     /// Virtualized row height; must match `#messagelist` density CSS.
     pub fn item_height(self) -> f64 {
         match self {
@@ -120,6 +135,9 @@ impl MessageListDensity {
         }
     }
 }
+
+/// `localStorage` key for the UI language (`en`).
+pub const LOCALE_KEY: &str = "mailiner.ui.locale";
 
 /// `localStorage` key for the color-theme override (`system` | `light` | `dark`).
 pub const THEME_KEY: &str = "mailiner.ui.theme";
@@ -182,6 +200,14 @@ impl ThemePref {
         }
     }
 
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::System => "prefs.theme_system",
+            Self::Light => "prefs.theme_light",
+            Self::Dark => "prefs.theme_dark",
+        }
+    }
+
     /// `data-theme` on `<html>`. `None` leaves the attribute unset (OS default).
     pub fn data_theme(self) -> Option<&'static str> {
         match self {
@@ -225,6 +251,13 @@ impl ComposeBodyMode {
             Self::Rich => "Rich text",
         }
     }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Plain => "prefs.compose_plain",
+            Self::Rich => "prefs.compose_rich",
+        }
+    }
 }
 
 /// Where the composer is shown.
@@ -259,6 +292,13 @@ impl ComposePlacement {
         match self {
             Self::Modal => "Dialog",
             Self::Docked => "Docked to bottom",
+        }
+    }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Modal => "prefs.placement_modal",
+            Self::Docked => "prefs.placement_docked",
         }
     }
 
@@ -306,6 +346,13 @@ impl MailLayout {
         }
     }
 
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Stacked => "prefs.layout_stacked",
+            Self::Classic => "prefs.layout_classic",
+        }
+    }
+
     /// Class on `#app` so chrome CSS can switch pane axes.
     pub fn css_class(self) -> &'static str {
         match self {
@@ -328,6 +375,13 @@ impl RemoteImagePref {
         match self {
             Self::Allow => "Allow",
             Self::Block => "Block",
+        }
+    }
+
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Allow => "prefs.remote_allow",
+            Self::Block => "prefs.remote_block",
         }
     }
 }
@@ -1233,6 +1287,21 @@ pub fn save_message_list_view(view: MessageListView) {
     let _ = with_kv(|kv| kv.set_item(MESSAGE_LIST_VIEW_KEY, view.as_key()));
 }
 
+pub fn load_locale() -> crate::i18n::UiLocale {
+    with_kv(|kv| {
+        Ok(kv
+            .get_item(LOCALE_KEY)?
+            .as_deref()
+            .and_then(crate::i18n::UiLocale::from_key)
+            .unwrap_or_default())
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_locale(locale: crate::i18n::UiLocale) {
+    let _ = with_kv(|kv| kv.set_item(LOCALE_KEY, locale.as_key()));
+}
+
 pub fn load_theme() -> ThemePref {
     with_kv(|kv| {
         Ok(kv
@@ -1941,6 +2010,23 @@ mod tests {
         assert_eq!(load_message_list_filter(), filter);
         save_message_list_filter(MessageListFilter::default());
         assert!(load_message_list_filter().is_empty());
+        host_kv::reset();
+    }
+
+    #[test]
+    fn locale_pref_load_save_roundtrip() {
+        host_kv::reset();
+        assert_eq!(load_locale(), crate::i18n::UiLocale::En);
+        save_locale(crate::i18n::UiLocale::En);
+        assert_eq!(load_locale(), crate::i18n::UiLocale::En);
+        host_kv::with(|kv| {
+            kv.set_item(LOCALE_KEY, "nope").expect("set unknown locale");
+        });
+        assert_eq!(load_locale(), crate::i18n::UiLocale::En);
+        host_kv::with(|kv| {
+            kv.set_item(LOCALE_KEY, "en-US").expect("set en-US");
+        });
+        assert_eq!(load_locale(), crate::i18n::UiLocale::En);
         host_kv::reset();
     }
 

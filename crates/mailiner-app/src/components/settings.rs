@@ -6,6 +6,7 @@ use crate::Route;
 use crate::account::{Account, AccountId};
 use crate::address_book::{self, AddressBookError, Contact};
 use crate::context::AppContext;
+use crate::i18n::{self, UiLocale, t, t_args};
 use crate::layout::reset_saved_layout;
 use crate::mail_rules::{self, MailRule};
 use crate::mailbox::{MailboxId, flatten_mailboxes, mailbox_is_action_target};
@@ -44,6 +45,8 @@ pub fn SettingsPage() -> Element {
     let mut default_from = use_signal(crate::ui_prefs::load_default_from_account);
     let mut allow_remote = use_signal(crate::ui_prefs::load_allow_remote_images);
     let mut layout_reset = use_signal(|| false);
+    let mut locale = ctx.locale;
+    let current_locale = *locale.read();
 
     let mut accounts: Vec<_> = ctx.accounts.read().values().cloned().collect();
     accounts.sort_by(|a, b| {
@@ -63,22 +66,44 @@ pub fn SettingsPage() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card settings-card",
-                h1 { class: "bootstrap-title", "Settings" }
+                h1 { class: "bootstrap-title", {t("settings.title")} }
                 p {
                     class: "bootstrap-muted",
-                    "Appearance, composer, filters, vacation, contacts, privacy, and shortcut preferences are stored in this browser."
+                    {t("settings.intro")}
                 }
 
                 section {
                     class: "settings-section",
-                    h2 { "Appearance" }
+                    h2 { {t("settings.appearance")} }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "List density and mail layout apply immediately on desktop. Phone and tablet widths show one pane at a time. Pane sizes reset the next time you open mail."
+                        {t("settings.appearance_hint")}
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-density", "Message list density" }
+                        label { r#for: "settings-locale", {t("settings.language")} }
+                        select {
+                            id: "settings-locale",
+                            value: "{current_locale.as_key()}",
+                            onchange: move |evt| {
+                                if let Some(next) = UiLocale::from_key(&evt.value()) {
+                                    crate::ui_prefs::save_locale(next);
+                                    i18n::set_locale(next);
+                                    locale.set(next);
+                                }
+                            },
+                            for option in UiLocale::ALL {
+                                option {
+                                    value: "{option.as_key()}",
+                                    selected: option == current_locale,
+                                    "{option.native_name()}"
+                                }
+                            }
+                        }
+                    }
+                    div {
+                        class: "onboarding-field",
+                        label { r#for: "settings-density", {t("settings.density")} }
                         select {
                             id: "settings-density",
                             value: "{current_density.as_key()}",
@@ -92,14 +117,14 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == current_density,
-                                    "{option.label()}"
+                                    {t(option.label_key())}
                                 }
                             }
                         }
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-list-view", "Message list grouping" }
+                        label { r#for: "settings-list-view", {t("settings.list_view")} }
                         select {
                             id: "settings-list-view",
                             value: "{current_view.as_key()}",
@@ -116,14 +141,14 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == current_view,
-                                    "{option.label()}"
+                                    {t(option.label_key())}
                                 }
                             }
                         }
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-mail-layout", "Mail layout" }
+                        label { r#for: "settings-mail-layout", {t("settings.mail_layout")} }
                         select {
                             id: "settings-mail-layout",
                             value: "{current_layout.as_key()}",
@@ -137,7 +162,7 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == current_layout,
-                                    "{option.label()}"
+                                    {t(option.label_key())}
                                 }
                             }
                         }
@@ -151,27 +176,27 @@ pub fn SettingsPage() -> Element {
                                 reset_saved_layout();
                                 layout_reset.set(true);
                             },
-                            "Reset pane sizes"
+                            {t("settings.reset_panes")}
                         }
                     }
                     if layout_reset() {
                         p {
                             class: "bootstrap-muted settings-reset-note",
-                            "Folder width and message-list size will use the defaults when you return to mail."
+                            {t("settings.reset_note")}
                         }
                     }
                 }
 
                 section {
                     class: "settings-section",
-                    h2 { "Composer" }
+                    h2 { {t("settings.composer")} }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "The composer is a plain-text editor. Rich sends an HTML alternative of the same text. Docked keeps the mailbox visible while you write."
+                        {t("settings.composer_hint")}
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-compose-placement", "Compose window" }
+                        label { r#for: "settings-compose-placement", {t("settings.compose_window")} }
                         select {
                             id: "settings-compose-placement",
                             value: "{compose_placement().as_key()}",
@@ -185,14 +210,14 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == compose_placement(),
-                                    "{option.label()}"
+                                    {t(option.label_key())}
                                 }
                             }
                         }
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-compose-mode", "Default format" }
+                        label { r#for: "settings-compose-mode", {t("settings.default_format")} }
                         select {
                             id: "settings-compose-mode",
                             value: "{body_mode().as_key()}",
@@ -206,14 +231,14 @@ pub fn SettingsPage() -> Element {
                                 option {
                                     value: "{option.as_key()}",
                                     selected: option == body_mode(),
-                                    "{option.label()}"
+                                    {t(option.label_key())}
                                 }
                             }
                         }
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-default-from", "Default From" }
+                        label { r#for: "settings-default-from", {t("settings.default_from")} }
                         select {
                             id: "settings-default-from",
                             value: "{from_value}",
@@ -231,7 +256,7 @@ pub fn SettingsPage() -> Element {
                             option {
                                 value: "",
                                 selected: from_value.is_empty(),
-                                "Active account"
+                                {t("settings.active_account")}
                             }
                             for account in accounts.iter() {
                                 option {
@@ -252,14 +277,14 @@ pub fn SettingsPage() -> Element {
 
                 section {
                     class: "settings-section",
-                    h2 { "Privacy" }
+                    h2 { {t("settings.privacy")} }
                     p {
                         class: "bootstrap-muted settings-hint",
-                        "Remote images can tell the sender that you opened a message. Blocked by default; you can still allow them on a single message."
+                        {t("settings.privacy_hint")}
                     }
                     div {
                         class: "onboarding-field",
-                        label { r#for: "settings-remote-images", "Remote images" }
+                        label { r#for: "settings-remote-images", {t("settings.remote_images")} }
                         select {
                             id: "settings-remote-images",
                             value: if allow_remote() { "allow" } else { "block" },
@@ -271,12 +296,12 @@ pub fn SettingsPage() -> Element {
                             option {
                                 value: "block",
                                 selected: !allow_remote(),
-                                "Block by default"
+                                {t("settings.remote_block")}
                             }
                             option {
                                 value: "allow",
                                 selected: allow_remote(),
-                                "Allow by default"
+                                {t("settings.remote_allow")}
                             }
                         }
                     }
@@ -289,12 +314,12 @@ pub fn SettingsPage() -> Element {
                     Link {
                         to: Route::AccountsSettingsView {},
                         class: "onboarding-btn onboarding-btn-primary accounts-link-btn",
-                        "Accounts"
+                        {t("settings.accounts")}
                     }
                     Link {
                         to: Route::MainView {},
                         class: "onboarding-btn onboarding-btn-secondary accounts-link-btn",
-                        "Back to mail"
+                        {t("settings.back_to_mail")}
                     }
                 }
             }
@@ -314,10 +339,10 @@ fn ShortcutSettingsSection() -> Element {
     rsx! {
         section {
             class: "settings-section",
-            h2 { "Keyboard shortcuts" }
+            h2 { {t("settings.shortcuts")} }
             p {
                 class: "bootstrap-muted settings-hint",
-                "Click a key to change it. Esc cancels. Press ? from the mail view to open the help list."
+                {t("settings.shortcuts_hint")}
             }
             if has_remaps {
                 div {
@@ -331,7 +356,7 @@ fn ShortcutSettingsSection() -> Element {
                             capturing.set(None);
                             action_error.set(None);
                         },
-                        "Restore defaults"
+                        {t("settings.restore_defaults")}
                     }
                 }
             }
@@ -345,14 +370,13 @@ fn ShortcutSettingsSection() -> Element {
             for group in ShortcutGroup::ALL {
                 section {
                     class: "shortcut-group settings-shortcut-group",
-                    h3 { class: "shortcut-group-title", "{group.title()}" }
+                    h3 { class: "shortcut-group-title", {t(group.title_key())} }
                     ul {
                         class: "shortcut-list",
                         for shortcut in listed.iter().filter(|s| s.group == *group) {
                             ShortcutSettingsRow {
                                 key: "{shortcut.id.as_key()}",
                                 id: shortcut.id,
-                                description: shortcut.description,
                                 label: shortcut.label.clone(),
                                 remappable: shortcut.id.remappable(),
                                 remapped: shortcut.remapped,
@@ -371,7 +395,6 @@ fn ShortcutSettingsSection() -> Element {
 #[component]
 fn ShortcutSettingsRow(
     id: ShortcutId,
-    description: &'static str,
     label: String,
     remappable: bool,
     remapped: bool,
@@ -380,15 +403,20 @@ fn ShortcutSettingsRow(
     mut action_error: Signal<Option<String>>,
 ) -> Element {
     let is_capturing = capturing() == Some(id);
+    let description = t(id.description_key());
     let bind_class = if is_capturing {
         "shortcut-bind shortcut-bind-capturing"
     } else {
         "shortcut-bind"
     };
+    let restore_one = t_args("settings.restore_one", &[("action", &description)]);
     let aria = if is_capturing {
-        format!("Press a new key for {description}")
+        t_args("settings.press_key_for", &[("action", &description)])
     } else {
-        format!("Change shortcut for {description}, currently {label}")
+        t_args(
+            "settings.change_shortcut",
+            &[("action", &description), ("key", &label)],
+        )
     };
 
     rsx! {
@@ -441,7 +469,7 @@ fn ShortcutSettingsRow(
                             }
                         },
                         if is_capturing {
-                            "Press a key…"
+                            {t("settings.press_key")}
                         } else {
                             kbd { class: "shortcut-key", "{label}" }
                         }
@@ -450,8 +478,8 @@ fn ShortcutSettingsRow(
                         button {
                             r#type: "button",
                             class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
-                            title: "Restore default for {description}",
-                            aria_label: "Restore default for {description}",
+                            title: "{restore_one}",
+                            aria_label: "{restore_one}",
                             onclick: move |_| {
                                 match reset_shortcut(id) {
                                     Ok(()) => {
@@ -462,7 +490,7 @@ fn ShortcutSettingsRow(
                                     Err(e) => action_error.set(Some(e.message())),
                                 }
                             },
-                            "Reset"
+                            {t("settings.reset")}
                         }
                     }
                 } else {

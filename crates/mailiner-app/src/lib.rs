@@ -12,6 +12,7 @@ pub mod download;
 pub mod draft_store;
 pub mod formatter;
 pub mod headers;
+pub mod i18n;
 #[cfg(target_arch = "wasm32")]
 pub mod idb;
 pub mod keywords;

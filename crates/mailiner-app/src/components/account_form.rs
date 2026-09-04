@@ -72,14 +72,14 @@ impl StatusMessage {
     }
 }
 
-pub fn kind_label(kind: ConnectErrorKind) -> &'static str {
+pub fn kind_label(kind: ConnectErrorKind) -> String {
     match kind {
-        ConnectErrorKind::NetworkOrProxy => "Network / proxy",
-        ConnectErrorKind::TlsOrSni => "TLS / certificate",
-        ConnectErrorKind::Auth => "Sign-in failed",
-        ConnectErrorKind::Timeout => "Timed out",
-        ConnectErrorKind::Cancelled => "Cancelled",
-        ConnectErrorKind::Internal => "Error",
+        ConnectErrorKind::NetworkOrProxy => crate::i18n::t("account_form.error_network"),
+        ConnectErrorKind::TlsOrSni => crate::i18n::t("account_form.error_tls"),
+        ConnectErrorKind::Auth => crate::i18n::t("account_form.error_auth"),
+        ConnectErrorKind::Timeout => crate::i18n::t("account_form.error_timeout"),
+        ConnectErrorKind::Cancelled => crate::i18n::t("account_form.error_cancelled"),
+        ConnectErrorKind::Internal => crate::i18n::t("account_form.error_internal"),
     }
 }
 
@@ -649,9 +649,9 @@ pub fn AccountConnectionFields(
     rsx! {
         fieldset {
             class: "onboarding-section",
-            legend { "Identity" }
+            legend { {crate::i18n::t("account_form.identity")} }
             FormField {
-                label: "Display name",
+                label: crate::i18n::t("account_form.display_name"),
                 id: "{id_prefix}-display-name",
                 value: display_name,
                 oninput: move |v| set_display_name.call(v),
@@ -659,7 +659,7 @@ pub fn AccountConnectionFields(
                 disabled: busy,
             }
             FormField {
-                label: "Email",
+                label: crate::i18n::t("account_form.email"),
                 id: "{id_prefix}-email",
                 value: email.clone(),
                 oninput: {
@@ -751,7 +751,7 @@ pub fn AccountConnectionFields(
                     if looking {
                         "Looking up…"
                     } else {
-                        "Look up servers"
+                        {crate::i18n::t("account_form.lookup")}
                     }
                 }
                 p {
@@ -769,7 +769,7 @@ pub fn AccountConnectionFields(
 
         fieldset {
             class: "onboarding-section",
-            legend { "IMAP" }
+            legend { {crate::i18n::t("account_form.imap")} }
             ProviderPresetSelect {
                 id: "{id_prefix}-provider",
                 email: email.clone(),
@@ -799,7 +799,7 @@ pub fn AccountConnectionFields(
                 busy: busy,
             }
             FormField {
-                label: "Host",
+                label: crate::i18n::t("account_form.host"),
                 id: "{id_prefix}-imap-host",
                 value: imap_host,
                 oninput: move |v| {
@@ -811,7 +811,7 @@ pub fn AccountConnectionFields(
                 disabled: busy,
             }
             FormField {
-                label: "Port",
+                label: crate::i18n::t("account_form.port"),
                 id: "{id_prefix}-imap-port",
                 value: imap_port,
                 oninput: move |v| {
@@ -882,7 +882,7 @@ pub fn AccountConnectionFields(
                 }
             }
             FormField {
-                label: "Username",
+                label: crate::i18n::t("account_form.username"),
                 id: "{id_prefix}-imap-user",
                 value: imap_username,
                 oninput: move |v| {
@@ -894,7 +894,7 @@ pub fn AccountConnectionFields(
             }
             if !hide_imap_password {
                 FormField {
-                    label: "Password",
+                    label: crate::i18n::t("account_form.password"),
                     id: "{id_prefix}-imap-password",
                     value: imap_password,
                     oninput: move |v| set_imap_password.call(v),
@@ -907,14 +907,14 @@ pub fn AccountConnectionFields(
 
         fieldset {
             class: "onboarding-section",
-            legend { "Proxy (WebSocket TCP proxy)" }
+            legend { {crate::i18n::t("account_form.proxy")} }
             p {
                 class: "bootstrap-muted",
                 "Browsers cannot open plain TCP. Mailiner reaches IMAP through a \
                  WebSocket proxy (e.g. ws-tcp-proxy)."
             }
             FormField {
-                label: "Proxy base URL",
+                label: crate::i18n::t("account_form.proxy_url"),
                 id: "{id_prefix}-proxy-url",
                 value: proxy_base_url,
                 oninput: move |v| set_proxy_base_url.call(v),
@@ -923,7 +923,7 @@ pub fn AccountConnectionFields(
                 disabled: busy,
             }
             FormField {
-                label: "Proxy token",
+                label: crate::i18n::t("account_form.proxy_token"),
                 id: "{id_prefix}-proxy-token",
                 value: proxy_token,
                 oninput: move |v| set_proxy_token.call(v),
@@ -936,7 +936,7 @@ pub fn AccountConnectionFields(
                 open: open_advanced,
                 summary { "Advanced: remote override" }
                 FormField {
-                    label: "Remote host (optional)",
+                    label: crate::i18n::t("account_form.remote_host"),
                     id: "{id_prefix}-remote-host",
                     value: remote_host,
                     oninput: move |v| set_remote_host.call(v),
@@ -945,7 +945,7 @@ pub fn AccountConnectionFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "Remote port (optional)",
+                    label: crate::i18n::t("account_form.remote_port"),
                     id: "{id_prefix}-remote-port",
                     value: remote_port,
                     oninput: move |v| set_remote_port.call(v),
@@ -955,7 +955,7 @@ pub fn AccountConnectionFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "SMTP remote host (optional)",
+                    label: crate::i18n::t("account_form.smtp_remote_host"),
                     id: "{id_prefix}-smtp-remote-host",
                     value: smtp_remote_host,
                     oninput: move |v| set_smtp_remote_host.call(v),
@@ -964,7 +964,7 @@ pub fn AccountConnectionFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "SMTP remote port (optional)",
+                    label: crate::i18n::t("account_form.smtp_remote_port"),
                     id: "{id_prefix}-smtp-remote-port",
                     value: smtp_remote_port,
                     oninput: move |v| set_smtp_remote_port.call(v),
@@ -1236,7 +1236,7 @@ pub fn AccountIdentitiesFields(
     rsx! {
         fieldset {
             class: "onboarding-section",
-            legend { "From identities" }
+            legend { {crate::i18n::t("account_form.identities")} }
             p {
                 class: "bootstrap-muted",
                 "Extra names and addresses you can send from with this account. \
@@ -1249,7 +1249,7 @@ pub fn AccountIdentitiesFields(
                         class: "account-identity-row",
                         key: "{index}",
                         FormField {
-                            label: "Name",
+                            label: crate::i18n::t("account_form.identity_name"),
                             id: "{id_prefix}-identity-{index}-name",
                             value: identity.display_name.clone(),
                             oninput: {
@@ -1266,7 +1266,7 @@ pub fn AccountIdentitiesFields(
                             disabled: busy,
                         }
                         FormField {
-                            label: "Email",
+                            label: crate::i18n::t("account_form.identity_email"),
                             id: "{id_prefix}-identity-{index}-email",
                             value: identity.email.clone(),
                             oninput: {
@@ -1287,7 +1287,7 @@ pub fn AccountIdentitiesFields(
                             r#type: "button",
                             class: "onboarding-btn onboarding-btn-secondary accounts-btn-sm",
                             title: "Remove identity",
-                            aria_label: "Remove identity",
+                            aria_label: crate::i18n::t("account_form.remove_identity"),
                             disabled: busy,
                             onclick: {
                                 let identities = identities.clone();
@@ -1334,7 +1334,7 @@ pub fn AccountTlsFields(
     rsx! {
         fieldset {
             class: "onboarding-section",
-            legend { "TLS certificates" }
+            legend { {crate::i18n::t("account_form.tls")} }
             p {
                 class: "bootstrap-muted",
                 "Optional extra CA certificates (PEM) trusted in addition to public roots. \
@@ -1421,7 +1421,7 @@ pub fn AccountSignatureFields(
     rsx! {
         fieldset {
             class: "onboarding-section",
-            legend { "Signature" }
+            legend { {crate::i18n::t("account_form.signature")} }
             p {
                 class: "bootstrap-muted",
                 "Optional plain text appended to new, reply, and forward messages."
@@ -1473,7 +1473,7 @@ pub fn AccountSmtpFields(
     rsx! {
         fieldset {
             class: "onboarding-section",
-            legend { "SMTP (sending)" }
+            legend { {crate::i18n::t("account_form.smtp")} }
             p {
                 class: "onboarding-notice",
                 role: "note",
@@ -1485,7 +1485,7 @@ pub fn AccountSmtpFields(
                 open: open,
                 summary { "Optional SMTP settings" }
                 FormField {
-                    label: "SMTP host",
+                    label: crate::i18n::t("account_form.smtp_host"),
                     id: "{id_prefix}-smtp-host",
                     value: smtp_host,
                     oninput: move |v| {
@@ -1497,7 +1497,7 @@ pub fn AccountSmtpFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "SMTP port",
+                    label: crate::i18n::t("account_form.smtp_port"),
                     id: "{id_prefix}-smtp-port",
                     value: smtp_port,
                     oninput: move |v| {
@@ -1510,7 +1510,7 @@ pub fn AccountSmtpFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "SMTP username",
+                    label: crate::i18n::t("account_form.smtp_username"),
                     id: "{id_prefix}-smtp-user",
                     value: smtp_username,
                     oninput: move |v| {
@@ -1521,7 +1521,7 @@ pub fn AccountSmtpFields(
                     disabled: busy,
                 }
                 FormField {
-                    label: "SMTP password",
+                    label: crate::i18n::t("account_form.smtp_password"),
                     id: "{id_prefix}-smtp-password",
                     value: smtp_password,
                     oninput: move |v| set_smtp_password.call(v),

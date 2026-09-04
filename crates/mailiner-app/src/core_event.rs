@@ -5150,7 +5150,7 @@ async fn handle_move_messages(
                 .mailbox_nodes
                 .read()
                 .get(&dest_mailbox_id)
-                .map(|n| n.title().to_string())
+                .map(|n| n.display_title())
                 .unwrap_or_else(|| dest_mailbox_id.to_string());
             let dest_ids = dest_uids;
             if dest_ids.len() == snapshots.len() && !dest_ids.is_empty() {
@@ -5233,7 +5233,7 @@ async fn handle_copy_messages(
                     .mailbox_nodes
                     .read()
                     .get(&dest_mailbox_id)
-                    .map(|n| n.title().to_string())
+                    .map(|n| n.display_title())
                     .unwrap_or_else(|| dest_mailbox_id.to_string());
                 ctx.show_toast(ToastAction::info(format!("Copied to {dest_label}")));
             }
@@ -5652,7 +5652,7 @@ async fn handle_set_folder_subscribed(
                 .mailbox_nodes
                 .read()
                 .get(&mailbox_id)
-                .map(|n| n.title().to_string())
+                .map(|n| n.display_title())
                 .unwrap_or_else(|| mailbox_id.to_string());
             let msg = if subscribed {
                 format!("Subscribed to {title}")

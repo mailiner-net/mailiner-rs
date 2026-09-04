@@ -39,6 +39,7 @@ mod download;
 mod draft_store;
 mod formatter;
 mod headers;
+mod i18n;
 #[cfg(target_arch = "wasm32")]
 mod idb;
 mod keywords;
@@ -435,6 +436,11 @@ fn App() -> Element {
     let snooze_picker_open = use_signal(|| false);
     let account_inbox_unread = use_signal(HashMap::new);
     let unified_inbox_notes = use_signal(Vec::new);
+    let locale = use_signal(|| {
+        let locale = crate::ui_prefs::load_locale();
+        crate::i18n::set_locale(locale);
+        locale
+    });
 
     let ctx = AppContext {
         accounts,
@@ -489,6 +495,7 @@ fn App() -> Element {
         snooze_picker_open,
         account_inbox_unread,
         unified_inbox_notes,
+        locale,
     };
     let ctx_clone = ctx.clone();
 
@@ -690,7 +697,7 @@ fn MainView() -> Element {
                     evt.prevent_default();
                     crate::a11y::focus_element_by_id(crate::a11y::SKIP_TO_MESSAGE_ID);
                 },
-                "Skip to message"
+                {crate::i18n::t("nav.skip_to_message")}
             }
             div {
                 id: "app",

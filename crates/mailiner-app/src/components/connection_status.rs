@@ -101,9 +101,9 @@ pub fn ConnectionStatusBanner() -> Element {
                     r#type: "button",
                     disabled: retry_disabled,
                     title: if retry_disabled {
-                        "Reconnecting…"
+                        crate::i18n::t("connection.reconnecting")
                     } else {
-                        "Reconnect to the mail server"
+                        crate::i18n::t("connection.reconnect_tip")
                     },
                     onclick: move |_| {
                         if retry_pending() {
@@ -114,7 +114,7 @@ pub fn ConnectionStatusBanner() -> Element {
                             account_id: account_id_for_retry.clone(),
                         });
                     },
-                    if retry_disabled { "Retrying…" } else { "Retry" }
+                    if retry_disabled { {crate::i18n::t("connection.retrying")} } else { {crate::i18n::t("connection.retry")} }
                 }
             }
         }
@@ -137,25 +137,25 @@ impl StatusView {
             ConnectionState::Connecting => Self {
                 banner_class: "connection-banner connection-banner-info",
                 dot_class: "connection-banner-dot connection-banner-dot-info connection-banner-dot-pulse",
-                label: "Connecting…".into(),
+                label: crate::i18n::t("connection.connecting"),
                 detail: None,
-                tooltip: "Opening WebSocket proxy and TLS to the IMAP server".into(),
+                tooltip: crate::i18n::t("connection.connecting_tip"),
                 show_retry: false,
             },
             ConnectionState::Authenticating => Self {
                 banner_class: "connection-banner connection-banner-info",
                 dot_class: "connection-banner-dot connection-banner-dot-info connection-banner-dot-pulse",
-                label: "Signing in…".into(),
+                label: crate::i18n::t("connection.signing_in"),
                 detail: None,
-                tooltip: "Authenticating with the IMAP server".into(),
+                tooltip: crate::i18n::t("connection.signing_in_tip"),
                 show_retry: false,
             },
             ConnectionState::Ready => Self {
                 banner_class: "connection-banner connection-banner-ready",
                 dot_class: "connection-banner-dot connection-banner-dot-ready",
-                label: "Connected".into(),
+                label: crate::i18n::t("connection.connected"),
                 detail: None,
-                tooltip: "IMAP session ready".into(),
+                tooltip: crate::i18n::t("connection.connected_tip"),
                 show_retry: false,
             },
             ConnectionState::Reconnecting {
@@ -170,7 +170,7 @@ impl StatusView {
                 Self {
                     banner_class: "connection-banner connection-banner-info",
                     dot_class: "connection-banner-dot connection-banner-dot-info connection-banner-dot-pulse",
-                    label: "Reconnecting…".into(),
+                    label: crate::i18n::t("connection.reconnecting"),
                     tooltip: format!(
                         "IMAP session dropped; automatic reconnect (attempt {} of {})",
                         failed_attempts.saturating_add(1),
@@ -189,7 +189,7 @@ impl StatusView {
                 Self {
                     banner_class: "connection-banner connection-banner-error",
                     dot_class: "connection-banner-dot connection-banner-dot-error",
-                    label: kind_label.into(),
+                    label: kind_label.clone(),
                     detail: Some(message.clone()),
                     tooltip: format!("{kind_label}: {message}"),
                     show_retry: *retryable,
@@ -208,13 +208,13 @@ impl StatusView {
     }
 }
 
-fn error_kind_label(kind: ConnectErrorKind) -> &'static str {
+fn error_kind_label(kind: ConnectErrorKind) -> String {
     match kind {
-        ConnectErrorKind::NetworkOrProxy => "Connection failed",
-        ConnectErrorKind::TlsOrSni => "Secure connection failed",
-        ConnectErrorKind::Auth => "Sign-in failed",
-        ConnectErrorKind::Timeout => "Timed out",
-        ConnectErrorKind::Cancelled => "Cancelled",
-        ConnectErrorKind::Internal => "Connection error",
+        ConnectErrorKind::NetworkOrProxy => crate::i18n::t("account_form.error_network"),
+        ConnectErrorKind::TlsOrSni => crate::i18n::t("account_form.error_tls"),
+        ConnectErrorKind::Auth => crate::i18n::t("account_form.error_auth"),
+        ConnectErrorKind::Timeout => crate::i18n::t("account_form.error_timeout"),
+        ConnectErrorKind::Cancelled => crate::i18n::t("account_form.error_cancelled"),
+        ConnectErrorKind::Internal => crate::i18n::t("account_form.error_internal"),
     }
 }

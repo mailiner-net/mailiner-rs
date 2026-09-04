@@ -50,7 +50,7 @@ pub fn SplitHandle(axis: SplitAxis) -> Element {
             role: "separator",
             aria_orientation: orientation,
             tabindex: "0",
-            aria_label: "Drag to resize. Double-click to reset.",
+            aria_label: crate::i18n::t("a11y.resize"),
             onmounted: move |evt| {
                 if let Some(el) = evt.data().downcast::<web_sys::Element>() {
                     let _ = el.set_attribute("style", cursor);

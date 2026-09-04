@@ -150,9 +150,9 @@ pub fn OnboardingForm() -> Element {
                             // Drop ephemeral test key (UI-owned cleanup).
                             ctx.connection_states.write().remove(&rid);
                             test_request_id.set(None);
-                            status_message.set(Some(StatusMessage::success(
-                                "Connection successful. You can save and continue.",
-                            )));
+                            status_message.set(Some(StatusMessage::success(crate::i18n::t(
+                                "onboarding.test_ok",
+                            ))));
                         }
                         ConnectionState::Error { message, kind, .. } => {
                             if !test_seen_progress() {
@@ -238,11 +238,16 @@ pub fn OnboardingForm() -> Element {
                 test_request_id.set(Some(request_id.clone()));
                 test_seen_progress.set(true);
                 phase.set(FormPhase::Testing);
-                status_message.set(Some(StatusMessage::info("Testing connection…")));
+                status_message.set(Some(StatusMessage::info(crate::i18n::t(
+                    "onboarding.testing_status",
+                ))));
                 core_tx.send(CoreEvent::TestConnection { request_id, config });
             }
             Err(msg) => {
-                status_message.set(Some(StatusMessage::error("Validation", &msg)));
+                status_message.set(Some(StatusMessage::error(
+                    crate::i18n::t("onboarding.validation"),
+                    &msg,
+                )));
             }
         }
     };
@@ -318,16 +323,17 @@ pub fn OnboardingForm() -> Element {
                 if !passphrase.is_empty() || !confirm.is_empty() {
                     if passphrase != confirm {
                         status_message.set(Some(StatusMessage::error(
-                            "Validation",
-                            "Unlock passphrase and confirmation do not match.",
+                            crate::i18n::t("onboarding.validation"),
+                            crate::i18n::t("onboarding.passphrase_mismatch"),
                         )));
                         return;
                     }
                     if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
                         status_message.set(Some(StatusMessage::error(
-                            "Validation",
-                            format!(
-                                "Unlock passphrase must be at least {MIN_PASSPHRASE_CHARS} characters."
+                            crate::i18n::t("onboarding.validation"),
+                            crate::i18n::t_args(
+                                "onboarding.passphrase_too_short",
+                                &[("n", &MIN_PASSPHRASE_CHARS.to_string())],
                             ),
                         )));
                         return;
@@ -340,11 +346,16 @@ pub fn OnboardingForm() -> Element {
                     .insert(account_id_for_save.clone(), ConnectionState::Connecting);
                 save_seen_progress.set(true);
                 phase.set(FormPhase::Saving);
-                status_message.set(Some(StatusMessage::info("Connecting…")));
+                status_message.set(Some(StatusMessage::info(crate::i18n::t(
+                    "onboarding.connecting",
+                ))));
                 core_tx.send(CoreEvent::CommitNewAccount { config });
             }
             Err(msg) => {
-                status_message.set(Some(StatusMessage::error("Validation", &msg)));
+                status_message.set(Some(StatusMessage::error(
+                    crate::i18n::t("onboarding.validation"),
+                    &msg,
+                )));
             }
         }
     };
@@ -354,11 +365,10 @@ pub fn OnboardingForm() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
-                h1 { class: "bootstrap-title", "Welcome to Mailiner" }
+                h1 { class: "bootstrap-title", {crate::i18n::t("onboarding.title")} }
                 p {
                     class: "bootstrap-muted",
-                    "Add your first email account. Use an IMAP password (or provider \
-                     app password), or sign in with OAuth 2.0 for Gmail and Outlook."
+                    {crate::i18n::t("onboarding.intro")}
                 }
 
                 form {
@@ -460,14 +470,13 @@ pub fn OnboardingForm() -> Element {
 
                     fieldset {
                         class: "onboarding-section",
-                        legend { "Unlock passphrase (optional)" }
+                        legend { {crate::i18n::t("onboarding.unlock_optional")} }
                         p {
                             class: "bootstrap-muted",
-                            "Encrypt IMAP/SMTP passwords and the proxy token in this browser. \
-                             You will enter it once per session. Mailiner cannot recover it."
+                            {crate::i18n::t("onboarding.unlock_hint")}
                         }
                         FormField {
-                            label: "Unlock passphrase",
+                            label: crate::i18n::t("onboarding.unlock_passphrase"),
                             id: "onboarding-unlock-passphrase",
                             value: unlock_passphrase(),
                             oninput: move |v| unlock_passphrase.set(v),
@@ -476,7 +485,7 @@ pub fn OnboardingForm() -> Element {
                             disabled: busy,
                         }
                         FormField {
-                            label: "Confirm passphrase",
+                            label: crate::i18n::t("onboarding.confirm_passphrase"),
                             id: "onboarding-unlock-passphrase-confirm",
                             value: unlock_passphrase_confirm(),
                             oninput: move |v| unlock_passphrase_confirm.set(v),
@@ -496,9 +505,9 @@ pub fn OnboardingForm() -> Element {
                             disabled: busy,
                             onclick: on_test,
                             if matches!(phase(), FormPhase::Testing) {
-                                "Testing…"
+                                {crate::i18n::t("onboarding.testing")}
                             } else {
-                                "Test connection"
+                                {crate::i18n::t("onboarding.test")}
                             }
                         }
                         button {
@@ -507,9 +516,9 @@ pub fn OnboardingForm() -> Element {
                             disabled: busy,
                             onclick: on_test_smtp,
                             if matches!(phase(), FormPhase::TestingSmtp) {
-                                "Testing SMTP…"
+                                {crate::i18n::t("onboarding.testing_smtp")}
                             } else {
-                                "Test SMTP"
+                                {crate::i18n::t("onboarding.test_smtp")}
                             }
                         }
                         button {
@@ -518,9 +527,9 @@ pub fn OnboardingForm() -> Element {
                             disabled: busy,
                             onclick: on_save,
                             if matches!(phase(), FormPhase::Saving) {
-                                "Connecting…"
+                                {crate::i18n::t("onboarding.connecting")}
                             } else {
-                                "Save & continue"
+                                {crate::i18n::t("onboarding.save")}
                             }
                         }
                     }

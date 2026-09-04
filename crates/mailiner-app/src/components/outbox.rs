@@ -18,8 +18,8 @@ pub fn OutboxPanel() -> Element {
     rsx! {
         section {
             class: "outbox-panel",
-            aria_label: "Outbox",
-            h3 { "Outbox ({items.len()})" }
+            aria_label: crate::i18n::t("outbox.title"),
+            h3 { {crate::i18n::t_args("outbox.heading", &[("n", &items.len().to_string())])} }
             ul {
                 class: "outbox-list",
                 for item in items {
@@ -51,7 +51,7 @@ pub fn OutboxPanel() -> Element {
                                         core.send(CoreEvent::RetryOutboxItem { id: id.clone() });
                                     }
                                 },
-                                "Retry"
+                                {crate::i18n::t("outbox.retry")}
                             }
                             button {
                                 r#type: "button",
@@ -62,7 +62,7 @@ pub fn OutboxPanel() -> Element {
                                         core.send(CoreEvent::DeleteOutboxItem { id: id.clone() });
                                     }
                                 },
-                                "Delete"
+                                {crate::i18n::t("outbox.delete")}
                             }
                         }
                     }
@@ -72,10 +72,10 @@ pub fn OutboxPanel() -> Element {
     }
 }
 
-fn state_label(state: OutboxItemState) -> &'static str {
+fn state_label(state: OutboxItemState) -> String {
     match state {
-        OutboxItemState::Queued => "Queued",
-        OutboxItemState::Sending => "Sending",
-        OutboxItemState::Failed => "Failed",
+        OutboxItemState::Queued => crate::i18n::t("outbox.queued"),
+        OutboxItemState::Sending => crate::i18n::t("outbox.sending"),
+        OutboxItemState::Failed => crate::i18n::t("outbox.failed"),
     }
 }

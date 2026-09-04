@@ -30,6 +30,15 @@ impl SnoozePreset {
         }
     }
 
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::OneHour => "snooze.one_hour",
+            Self::ThreeHours => "snooze.three_hours",
+            Self::Tomorrow => "snooze.tomorrow",
+            Self::NextWeek => "snooze.next_week",
+        }
+    }
+
     pub fn until(self, now: DateTime<Utc>) -> DateTime<Utc> {
         match self {
             Self::OneHour => now + Duration::hours(1),
@@ -40,9 +49,9 @@ impl SnoozePreset {
     }
 }
 
-/// Short clock time for toasts (`03 Sep, 14:05`).
+/// Short clock time for toasts (`03 Sep, 14:05` in English).
 pub fn format_until(until: DateTime<Utc>) -> String {
-    until.format("%d %b, %H:%M").to_string()
+    crate::i18n::format_datetime(&until, crate::i18n::DateStyle::Snooze)
 }
 
 /// UIDs whose snooze is still in the future.

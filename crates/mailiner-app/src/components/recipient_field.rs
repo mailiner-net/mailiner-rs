@@ -52,7 +52,7 @@ fn apply_suggestion(
 
 #[component]
 pub fn RecipientField(
-    label: &'static str,
+    label: String,
     chips: Signal<Vec<ComposerAddress>>,
     draft: Signal<String>,
     disabled: bool,

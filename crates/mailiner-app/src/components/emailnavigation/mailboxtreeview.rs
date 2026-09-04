@@ -39,9 +39,9 @@ pub(crate) fn prompt_folder_name(message: &str, default: &str) -> Option<String>
 
 fn confirm_delete_folder(title: &str, has_children: bool) -> bool {
     let message = if has_children {
-        format!("Delete folder \"{title}\" and its subfolders?")
+        crate::i18n::t_args("folder.delete_with_children", &[("name", title)])
     } else {
-        format!("Delete folder \"{title}\"?")
+        crate::i18n::t_args("folder.delete", &[("name", title)])
     };
     #[cfg(feature = "web")]
     {
@@ -147,8 +147,8 @@ pub fn MailboxTreeView() -> Element {
                 class: "ui-input",
                 r#type: "text",
                 value: "{query}",
-                placeholder: "Filter folders",
-                aria_label: "Filter folders",
+                placeholder: crate::i18n::t("folder.filter"),
+                aria_label: crate::i18n::t("folder.filter"),
                 autocomplete: "off",
                 spellcheck: false,
                 oninput: move |evt| query.set(evt.value()),
@@ -163,13 +163,13 @@ pub fn MailboxTreeView() -> Element {
         div {
             id: "mailboxtreeview",
             role: "tree",
-            aria_label: "Mailboxes",
+            aria_label: crate::i18n::t("folder.mailboxes"),
             class: if drop_active { "drop-active" },
 
             if no_matches {
                 p {
                     class: "mailbox-tree-empty",
-                    "No matching folders"
+                    {crate::i18n::t("folder.no_match")}
                 }
             } else {
                 if show_unified {
@@ -188,7 +188,7 @@ pub fn MailboxTreeView() -> Element {
                 if !shown_searches.is_empty() {
                     h3 {
                         class: "saved-searches-heading",
-                        "Saved searches"
+                        {crate::i18n::t("folder.saved_searches")}
                     }
                     for search in shown_searches {
                         SavedSearchItem {
@@ -351,9 +351,9 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                 },
                 tabindex: if selectable { "0" } else { "-1" },
                 aria_label: if mailbox.unread_count > 0 {
-                    format!("{}, {} unread", mailbox.title(), mailbox.unread_count)
+                    format!("{}, {} unread", mailbox.display_title(), mailbox.unread_count)
                 } else {
-                    mailbox.title().to_string()
+                    mailbox.display_title()
                 },
 
                 onclick: {
@@ -485,7 +485,11 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         class: "flat mailbox-chevron",
                         icon: if show_children { IconKind::ChevronDown } else { IconKind::ChevronRight },
                         size: 16,
-                        title: if show_children { "Collapse folder" } else { "Expand folder" },
+                        title: if show_children {
+                            crate::i18n::t("folder.collapse")
+                        } else {
+                            crate::i18n::t("folder.expand")
+                        },
                         onclick: move |e: MouseEvent| {
                             children_visible.set(!children_visible());
                             e.stop_propagation();
@@ -503,7 +507,7 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
 
                 div {
                     class: "mailbox-name",
-                    span { class: "mailbox-title", "{mailbox.title()}" }
+                    span { class: "mailbox-title", "{mailbox.display_title()}" }
                     if mailbox.unread_count > 0 {
                         span {
                             class: "mailbox-unread",
@@ -538,16 +542,16 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
     let Some(node) = nodes.get(&menu.mailbox_id) else {
         return rsx! {};
     };
-    let title = node.title().to_string();
+    let title = node.display_title();
     let name = node.name.clone();
     let can_manage = can_manage_folder(node);
     let can_toggle = can_toggle_subscription(node);
     let has_children = !node.children.is_empty();
     let subscribed = node.subscribed;
     let toggle_label = if subscribed {
-        "Unsubscribe"
+        crate::i18n::t("folder.unsubscribe")
     } else {
-        "Subscribe"
+        crate::i18n::t("folder.subscribe")
     };
     let mailbox_id = menu.mailbox_id.clone();
     let account_id = ctx.selected_account.read().clone();
@@ -581,7 +585,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                         let Some(account_id) = create_account.clone() else {
                             return;
                         };
-                        let Some(name) = prompt_folder_name("New folder name", "") else {
+                        let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
                             return;
                         };
                         let _ = core_tx.send(CoreEvent::CreateFolder {
@@ -590,7 +594,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                             name,
                         });
                     },
-                    "New folder"
+                    {crate::i18n::t("folder.new")}
                 }
 
                 if can_manage {
@@ -604,7 +608,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                                 return;
                             };
                             let Some(new_name) =
-                                prompt_folder_name("Rename folder", &rename_current)
+                                prompt_folder_name(&crate::i18n::t("folder.rename"), &rename_current)
                             else {
                                 return;
                             };
@@ -617,7 +621,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                                 new_name,
                             });
                         },
-                        "Rename"
+                        {crate::i18n::t("common.rename")}
                     }
                     button {
                         class: "folder-menu-item is-danger",
@@ -636,7 +640,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                                 mailbox_id: delete_mailbox.clone(),
                             });
                         },
-                        "Delete"
+                        {crate::i18n::t("common.delete")}
                     }
                 }
 
@@ -664,7 +668,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                         ctx.folder_subscribe_open.set(true);
                         onclose.call(evt);
                     },
-                    "Manage subscriptions…"
+                    {crate::i18n::t("folder.manage_subscriptions")}
                 }
             }
         }
@@ -680,7 +684,7 @@ fn SavedSearchItem(search: SavedSearch, on_menu: EventHandler<SearchMenu>) -> El
         .mailbox_nodes
         .read()
         .get(&search.mailbox())
-        .map(|n| n.title().to_string())
+        .map(|n| n.display_title())
         .unwrap_or_else(|| search.mailbox_id.clone());
     let tooltip = if search.name == search.query {
         format!("{folder_title} · {}", search.query)
@@ -770,7 +774,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
                     onclick: move |evt| {
                         onclose.call(evt);
                         let Some(name) =
-                            prompt_folder_name("Rename saved search", &current_name)
+                            prompt_folder_name(&crate::i18n::t("folder.rename_search"), &current_name)
                         else {
                             return;
                         };
@@ -779,7 +783,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
                             name,
                         });
                     },
-                    "Rename"
+                    {crate::i18n::t("common.rename")}
                 }
                 button {
                     class: "folder-menu-item is-danger",
@@ -794,7 +798,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
                             id: delete_id.clone(),
                         });
                     },
-                    "Delete"
+                    {crate::i18n::t("common.delete")}
                 }
             }
         }
@@ -802,7 +806,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
 }
 
 fn confirm_delete_saved_search(name: &str) -> bool {
-    let message = format!("Delete saved search \"{name}\"?");
+    let message = crate::i18n::t_args("folder.delete_search", &[("name", name)]);
     #[cfg(feature = "web")]
     {
         web_sys::window()

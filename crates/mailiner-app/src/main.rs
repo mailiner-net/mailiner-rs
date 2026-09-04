@@ -102,6 +102,9 @@ pub(crate) enum Route {
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
+const MANIFEST_HREF: &str = "/manifest.webmanifest";
+const APPLE_TOUCH_ICON_HREF: &str = "/icons/apple-touch-icon.png";
+const THEME_COLOR: &str = "#121212";
 
 /// Baseline Content-Security-Policy for the Mailiner origin (PR7).
 ///
@@ -146,7 +149,31 @@ form-action 'self'\
 ";
 
 fn main() {
+    register_service_worker();
     dioxus::launch(App);
+}
+
+/// Register the app-shell service worker so the origin is installable.
+///
+/// No-op off wasm32 or when `navigator.serviceWorker` is missing (insecure
+/// context, unsupported browser). Mail bodies are not cached by the worker.
+fn register_service_worker() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let navigator = window.navigator();
+        if !js_sys::Reflect::has(
+            &navigator,
+            &wasm_bindgen::JsValue::from_str("serviceWorker"),
+        )
+        .unwrap_or(false)
+        {
+            return;
+        }
+        let _ = navigator.service_worker().register("/sw.js");
+    }
 }
 
 /// Result of opening the store and applying the bootstrap resolution algorithm.
@@ -449,9 +476,15 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Link { rel: "manifest", href: MANIFEST_HREF }
+        document::Link { rel: "apple-touch-icon", href: APPLE_TOUCH_ICON_HREF }
         document::Meta {
             name: "viewport",
             content: "width=device-width, initial-scale=1",
+        }
+        document::Meta {
+            name: "theme-color",
+            content: THEME_COLOR,
         }
         document::Meta {
             http_equiv: "Content-Security-Policy",

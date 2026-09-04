@@ -18,6 +18,9 @@ script = []
 # in main.rs) for local `dx serve`. Dioxus.toml has no first-class CSP field.
 # Cloudflare Pages deploy also sends the same policy as an HTTP header
 # (`_headers` in the built public dir). See README "Content-Security-Policy".
+#
+# PWA files (manifest, sw.js, icons) live in this crate's `public/` directory
+# and are copied as-is to the web output (stable paths, not asset-hashed).
 
 [web.resource.dev]
 

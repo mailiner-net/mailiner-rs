@@ -6,7 +6,10 @@ flexibility.
 ## Technology
 
 Mailiner is written in Rust using the Dioxus library. It gets cross-compiled to
-WASM in order to run in the browser.
+WASM in order to run in the browser. The web build ships a web app manifest and
+a minimal app-shell service worker so the site can be installed as a standalone
+window. The worker caches only same-origin shell files (HTML, hashed JS/CSS/WASM,
+icons); mail bodies travel over IMAP/WebSocket and are not stored there.
 
 Since browsers do not yet support creating plain TCP connections, Mailiner cannot
 establish a direct connection to the target IMAP server. To work around this, we

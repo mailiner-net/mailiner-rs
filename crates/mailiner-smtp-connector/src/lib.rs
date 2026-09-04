@@ -4,12 +4,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_smtp::authentication::{Credentials, Mechanism};
-use async_smtp::extension::{ClientId, ServerInfo};
+use async_smtp::commands::{DataCommand, MailCommand, RcptCommand};
+use async_smtp::extension::{
+    ClientId, Extension, MailBodyParameter, MailParameter, RcptParameter, ServerInfo,
+};
+use async_smtp::response::Response;
 use async_smtp::{Envelope, SendableEmail, SmtpClient, SmtpTransport};
-use mailiner_core::{AccountId, SendErrorKind, SubmitReceipt, SubmitRequest};
+use mailiner_core::{AccountId, DsnRequest, SendErrorKind, SubmitReceipt, SubmitRequest};
 use rustls::{ClientConfig, RootCertStore};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
@@ -183,14 +187,21 @@ impl SmtpConnector {
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
-        let mut transport = self
+        let (mut transport, ehlo) = self
             .open_and_auth(stream, password, expect_greeting)
             .await?;
-        let envelope = build_envelope(request)?;
-        let email = SendableEmail::new(envelope, request.rfc822.clone());
-        let response = transport.send(email).await.map_err(map_smtp_send)?;
+        let use_dsn = request.dsn.as_ref().is_some_and(DsnRequest::is_requested)
+            && ehlo_advertises_dsn(&ehlo);
+        let response = if use_dsn {
+            send_with_dsn(transport, request, &ehlo).await?
+        } else {
+            let envelope = build_envelope(request)?;
+            let email = SendableEmail::new(envelope, request.rfc822.clone());
+            let response = transport.send(email).await.map_err(map_smtp_send)?;
+            let _ = transport.quit().await;
+            response
+        };
         let reply = response.message.first().map(|s| truncate_smtp_reply(s));
-        let _ = transport.quit().await;
         Ok(SubmitReceipt {
             message_id: request.message_id.clone(),
             server_reply: reply,
@@ -206,7 +217,7 @@ impl SmtpConnector {
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
-        let mut transport = self
+        let (mut transport, _ehlo) = self
             .open_and_auth(stream, password, expect_greeting)
             .await?;
         let _ = transport.quit().await;
@@ -218,7 +229,7 @@ impl SmtpConnector {
         stream: S,
         password: &str,
         expect_greeting: bool,
-    ) -> Result<SmtpTransport<BufReader<S>>, SmtpError>
+    ) -> Result<(SmtpTransport<BufReader<S>>, Response), SmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin + Debug,
     {
@@ -235,7 +246,7 @@ impl SmtpConnector {
             .await
             .map_err(map_smtp_connect)?;
 
-        // Second EHLO so we can parse AUTH without relying on private server_info.
+        // Second EHLO so we can parse AUTH (and DSN) without private server_info.
         let ehlo = transport
             .get_mut()
             .ehlo(hello)
@@ -261,8 +272,177 @@ impl SmtpConnector {
             .auth(mechanism, &creds)
             .await
             .map_err(map_smtp_auth)?;
-        Ok(transport)
+        Ok((transport, ehlo))
     }
+}
+
+/// EHLO keyword `DSN` (RFC 3461). `ServerInfo` does not parse it.
+fn ehlo_advertises_dsn(response: &Response) -> bool {
+    response.message.iter().any(|line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(|kw| kw.eq_ignore_ascii_case("DSN"))
+    })
+}
+
+fn mail_params_for_dsn(ehlo: &Response, dsn: &DsnRequest, message_id: &str) -> Vec<MailParameter> {
+    let info = ServerInfo::from_response(ehlo).ok();
+    let mut params = Vec::new();
+    if info
+        .as_ref()
+        .is_some_and(|i| i.supports_feature(Extension::EightBitMime))
+    {
+        params.push(MailParameter::Body(MailBodyParameter::EightBitMime));
+    }
+    if info
+        .as_ref()
+        .is_some_and(|i| i.supports_feature(Extension::SmtpUtfEight))
+    {
+        params.push(MailParameter::SmtpUtfEight);
+    }
+    params.push(MailParameter::Other {
+        keyword: "RET".into(),
+        value: Some(dsn.ret.as_smtp().to_string()),
+    });
+    params.push(MailParameter::Other {
+        keyword: "ENVID".into(),
+        value: Some(dsn.envid_value(message_id)),
+    });
+    params
+}
+
+/// MAIL/RCPT with DSN params, then DATA. `transport.send` cannot attach NOTIFY/RET/ENVID.
+async fn send_with_dsn<S>(
+    transport: SmtpTransport<BufReader<S>>,
+    request: &SubmitRequest,
+    ehlo: &Response,
+) -> Result<Response, SmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug,
+{
+    let dsn = request
+        .dsn
+        .as_ref()
+        .filter(|d| d.is_requested())
+        .ok_or_else(|| {
+            SmtpError::classified(SendErrorKind::Internal, "DSN requested but missing")
+        })?;
+    let notify = dsn.notify_value().ok_or_else(|| {
+        SmtpError::classified(SendErrorKind::Internal, "DSN requested but NOTIFY empty")
+    })?;
+
+    let from = async_smtp::EmailAddress::new(request.mail_from.clone()).map_err(|e| {
+        SmtpError::classified(SendErrorKind::Internal, format!("Invalid MAIL FROM: {e}"))
+    })?;
+    let mail_params = mail_params_for_dsn(ehlo, dsn, &request.message_id);
+    let rcpt_params = vec![RcptParameter::Other {
+        keyword: "NOTIFY".into(),
+        value: Some(notify.to_string()),
+    }];
+
+    let mut stream = transport.into_inner();
+    stream
+        .command(MailCommand::new(Some(from), mail_params))
+        .await
+        .map_err(map_smtp_send)?;
+    for rcpt in &request.rcpt_to {
+        let addr = async_smtp::EmailAddress::new(rcpt.clone()).map_err(|e| {
+            SmtpError::classified(SendErrorKind::Internal, format!("Invalid RCPT TO: {e}"))
+        })?;
+        stream
+            .command(RcptCommand::new(addr, rcpt_params.clone()))
+            .await
+            .map_err(map_smtp_send)?;
+    }
+    stream.command(DataCommand).await.map_err(map_smtp_send)?;
+
+    let mut inner = stream.into_inner();
+    let stuffed = dot_stuff_message(&request.rfc822);
+    inner
+        .write_all(&stuffed)
+        .await
+        .map_err(|e| SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()))?;
+    inner
+        .flush()
+        .await
+        .map_err(|e| SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()))?;
+    let response = read_smtp_response(&mut inner).await?;
+    let _ = write_quit(&mut inner).await;
+    Ok(response)
+}
+
+/// Match `async_smtp` ClientCodec, then the DATA terminator.
+fn dot_stuff_message(frame: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(frame.len() + 16);
+    let mut escape_count = 0u8;
+    for &byte in frame {
+        match escape_count {
+            0 => escape_count = u8::from(byte == b'\r'),
+            1 => escape_count = if byte == b'\n' { 2 } else { 0 },
+            2 => {
+                if byte == b'.' {
+                    out.push(b'.');
+                    escape_count = 0;
+                } else if byte == b'\r' {
+                    escape_count = 1;
+                } else {
+                    escape_count = 0;
+                }
+            }
+            _ => escape_count = 0,
+        }
+        out.push(byte);
+    }
+    match escape_count {
+        1 => out.extend_from_slice(b"\n.\r\n"),
+        2 => out.extend_from_slice(b".\r\n"),
+        _ => out.extend_from_slice(b"\r\n.\r\n"),
+    }
+    out
+}
+
+async fn read_smtp_response<S>(stream: &mut S) -> Result<Response, SmtpError>
+where
+    S: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut buffer = String::new();
+    loop {
+        let n = stream
+            .read_line(&mut buffer)
+            .await
+            .map_err(|e| SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()))?;
+        if n == 0 {
+            return Err(SmtpError::classified(
+                SendErrorKind::NetworkOrProxy,
+                "SMTP connection closed while reading a response.",
+            ));
+        }
+        match buffer.parse::<Response>() {
+            Ok(resp) => {
+                if resp.is_positive() {
+                    return Ok(resp);
+                }
+                return Err(map_smtp_send(resp.into()));
+            }
+            Err(_) => { /* incomplete multiline reply */ }
+        }
+    }
+}
+
+async fn write_quit<S>(stream: &mut S) -> Result<(), SmtpError>
+where
+    S: AsyncWrite + tokio::io::AsyncBufRead + Unpin,
+{
+    stream
+        .write_all(b"QUIT\r\n")
+        .await
+        .map_err(|e| SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()))?;
+    stream
+        .flush()
+        .await
+        .map_err(|e| SmtpError::classified(SendErrorKind::NetworkOrProxy, e.to_string()))?;
+    let _ = read_smtp_response(stream).await;
+    Ok(())
 }
 
 fn build_envelope(request: &SubmitRequest) -> Result<Envelope, SmtpError> {
@@ -376,7 +556,56 @@ mod tests {
             rfc822: b"From: me@example.com\r\nTo: you@example.com\r\nSubject: Hi\r\n\r\nHello\r\n"
                 .to_vec(),
             message_id: "<id@example.com>".into(),
+            dsn: None,
         }
+    }
+
+    fn ehlo_auth_only() -> &'static str {
+        "250-smtp.example.com\r\n250 AUTH PLAIN LOGIN\r\n"
+    }
+
+    fn ehlo_with_dsn() -> &'static str {
+        "250-smtp.example.com\r\n250-DSN\r\n250 AUTH PLAIN LOGIN\r\n"
+    }
+
+    async fn script_greeting_and_auth(
+        server: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+        buf: &mut Vec<u8>,
+        ehlo: &str,
+    ) {
+        write_all(server, "220 smtp.example.com ESMTP\r\n").await;
+        let _ = read_cmd(server, buf).await;
+        write_all(server, ehlo).await;
+        let _ = read_cmd(server, buf).await;
+        write_all(server, ehlo).await;
+        let auth = read_cmd(server, buf).await;
+        assert!(auth.to_ascii_uppercase().contains("AUTH"), "{auth}");
+        write_all(server, "235 2.7.0 Authentication successful\r\n").await;
+    }
+
+    async fn script_data_and_quit(
+        server: &mut (impl AsyncReadExt + AsyncWriteExt + Unpin),
+        buf: &mut Vec<u8>,
+    ) {
+        let data = read_cmd(server, buf).await;
+        assert!(data.to_ascii_uppercase().contains("DATA"), "{data}");
+        write_all(server, "354 End data with <CR><LF>.<CR><LF>\r\n").await;
+        let mut body = Vec::new();
+        let mut tmp = [0u8; 1024];
+        loop {
+            let n = server.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&tmp[..n]);
+            if body.windows(5).any(|w| w == b"\r\n.\r\n") {
+                break;
+            }
+        }
+        write_all(server, "250 2.0.0 OK queued\r\n").await;
+        let quit = read_cmd(server, buf).await;
+        assert!(quit.to_ascii_uppercase().contains("QUIT"), "{quit}");
+        write_all(server, "221 2.0.0 Bye\r\n").await;
     }
 
     async fn write_all(w: &mut (impl AsyncWriteExt + Unpin), s: &str) {
@@ -596,5 +825,139 @@ mod tests {
 
         conn.test_on(client, "secret", false).await.unwrap();
         server_task.await.unwrap();
+    }
+
+    #[test]
+    fn ehlo_dsn_is_case_insensitive() {
+        let yes = Response::new(
+            async_smtp::response::Code::new(
+                async_smtp::response::Severity::PositiveCompletion,
+                async_smtp::response::Category::MailSystem,
+                async_smtp::response::Detail::Zero,
+            ),
+            vec!["smtp.example.com".into(), "dsn".into(), "AUTH PLAIN".into()],
+        );
+        let no = Response::new(
+            async_smtp::response::Code::new(
+                async_smtp::response::Severity::PositiveCompletion,
+                async_smtp::response::Category::MailSystem,
+                async_smtp::response::Detail::Zero,
+            ),
+            vec!["smtp.example.com".into(), "AUTH PLAIN".into()],
+        );
+        assert!(ehlo_advertises_dsn(&yes));
+        assert!(!ehlo_advertises_dsn(&no));
+    }
+
+    #[tokio::test]
+    async fn dsn_advertised_emits_notify_ret_envid() {
+        let (client, mut server) = duplex(64 * 1024);
+        let conn = connector();
+        let mut req = request();
+        req.dsn = DsnRequest::new(true, true);
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            script_greeting_and_auth(&mut server, &mut buf, ehlo_with_dsn()).await;
+            let mail = read_cmd(&mut server, &mut buf).await;
+            let mail_up = mail.to_ascii_uppercase();
+            assert!(mail_up.contains("MAIL FROM"), "{mail}");
+            assert!(mail_up.contains("RET=HDRS"), "{mail}");
+            assert!(mail_up.contains("ENVID=ID@EXAMPLE.COM"), "{mail}");
+            write_all(&mut server, "250 2.1.0 OK\r\n").await;
+            let rcpt = read_cmd(&mut server, &mut buf).await;
+            let rcpt_up = rcpt.to_ascii_uppercase();
+            assert!(rcpt_up.contains("RCPT TO"), "{rcpt}");
+            assert!(rcpt_up.contains("NOTIFY=SUCCESS,FAILURE"), "{rcpt}");
+            write_all(&mut server, "250 2.1.5 OK\r\n").await;
+            script_data_and_quit(&mut server, &mut buf).await;
+        });
+
+        let receipt = conn.submit(client, "secret", &req).await.unwrap();
+        assert_eq!(receipt.message_id, "<id@example.com>");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dsn_not_advertised_omits_params() {
+        let (client, mut server) = duplex(64 * 1024);
+        let conn = connector();
+        let mut req = request();
+        req.dsn = DsnRequest::new(true, false);
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            script_greeting_and_auth(&mut server, &mut buf, ehlo_auth_only()).await;
+            let mail = read_cmd(&mut server, &mut buf).await;
+            let mail_up = mail.to_ascii_uppercase();
+            assert!(mail_up.contains("MAIL FROM"), "{mail}");
+            assert!(!mail_up.contains("RET="), "{mail}");
+            assert!(!mail_up.contains("ENVID="), "{mail}");
+            write_all(&mut server, "250 2.1.0 OK\r\n").await;
+            let rcpt = read_cmd(&mut server, &mut buf).await;
+            let rcpt_up = rcpt.to_ascii_uppercase();
+            assert!(rcpt_up.contains("RCPT TO"), "{rcpt}");
+            assert!(!rcpt_up.contains("NOTIFY="), "{rcpt}");
+            write_all(&mut server, "250 2.1.5 OK\r\n").await;
+            script_data_and_quit(&mut server, &mut buf).await;
+        });
+
+        conn.submit(client, "secret", &req).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dsn_not_requested_omits_params_when_advertised() {
+        let (client, mut server) = duplex(64 * 1024);
+        let conn = connector();
+        let req = request();
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            script_greeting_and_auth(&mut server, &mut buf, ehlo_with_dsn()).await;
+            let mail = read_cmd(&mut server, &mut buf).await;
+            assert!(!mail.to_ascii_uppercase().contains("ENVID="), "{mail}");
+            write_all(&mut server, "250 2.1.0 OK\r\n").await;
+            let rcpt = read_cmd(&mut server, &mut buf).await;
+            assert!(!rcpt.to_ascii_uppercase().contains("NOTIFY="), "{rcpt}");
+            write_all(&mut server, "250 2.1.5 OK\r\n").await;
+            script_data_and_quit(&mut server, &mut buf).await;
+        });
+
+        conn.submit(client, "secret", &req).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dsn_success_only_notify() {
+        let (client, mut server) = duplex(64 * 1024);
+        let conn = connector();
+        let mut req = request();
+        req.dsn = DsnRequest::new(true, false);
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            script_greeting_and_auth(&mut server, &mut buf, ehlo_with_dsn()).await;
+            let mail = read_cmd(&mut server, &mut buf).await;
+            assert!(mail.to_ascii_uppercase().contains("RET=HDRS"), "{mail}");
+            write_all(&mut server, "250 2.1.0 OK\r\n").await;
+            let rcpt = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                rcpt.to_ascii_uppercase().contains("NOTIFY=SUCCESS")
+                    && !rcpt.to_ascii_uppercase().contains("FAILURE"),
+                "{rcpt}"
+            );
+            write_all(&mut server, "250 2.1.5 OK\r\n").await;
+            script_data_and_quit(&mut server, &mut buf).await;
+        });
+
+        conn.submit(client, "secret", &req).await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[test]
+    fn dot_stuff_terminator_and_leading_dot_after_crlf() {
+        let stuffed = dot_stuff_message(b"line1\r\n.hidden\r\nend");
+        assert_eq!(stuffed, b"line1\r\n..hidden\r\nend\r\n.\r\n");
     }
 }

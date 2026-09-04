@@ -1,5 +1,6 @@
 mod auth;
 mod bodystructure;
+mod compress;
 mod fetch_chunk;
 mod quota;
 mod section_path;
@@ -91,14 +92,55 @@ pub enum ImapTlsMode {
     None,
 }
 
-/// Session transport after connect: rustls or leftover plaintext.
+/// Session transport after connect: rustls or leftover plaintext, plus
+/// optional RFC 4978 DEFLATE after a successful `COMPRESS DEFLATE`.
 #[derive(Debug)]
-enum ImapIo<S> {
-    Tls(Box<TlsStream<S>>),
-    Plain(S),
+struct ImapIo<S> {
+    inner: Option<ImapIoKind<S>>,
 }
 
-impl<S> AsyncRead for ImapIo<S>
+#[derive(Debug)]
+enum ImapIoKind<S> {
+    Tls(Box<TlsStream<S>>),
+    Plain(S),
+    Deflate(Box<compress::DeflateIo<ImapIoKind<S>>>),
+}
+
+impl<S> ImapIo<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn tls(stream: TlsStream<S>) -> Self {
+        Self {
+            inner: Some(ImapIoKind::Tls(Box::new(stream))),
+        }
+    }
+
+    fn plain(stream: S) -> Self {
+        Self {
+            inner: Some(ImapIoKind::Plain(stream)),
+        }
+    }
+
+    /// Switch the live session stream to raw DEFLATE. Call only after the
+    /// tagged `COMPRESS DEFLATE` OK (that exchange is uncompressed).
+    fn enable_deflate(&mut self) {
+        let kind = match self.inner.take() {
+            Some(ImapIoKind::Deflate(d)) => ImapIoKind::Deflate(d),
+            Some(raw) => ImapIoKind::Deflate(Box::new(compress::DeflateIo::new(raw))),
+            None => return,
+        };
+        self.inner = Some(kind);
+    }
+
+    fn kind_mut(&mut self) -> io::Result<&mut ImapIoKind<S>> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "IMAP transport closed"))
+    }
+}
+
+impl<S> AsyncRead for ImapIoKind<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -110,6 +152,56 @@ where
         match &mut *self {
             Self::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
             Self::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            Self::Deflate(s) => Pin::new(&mut **s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<S> AsyncWrite for ImapIoKind<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
+            Self::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            Self::Deflate(s) => Pin::new(&mut **s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
+            Self::Plain(s) => Pin::new(s).poll_flush(cx),
+            Self::Deflate(s) => Pin::new(&mut **s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
+            Self::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            Self::Deflate(s) => Pin::new(&mut **s).poll_shutdown(cx),
+        }
+    }
+}
+
+impl<S> AsyncRead for ImapIo<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.kind_mut() {
+            Ok(kind) => Pin::new(kind).poll_read(cx, buf),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 }
@@ -123,23 +215,23 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match &mut *self {
-            Self::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
-            Self::Plain(s) => Pin::new(s).poll_write(cx, buf),
+        match self.kind_mut() {
+            Ok(kind) => Pin::new(kind).poll_write(cx, buf),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match &mut *self {
-            Self::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
-            Self::Plain(s) => Pin::new(s).poll_flush(cx),
+        match self.kind_mut() {
+            Ok(kind) => Pin::new(kind).poll_flush(cx),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match &mut *self {
-            Self::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
-            Self::Plain(s) => Pin::new(s).poll_shutdown(cx),
+        match self.kind_mut() {
+            Ok(kind) => Pin::new(kind).poll_shutdown(cx),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 }
@@ -188,6 +280,8 @@ where
     has_quota: AtomicBool,
     /// RFC 2177 IDLE advertised after LOGIN.
     has_idle: AtomicBool,
+    /// RFC 4978 `COMPRESS DEFLATE` is active on this session.
+    has_compress: AtomicBool,
     /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
 }
@@ -230,6 +324,7 @@ where
             has_sort: AtomicBool::new(false),
             has_quota: AtomicBool::new(false),
             has_idle: AtomicBool::new(false),
+            has_compress: AtomicBool::new(false),
             list_index: Mutex::new(None),
         }
     }
@@ -237,6 +332,11 @@ where
     /// True when the server advertised `IDLE` after LOGIN.
     pub fn supports_idle(&self) -> bool {
         self.has_idle.load(Ordering::Relaxed)
+    }
+
+    /// True when `COMPRESS DEFLATE` is active on this session.
+    pub fn supports_compress(&self) -> bool {
+        self.has_compress.load(Ordering::Relaxed)
     }
 
     /// Watch `folder_id` until it changes, `cancel` resolves, or `timeout` resolves.
@@ -546,14 +646,14 @@ where
         match *imap {
             ImapSession::Disconnected => {
                 let io = match self.tls_mode {
-                    ImapTlsMode::Implicit => ImapIo::Tls(Box::new(self.wrap_tls(stream).await?)),
+                    ImapTlsMode::Implicit => ImapIo::tls(self.wrap_tls(stream).await?),
                     ImapTlsMode::StartTls => {
                         let plain = self.starttls_handshake(stream).await?;
-                        ImapIo::Tls(Box::new(self.wrap_tls(plain).await?))
+                        ImapIo::tls(self.wrap_tls(plain).await?)
                     }
                     ImapTlsMode::None => {
                         info!(host = %self.host, "IMAP plaintext");
-                        ImapIo::Plain(stream)
+                        ImapIo::plain(stream)
                     }
                 };
                 *imap = ImapSession::Unauthenticated(Client::new(io));
@@ -1029,22 +1129,43 @@ where
         has_sort: &AtomicBool,
         has_quota: &AtomicBool,
         has_idle: &AtomicBool,
-    ) {
+    ) -> bool {
         match session.capabilities().await {
             Ok(caps) => {
                 let sort = caps.has_str("SORT");
                 let quota = caps.has_str("QUOTA");
                 let idle = caps.has_str("IDLE");
+                let compress = compress::advertises_deflate(&caps);
                 has_sort.store(sort, Ordering::Relaxed);
                 has_quota.store(quota, Ordering::Relaxed);
                 has_idle.store(idle, Ordering::Relaxed);
-                info!("IMAP capabilities: SORT={sort} QUOTA={quota} IDLE={idle}");
+                info!(
+                    "IMAP capabilities: SORT={sort} QUOTA={quota} IDLE={idle} COMPRESS={compress}"
+                );
+                compress
             }
             Err(e) => {
-                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA/IDLE");
+                tracing::warn!("CAPABILITY failed ({e}); assuming no SORT/QUOTA/IDLE/COMPRESS");
                 has_sort.store(false, Ordering::Relaxed);
                 has_quota.store(false, Ordering::Relaxed);
                 has_idle.store(false, Ordering::Relaxed);
+                false
+            }
+        }
+    }
+
+    /// RFC 4978: issue `COMPRESS DEFLATE` when advertised. On `NO`/`BAD`, keep
+    /// the uncompressed session (servers may refuse under load).
+    async fn maybe_enable_compress(session: &mut Session<ImapIo<S>>, has_compress: &AtomicBool) {
+        match session.run_command_and_check_ok("COMPRESS DEFLATE").await {
+            Ok(()) => {
+                session.as_mut().enable_deflate();
+                has_compress.store(true, Ordering::Relaxed);
+                info!("IMAP COMPRESS=DEFLATE enabled");
+            }
+            Err(e) => {
+                has_compress.store(false, Ordering::Relaxed);
+                tracing::warn!("COMPRESS DEFLATE failed ({e}); continuing uncompressed");
             }
         }
     }
@@ -1669,13 +1790,18 @@ where
                 })?);
                 clear_selected(&self.selected_mailbox);
                 if let ImapSession::Authenticated(session) = &mut *imap {
-                    Self::probe_capabilities(
+                    let try_compress = Self::probe_capabilities(
                         session,
                         &self.has_sort,
                         &self.has_quota,
                         &self.has_idle,
                     )
                     .await;
+                    if try_compress {
+                        Self::maybe_enable_compress(session, &self.has_compress).await;
+                    } else {
+                        self.has_compress.store(false, Ordering::Relaxed);
+                    }
                 }
             } else {
                 return Err(MailinerError::Connector(
@@ -2544,7 +2670,7 @@ fn part_size_from_structure(root: &BodyPart, section: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mailiner_core::ImapKeyword;
+    use mailiner_core::{EmailConnector, ImapKeyword};
 
     fn leaf(size: u64) -> BodyPart {
         BodyPart {
@@ -3308,5 +3434,137 @@ Received-SPF: pass\r\n\
             other => panic!("expected Auth, got {other:?}"),
         }
         let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn compress_deflate_enabled_when_advertised() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            expect_capability_then_login(&mut server, &mut buf).await;
+
+            let post = read_cmd(&mut server, &mut buf).await;
+            assert!(post.to_ascii_uppercase().contains("CAPABILITY"), "{post}");
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " COMPRESS=DEFLATE")).await;
+
+            let compress = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                compress.to_ascii_uppercase().contains("COMPRESS DEFLATE"),
+                "expected COMPRESS DEFLATE, got {compress}"
+            );
+            let tag = compress.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK DEFLATE active\r\n")).await;
+
+            let mut codec = crate::compress::DeflateIo::new(server);
+            let list = read_cmd(&mut codec, &mut buf).await;
+            assert!(
+                list.to_ascii_uppercase().contains("LIST"),
+                "expected compressed LIST, got {list}"
+            );
+            let tag = list.split_whitespace().next().unwrap();
+            write_all(
+                &mut codec,
+                &format!("* LIST (\\HasNoChildren) \"/\" INBOX\r\n{tag} OK LIST\r\n"),
+            )
+            .await;
+            let lsub = read_cmd(&mut codec, &mut buf).await;
+            assert!(
+                lsub.to_ascii_uppercase().contains("LSUB"),
+                "expected compressed LSUB, got {lsub}"
+            );
+            let tag = lsub.split_whitespace().next().unwrap();
+            write_all(
+                &mut codec,
+                &format!("* LSUB (\\HasNoChildren) \"/\" INBOX\r\n{tag} OK LSUB\r\n"),
+            )
+            .await;
+        });
+
+        login_plain(&conn, client).await;
+        assert!(conn.supports_compress());
+        let folders = conn
+            .list_folders(&AccountId::new("acc"))
+            .await
+            .expect("LIST over COMPRESS=DEFLATE");
+        assert!(
+            folders.iter().any(|f| f.id.as_str() == "INBOX"),
+            "{folders:?}"
+        );
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn compress_deflate_rejected_continues_uncompressed() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            expect_capability_then_login(&mut server, &mut buf).await;
+
+            let post = read_cmd(&mut server, &mut buf).await;
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " COMPRESS=DEFLATE")).await;
+
+            let compress = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                compress.to_ascii_uppercase().contains("COMPRESS DEFLATE"),
+                "{compress}"
+            );
+            let tag = compress.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} NO [COMPRESSIONACTIVE]\r\n")).await;
+
+            let logout = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                logout.to_ascii_uppercase().contains("LOGOUT"),
+                "LOGOUT must stay plaintext after COMPRESS NO, got {logout}"
+            );
+            let tag = logout.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged out\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        assert!(!conn.supports_compress());
+        conn.disconnect().await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn compress_not_sent_when_not_advertised() {
+        let (client, mut server) = tokio::io::duplex(16 * 1024);
+        let conn = connector().with_tls_mode(ImapTlsMode::None);
+
+        let server_task = tokio::spawn(async move {
+            write_all(&mut server, "* OK IMAP4rev1 ready\r\n").await;
+            let mut buf = Vec::new();
+            expect_capability_then_login(&mut server, &mut buf).await;
+
+            let post = read_cmd(&mut server, &mut buf).await;
+            assert!(post.to_ascii_uppercase().contains("CAPABILITY"), "{post}");
+            let tag = post.split_whitespace().next().unwrap();
+            write_all(&mut server, &reply_capability(tag, " IDLE")).await;
+
+            let logout = read_cmd(&mut server, &mut buf).await;
+            assert!(
+                logout.to_ascii_uppercase().contains("LOGOUT"),
+                "expected LOGOUT (no COMPRESS), got {logout}"
+            );
+            assert!(
+                !logout.to_ascii_uppercase().contains("COMPRESS"),
+                "{logout}"
+            );
+            let tag = logout.split_whitespace().next().unwrap();
+            write_all(&mut server, &format!("{tag} OK logged out\r\n")).await;
+        });
+
+        login_plain(&conn, client).await;
+        assert!(!conn.supports_compress());
+        conn.disconnect().await.unwrap();
+        server_task.await.unwrap();
     }
 }

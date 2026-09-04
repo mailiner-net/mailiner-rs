@@ -251,6 +251,8 @@ impl AppContext {
         self.mailbox_nodes.write().clear();
         self.mailbox_roots.write().clear();
         self.messages.set(SparseList::new(0));
+        self.list_text_filter.set(String::new());
+        self.list_search_query.set(String::new());
         self.messages_loading.set(false);
         self.message_sort.set(mailiner_core::MessageSort::default());
         self.sort_supports_size_sender.set(false);

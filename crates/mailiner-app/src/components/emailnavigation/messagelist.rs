@@ -175,7 +175,7 @@ pub fn MessageList() -> Element {
                         },
                         "Search"
                     }
-                    if search_active {
+                    if search_active && !filter.has_attachment {
                         span {
                             class: "message-list-filter-count",
                             aria_live: "polite",

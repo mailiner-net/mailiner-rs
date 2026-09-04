@@ -1990,7 +1990,9 @@ async fn handle_select_mailbox(
                 if let Some(id) = first_id {
                     // Unread-first / unread filter: selecting the top row would
                     // immediately consume the message the user just asked to see.
-                    let auto_mark = state.sort != MessageSort::Unread && !filter.unread;
+                    let auto_mark = state.sort != MessageSort::Unread
+                        && !filter.unread
+                        && !mailiner_core::MailboxSearch::parse(&search).has_unread();
                     handle_select_message(manager, ctx, id, auto_mark, true).await;
                 }
             }
@@ -3031,20 +3033,7 @@ async fn handle_mark_read(
     }
     relocate_unread_sort_rows(connector, ctx, &message_ids, is_read).await;
     if filter_dropped_read_rows(ctx, is_read) {
-        let focus = ctx.selection.read().focus().cloned();
-        let gone = focus
-            .as_ref()
-            .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
-        if gone {
-            let idx = ctx.selection.read().focus_at_index();
-            ctx.selection.write().clear();
-            ctx.message_view.set(MessageViewState::Empty);
-            ctx.download_status.set(HashMap::new());
-            select_after_removed_row_mark(manager, ctx, idx, false).await;
-        } else {
-            let gone: HashSet<_> = message_ids.iter().cloned().collect();
-            ctx.selection.write().remove_ids(&gone);
-        }
+        clear_selection_if_focus_gone(manager, ctx, &message_ids).await;
     }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
     persist_folder_tree(manager.cache(), ctx, &account_id).await;
@@ -3103,6 +3092,13 @@ async fn handle_toggle_flag(
             flag_label(flag)
         )));
         return;
+    }
+    if flag == EnvelopeFlag::Flagged && filter_dropped_flagged_rows(ctx, value) {
+        let idset: std::collections::HashSet<&MessageId> = message_ids.iter().collect();
+        ctx.messages
+            .write()
+            .remove_matching(|m| idset.contains(&m.id));
+        clear_selection_if_focus_gone(manager, ctx, &message_ids).await;
     }
     persist_selected_messages(manager.cache(), ctx, &account_id).await;
 }
@@ -3198,8 +3194,37 @@ fn apply_toggleable_flag(ctx: &mut AppContext, ids: &[MessageId], flag: Envelope
     }
 }
 
+fn active_mailbox_search(ctx: &AppContext) -> mailiner_core::MailboxSearch {
+    mailiner_core::MailboxSearch::parse(ctx.list_search_query.peek().as_str())
+}
+
 fn filter_dropped_read_rows(ctx: &AppContext, now_read: bool) -> bool {
-    now_read && ctx.message_list_filter.peek().unread
+    active_mailbox_search(ctx).drops_on_read_change(*ctx.message_list_filter.peek(), now_read)
+}
+
+fn filter_dropped_flagged_rows(ctx: &AppContext, now_flagged: bool) -> bool {
+    active_mailbox_search(ctx).drops_on_flagged_change(*ctx.message_list_filter.peek(), now_flagged)
+}
+
+async fn clear_selection_if_focus_gone(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_ids: &[MessageId],
+) {
+    let focus = ctx.selection.read().focus().cloned();
+    let gone = focus
+        .as_ref()
+        .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
+    if gone {
+        let idx = ctx.selection.read().focus_at_index();
+        ctx.selection.write().clear();
+        ctx.message_view.set(MessageViewState::Empty);
+        ctx.download_status.set(HashMap::new());
+        select_after_removed_row_mark(manager, ctx, idx, false).await;
+    } else {
+        let gone: HashSet<_> = message_ids.iter().cloned().collect();
+        ctx.selection.write().remove_ids(&gone);
+    }
 }
 
 /// Slide rows in the unread-first index without SELECT/SEARCH or a list rebuild.
@@ -3210,10 +3235,11 @@ async fn relocate_unread_sort_rows(
     now_read: bool,
 ) {
     let filter = *ctx.message_list_filter.peek();
-    if filter.unread && now_read {
+    let search = active_mailbox_search(ctx);
+    if search.drops_on_read_change(filter, now_read) {
         let core_ids = core_message_ids(message_ids);
-        if let Err(e) = connector.sync_unread_sort_index(&core_ids, true).await {
-            warn!("unread-filter index drop failed: {e}");
+        if let Err(e) = connector.sync_unread_sort_index(&core_ids, now_read).await {
+            warn!("search-filter index drop failed: {e}");
         }
         let idset: std::collections::HashSet<&MessageId> = message_ids.iter().collect();
         ctx.messages

@@ -876,6 +876,42 @@ fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     }
 }
 
+async fn drop_mismatched_search_uids(
+    list_index: &Mutex<Option<ListIndex>>,
+    message_ids: &[MessageId],
+    flags: &[(EnvelopeFlag, bool)],
+) {
+    let mut slot = list_index.lock().await;
+    let Some(index) = slot.as_mut() else {
+        return;
+    };
+    let parsed = mailiner_core::MailboxSearch::parse(&index.search);
+    let drop = flags.iter().any(|(flag, value)| match flag {
+        EnvelopeFlag::Read => parsed.drops_on_read_change(index.filter, *value),
+        EnvelopeFlag::Flagged => parsed.drops_on_flagged_change(index.filter, *value),
+        _ => false,
+    });
+    if !drop {
+        return;
+    }
+    let Some(uids) = index.uids.as_mut() else {
+        return;
+    };
+    for id in message_ids {
+        let Ok(uid) = id.as_uid().parse::<u32>() else {
+            continue;
+        };
+        if let Some(from) = uids.iter().position(|&u| u == uid) {
+            uids.remove(from);
+            if index.unread.is_some_and(|n| from < n) {
+                index.unread = Some(index.unread.unwrap_or(0).saturating_sub(1));
+            }
+        }
+    }
+    let total = uids.len();
+    index.total = total;
+}
+
 struct ParsedFlags {
     is_read: bool,
     is_answered: bool,
@@ -1462,6 +1498,8 @@ where
             };
             drain_uid_store(session, &uids, &query).await?;
         }
+        drop(imap);
+        drop_mismatched_search_uids(&self.list_index, message_ids, flags).await;
 
         Ok(())
     }
@@ -1478,7 +1516,9 @@ where
         let Some(uids) = index.uids.as_mut() else {
             return Ok(Vec::new());
         };
-        if index.filter.unread {
+        let parsed = mailiner_core::MailboxSearch::parse(&index.search);
+        let unseen_only = index.filter.unread || parsed.has_unread();
+        if unseen_only {
             // Unseen-only SEARCH list: drop read UIDs; insert unread at the unseen prefix.
             for id in message_ids {
                 let Ok(uid) = id.as_uid().parse::<u32>() else {
@@ -1499,6 +1539,21 @@ where
                         .unwrap_or(dest_end);
                     uids.insert(to, uid);
                     index.unread = Some(index.unread.unwrap_or(0).saturating_add(1));
+                }
+            }
+            index.total = uids.len();
+            return Ok(Vec::new());
+        }
+        if parsed.has_read() && !now_read {
+            for id in message_ids {
+                let Ok(uid) = id.as_uid().parse::<u32>() else {
+                    continue;
+                };
+                if let Some(from) = uids.iter().position(|&u| u == uid) {
+                    uids.remove(from);
+                    if index.unread.is_some_and(|n| from < n) {
+                        index.unread = Some(index.unread.unwrap_or(0).saturating_sub(1));
+                    }
                 }
             }
             index.total = uids.len();

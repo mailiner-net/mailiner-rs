@@ -80,8 +80,36 @@ impl MailboxSearch {
         self.terms.iter().any(|t| matches!(t, SearchTerm::Unread))
     }
 
+    pub fn has_read(&self) -> bool {
+        self.terms.iter().any(|t| matches!(t, SearchTerm::Read))
+    }
+
     pub fn has_flagged(&self) -> bool {
         self.terms.iter().any(|t| matches!(t, SearchTerm::Flagged))
+    }
+
+    pub fn has_unflagged(&self) -> bool {
+        self.terms
+            .iter()
+            .any(|t| matches!(t, SearchTerm::Unflagged))
+    }
+
+    /// `true` when a `\Seen` change would leave the message outside this SEARCH.
+    pub fn drops_on_read_change(&self, filter: MessageListFilter, now_read: bool) -> bool {
+        if now_read {
+            filter.unread || self.has_unread()
+        } else {
+            self.has_read()
+        }
+    }
+
+    /// `true` when a `\Flagged` change would leave the message outside this SEARCH.
+    pub fn drops_on_flagged_change(&self, filter: MessageListFilter, now_flagged: bool) -> bool {
+        if now_flagged {
+            self.has_unflagged()
+        } else {
+            filter.flagged || self.has_flagged()
+        }
     }
 
     /// Envelope match for [`crate::MockConnector`] (no per-message body).
@@ -201,8 +229,7 @@ pub fn compile_unread_sort_extra(query: &str) -> CompiledSearch {
     let mut keys = Vec::new();
     for term in &parsed.terms {
         match term {
-            SearchTerm::Unread | SearchTerm::Read | SearchTerm::Flagged | SearchTerm::Unflagged => {
-            }
+            SearchTerm::Unread | SearchTerm::Flagged => {}
             other => keys.push(other.to_imap_key()),
         }
     }
@@ -549,15 +576,40 @@ mod tests {
 
     #[test]
     fn unread_sort_extra_omits_flag_keys() {
-        let extra = compile_unread_sort_extra("from:ada is:unread is:flagged invoice");
+        let extra = compile_unread_sort_extra("from:ada is:unread is:flagged is:read invoice");
         assert_eq!(
             extra.keys,
-            r#"FROM "ada" OR OR SUBJECT "invoice" FROM "invoice" TEXT "invoice""#
+            r#"FROM "ada" SEEN OR OR SUBJECT "invoice" FROM "invoice" TEXT "invoice""#
         );
         assert_eq!(
             join_search_keys(&["UNSEEN", extra.sort_query()]),
-            r#"UNSEEN FROM "ada" OR OR SUBJECT "invoice" FROM "invoice" TEXT "invoice""#
+            r#"UNSEEN FROM "ada" SEEN OR OR SUBJECT "invoice" FROM "invoice" TEXT "invoice""#
         );
+        let extra_unflagged = compile_unread_sort_extra("is:unflagged invoice");
+        assert_eq!(
+            extra_unflagged.keys,
+            r#"UNFLAGGED OR OR SUBJECT "invoice" FROM "invoice" TEXT "invoice""#
+        );
+    }
+
+    #[test]
+    fn flag_terms_drop_when_search_would_exclude() {
+        let unread = MailboxSearch::parse("is:unread");
+        let read = MailboxSearch::parse("is:read");
+        let flagged = MailboxSearch::parse("is:flagged");
+        let unflagged = MailboxSearch::parse("is:unflagged");
+        let empty = MailboxSearch::default();
+        let chip_unread = MessageListFilter {
+            unread: true,
+            ..MessageListFilter::default()
+        };
+        assert!(unread.drops_on_read_change(MessageListFilter::default(), true));
+        assert!(!unread.drops_on_read_change(MessageListFilter::default(), false));
+        assert!(read.drops_on_read_change(MessageListFilter::default(), false));
+        assert!(empty.drops_on_read_change(chip_unread, true));
+        assert!(flagged.drops_on_flagged_change(MessageListFilter::default(), false));
+        assert!(unflagged.drops_on_flagged_change(MessageListFilter::default(), true));
+        assert!(!empty.drops_on_flagged_change(MessageListFilter::default(), false));
     }
 
     #[test]

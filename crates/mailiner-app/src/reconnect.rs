@@ -28,6 +28,7 @@ pub fn is_session_death(err: &MailinerError) -> bool {
         | MailinerError::InvalidData(_)
         | MailinerError::NotFound(_)
         | MailinerError::PartialMove { .. }
+        | MailinerError::FolderName(_)
         | MailinerError::Serialization(_) => false,
         MailinerError::Connector(msg) => is_session_death_message(msg),
     }

@@ -148,6 +148,23 @@ pub enum CoreEvent {
         account_id: AccountId,
         mailbox_id: MailboxId,
     },
+    /// CREATE a mailbox under `parent_id` (or at the root).
+    CreateFolder {
+        account_id: AccountId,
+        parent_id: Option<MailboxId>,
+        name: String,
+    },
+    /// RENAME `mailbox_id` so its last path segment is `new_name`.
+    RenameFolder {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+        new_name: String,
+    },
+    /// DELETE `mailbox_id` (and its descendants, deepest first). Inbox is refused.
+    DeleteFolder {
+        account_id: AccountId,
+        mailbox_id: MailboxId,
+    },
     /// Inverse of a toasted action (central undo).
     Undo(UndoRequest),
     /// Work held until a toast dismissed without Undo (permanent delete).
@@ -564,6 +581,26 @@ pub async fn core_loop(
                 mailbox_id,
             } => {
                 handle_empty_trash(&manager, &mut ctx, account_id, mailbox_id).await;
+            }
+            CoreEvent::CreateFolder {
+                account_id,
+                parent_id,
+                name,
+            } => {
+                handle_create_folder(&manager, &mut ctx, account_id, parent_id, name).await;
+            }
+            CoreEvent::RenameFolder {
+                account_id,
+                mailbox_id,
+                new_name,
+            } => {
+                handle_rename_folder(&manager, &mut ctx, account_id, mailbox_id, new_name).await;
+            }
+            CoreEvent::DeleteFolder {
+                account_id,
+                mailbox_id,
+            } => {
+                handle_delete_folder(&manager, &mut ctx, account_id, mailbox_id).await;
             }
             CoreEvent::Undo(undo) => {
                 handle_undo(&manager, &mut ctx, undo).await;
@@ -3353,6 +3390,140 @@ async fn handle_empty_trash(
             ctx.show_toast(ToastAction::error(format!("Could not empty Trash: {e}")));
         }
     }
+}
+
+async fn handle_create_folder(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    parent_id: Option<MailboxId>,
+    name: String,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+    let parent = parent_id.as_ref().map(|id| FolderId::new(id.to_string()));
+    match connector
+        .create_folder(&account_id, &name, parent.as_ref())
+        .await
+    {
+        Ok(folder) => {
+            info!("Created folder {}", folder.id.as_str());
+            list_folders_soft(manager, ctx, &account_id).await;
+            ctx.show_toast(ToastAction::info(format!("Created folder {}", folder.name)));
+        }
+        Err(e) => {
+            error!("Failed to create folder: {e}");
+            ctx.show_toast(ToastAction::error(format!("Could not create folder: {e}")));
+        }
+    }
+}
+
+async fn handle_rename_folder(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+    new_name: String,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    let can_rename = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(crate::mailbox::can_manage_folder);
+    if !can_rename {
+        ctx.show_toast(ToastAction::error("Cannot rename Inbox"));
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+    let folder_id = FolderId::new(mailbox_id.to_string());
+    match connector.rename_folder(&folder_id, &new_name).await {
+        Ok(folder) => {
+            let new_id = MailboxId::from(folder.id.clone());
+            let nodes = ctx.mailbox_nodes.read().clone();
+            if let Some(next) = ctx.selected_mailbox.read().as_ref().and_then(|sel| {
+                crate::mailbox::remap_renamed_mailbox(&mailbox_id, &new_id, sel, &nodes)
+            }) {
+                crate::ui_prefs::save_last_mailbox(&account_id, &next);
+            }
+            for id in crate::mailbox::mailbox_subtree_deepest_first(&mailbox_id, &nodes) {
+                invalidate_mailbox_messages(manager.cache(), &account_id, &id).await;
+            }
+            list_folders_soft(manager, ctx, &account_id).await;
+            ctx.show_toast(ToastAction::info(format!(
+                "Renamed folder to {}",
+                folder.name
+            )));
+        }
+        Err(e) => {
+            error!("Failed to rename folder: {e}");
+            ctx.show_toast(ToastAction::error(format!("Could not rename folder: {e}")));
+        }
+    }
+}
+
+async fn handle_delete_folder(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    account_id: AccountId,
+    mailbox_id: MailboxId,
+) {
+    if !selected_account_is(ctx, &account_id) {
+        return;
+    }
+    let can_delete = ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_some_and(crate::mailbox::can_manage_folder);
+    if !can_delete {
+        ctx.show_toast(ToastAction::error("Cannot delete Inbox"));
+        return;
+    }
+    let Some(connector) = manager.get(&account_id) else {
+        ctx.show_toast(ToastAction::error("Not connected"));
+        return;
+    };
+
+    let selected = ctx.selected_mailbox.read().clone();
+    let nodes = ctx.mailbox_nodes.read().clone();
+    let to_delete: Vec<MailboxId> =
+        crate::mailbox::mailbox_subtree_deepest_first(&mailbox_id, &nodes)
+            .into_iter()
+            .filter(|id| nodes.get(id).is_some_and(crate::mailbox::can_manage_folder))
+            .collect();
+    let selected_hit = selected.as_ref().is_some_and(|sel| {
+        to_delete.iter().any(|id| id == sel)
+            || crate::mailbox::mailbox_is_ancestor(&mailbox_id, sel, &nodes)
+    });
+    if selected_hit {
+        if let Some(inbox) = crate::mailbox::find_mailbox_with_role(&nodes, MailboxRole::Inbox) {
+            crate::ui_prefs::save_last_mailbox(&account_id, &inbox);
+        }
+    }
+
+    for id in &to_delete {
+        let folder_id = FolderId::new(id.to_string());
+        if let Err(e) = connector.delete_folder(&folder_id).await {
+            error!("Failed to delete folder {}: {e}", id.as_str());
+            ctx.show_toast(ToastAction::error(format!("Could not delete folder: {e}")));
+            list_folders_soft(manager, ctx, &account_id).await;
+            return;
+        }
+        invalidate_mailbox_messages(manager.cache(), &account_id, id).await;
+    }
+    list_folders_soft(manager, ctx, &account_id).await;
+    ctx.show_toast(ToastAction::info("Folder deleted"));
 }
 
 async fn schedule_permanent_delete(

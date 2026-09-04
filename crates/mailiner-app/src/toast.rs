@@ -213,6 +213,7 @@ mod tests {
             has_attachments: false,
             size: None,
             snippet: None,
+            auth_results: Default::default(),
         };
         Arc::new(envelope.into())
     }

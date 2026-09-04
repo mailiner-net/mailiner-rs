@@ -8,6 +8,7 @@ use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
 
 use mailiner_core::MailboxRole;
 use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
+use mailiner_core::{AuthResults, AuthVerdict};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::components::icons::{IconButton, IconKind};
@@ -1302,8 +1303,43 @@ fn MessageHeader(
                     span { class: "message-view-meta-k", "Date" }
                     " {date}"
                 }
+                AuthResultsRow { auth: message.envelope.auth_results }
             }
             SenderCueBanner { cues: sender_cues }
+        }
+    }
+}
+
+#[component]
+fn AuthResultsRow(auth: AuthResults) -> Element {
+    if auth.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        span {
+            class: "message-view-meta-item message-auth",
+            title: "From Authentication-Results (not verified locally)",
+            role: if auth.any_fail() { Some("status") } else { None },
+            span { class: "message-view-meta-k", "Auth" }
+            " "
+            for (method, verdict) in auth.methods() {
+                AuthChip { method, verdict }
+            }
+        }
+    }
+}
+
+#[component]
+fn AuthChip(method: &'static str, verdict: AuthVerdict) -> Element {
+    let class = match verdict {
+        AuthVerdict::Pass => "message-auth-chip is-pass",
+        AuthVerdict::Fail => "message-auth-chip is-fail",
+        AuthVerdict::Neutral => "message-auth-chip is-neutral",
+    };
+    rsx! {
+        span {
+            class: "{class}",
+            "{method} {verdict.as_str()}"
         }
     }
 }

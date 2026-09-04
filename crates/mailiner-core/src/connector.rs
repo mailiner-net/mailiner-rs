@@ -212,6 +212,11 @@ fn mock_envelopes(folder_id: &FolderId, range: Range<usize>) -> Result<Vec<Envel
             has_attachments: n.is_multiple_of(2),
             size: Some(1_000 + ((n * 37) % 97) as u64 * 100),
             snippet: None,
+            auth_results: crate::AuthResults {
+                spf: Some(crate::AuthVerdict::Pass),
+                dkim: Some(crate::AuthVerdict::Pass),
+                dmarc: Some(crate::AuthVerdict::Pass),
+            },
         });
     }
     Ok(envelopes)
@@ -290,6 +295,8 @@ Subject: Test Message\r\n\
 Date: Wed, 01 Jan 2020 00:00:00 +0000\r\n\
 Message-ID: <mock@example.com>\r\n\
 MIME-Version: 1.0\r\n\
+Authentication-Results: example.com; dkim=pass header.i=@example.com;\r\n\
+\tspf=pass smtp.mailfrom=sender@example.com; dmarc=pass header.from=example.com\r\n\
 Content-Type: multipart/mixed; boundary=\"----=_mock\"\r\n\
 \r\n";
 

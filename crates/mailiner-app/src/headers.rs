@@ -76,4 +76,13 @@ mod tests {
         assert!(!text.contains('\r'));
         assert!(text.ends_with("\n\n"));
     }
+
+    #[test]
+    fn mock_headers_include_auth_results() {
+        let auth =
+            mailiner_core::AuthResults::from_header_bytes(mailiner_core::MOCK_RFC822_HEADERS);
+        assert_eq!(auth.spf, Some(mailiner_core::AuthVerdict::Pass));
+        assert_eq!(auth.dkim, Some(mailiner_core::AuthVerdict::Pass));
+        assert_eq!(auth.dmarc, Some(mailiner_core::AuthVerdict::Pass));
+    }
 }

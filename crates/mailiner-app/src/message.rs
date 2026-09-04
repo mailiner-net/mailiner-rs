@@ -186,6 +186,7 @@ mod tests {
             has_attachments: false,
             size: None,
             snippet: None,
+            auth_results: Default::default(),
         };
         let msg = Message::from(envelope.clone());
         assert_eq!(msg.cc.as_deref(), Some("Cc Name <cc@example.com>"));
@@ -242,6 +243,7 @@ mod tests {
             has_attachments: false,
             size: None,
             snippet: Some("Hello preview".into()),
+            auth_results: Default::default(),
         };
         let msg = Message::from(envelope);
         assert!(msg.is_answered);
@@ -315,6 +317,7 @@ mod tests {
             has_attachments: false,
             size: None,
             snippet: None,
+            auth_results: Default::default(),
         };
         let msg = Message::from(envelope);
         assert_eq!(msg.sender_email(), Some("ada@example.com"));

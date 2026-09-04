@@ -726,8 +726,10 @@ mod tests {
         let sig = parts
             .iter()
             .find(|p| p.content_type.contains("pgp-signature"))
-            .expect("pgp signature stays an attachment");
-        assert!(!sig.is_hidden);
+            .expect("pgp signature part");
+        // Hidden as OpenPGP crypto (prefetch), not as S/MIME.
+        assert!(sig.is_hidden);
+        assert!(sig.should_prefetch());
         assert!(!mailiner_core::is_smime_mime(&sig.content_type));
     }
 

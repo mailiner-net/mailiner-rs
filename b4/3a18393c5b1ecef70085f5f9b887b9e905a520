@@ -1,0 +1,36 @@
+README.md
+  s_8620e64a1e2571::t_1ce0ceefeb27ab 9-12
+crates/mailiner-app/Dioxus.toml
+  s_8620e64a1e2571::t_cd5bb096218711 21-23
+crates/mailiner-app/public/sw.js
+  s_8620e64a1e2571::t_cea2ac0aa807ed 1-92
+e2e/tests/app.spec.ts
+  s_8620e64a1e2571::t_cf4862418ce818 24-88
+crates/mailiner-app/Cargo.toml
+  s_8620e64a1e2571::t_ae9eb420e39ee9 82
+crates/mailiner-app/README.md
+  s_8620e64a1e2571::t_ed4ec4cca93148 27-29
+.github/workflows/build-test.yml
+  s_8620e64a1e2571::t_7075a4e430abc9 145-154,173-180
+crates/mailiner-app/public/manifest.webmanifest
+  s_8620e64a1e2571::t_f19fe3f9ac74aa 1-40
+crates/mailiner-app/src/main.rs
+  s_8620e64a1e2571::t_869641f3867aa7 175
+  s_8620e64a1e2571::t_e25b7ccf0550d6 105-107,152,156-168,170-174,176-178,475-476,481-483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b43a18393c5b1ecef70085f5f9b887b9e905a520",
+  "prompts": {},
+  "sessions": {
+    "s_8620e64a1e2571": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06abb-91d6-75f3-9a3f-7e60b0643306",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+crates/mailiner-app/src/background_sync.rs
+  s_a7d0f7d931a109::t_51eaf32999d68a 1-9,11-78,82,90-93,95-257,260-262,264-266,271-278
+  s_a7d0f7d931a109::t_1e309edae236e3 258-259,263,267-270
+  s_a7d0f7d931a109::t_fed2e17bbfdbbe 10,79-81,83-89
+crates/mailiner-app/src/components/accounts.rs
+  s_a7d0f7d931a109::t_2d11341513928b 70-71
+crates/mailiner-app/src/connection.rs
+  s_a7d0f7d931a109::t_be493c2015c8db 32
+  s_a7d0f7d931a109::t_b782662dc47c8e 551-554,564-565
+  s_a7d0f7d931a109::t_679283bde5d0ea 409-430,432-448
+  s_a7d0f7d931a109::t_a434687032d5ef 38
+  s_a7d0f7d931a109::t_b7c54aacf046d5 494
+  s_a7d0f7d931a109::t_2cdf494f1e553c 588-589,593-596
+  s_a7d0f7d931a109::t_ce2ec8b962fbf0 526
+  s_a7d0f7d931a109::t_59f3f1742c6a23 12-15
+  s_a7d0f7d931a109::t_a14d5f07b0e7ad 230-232,247-248
+crates/mailiner-app/src/lib.rs
+  s_a7d0f7d931a109::t_3044b915f69ad4 9
+crates/mailiner-app/src/main.rs
+  s_a7d0f7d931a109::t_6b84f0ae3e8129 32
+crates/mailiner-app/src/core_event.rs
+  s_a7d0f7d931a109::t_434ab0d1fcc373 1823-1872
+  s_a7d0f7d931a109::t_8b0839c5dfd555 1019-1022,1464-1465
+  s_a7d0f7d931a109::t_fec0b4c68cc77d 1341-1347,1408
+  s_a7d0f7d931a109::t_f6eae9298b3aa2 402-403,470
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "fa8554c8aa0005f9fb6baab5ced0b7ef1ce3941c",
+  "prompts": {},
+  "sessions": {
+    "s_a7d0f7d931a109": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06ae5-e3f1-7cf0-85f4-59a371bbf0ed",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

@@ -74,6 +74,22 @@ pub enum CoreEvent {
     ApplyMailboxSearch {
         query: String,
     },
+    /// Persist the current folder's search as a virtual folder.
+    SaveMailboxSearch {
+        name: String,
+        query: String,
+    },
+    /// Open a saved search (select its folder and re-run the query).
+    OpenSavedSearch {
+        id: String,
+    },
+    RenameSavedSearch {
+        id: String,
+        name: String,
+    },
+    DeleteSavedSearch {
+        id: String,
+    },
     /// Load envelopes for UI indices `[range.start, range.end)` into the sparse cache.
     FetchMessageRange {
         mailbox_id: MailboxId,
@@ -524,6 +540,18 @@ pub async fn core_loop(
             }
             CoreEvent::ApplyMailboxSearch { query } => {
                 handle_apply_mailbox_search(&manager, &mut ctx, query).await;
+            }
+            CoreEvent::SaveMailboxSearch { name, query } => {
+                handle_save_mailbox_search(&manager, &mut ctx, name, query).await;
+            }
+            CoreEvent::OpenSavedSearch { id } => {
+                handle_open_saved_search(&manager, &mut ctx, id).await;
+            }
+            CoreEvent::RenameSavedSearch { id, name } => {
+                handle_rename_saved_search(&mut ctx, id, name);
+            }
+            CoreEvent::DeleteSavedSearch { id } => {
+                handle_delete_saved_search(&mut ctx, id);
             }
             CoreEvent::FetchMessageRange { mailbox_id, range } => {
                 handle_fetch_message_range(&manager, &mut ctx, mailbox_id, range).await;
@@ -1434,6 +1462,9 @@ async fn handle_accounts_changed(manager: &mut AccountConnectionManager, ctx: &m
     refresh_ui_accounts(manager, ctx).await;
     crate::ui_prefs::retain_last_mailboxes(&known);
     crate::ui_prefs::retain_ack_unread(&known);
+    crate::ui_prefs::retain_saved_searches(&known);
+    ctx.saved_searches
+        .set(crate::ui_prefs::load_saved_searches());
     crate::draft_store::retain_drafts(&known);
     if let Err(e) = manager.cache().retain_accounts(&known).await {
         warn!("mail cache retain_accounts failed: {e}");
@@ -1611,6 +1642,7 @@ fn clear_mailbox_ui(ctx: &mut AppContext) {
     ctx.selected_mailbox.set(None);
     ctx.list_text_filter.set(String::new());
     ctx.list_search_query.set(String::new());
+    ctx.active_saved_search.set(None);
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(false);
     ctx.selection.write().clear();
@@ -1914,6 +1946,16 @@ async fn handle_select_mailbox(
     mailbox_id: MailboxId,
     select_first: bool,
 ) {
+    select_mailbox(manager, ctx, mailbox_id, select_first, false).await;
+}
+
+async fn select_mailbox(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    mailbox_id: MailboxId,
+    select_first: bool,
+    from_saved_search: bool,
+) {
     if ctx
         .mailbox_nodes
         .read()
@@ -1926,12 +1968,18 @@ async fn handle_select_mailbox(
     // Folder open stays on the list even when the first row is auto-selected.
     ctx.set_mobile_pane(MobilePane::after_select_mailbox());
 
-    if ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id) {
-        ctx.list_text_filter.set(String::new());
-        ctx.list_search_query.set(String::new());
+    let mailbox_changed = ctx.selected_mailbox.peek().as_ref() != Some(&mailbox_id);
+    let leaving_saved = !from_saved_search && ctx.active_saved_search.peek().is_some();
+    if !from_saved_search {
+        ctx.active_saved_search.set(None);
+        if mailbox_changed || leaving_saved {
+            ctx.list_text_filter.set(String::new());
+            ctx.list_search_query.set(String::new());
+        }
     }
 
-    let already_showing = ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
+    let already_showing = !leaving_saved
+        && ctx.selected_mailbox.read().as_ref() == Some(&mailbox_id)
         && ctx.messages.read().cached_count() > 0;
     if !already_showing {
         ctx.selection.write().clear();
@@ -2331,6 +2379,7 @@ async fn handle_apply_mailbox_search(
 ) {
     let query = query.trim().to_string();
     ctx.list_text_filter.set(query.clone());
+    ctx.active_saved_search.set(None);
     if ctx.list_search_query.peek().as_str() == query {
         return;
     }
@@ -2340,7 +2389,100 @@ async fn handle_apply_mailbox_search(
     };
     ctx.messages.set(SparseList::new(0));
     ctx.messages_loading.set(true);
-    handle_select_mailbox(manager, ctx, mailbox_id, true).await;
+    select_mailbox(manager, ctx, mailbox_id, true, false).await;
+}
+
+async fn handle_save_mailbox_search(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    name: String,
+    query: String,
+) {
+    let Some(account_id) = ctx.selected_account.read().clone() else {
+        ctx.show_toast(ToastAction::error("No account selected"));
+        return;
+    };
+    let Some(mailbox_id) = ctx.selected_mailbox.read().clone() else {
+        ctx.show_toast(ToastAction::error("No folder selected"));
+        return;
+    };
+    match crate::ui_prefs::add_saved_search(&name, &query, account_id, &mailbox_id) {
+        Ok(saved) => {
+            ctx.saved_searches
+                .set(crate::ui_prefs::load_saved_searches());
+            ctx.active_saved_search.set(Some(saved.id.clone()));
+            ctx.show_toast(ToastAction::info(format!("Saved \"{}\"", saved.name)));
+            if ctx.list_search_query.peek().as_str() != saved.query {
+                handle_apply_mailbox_search(manager, ctx, saved.query).await;
+                ctx.active_saved_search.set(Some(saved.id));
+            }
+        }
+        Err(crate::ui_prefs::SaveSearchError::EmptyQuery) => {
+            ctx.show_toast(ToastAction::error("Nothing to save"));
+        }
+    }
+}
+
+async fn handle_open_saved_search(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    id: String,
+) {
+    let Some(search) = ctx
+        .saved_searches
+        .peek()
+        .iter()
+        .find(|s| s.id == id)
+        .cloned()
+    else {
+        ctx.show_toast(ToastAction::error("Saved search not found"));
+        return;
+    };
+    let mailbox_id = search.mailbox();
+    if ctx
+        .mailbox_nodes
+        .read()
+        .get(&mailbox_id)
+        .is_none_or(|n| !n.selectable)
+    {
+        ctx.show_toast(ToastAction::error(format!(
+            "Folder for \"{}\" is no longer available",
+            search.name
+        )));
+        return;
+    }
+    ctx.active_saved_search.set(Some(search.id.clone()));
+    ctx.list_text_filter.set(search.query.clone());
+    if ctx.list_search_query.peek().as_str() == search.query
+        && ctx.selected_mailbox.peek().as_ref() == Some(&mailbox_id)
+    {
+        return;
+    }
+    ctx.list_search_query.set(search.query);
+    ctx.messages.set(SparseList::new(0));
+    ctx.messages_loading.set(true);
+    select_mailbox(manager, ctx, mailbox_id, true, true).await;
+}
+
+fn handle_rename_saved_search(ctx: &mut AppContext, id: String, name: String) {
+    if crate::ui_prefs::rename_saved_search(&id, &name).is_none() {
+        ctx.show_toast(ToastAction::error("Saved search not found"));
+        return;
+    }
+    ctx.saved_searches
+        .set(crate::ui_prefs::load_saved_searches());
+}
+
+fn handle_delete_saved_search(ctx: &mut AppContext, id: String) {
+    if !crate::ui_prefs::remove_saved_search(&id) {
+        ctx.show_toast(ToastAction::error("Saved search not found"));
+        return;
+    }
+    if ctx.active_saved_search.peek().as_deref() == Some(id.as_str()) {
+        ctx.active_saved_search.set(None);
+    }
+    ctx.saved_searches
+        .set(crate::ui_prefs::load_saved_searches());
 }
 
 async fn handle_fetch_message_range(

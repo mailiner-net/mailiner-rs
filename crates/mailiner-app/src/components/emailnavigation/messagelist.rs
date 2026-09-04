@@ -175,6 +175,36 @@ pub fn MessageList() -> Element {
                         },
                         "Search"
                     }
+                    if mailiner_core::mailbox_search_is_active(&filter_query)
+                        || search_active
+                    {
+                        button {
+                            r#type: "button",
+                            class: "message-list-search-btn",
+                            title: "Save this search in the folder tree",
+                            onclick: move |_| {
+                                let query = {
+                                    let draft = list_text_filter.peek().clone();
+                                    if mailiner_core::mailbox_search_is_active(&draft) {
+                                        draft
+                                    } else {
+                                        ctx.list_search_query.peek().clone()
+                                    }
+                                };
+                                if !mailiner_core::mailbox_search_is_active(&query) {
+                                    return;
+                                }
+                                let Some(name) = super::mailboxtreeview::prompt_folder_name(
+                                    "Save search as",
+                                    &query,
+                                ) else {
+                                    return;
+                                };
+                                let _ = core_tx.send(CoreEvent::SaveMailboxSearch { name, query });
+                            },
+                            "Save"
+                        }
+                    }
                     if search_active && !filter.has_attachment {
                         span {
                             class: "message-list-filter-count",

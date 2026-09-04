@@ -13,6 +13,7 @@ use crate::mailbox::{
     MailboxId, can_manage_folder, can_toggle_subscription, mailbox_tree_filter_ids,
     mailbox_visible_in_tree,
 };
+use crate::ui_prefs::SavedSearch;
 
 /// Prompt for a single folder path segment. Non-web builds fail closed.
 pub(crate) fn prompt_folder_name(message: &str, default: &str) -> Option<String> {
@@ -93,11 +94,24 @@ pub(crate) struct FolderMenu {
     y: f64,
 }
 
+#[derive(Clone, PartialEq)]
+struct SearchMenu {
+    id: String,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, PartialEq)]
+enum TreeMenu {
+    Folder(FolderMenu),
+    Search(SearchMenu),
+}
+
 #[component]
 pub fn MailboxTreeView() -> Element {
     let ctx = use_context::<AppContext>();
     let mut query = use_signal(String::new);
-    let mut menu = use_signal(|| None::<FolderMenu>);
+    let mut menu = use_signal(|| None::<TreeMenu>);
     let roots = (ctx.mailbox_roots)();
     let nodes = ctx.mailbox_nodes.read();
     let show_all = *ctx.show_all_folders.read();
@@ -108,8 +122,22 @@ pub fn MailboxTreeView() -> Element {
         .filter(|id| folder_shown(id, &nodes, show_all, &visible))
         .cloned()
         .collect();
-    let no_matches = visible.as_ref().is_some_and(|ids| ids.is_empty())
+    let filter_q = query.read().clone();
+    let account_id = ctx.selected_account.read().clone();
+    let shown_searches: Vec<SavedSearch> = account_id
+        .as_ref()
+        .map(|id| {
+            ctx.saved_searches
+                .read()
+                .iter()
+                .filter(|s| &s.account_id == id && s.matches_filter(&filter_q))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let no_folder_matches = visible.as_ref().is_some_and(|ids| ids.is_empty())
         || (visible.is_some() && shown_roots.is_empty());
+    let no_matches = no_folder_matches && shown_searches.is_empty();
     rsx! {
         div {
             class: "mailbox-tree-filter",
@@ -140,19 +168,40 @@ pub fn MailboxTreeView() -> Element {
                     "No matching folders"
                 }
             } else {
-                for mailbox_id in shown_roots {
-                    MailboxTreeViewItem {
-                        key: "{mailbox_id.as_str()}",
-                        mailbox_id: mailbox_id.clone(),
-                        visible: visible.clone(),
-                        on_menu: move |next| menu.set(Some(next)),
+                if !no_folder_matches {
+                    for mailbox_id in shown_roots {
+                        MailboxTreeViewItem {
+                            key: "{mailbox_id.as_str()}",
+                            mailbox_id: mailbox_id.clone(),
+                            visible: visible.clone(),
+                            on_menu: move |next| menu.set(Some(TreeMenu::Folder(next))),
+                        }
+                    }
+                }
+                if !shown_searches.is_empty() {
+                    h3 {
+                        class: "saved-searches-heading",
+                        "Saved searches"
+                    }
+                    for search in shown_searches {
+                        SavedSearchItem {
+                            key: "{search.id}",
+                            search,
+                            on_menu: move |next| menu.set(Some(TreeMenu::Search(next))),
+                        }
                     }
                 }
             }
         }
 
-        if let Some(open) = menu() {
+        if let Some(TreeMenu::Folder(open)) = menu() {
             FolderContextMenu {
+                menu: open,
+                onclose: move |_| menu.set(None),
+            }
+        }
+        if let Some(TreeMenu::Search(open)) = menu() {
+            SavedSearchContextMenu {
                 menu: open,
                 onclose: move |_| menu.set(None),
             }
@@ -183,12 +232,12 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
         .filter(|id| folder_shown(id, &mailboxes, show_all, &props.visible))
         .cloned()
         .collect();
-    let is_selected = ctx
-        .selected_mailbox
-        .read()
-        .as_ref()
-        .map(|id| *id == props.mailbox_id)
-        .unwrap_or(false);
+    let is_selected = ctx.active_saved_search.read().is_none()
+        && ctx
+            .selected_mailbox
+            .read()
+            .as_ref()
+            .is_some_and(|id| *id == props.mailbox_id);
     let mut children_visible = use_signal(|| false);
     let filtering = props.visible.is_some();
     let has_visible_children = !visible_children.is_empty();
@@ -518,6 +567,151 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                 }
             }
         }
+    }
+}
+
+#[component]
+fn SavedSearchItem(search: SavedSearch, on_menu: EventHandler<SearchMenu>) -> Element {
+    let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let is_selected = ctx.active_saved_search.read().as_deref() == Some(search.id.as_str());
+    let folder_title = ctx
+        .mailbox_nodes
+        .read()
+        .get(&search.mailbox())
+        .map(|n| n.title().to_string())
+        .unwrap_or_else(|| search.mailbox_id.clone());
+    let tooltip = if search.name == search.query {
+        format!("{folder_title} · {}", search.query)
+    } else {
+        format!("{} · {folder_title} · {}", search.name, search.query)
+    };
+    let search_id = search.id.clone();
+    let menu_id = search.id.clone();
+    rsx! {
+        div {
+            class: "mailbox-tree-view-item saved-search-item",
+
+            div {
+                class: "mailbox-row",
+                class: if is_selected { "selected" },
+                title: "{tooltip}",
+                role: "button",
+                aria_current: if is_selected { "true" },
+                onclick: move |_| {
+                    let _ = core_tx.send(CoreEvent::OpenSavedSearch {
+                        id: search_id.clone(),
+                    });
+                },
+                oncontextmenu: move |evt: MouseEvent| {
+                    evt.prevent_default();
+                    evt.stop_propagation();
+                    let coords = evt.client_coordinates();
+                    on_menu.call(SearchMenu {
+                        id: menu_id.clone(),
+                        x: coords.x,
+                        y: coords.y,
+                    });
+                },
+
+                span {
+                    class: "mailbox-icon",
+                    Icon {
+                        size: 18,
+                        icon: IconKind::MagnifyingGlass,
+                    }
+                }
+
+                div {
+                    class: "mailbox-name",
+                    span { class: "mailbox-title", "{search.name}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -> Element {
+    let ctx = use_context::<AppContext>();
+    let core_tx = use_coroutine_handle::<CoreEvent>();
+    let Some(search) = ctx
+        .saved_searches
+        .read()
+        .iter()
+        .find(|s| s.id == menu.id)
+        .cloned()
+    else {
+        return rsx! {};
+    };
+    let rename_id = search.id.clone();
+    let delete_id = search.id.clone();
+    let current_name = search.name.clone();
+    let delete_name = search.name.clone();
+    rsx! {
+        div {
+            class: "folder-menu-backdrop",
+            onclick: move |evt| onclose.call(evt),
+            oncontextmenu: move |evt: MouseEvent| {
+                evt.prevent_default();
+                onclose.call(evt);
+            },
+            div {
+                class: "folder-menu",
+                role: "menu",
+                style: "left: {menu.x}px; top: {menu.y}px;",
+                onclick: move |evt| evt.stop_propagation(),
+
+                button {
+                    class: "folder-menu-item",
+                    r#type: "button",
+                    role: "menuitem",
+                    onclick: move |evt| {
+                        onclose.call(evt);
+                        let Some(name) =
+                            prompt_folder_name("Rename saved search", &current_name)
+                        else {
+                            return;
+                        };
+                        let _ = core_tx.send(CoreEvent::RenameSavedSearch {
+                            id: rename_id.clone(),
+                            name,
+                        });
+                    },
+                    "Rename"
+                }
+                button {
+                    class: "folder-menu-item is-danger",
+                    r#type: "button",
+                    role: "menuitem",
+                    onclick: move |evt| {
+                        onclose.call(evt);
+                        if !confirm_delete_saved_search(&delete_name) {
+                            return;
+                        }
+                        let _ = core_tx.send(CoreEvent::DeleteSavedSearch {
+                            id: delete_id.clone(),
+                        });
+                    },
+                    "Delete"
+                }
+            }
+        }
+    }
+}
+
+fn confirm_delete_saved_search(name: &str) -> bool {
+    let message = format!("Delete saved search \"{name}\"?");
+    #[cfg(feature = "web")]
+    {
+        web_sys::window()
+            .and_then(|window| window.confirm_with_message(&message).ok())
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        let _ = message;
+        false
     }
 }
 

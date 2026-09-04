@@ -2490,6 +2490,16 @@ body:has(.compose-dock) .toast {
     margin: 0;
 }
 
+.saved-searches-heading {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: var(--space-3) var(--margin) var(--space-1);
+    margin: var(--space-2) 0 0;
+}
+
 .folder-context-backdrop {
     position: fixed;
     inset: 0;

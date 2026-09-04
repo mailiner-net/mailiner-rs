@@ -18,7 +18,7 @@ use crate::outbox_store::OutboxListEntry;
 use crate::selection::MessageSelection;
 use crate::send::{ComposeSession, SendState};
 use crate::toast::{Toast, ToastAction};
-use crate::ui_prefs::{ComposePlacement, MailLayout, MessageListDensity};
+use crate::ui_prefs::{ComposePlacement, MailLayout, MessageListDensity, SavedSearch};
 
 /// KMail-style folder jumper: **J** goes to a mailbox, **M** moves, **Shift+C** copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +106,10 @@ pub struct AppContext {
     pub list_text_filter: Signal<String>,
     /// Applied IMAP SEARCH query for the open folder (empty = whole folder).
     pub list_search_query: Signal<String>,
+    /// Saved searches (virtual folders) for every account.
+    pub saved_searches: Signal<Vec<SavedSearch>>,
+    /// Selected virtual-folder id, if the list is showing a saved search.
+    pub active_saved_search: Signal<Option<String>>,
     /// True while SELECT / EXISTS is in flight for the selected mailbox.
     pub messages_loading: Signal<bool>,
     /// Active list sort (may fall back if the server lacks IMAP SORT).
@@ -277,6 +281,7 @@ impl AppContext {
     pub fn reset_after_sign_out(&mut self) {
         self.reset_session_ui();
         self.mail_layout.set(MailLayout::default());
+        self.saved_searches.set(Vec::new());
     }
 
     /// Drop in-memory mail/secrets after locking the vault. Prefs stay put.
@@ -292,6 +297,7 @@ impl AppContext {
         self.messages.set(SparseList::new(0));
         self.list_text_filter.set(String::new());
         self.list_search_query.set(String::new());
+        self.active_saved_search.set(None);
         self.messages_loading.set(false);
         self.message_sort.set(mailiner_core::MessageSort::default());
         self.sort_supports_size_sender.set(false);

@@ -84,6 +84,18 @@ mod tests {
     }
 
     #[test]
+    fn header_full() {
+        assert_eq!(
+            parse_section_path("HEADER").unwrap(),
+            SectionPath::Full(MessageSection::Header)
+        );
+        assert_eq!(
+            parse_section_path("header").unwrap(),
+            SectionPath::Full(MessageSection::Header)
+        );
+    }
+
+    #[test]
     fn single_part() {
         assert_eq!(
             parse_section_path("1").unwrap(),

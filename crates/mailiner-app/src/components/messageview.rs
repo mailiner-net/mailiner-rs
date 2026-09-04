@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use dioxus::html::Key;
 use dioxus::prelude::*;
 
 use mailiner_composer::{ComposeIntent, ComposerAddress, try_composer_address};
@@ -10,7 +11,7 @@ use mailiner_core::models::{EmailAddr, EmailAddress, MessageContent, PartKind};
 
 use crate::components::attachments::AttachmentsFooter;
 use crate::components::icons::{IconButton, IconKind};
-use crate::context::{AppContext, MailboxPickerMode, MessageViewState};
+use crate::context::{AppContext, MailboxPickerMode, MessageHeadersState, MessageViewState};
 use crate::core_event::CoreEvent;
 use crate::download::{DownloadStatus, EML_DOWNLOAD_KEY, eml_filename};
 use crate::formatter::quote::QUOTE_TOGGLE_CSS;
@@ -905,6 +906,37 @@ fn MessageHeader(
                     }
                     button {
                         class: "ui-btn ui-btn-secondary",
+                        title: "Show full message headers",
+                        onclick: {
+                            let mailbox_id = mailbox_id.clone();
+                            let message_id = message.id.clone();
+                            let mut ctx = ctx.clone();
+                            move |_| {
+                                let Some(mailbox_id) = mailbox_id.clone() else {
+                                    return;
+                                };
+                                let already_open = matches!(
+                                    &*ctx.message_headers.peek(),
+                                    MessageHeadersState::Loading { message_id: id }
+                                        | MessageHeadersState::Ready { message_id: id, .. }
+                                        if id == &message_id
+                                );
+                                if already_open {
+                                    return;
+                                }
+                                ctx.message_headers.set(MessageHeadersState::Loading {
+                                    message_id: message_id.clone(),
+                                });
+                                let _ = core_tx.send(CoreEvent::FetchMessageHeaders {
+                                    mailbox_id,
+                                    message_id: message_id.clone(),
+                                });
+                            }
+                        },
+                        "Show headers"
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
                         disabled: !actions_ready,
                         title: "Reply",
                         onclick: {
@@ -1219,6 +1251,140 @@ fn MessageHeader(
 pub(crate) fn find_envelope(ctx: &AppContext, message_id: &MessageId) -> Option<Arc<Message>> {
     let messages = ctx.messages.read();
     messages.find(|m| &m.id == message_id).cloned()
+}
+
+fn close_headers_dialog(ctx: &mut AppContext) {
+    ctx.message_headers.set(MessageHeadersState::Closed);
+}
+
+fn copy_headers_to_clipboard(ctx: &AppContext, text: &str) {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    {
+        use wasm_bindgen_futures::JsFuture;
+        let text = text.to_string();
+        let ctx = ctx.clone();
+        spawn(async move {
+            let Some(window) = web_sys::window() else {
+                ctx.show_toast(ToastAction::error("Could not copy headers"));
+                return;
+            };
+            match JsFuture::from(window.navigator().clipboard().write_text(&text)).await {
+                Ok(_) => ctx.show_toast(ToastAction::info("Headers copied")),
+                Err(_) => ctx.show_toast(ToastAction::error("Could not copy headers")),
+            }
+        });
+    }
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    {
+        let _ = text;
+        ctx.show_toast(ToastAction::error("Could not copy headers"));
+    }
+}
+
+#[component]
+pub fn MessageHeadersHost() -> Element {
+    let ctx = use_context::<AppContext>();
+    let state = ctx.message_headers.read().clone();
+    if matches!(state, MessageHeadersState::Closed) {
+        return rsx! {};
+    }
+
+    rsx! {
+        MessageHeadersDialog { state }
+    }
+}
+
+#[component]
+fn MessageHeadersDialog(state: MessageHeadersState) -> Element {
+    let ctx = use_context::<AppContext>();
+    let ready_text = match &state {
+        MessageHeadersState::Ready { text, .. } => Some(text.clone()),
+        _ => None,
+    };
+
+    rsx! {
+        div {
+            class: "picker-backdrop headers-backdrop",
+            onclick: {
+                let mut ctx = ctx.clone();
+                move |_| close_headers_dialog(&mut ctx)
+            },
+            div {
+                class: "ui-dialog headers-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Message headers",
+                tabindex: "-1",
+                onclick: move |evt| evt.stop_propagation(),
+                onkeydown: {
+                    let mut ctx = ctx.clone();
+                    move |evt: KeyboardEvent| {
+                        if evt.key() == Key::Escape {
+                            evt.prevent_default();
+                            close_headers_dialog(&mut ctx);
+                        }
+                    }
+                },
+                onmounted: move |evt| {
+                    let data = evt.data();
+                    spawn(async move {
+                        let _ = data.set_focus(true).await;
+                    });
+                },
+
+                div {
+                    class: "ui-dialog-head",
+                    h2 { class: "ui-dialog-title", "Message headers" }
+                    IconButton {
+                        class: "flat ui-icon-btn",
+                        title: "Close",
+                        size: 20,
+                        icon: IconKind::XMark,
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| close_headers_dialog(&mut ctx)
+                        },
+                    }
+                }
+
+                match &state {
+                    MessageHeadersState::Loading { .. } => rsx! {
+                        p { class: "headers-status", "Loading headers…" }
+                    },
+                    MessageHeadersState::Error { message, .. } => rsx! {
+                        p { class: "ui-alert-error", "Failed to load headers: {message}" }
+                    },
+                    MessageHeadersState::Ready { text, .. } => rsx! {
+                        pre { class: "headers-pre", "{text}" }
+                    },
+                    MessageHeadersState::Closed => rsx! {},
+                }
+
+                div {
+                    class: "ui-dialog-actions",
+                    if let Some(text) = ready_text {
+                        button {
+                            class: "ui-btn ui-btn-secondary",
+                            title: "Copy headers",
+                            onclick: {
+                                let ctx = ctx.clone();
+                                move |_| copy_headers_to_clipboard(&ctx, &text)
+                            },
+                            "Copy"
+                        }
+                    }
+                    button {
+                        class: "ui-btn ui-btn-secondary",
+                        onclick: {
+                            let mut ctx = ctx.clone();
+                            move |_| close_headers_dialog(&mut ctx)
+                        },
+                        "Close"
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

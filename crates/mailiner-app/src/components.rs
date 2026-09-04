@@ -22,7 +22,7 @@ pub use compose::ComposeOverlay;
 pub use connection_status::ConnectionStatusBanner;
 pub use emailnavigation::{EmailNavigation, MessageList};
 pub use mailbox_picker::MailboxPickerHost;
-pub use messageview::MessageView;
+pub use messageview::{MessageHeadersHost, MessageView};
 pub use onboarding::OnboardingForm;
 pub use outbox::OutboxPanel;
 pub use settings::SettingsPage;

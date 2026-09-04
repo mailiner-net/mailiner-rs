@@ -106,10 +106,13 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 ///   use inline `style=` attributes; strict style-src breaks layout. Remote
 ///   stylesheets are not allowed (formatter/sanitizer strips them).
 /// - `img-src 'self' data: blob: http: https:`: cid→`data:` inlines and
-///   `blob:` downloads, plus remote `http(s)` images when the user clicks
-///   **Allow remote resources** in the message viewer. Privacy is gated in the
-///   HTML formatter first; CSP must not veto that path. CSS `url(...)` image
-///   loads are also constrained by `img-src` in most browsers.
+///   `blob:` downloads / image previews, plus remote `http(s)` images when the
+///   user clicks **Allow remote resources** in the message viewer. Privacy is
+///   gated in the HTML formatter first; CSP must not veto that path. CSS
+///   `url(...)` image loads are also constrained by `img-src` in most browsers.
+/// - `frame-src 'self' blob:`: PDF attachment preview uses an `<iframe>` with a
+///   `blob:` URL (`object-src` stays `'none'` so we never `<embed>` untrusted
+///   documents).
 /// - `connect-src 'self' ws: wss: http: https:`: user-entered proxy hosts make
 ///   a strict host allowlist impossible without dynamic CSP (limited in browsers).
 ///   Schemes stay open so self-hosted proxies work; IMAP traffic is still
@@ -126,6 +129,7 @@ style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob: http: https:; \
 font-src 'self'; \
 connect-src 'self' ws: wss: http: https:; \
+frame-src 'self' blob:; \
 object-src 'none'; \
 base-uri 'self'; \
 form-action 'self'\
@@ -312,6 +316,8 @@ fn App() -> Element {
     let message_headers = use_signal(|| crate::context::MessageHeadersState::Closed);
     let message_source = use_signal(|| crate::context::MessageSourceState::Closed);
     let download_status = use_signal(HashMap::new);
+    let attachment_blobs = use_signal(HashMap::new);
+    let attachment_preview = use_signal(|| None);
     let send_status = use_signal(HashMap::new);
     let smtp_test_status = use_signal(HashMap::new);
     let smtp_test_abandoned = use_signal(HashSet::new);
@@ -350,6 +356,8 @@ fn App() -> Element {
         message_headers,
         message_source,
         download_status,
+        attachment_blobs,
+        attachment_preview,
         connection_states,
         send_status,
         smtp_test_status,

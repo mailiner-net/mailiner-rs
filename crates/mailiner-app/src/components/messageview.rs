@@ -255,9 +255,9 @@ pub fn MessageView() -> Element {
             }
 
             let ready = match &view {
-                MessageViewState::Ready { message_id, loaded } => {
-                    Some((message_id.clone(), loaded.clone()))
-                }
+                MessageViewState::Ready {
+                    message_id, loaded, ..
+                } => Some((message_id.clone(), loaded.clone())),
                 MessageViewState::Empty
                 | MessageViewState::Loading { .. }
                 | MessageViewState::Error { .. } => {
@@ -437,6 +437,7 @@ fn apply_cid_payload_retention(
     let MessageViewState::Ready {
         message_id: id,
         loaded,
+        ..
     } = &mut *view
     else {
         return;
@@ -469,6 +470,7 @@ pub(crate) fn ready_loaded(
         MessageViewState::Ready {
             message_id: loaded_id,
             loaded,
+            ..
         } if loaded_id == message_id => Some(loaded.clone()),
         _ => None,
     }
@@ -742,7 +744,6 @@ fn MessageHeader(
     let show_plain_toggle = loaded
         .as_ref()
         .is_some_and(|loaded| has_html_and_plain(&loaded.parts));
-    let account_id = ctx.selected_account.read().clone();
     let mailbox_id = ctx.selected_mailbox.read().clone();
     let in_trash = mailbox_id
         .as_ref()

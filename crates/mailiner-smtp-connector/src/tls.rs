@@ -47,11 +47,34 @@ pub fn add_extra_ca_pems(
     Ok(added)
 }
 
+/// Trust the bundled docker-mail CA in debug builds / `local-ca`.
+fn add_local_dev_ca(store: &mut RootCertStore) {
+    #[cfg(any(debug_assertions, feature = "local-ca"))]
+    {
+        const PEM: &[u8] = include_bytes!("../../../docker/mail/tls/ca.crt");
+        for item in CertificateDer::pem_slice_iter(PEM) {
+            match item {
+                Ok(cert) => {
+                    if let Err(e) = store.add(cert) {
+                        tracing::warn!("local mail CA not added: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("local mail CA parse failed: {e}"),
+            }
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "local-ca")))]
+    {
+        let _ = store;
+    }
+}
+
 /// webpki roots plus any extra user-imported CA PEMs.
 pub fn root_cert_store(extra_ca_pems: &[String]) -> Result<RootCertStore, String> {
     let mut store = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
+    add_local_dev_ca(&mut store);
     add_extra_ca_pems(&mut store, extra_ca_pems)?;
     Ok(store)
 }

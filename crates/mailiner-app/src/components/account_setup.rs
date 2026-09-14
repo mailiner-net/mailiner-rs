@@ -17,7 +17,8 @@ use crate::account_config::{
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
     AccountIdentityFields, AccountImapFields, AccountOauthFields, AccountProxyFields,
-    AccountSmtpFields, FormAuth, FormField, FormPhase, FormStatusBanner, LookupEditGuard,
+    AccountSmtpFields, AccountTlsFields, FormAuth, FormField, FormPhase, FormStatusBanner,
+    LookupEditGuard,
     StatusMessage, apply_form_auth, build_config_from_form, kind_label, provide_lookup_edit_guard,
     start_server_lookup,
 };
@@ -738,6 +739,12 @@ fn step_body(
                 busy: busy,
                 open: model.smtp_open() || !model.smtp_host().trim().is_empty(),
                 hide_password: true,
+            }
+            AccountTlsFields {
+                id_prefix: id_prefix,
+                extra_ca_pems: model.extra_ca_pems(),
+                set_extra_ca_pems: move |v| model.extra_ca_pems.set(v),
+                busy: busy,
             }
         },
         SetupStep::Proxy => rsx! {

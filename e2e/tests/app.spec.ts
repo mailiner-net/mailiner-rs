@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoPath } from './helpers';
 
 test('empty store shows first-run onboarding', async ({ page }) => {
-  await page.goto('/');
+  await gotoPath(page);
 
   // Empty localStorage → NeedsOnboarding → /onboarding (no mail chrome #app).
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
@@ -17,15 +18,16 @@ test('empty store shows first-run onboarding', async ({ page }) => {
 });
 
 test('viewport meta enables device-width media queries', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+  await gotoPath(page);
+  // Dioxus may inject a second viewport tag after mount; either is sufficient.
+  await expect(page.locator('meta[name="viewport"]').first()).toHaveAttribute(
     'content',
     /width=device-width/,
   );
 });
 
 test('web app manifest is linked and installable', async ({ page, request }) => {
-  await page.goto('/');
+  await gotoPath(page);
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
     'href',
     '/manifest.webmanifest',
@@ -71,7 +73,7 @@ test('app-shell service worker is registered', async ({ page, request }) => {
   expect(body).toContain('mailiner-shell-v1');
   expect(body).toContain('isAppShell');
 
-  await page.goto('/');
+  await gotoPath(page);
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
   await expect
     .poll(async () =>
@@ -97,7 +99,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto('/');
+    await gotoPath(page);
     await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
     const noHorizontalOverflow = await page.evaluate(
@@ -127,7 +129,7 @@ test('encrypted store shows unlock instead of mail chrome', async ({ page }) => 
     );
   });
 
-  await page.goto('/');
+  await gotoPath(page);
   await expect(page.getByRole('heading', { name: 'Unlock accounts' })).toBeVisible();
   await expect(page.getByRole('main')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unlock' })).toBeVisible();

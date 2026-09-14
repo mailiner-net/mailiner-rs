@@ -152,13 +152,42 @@ export async function seedAccount(page: Page, options: SeedOptions = {}) {
   );
 }
 
+/** Navigate without waiting for WASM `load` (can stall on a cold `dx serve`). */
+export async function gotoPath(page: Page, path = '/') {
+  await page.goto(path, { waitUntil: 'domcontentloaded' });
+}
+
 /** Main mail chrome after a seeded Ready bootstrap. */
 export async function gotoMail(page: Page) {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto('/');
+  await gotoPath(page, '/');
   await expect(page.locator('#app')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Skip to message' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Compose' })).toBeVisible();
+  await expect(composeButton(page)).toBeVisible();
+}
+
+/** FAB only — viewer “Compose to …” buttons also match name `/Compose/`. */
+export function composeButton(page: Page) {
+  return page.getByRole('button', { name: 'Compose', exact: true });
+}
+
+/** Settings home after a seeded Ready bootstrap. */
+export async function gotoSettings(page: Page) {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await gotoPath(page, '/settings');
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+}
+
+/** Compose overlay is a modal dialog or a docked region. */
+export function composeOverlay(page: Page) {
+  return page.getByRole('dialog', { name: 'New message' }).or(
+    page.getByRole('region', { name: 'New message' }),
+  );
+}
+
+/** Advance the setup wizard from its primary action. */
+export async function wizardContinue(page: Page, label = 'Continue') {
+  await page.getByRole('button', { name: label, exact: true }).click();
 }
 
 /**

@@ -37,7 +37,7 @@ use mail_parser::{Address, HeaderValue, MessageParser};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::{client::TlsStream, TlsConnector};
 use tracing::info;
 
@@ -335,35 +335,6 @@ struct IndexBuild<'a> {
     highestmodseq: Option<u64>,
 }
 
-/// Trust the bundled local-mail CA in debug builds / `local-ca`.
-///
-/// The Docker Dovecot/Postfix container (`docker/mail`) presents a cert
-/// signed by `docker/mail/tls/ca.crt`. rustls only has `webpki_roots`, so
-/// without this hook Mailiner cannot complete IMAPS against localhost.
-fn add_local_dev_ca(root_store: &mut RootCertStore) {
-    #[cfg(any(debug_assertions, feature = "local-ca"))]
-    {
-        use rustls_pki_types::pem::PemObject;
-        use rustls_pki_types::CertificateDer;
-
-        const PEM: &[u8] = include_bytes!("../../../docker/mail/tls/ca.crt");
-        for item in CertificateDer::pem_slice_iter(PEM) {
-            match item {
-                Ok(cert) => {
-                    if let Err(e) = root_store.add(cert) {
-                        tracing::warn!("local mail CA not added: {e}");
-                    }
-                }
-                Err(e) => tracing::warn!("local mail CA parse failed: {e}"),
-            }
-        }
-    }
-    #[cfg(not(any(debug_assertions, feature = "local-ca")))]
-    {
-        let _ = root_store;
-    }
-}
-
 impl<S> ImapConnector<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
@@ -481,8 +452,7 @@ where
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let mut root_store = root_cert_store(&self.extra_ca_pems).map_err(ImapError::Tls)?;
-        add_local_dev_ca(&mut root_store);
+        let root_store = root_cert_store(&self.extra_ca_pems).map_err(ImapError::Tls)?;
         let config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
@@ -3088,19 +3058,6 @@ fn part_size_from_structure(root: &BodyPart, section: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use mailiner_core::{EmailConnector, ImapKeyword};
-
-    #[test]
-    fn local_mail_ca_is_trusted_in_debug() {
-        let mut store = RootCertStore::empty();
-        add_local_dev_ca(&mut store);
-        #[cfg(any(debug_assertions, feature = "local-ca"))]
-        assert!(
-            !store.is_empty(),
-            "debug/local-ca builds must load docker/mail/tls/ca.crt"
-        );
-        #[cfg(not(any(debug_assertions, feature = "local-ca")))]
-        assert!(store.is_empty());
-    }
 
     fn leaf(size: u64) -> BodyPart {
         BodyPart {

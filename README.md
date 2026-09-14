@@ -81,48 +81,37 @@ Dioxus runtime.
 
 ## Running Mailiner locally
 
-Step 0 (optional): start a local IMAP + SMTP server with a seeded inbox:
+Step 1: start the local mail server and WebSocket proxy:
 
 ```
-docker compose up --build
+docker compose up --build --wait
 ```
 
-This runs Dovecot (IMAPS 993, IMAP 143) and Postfix (SMTPS 465, submission 587, SMTP 25) in `mailiner-mail`. Default account:
+That runs Dovecot/Postfix (`mailiner-mail`) and `ws-tcp-proxy` (`mailiner-proxy`).
+Default account:
 
 | Field | Value |
 |---|---|
-| Email / username | `dev@mailiner.test` (or `dev`) |
+| Email / username | `dev@mailiner.test` |
 | Password | `dev` |
-| IMAP | `localhost:993` (implicit TLS) |
-| SMTP | `localhost:465` (implicit TLS) |
+| IMAP | `mail:993` (implicit TLS) |
+| SMTP | `mail:465` (implicit TLS) |
+| Proxy | `ws://localhost:9400/proxy` (no token) |
 
-The container delivers a handful of fixture messages (plain text, HTML, multipart/alternative, attachments, inline CID image, remote image, RFC 2047 subject, a two-message thread, sanitizer bait, plus Drafts / Sent / Trash). Authenticated SMTP to any recipient is rewritten to the test inbox, so a Mailiner Send lands where you can open it. TLS uses a **test-only** CA at `docker/mail/tls/ca.crt`. Debug `dx serve` builds (and `--features dev-defaults`) trust that CA automatically; a stock release build will reject the certificate.
+The browser talks to the proxy on localhost; the proxy dials the `mail`
+service on the compose network. Use host **`mail`** (it is on the test
+certificate SAN), not `localhost`. TLS uses the test CA at
+`docker/mail/tls/ca.crt`. Debug `dx serve` builds (and `--features
+dev-defaults`) trust that CA automatically; a stock release build needs
+the PEM pasted under Extra CA certificates.
 
-Re-seed an existing volume with `FORCE_SEED=1 docker compose up`. Override `MAIL_USER` / `MAIL_PASSWORD` / `MAIL_NAME` if you want a different login.
+Re-seed an existing volume with `FORCE_SEED=1 docker compose up`. The
+proxy is built from the sibling `../ws-tcp-proxy` checkout by default.
+Override with `WS_TCP_PROXY_CONTEXT=/path/to/ws-tcp-proxy`.
 
-Prefill the onboarding form against this container (does **not** auto-connect):
-
-```
-MAILINER_DEV_DISPLAY_NAME=Dev \
-MAILINER_DEV_EMAIL=dev@mailiner.test \
-MAILINER_DEV_IMAP_HOST=localhost \
-MAILINER_DEV_IMAP_PORT=993 \
-MAILINER_DEV_IMAP_USER=dev@mailiner.test \
-MAILINER_DEV_IMAP_PASSWORD=dev \
-dx serve -p mailiner-app
-```
-
-Fill SMTP as `localhost` / `465` / same username and password (or leave the password blank to reuse the IMAP one).
-
-Step 1: run the ws-tcp-proxy (from the separate `mailiner/ws-tcp-proxy` repo):
-
-```
-cd ws-tcp-proxy && cargo run
-```
-
-By default the proxy listens on `ws://localhost:9400/proxy`. Use a token that
-matches what you enter in the onboarding form (e.g. `testtoken` for a local
-dev proxy that expects that value).
+Alternatively, run only the mail container and start the proxy from the
+`ws-tcp-proxy` repo (`cargo run`). In that case IMAP/SMTP host is
+`localhost` and a debug proxy accepts token `testtoken`.
 
 Step 2: run Mailiner
 
@@ -195,3 +184,28 @@ Mailiner does **not** ship Google or Microsoft client IDs. Operators bring a
    automatically before AUTH when expired.
 
 Password / app-password login remains the default.
+
+## End-to-end tests
+
+Playwright covers first-run onboarding, unlock, mail chrome, compose, settings,
+and keyboard shortcuts without a live IMAP server. From the repo root:
+
+```
+npm install
+npx playwright install --with-deps chromium
+npm run test:e2e
+```
+
+That starts `dx serve` locally. The same suite runs in GitHub Actions on pull
+requests and on every push / merge to `main` (it serves the release web
+artifact).
+
+A second **live** suite talks to docker-mail through the compose proxy:
+
+```
+docker compose up --build --wait
+npm run test:e2e:live
+```
+
+CI runs that as **Playwright e2e (docker-mail)** after the web build. Details
+are in [`e2e/README.md`](e2e/README.md).

@@ -1,0 +1,64 @@
+crates/mailiner-app/src/lib.rs
+  s_e0de136c648131::t_5fe850b77939e7 42
+e2e/tests/settings.spec.ts
+  s_e0de136c648131::t_7034074b92c6f9 43-44,47
+crates/mailiner-app/i18n/en.json
+  s_e0de136c648131::t_ad383e5c3c1538 66-106
+crates/mailiner-app/assets/main.css
+  s_e0de136c648131::t_6626a98c818c87 351-450
+crates/mailiner-app/src/components/wizard.rs
+  s_e0de136c648131::t_d78e3b55ca7f62 37
+  s_e0de136c648131::t_01b21c371ee479 31-33,41
+  s_e0de136c648131::t_b4331b20bb6571 1-30,34-36,38-40,42-104
+e2e/tests/app.spec.ts
+  s_e0de136c648131::t_81bad6ddf65683 10-14,102
+crates/mailiner-app/src/components/onboarding.rs
+  s_e0de136c648131::t_cf135c63dff7fa 8,12
+  s_e0de136c648131::t_4cb690c586c431 1,5-6
+crates/mailiner-app/src/a11y.rs
+  s_e0de136c648131::t_29a7c2a6d55a64 32-61
+crates/mailiner-app/src/components/account_form.rs
+  s_e0de136c648131::t_03facb096288ea 168
+  s_e0de136c648131::t_7cf1dd15084a7d 1154
+  s_e0de136c648131::t_8bd9b50c6d8637 120
+  s_e0de136c648131::t_7bf651c085942e 683-708,713,825-965,971,983,990-994,996-997,1004,1022-1054,1056,1060-1065,1137-1148,1150-1153,1155-1158,1160-1162
+  s_e0de136c648131::t_268a30907d5e1b 149-152
+  s_e0de136c648131::t_a7dd0d3cf862fa 1755,1812-1822
+  s_e0de136c648131::t_7fc618d1d7d7ac 623-681
+  s_e0de136c648131::t_42706a4974a5ff 148,180
+crates/mailiner-app/src/setup_wizard.rs
+  s_e0de136c648131::t_8e51125796bc8b 6-8,55-74
+  s_e0de136c648131::t_2f54a808cdb2d5 155-156,158-217
+  s_e0de136c648131::t_37201c7356ad22 1-5,9-54,75-154,218
+README.md
+  s_e0de136c648131::t_7ff91a7b7d9528 126-142
+crates/mailiner-app/src/main.rs
+  s_e0de136c648131::t_cc0ed9afa8882f 69
+crates/mailiner-app/src/components/account_setup.rs
+  s_e0de136c648131::t_d294e1e2788d6a 63-91,93-99,101-112
+  s_e0de136c648131::t_72c745c585a36f 266
+  s_e0de136c648131::t_0519c7c51a229e 1-29,31-49,51-62,92,100,113-205,216-218,222-229,231-260,262-265,267-268,270-272,274-374,454-504,506-642,644-739,741-827
+  s_e0de136c648131::t_52741623383369 50,206-215,219-221
+  s_e0de136c648131::t_915d39955dbb25 269,273,375-453
+  s_e0de136c648131::t_5e850b9aa60765 740
+  s_e0de136c648131::t_32bf7c87a147d5 505,643
+crates/mailiner-app/src/components/accounts.rs
+  s_e0de136c648131::t_fd9fea9250ffd8 14
+  s_e0de136c648131::t_19c130be09ae74 1029,1033-1034
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "aca41252436a14eea08fa309e1a226bf58fbe921",
+  "prompts": {},
+  "sessions": {
+    "s_e0de136c648131": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0a086-d86f-7292-9c9c-f4c0f92e02f9",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

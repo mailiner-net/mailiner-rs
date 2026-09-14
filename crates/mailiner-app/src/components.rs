@@ -1,4 +1,5 @@
 mod account_form;
+mod account_setup;
 mod accounts;
 mod attachments;
 mod calendar;
@@ -20,7 +21,9 @@ mod theme;
 mod toast;
 mod unlock;
 pub mod virtual_scroll;
+mod wizard;
 
+pub use account_setup::AccountSetupWizard;
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
 pub use compose::ComposeOverlay;
 pub use connection_status::ConnectionStatusBanner;

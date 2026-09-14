@@ -123,16 +123,23 @@ compile-time `MAILINER_DEV_*` values if set in the environment at build time
 `MAILINER_DEV_PROXY_TOKEN`, etc.).
 
 Step 3: open the app in the browser. With an empty account store you will see
-**Onboarding**:
+a short **setup wizard**:
 
-1. Enter display name and email — Mailiner looks up IMAP/SMTP (Mozilla ISPDB,
-   then domain `.well-known` autoconfig, then common `imap.` / `smtp.` host
-   guesses). You can edit the result.
-2. Enter IMAP password, proxy base URL and token (and optional remote overrides),
-   **or** choose **OAuth 2.0** for Gmail / Outlook (see below)
-3. Optionally click **Test connection**
-4. Click **Save & continue** — Mailiner connects and authenticates first; only
-   on success are settings saved and the main mail UI opened
+1. **Get started** — what Mailiner is (a client in this browser; no Mailiner account)
+2. **Your email** — display name and address. Mailiner looks up IMAP/SMTP
+   (Mozilla ISPDB, then domain `.well-known` autoconfig, then common `imap.` /
+   `smtp.` host guesses). Pick a provider preset if you know it.
+3. **Sign in** — IMAP password / app password, or **OAuth 2.0** for Gmail / Outlook
+4. **Mail servers** — confirm the looked-up hosts (edit if needed)
+5. **How Mailiner connects** — proxy URL and token. Skipped when a URL is
+   already known (debug / `dev-defaults` prefill, or the last-used proxy when
+   adding another account)
+6. **Protect this device** — optional unlock passphrase
+7. **Review and connect** — Mailiner signs in first; only on success are
+   settings saved and the main mail UI opened
+
+Add account (`Settings → Accounts → Add account`) uses the same wizard without
+the welcome and passphrase steps.
 
 No build-time `IMAP_PASSWORD` is required.
 

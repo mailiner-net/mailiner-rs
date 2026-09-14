@@ -7,10 +7,11 @@ test('empty store shows first-run onboarding', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
   await expect(page.getByRole('main')).toBeVisible();
   await expect(page.locator('.onboarding-shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Look up servers' })).toBeVisible();
-  await expect(page.getByLabel('Unlock passphrase')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save & continue' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Look up servers' })).toHaveCount(0);
+  await expect(page.getByLabel('Unlock passphrase')).toHaveCount(0);
+  await expect(page.getByLabel('Proxy base URL')).toHaveCount(0);
   await expect(page.locator('#app')).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Skip to message' })).toHaveCount(0);
 });
@@ -98,7 +99,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Save & continue' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
     const noHorizontalOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth + 1,
     );

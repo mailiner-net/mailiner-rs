@@ -117,7 +117,7 @@ pub fn email_to_imap_host_hint(email: &str) -> String {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-enum LookupStatus {
+pub(crate) enum LookupStatus {
     Idle,
     Looking,
     NeedEmail,
@@ -145,10 +145,11 @@ impl LookupStatus {
 }
 
 #[derive(Clone, Copy)]
-struct LookupEditGuard {
-    hosts_dirty: Signal<bool>,
-    lookup_gen: Signal<u64>,
-    lookup_status: Signal<LookupStatus>,
+pub(crate) struct LookupEditGuard {
+    pub(crate) hosts_dirty: Signal<bool>,
+    pub(crate) lookup_gen: Signal<u64>,
+    pub(crate) lookup_status: Signal<LookupStatus>,
+    pub(crate) last_discovered: Signal<Option<DiscoveredConfig>>,
 }
 
 impl LookupEditGuard {
@@ -164,6 +165,7 @@ pub fn provide_lookup_edit_guard() {
         hosts_dirty: use_signal(|| false),
         lookup_gen: use_signal(|| 0u64),
         lookup_status: use_signal(|| LookupStatus::Idle),
+        last_discovered: use_signal(|| None),
     };
     use_context_provider(|| guard);
 }
@@ -175,7 +177,7 @@ fn invalidate_lookup(mut lookup_gen: Signal<u64>, mut lookup_status: Signal<Look
 }
 
 #[allow(clippy::too_many_arguments)]
-fn start_server_lookup(
+pub(crate) fn start_server_lookup(
     email: String,
     fields: PresetFormFields,
     force: bool,
@@ -618,15 +620,97 @@ pub fn AccountConnectionFields(
     #[props(default)] open_advanced: bool,
     #[props(default)] hide_imap_password: bool,
 ) -> Element {
-    let host_placeholder = email_to_imap_host_hint(&email);
-    let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
-    let warn_plain = imap_tls_mode == ImapTlsMode::None;
-    let imap_port_for_tls = imap_port.clone();
+    rsx! {
+        AccountIdentityFields {
+            id_prefix: id_prefix.clone(),
+            display_name: display_name,
+            email: email.clone(),
+            imap_host: imap_host.clone(),
+            imap_port: imap_port.clone(),
+            imap_username: imap_username.clone(),
+            smtp_host: smtp_host.clone(),
+            smtp_port: smtp_port.clone(),
+            smtp_username: smtp_username.clone(),
+            smtp_use_tls: smtp_use_tls,
+            set_display_name: set_display_name,
+            set_email: set_email,
+            set_imap_host: set_imap_host,
+            set_imap_port: set_imap_port,
+            set_imap_username: set_imap_username,
+            set_smtp_host: set_smtp_host,
+            set_smtp_port: set_smtp_port,
+            set_smtp_username: set_smtp_username,
+            set_smtp_use_tls: set_smtp_use_tls,
+            set_smtp_open: set_smtp_open,
+            busy: busy,
+        }
+        AccountImapFields {
+            id_prefix: id_prefix.clone(),
+            email: email,
+            imap_host: imap_host,
+            imap_port: imap_port,
+            imap_username: imap_username,
+            imap_password: imap_password,
+            imap_tls_mode: imap_tls_mode,
+            set_imap_host: set_imap_host,
+            set_imap_port: set_imap_port,
+            set_imap_username: set_imap_username,
+            set_imap_password: set_imap_password,
+            set_imap_tls_mode: set_imap_tls_mode,
+            busy: busy,
+            hide_imap_password: hide_imap_password,
+        }
+        AccountProxyFields {
+            id_prefix: id_prefix,
+            proxy_base_url: proxy_base_url,
+            proxy_token: proxy_token,
+            remote_host: remote_host,
+            remote_port: remote_port,
+            smtp_remote_host: smtp_remote_host,
+            smtp_remote_port: smtp_remote_port,
+            set_proxy_base_url: set_proxy_base_url,
+            set_proxy_token: set_proxy_token,
+            set_remote_host: set_remote_host,
+            set_remote_port: set_remote_port,
+            set_smtp_remote_host: set_smtp_remote_host,
+            set_smtp_remote_port: set_smtp_remote_port,
+            busy: busy,
+            open_advanced: open_advanced,
+        }
+    }
+}
+
+/// Display name, email, provider preset, and server lookup.
+#[component]
+pub fn AccountIdentityFields(
+    id_prefix: String,
+    display_name: String,
+    email: String,
+    imap_host: String,
+    imap_port: String,
+    imap_username: String,
+    smtp_host: String,
+    smtp_port: String,
+    smtp_username: String,
+    smtp_use_tls: bool,
+    set_display_name: EventHandler<String>,
+    set_email: EventHandler<String>,
+    set_imap_host: EventHandler<String>,
+    set_imap_port: EventHandler<String>,
+    set_imap_username: EventHandler<String>,
+    set_smtp_host: EventHandler<String>,
+    set_smtp_port: EventHandler<String>,
+    set_smtp_username: EventHandler<String>,
+    set_smtp_use_tls: EventHandler<bool>,
+    set_smtp_open: EventHandler<bool>,
+    busy: bool,
+    #[props(default = true)] show_lookup_button: bool,
+) -> Element {
     let guard = use_context::<LookupEditGuard>();
     let mut hosts_dirty = guard.hosts_dirty;
     let lookup_gen = guard.lookup_gen;
     let lookup_status = guard.lookup_status;
-    let last_discovered = use_signal(|| None::<DiscoveredConfig>);
+    let last_discovered = guard.last_discovered;
     let looking = matches!(lookup_status(), LookupStatus::Looking);
     let current_fields = PresetFormFields {
         imap_host: imap_host.clone(),
@@ -636,15 +720,6 @@ pub fn AccountConnectionFields(
         smtp_port: smtp_port.clone(),
         smtp_username: smtp_username.clone(),
         smtp_use_tls,
-    };
-    let insecure_proxy = {
-        ProxySettings {
-            base_url: proxy_base_url.clone(),
-            token: String::new(),
-            remote_host: None,
-            remote_port: None,
-        }
-        .is_insecure_remote_ws()
     };
 
     rsx! {
@@ -719,58 +794,6 @@ pub fn AccountConnectionFields(
                 autocomplete: "email",
                 disabled: busy,
             }
-            div {
-                class: "onboarding-lookup-row",
-                button {
-                    r#type: "button",
-                    class: "onboarding-btn onboarding-btn-secondary",
-                    disabled: busy || looking,
-                    onclick: {
-                        let email = email.clone();
-                        let fields = current_fields.clone();
-                        move |_| {
-                            start_server_lookup(
-                                email.clone(),
-                                fields.clone(),
-                                true,
-                                busy,
-                                hosts_dirty,
-                                lookup_gen,
-                                lookup_status,
-                                last_discovered,
-                                set_imap_host,
-                                set_imap_port,
-                                set_imap_username,
-                                set_smtp_host,
-                                set_smtp_port,
-                                set_smtp_username,
-                                set_smtp_use_tls,
-                                set_smtp_open,
-                            );
-                        }
-                    },
-                    if looking {
-                        "Looking up…"
-                    } else {
-                        {crate::i18n::t("account_form.lookup")}
-                    }
-                }
-                p {
-                    class: "bootstrap-muted onboarding-lookup-status",
-                    role: "status",
-                    "{lookup_status().message()}"
-                }
-            }
-            p {
-                class: "bootstrap-muted onboarding-preset-hint",
-                "Looks up Mozilla ISPDB and common imap./smtp. hosts over HTTPS. \
-                 Only the domain is sent. You can edit the result."
-            }
-        }
-
-        fieldset {
-            class: "onboarding-section",
-            legend { {crate::i18n::t("account_form.imap")} }
             ProviderPresetSelect {
                 id: "{id_prefix}-provider",
                 email: email.clone(),
@@ -799,12 +822,153 @@ pub fn AccountConnectionFields(
                 },
                 busy: busy,
             }
+            if show_lookup_button {
+                div {
+                    class: "onboarding-lookup-row",
+                    button {
+                        r#type: "button",
+                        class: "onboarding-btn onboarding-btn-secondary",
+                        disabled: busy || looking,
+                        onclick: {
+                            let email = email.clone();
+                            let fields = current_fields.clone();
+                            move |_| {
+                                start_server_lookup(
+                                    email.clone(),
+                                    fields.clone(),
+                                    true,
+                                    busy,
+                                    hosts_dirty,
+                                    lookup_gen,
+                                    lookup_status,
+                                    last_discovered,
+                                    set_imap_host,
+                                    set_imap_port,
+                                    set_imap_username,
+                                    set_smtp_host,
+                                    set_smtp_port,
+                                    set_smtp_username,
+                                    set_smtp_use_tls,
+                                    set_smtp_open,
+                                );
+                            }
+                        },
+                        if looking {
+                            "Looking up…"
+                        } else {
+                            {crate::i18n::t("account_form.lookup")}
+                        }
+                    }
+                    LookupStatusLine {}
+                }
+            } else {
+                LookupStatusLine {}
+            }
+            p {
+                class: "bootstrap-muted onboarding-preset-hint",
+                "Looks up Mozilla ISPDB and common imap./smtp. hosts over HTTPS. \
+                 Only the domain is sent. You can edit the result."
+            }
+        }
+    }
+}
+
+/// IMAP host, port, TLS, username, and optional password.
+#[component]
+pub fn AccountImapFields(
+    id_prefix: String,
+    email: String,
+    imap_host: String,
+    imap_port: String,
+    imap_username: String,
+    imap_password: String,
+    imap_tls_mode: ImapTlsMode,
+    set_imap_host: EventHandler<String>,
+    set_imap_port: EventHandler<String>,
+    set_imap_username: EventHandler<String>,
+    set_imap_password: EventHandler<String>,
+    set_imap_tls_mode: EventHandler<ImapTlsMode>,
+    busy: bool,
+    #[props(default)] hide_imap_password: bool,
+    #[props(default)] compact_tls: bool,
+) -> Element {
+    let host_placeholder = email_to_imap_host_hint(&email);
+    let warn_starttls = imap_tls_mode == ImapTlsMode::StartTls;
+    let warn_plain = imap_tls_mode == ImapTlsMode::None;
+    let imap_port_for_tls = imap_port.clone();
+    let guard = use_context::<LookupEditGuard>();
+    let tls_select = rsx! {
+        div {
+            class: "onboarding-field",
+            label {
+                r#for: "{id_prefix}-imap-tls",
+                "TLS mode"
+            }
+            select {
+                id: "{id_prefix}-imap-tls",
+                name: "{id_prefix}-imap-tls",
+                value: imap_tls_mode.as_form_value(),
+                disabled: busy,
+                onchange: move |e| {
+                    let new_mode = ImapTlsMode::from_form_value(&e.value());
+                    let next_port = port_for_imap_tls_mode_change(
+                        &imap_port_for_tls,
+                        imap_tls_mode,
+                        new_mode,
+                    );
+                    if next_port != imap_port_for_tls {
+                        set_imap_port.call(next_port);
+                    }
+                    set_imap_tls_mode.call(new_mode);
+                },
+                option {
+                    value: "implicit",
+                    selected: imap_tls_mode == ImapTlsMode::Implicit,
+                    "Implicit TLS (port 993)"
+                }
+                option {
+                    value: "start_tls",
+                    selected: imap_tls_mode == ImapTlsMode::StartTls,
+                    "STARTTLS (port 143)"
+                }
+                option {
+                    value: "none",
+                    selected: imap_tls_mode == ImapTlsMode::None,
+                    "None (plaintext)"
+                }
+            }
+        }
+        if warn_starttls {
+            p {
+                class: "onboarding-notice",
+                role: "note",
+                "STARTTLS (port 143) sends the server greeting and STARTTLS \
+                 in the clear, including through the proxy. LOGIN is encrypted \
+                 after the upgrade. Prefer implicit TLS on port 993 when the \
+                 server supports it."
+            }
+        }
+        if warn_plain {
+            p {
+                class: "onboarding-notice",
+                role: "alert",
+                "Plaintext IMAP sends LOGIN and mail in the clear, including \
+                 through the proxy. Prefer implicit TLS on port 993 or STARTTLS \
+                 on port 143."
+            }
+        }
+    };
+
+    rsx! {
+        fieldset {
+            class: "onboarding-section",
+            legend { {crate::i18n::t("account_form.imap")} }
             FormField {
                 label: crate::i18n::t("account_form.host"),
                 id: "{id_prefix}-imap-host",
                 value: imap_host,
                 oninput: move |v| {
-                    hosts_dirty.set(true);
+                    guard.mark_dirty();
                     set_imap_host.call(v);
                 },
                 placeholder: host_placeholder.clone(),
@@ -816,78 +980,28 @@ pub fn AccountConnectionFields(
                 id: "{id_prefix}-imap-port",
                 value: imap_port,
                 oninput: move |v| {
-                    hosts_dirty.set(true);
+                    guard.mark_dirty();
                     set_imap_port.call(v);
                 },
                 input_type: "number",
                 autocomplete: "off",
                 disabled: busy,
             }
-            div {
-                class: "onboarding-field",
-                label {
-                    r#for: "{id_prefix}-imap-tls",
-                    "TLS mode"
+            if compact_tls {
+                details {
+                    class: "onboarding-advanced",
+                    summary { "Advanced: TLS" }
+                    {tls_select}
                 }
-                select {
-                    id: "{id_prefix}-imap-tls",
-                    name: "{id_prefix}-imap-tls",
-                    value: imap_tls_mode.as_form_value(),
-                    disabled: busy,
-                    onchange: move |e| {
-                        let new_mode = ImapTlsMode::from_form_value(&e.value());
-                        let next_port = port_for_imap_tls_mode_change(
-                            &imap_port_for_tls,
-                            imap_tls_mode,
-                            new_mode,
-                        );
-                        if next_port != imap_port_for_tls {
-                            set_imap_port.call(next_port);
-                        }
-                        set_imap_tls_mode.call(new_mode);
-                    },
-                    option {
-                        value: "implicit",
-                        selected: imap_tls_mode == ImapTlsMode::Implicit,
-                        "Implicit TLS (port 993)"
-                    }
-                    option {
-                        value: "start_tls",
-                        selected: imap_tls_mode == ImapTlsMode::StartTls,
-                        "STARTTLS (port 143)"
-                    }
-                    option {
-                        value: "none",
-                        selected: imap_tls_mode == ImapTlsMode::None,
-                        "None (plaintext)"
-                    }
-                }
-            }
-            if warn_starttls {
-                p {
-                    class: "onboarding-notice",
-                    role: "note",
-                    "STARTTLS (port 143) sends the server greeting and STARTTLS \
-                     in the clear, including through the proxy. LOGIN is encrypted \
-                     after the upgrade. Prefer implicit TLS on port 993 when the \
-                     server supports it."
-                }
-            }
-            if warn_plain {
-                p {
-                    class: "onboarding-notice",
-                    role: "alert",
-                    "Plaintext IMAP sends LOGIN and mail in the clear, including \
-                     through the proxy. Prefer implicit TLS on port 993 or STARTTLS \
-                     on port 143."
-                }
+            } else {
+                {tls_select}
             }
             FormField {
                 label: crate::i18n::t("account_form.username"),
                 id: "{id_prefix}-imap-user",
                 value: imap_username,
                 oninput: move |v| {
-                    invalidate_lookup(lookup_gen, lookup_status);
+                    invalidate_lookup(guard.lookup_gen, guard.lookup_status);
                     set_imap_username.call(v);
                 },
                 autocomplete: "username",
@@ -905,14 +1019,50 @@ pub fn AccountConnectionFields(
                 }
             }
         }
+    }
+}
 
+/// WebSocket TCP-proxy URL, token, and optional remote overrides.
+#[component]
+pub fn AccountProxyFields(
+    id_prefix: String,
+    proxy_base_url: String,
+    proxy_token: String,
+    remote_host: String,
+    remote_port: String,
+    smtp_remote_host: String,
+    smtp_remote_port: String,
+    set_proxy_base_url: EventHandler<String>,
+    set_proxy_token: EventHandler<String>,
+    set_remote_host: EventHandler<String>,
+    set_remote_port: EventHandler<String>,
+    set_smtp_remote_host: EventHandler<String>,
+    set_smtp_remote_port: EventHandler<String>,
+    busy: bool,
+    #[props(default)] open_advanced: bool,
+    #[props(default = true)] show_intro: bool,
+    #[props(default = true)] show_disclosure: bool,
+) -> Element {
+    let insecure_proxy = {
+        ProxySettings {
+            base_url: proxy_base_url.clone(),
+            token: String::new(),
+            remote_host: None,
+            remote_port: None,
+        }
+        .is_insecure_remote_ws()
+    };
+
+    rsx! {
         fieldset {
             class: "onboarding-section",
             legend { {crate::i18n::t("account_form.proxy")} }
-            p {
-                class: "bootstrap-muted",
-                "Browsers cannot open plain TCP. Mailiner reaches IMAP through a \
-                 WebSocket proxy (e.g. ws-tcp-proxy)."
+            if show_intro {
+                p {
+                    class: "bootstrap-muted",
+                    "Browsers cannot open plain TCP. Mailiner reaches IMAP through a \
+                     WebSocket proxy (e.g. ws-tcp-proxy)."
+                }
             }
             FormField {
                 label: crate::i18n::t("account_form.proxy_url"),
@@ -976,7 +1126,6 @@ pub fn AccountConnectionFields(
                 }
             }
         }
-
         if insecure_proxy {
             p {
                 class: "onboarding-warning",
@@ -985,14 +1134,32 @@ pub fn AccountConnectionFields(
                  The proxy token can be sniffed. Prefer wss://."
             }
         }
+        if show_disclosure {
+            p {
+                class: "onboarding-disclosure bootstrap-muted",
+                "Your IMAP password or OAuth tokens are stored only in this browser \
+                 on this device. Mailiner has no server account. Optionally protect \
+                 stored secrets and proxy tokens with an unlock passphrase. Anyone \
+                 with this browser profile can still use Mailiner while it is \
+                 unlocked. Use a private device; clear site data to remove it."
+            }
+        }
+    }
+}
 
+/// Lookup status text from [`provide_lookup_edit_guard`].
+#[component]
+pub fn LookupStatusLine() -> Element {
+    let guard = use_context::<LookupEditGuard>();
+    let msg = (guard.lookup_status)().message();
+    if msg.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
         p {
-            class: "onboarding-disclosure bootstrap-muted",
-            "Your IMAP password or OAuth tokens are stored only in this browser \
-             on this device. Mailiner has no server account. Optionally protect \
-             stored secrets and proxy tokens with an unlock passphrase. Anyone \
-             with this browser profile can still use Mailiner while it is \
-             unlocked. Use a private device; clear site data to remove it."
+            class: "bootstrap-muted onboarding-lookup-status",
+            role: "status",
+            "{msg}"
         }
     }
 }
@@ -1585,6 +1752,7 @@ pub fn AccountSmtpFields(
     set_smtp_tls_mode: EventHandler<SmtpTlsMode>,
     busy: bool,
     #[props(default)] open: bool,
+    #[props(default)] hide_password: bool,
 ) -> Element {
     let port_placeholder = default_port_for_tls_mode(smtp_tls_mode).to_string();
     let warn_starttls = smtp_tls_mode == SmtpTlsMode::StartTls;
@@ -1641,15 +1809,17 @@ pub fn AccountSmtpFields(
                     autocomplete: "off",
                     disabled: busy,
                 }
-                FormField {
-                    label: crate::i18n::t("account_form.smtp_password"),
-                    id: "{id_prefix}-smtp-password",
-                    value: smtp_password,
-                    oninput: move |v| set_smtp_password.call(v),
-                    input_type: "password",
-                    placeholder: "Leave empty to reuse IMAP password",
-                    autocomplete: "off",
-                    disabled: busy,
+                if !hide_password {
+                    FormField {
+                        label: crate::i18n::t("account_form.smtp_password"),
+                        id: "{id_prefix}-smtp-password",
+                        value: smtp_password,
+                        oninput: move |v| set_smtp_password.call(v),
+                        input_type: "password",
+                        placeholder: "Leave empty to reuse IMAP password",
+                        autocomplete: "off",
+                        disabled: busy,
+                    }
                 }
                 div {
                     class: "onboarding-field",

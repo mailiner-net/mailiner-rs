@@ -66,6 +66,7 @@ mod recipient_suggest;
 mod reconnect;
 mod selection;
 mod send;
+mod setup_wizard;
 mod shortcuts;
 mod smime;
 mod smtp_inflight;

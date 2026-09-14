@@ -40,9 +40,11 @@ test('settings and account pages render after an account exists', async ({ page 
   );
 
   await page.goto('/settings/accounts/new');
-  await expect(page.getByRole('heading', { name: 'Add account' })).toBeVisible();
+  await expect(page.getByText('Add account', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your email' })).toBeVisible();
   await expect(page.getByLabel('Display name')).toBeVisible();
   await expect(page.locator('#account-new-email')).toBeVisible();
+  await expect(page.getByLabel('Proxy base URL')).toHaveCount(0);
 
   await page.goto('/settings/accounts/e2e-account-1');
   await expect(page.getByRole('heading', { name: 'Edit account' })).toBeVisible();

@@ -29,6 +29,36 @@ pub fn use_restore_focus_on_unmount() {
     use_drop(move || restore_focus(saved.borrow().clone()));
 }
 
+/// Focus the first tabbable control inside `container_selector`.
+pub fn focus_first_focusable(container_selector: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let Ok(Some(root)) = doc.query_selector(container_selector) else {
+            return;
+        };
+        let Ok(list) = root.query_selector_all(
+            "button:not([disabled]), [href], input:not([disabled]):not([type='hidden']), \
+             select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        ) else {
+            return;
+        };
+        let Some(node) = list.item(0) else {
+            return;
+        };
+        if let Ok(html) = node.dyn_into::<web_sys::HtmlElement>() {
+            let _ = html.focus();
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = container_selector;
+    }
+}
+
 /// Move keyboard focus to an element by id (skip link, overlay close).
 pub fn focus_element_by_id(id: &str) {
     #[cfg(target_arch = "wasm32")]

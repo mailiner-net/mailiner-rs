@@ -39,6 +39,7 @@ pub mod recipient_suggest;
 pub mod reconnect;
 pub mod selection;
 pub mod send;
+pub mod setup_wizard;
 pub mod shortcuts;
 pub mod smime;
 pub mod smtp_inflight;

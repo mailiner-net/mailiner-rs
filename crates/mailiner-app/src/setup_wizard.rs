@@ -30,9 +30,16 @@ pub enum SetupStep {
 /// Whether the Connection (proxy) step belongs in the list.
 ///
 /// Hidden when a proxy URL is already known (debug prefill or last-used
-/// copy) unless the user asked to change it.
+/// copy) unless the user asked to change it. While the user is **on** the
+/// proxy step, keep it even after they type a URL — otherwise the step
+/// drops out of the list and the wizard snaps to Review.
 pub fn include_proxy_step(proxy_url: &str, force: bool) -> bool {
     force || proxy_url.trim().is_empty()
+}
+
+/// [`include_proxy_step`] plus “do not hide the step the user is editing”.
+pub fn include_proxy_step_now(proxy_url: &str, force: bool, current: SetupStep) -> bool {
+    include_proxy_step(proxy_url, force) || current == SetupStep::Proxy
 }
 
 /// Ordered steps for `mode`.
@@ -151,6 +158,40 @@ mod tests {
         assert!(include_proxy_step("ws://localhost:9400/proxy", true));
         let steps = setup_steps(SetupMode::AddAccount, true);
         assert!(steps.contains(&SetupStep::Proxy));
+    }
+
+    #[test]
+    fn typing_proxy_url_on_that_step_does_not_drop_it() {
+        assert!(include_proxy_step_now(
+            "ws://127.0.0.1:9400/proxy",
+            false,
+            SetupStep::Proxy,
+        ));
+        let steps = setup_steps(
+            SetupMode::FirstRun,
+            include_proxy_step_now("ws://127.0.0.1:9400/proxy", false, SetupStep::Proxy),
+        );
+        assert_eq!(
+            steps,
+            vec![
+                SetupStep::Welcome,
+                SetupStep::Email,
+                SetupStep::SignIn,
+                SetupStep::Servers,
+                SetupStep::Proxy,
+                SetupStep::Unlock,
+                SetupStep::Review,
+            ]
+        );
+    }
+
+    #[test]
+    fn filled_proxy_still_skips_when_not_on_that_step() {
+        assert!(!include_proxy_step_now(
+            "ws://127.0.0.1:9400/proxy",
+            false,
+            SetupStep::Unlock,
+        ));
     }
 
     fn cfg(id: &str, url: &str, updated_hour: u32) -> AccountConfig {

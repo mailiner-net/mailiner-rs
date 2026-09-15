@@ -47,11 +47,38 @@ pub fn add_extra_ca_pems(
     Ok(added)
 }
 
+/// Trust the bundled docker-mail CA in debug builds / `local-ca`.
+///
+/// The compose Dovecot/Postfix container presents a cert signed by
+/// `docker/mail/tls/ca.crt`. rustls only has `webpki_roots`, so without
+/// this hook IMAPS against `mail` / `localhost` fails.
+fn add_local_dev_ca(store: &mut RootCertStore) {
+    #[cfg(any(debug_assertions, feature = "local-ca"))]
+    {
+        const PEM: &[u8] = include_bytes!("../../../docker/mail/tls/ca.crt");
+        for item in CertificateDer::pem_slice_iter(PEM) {
+            match item {
+                Ok(cert) => {
+                    if let Err(e) = store.add(cert) {
+                        tracing::warn!("local mail CA not added: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("local mail CA parse failed: {e}"),
+            }
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "local-ca")))]
+    {
+        let _ = store;
+    }
+}
+
 /// webpki roots plus any extra user-imported CA PEMs.
 pub fn root_cert_store(extra_ca_pems: &[String]) -> Result<RootCertStore, String> {
     let mut store = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
+    add_local_dev_ca(&mut store);
     add_extra_ca_pems(&mut store, extra_ca_pems)?;
     Ok(store)
 }
@@ -120,6 +147,22 @@ nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
         let baseline = root_cert_store(&[]).unwrap();
         let with_extra = root_cert_store(&[TEST_CA_PEM.to_string()]).unwrap();
         assert_eq!(with_extra.roots.len(), baseline.roots.len() + 1);
+    }
+
+    #[test]
+    fn debug_or_local_ca_trusts_docker_mail_ca() {
+        let store = root_cert_store(&[]).unwrap();
+        #[cfg(any(debug_assertions, feature = "local-ca"))]
+        {
+            assert!(
+                store.roots.len() > webpki_roots::TLS_SERVER_ROOTS.len(),
+                "debug/local-ca builds must load docker/mail/tls/ca.crt"
+            );
+        }
+        #[cfg(not(any(debug_assertions, feature = "local-ca")))]
+        {
+            assert_eq!(store.roots.len(), webpki_roots::TLS_SERVER_ROOTS.len());
+        }
     }
 
     #[test]

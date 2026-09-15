@@ -1,14 +1,18 @@
-# Local IMAP + SMTP for Mailiner development.
-#   docker compose up --build
+# Local IMAP + SMTP + WebSocket TCP proxy for Mailiner development and e2e.
+#   docker compose up --build --wait
 #
 # Default account: dev@mailiner.test / dev
-# Ports: 993 (IMAPS), 465 (SMTPS), 587 (submission STARTTLS), 143, 25
+# Mailiner (browser) talks to the proxy on localhost:9400. The proxy dials
+# the `mail` service on the compose network — set IMAP/SMTP host to `mail`
+# (that name is on the test certificate SAN).
+#
+# Override the proxy build context when ws-tcp-proxy is not a sibling:
+#   WS_TCP_PROXY_CONTEXT=/path/to/ws-tcp-proxy docker compose up --build
 services:
   mail:
     build:
       context: ./docker/mail
     image: mailiner-mail:local
-    container_name: mailiner-mail
     ports:
       - "127.0.0.1:993:993"
       - "127.0.0.1:465:465"
@@ -22,6 +26,32 @@ services:
       FORCE_SEED: ${FORCE_SEED:-0}
     volumes:
       - mail-data:/var/mail/vmail
+    restart: unless-stopped
+
+  proxy:
+    build:
+      context: ${WS_TCP_PROXY_CONTEXT:-../ws-tcp-proxy}
+      dockerfile: Dockerfile
+    image: mailiner-proxy:local
+    ports:
+      - "127.0.0.1:9400:9400"
+    environment:
+      PORT: "9400"
+      # Release image: public auth + private Docker dests need MAILINER_UNSAFE.
+      MAILINER_AUTH: public
+      MAILINER_ALLOW_PRIVATE_DESTS: "1"
+      MAILINER_UNSAFE: "1"
+      METRICS_AUTH_TOKEN: ${PROXY_METRICS_TOKEN:-dev-metrics-token}
+      MAILINER_ALLOWED_ORIGINS: ${MAILINER_ALLOWED_ORIGINS:-http://127.0.0.1:8080,http://localhost:8080,http://127.0.0.1:8090,http://localhost:8090}
+    depends_on:
+      mail:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9400'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

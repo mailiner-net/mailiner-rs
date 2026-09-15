@@ -15,7 +15,7 @@ use async_smtp::extension::{
 use async_smtp::response::Response;
 use async_smtp::{Envelope, SendableEmail, SmtpClient, SmtpTransport};
 use mailiner_core::{AccountId, DsnRequest, SendErrorKind, SubmitReceipt, SubmitRequest};
-use rustls::{ClientConfig, RootCertStore};
+use rustls::ClientConfig;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -59,32 +59,6 @@ pub enum SmtpAuthKind {
     #[default]
     Password,
     Xoauth2,
-}
-
-/// Trust the bundled local-mail CA in debug builds / `local-ca`.
-/// See `mailiner-imap-connector` — same CA, same reason (SMTP 465/587).
-fn add_local_dev_ca(root_store: &mut RootCertStore) {
-    #[cfg(any(debug_assertions, feature = "local-ca"))]
-    {
-        use rustls_pki_types::pem::PemObject;
-        use rustls_pki_types::CertificateDer;
-
-        const PEM: &[u8] = include_bytes!("../../../docker/mail/tls/ca.crt");
-        for item in CertificateDer::pem_slice_iter(PEM) {
-            match item {
-                Ok(cert) => {
-                    if let Err(e) = root_store.add(cert) {
-                        tracing::warn!("local mail CA not added: {e}");
-                    }
-                }
-                Err(e) => tracing::warn!("local mail CA parse failed: {e}"),
-            }
-        }
-    }
-    #[cfg(not(any(debug_assertions, feature = "local-ca")))]
-    {
-        let _ = root_store;
-    }
 }
 
 /// One-shot SMTP client. Password / access token is never stored.
@@ -145,9 +119,8 @@ impl SmtpConnector {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let mut root_store = root_cert_store(&self.extra_ca_pems)
+        let root_store = root_cert_store(&self.extra_ca_pems)
             .map_err(|e| SmtpError::classified(SendErrorKind::TlsOrSni, e))?;
-        add_local_dev_ca(&mut root_store);
         let config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();

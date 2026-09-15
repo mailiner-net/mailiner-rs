@@ -1,7 +1,10 @@
 # End-to-end tests
 
-Playwright drives the app in a real browser against a `dx serve` instance of
-`mailiner-app`.
+Playwright drives the app in a real browser. Locally it starts `dx serve` for
+`mailiner-app`. In GitHub Actions the **Playwright e2e** job (part of
+**Build & Test**) serves the release web artifact from the **Build mailiner-app
+(web)** job — that workflow runs on pull requests and on every push / merge to
+`main` (via **Build & Deploy**).
 
 All commands below are run from the repository root — `package.json` and
 `playwright.config.ts` live there, not inside `e2e/`.
@@ -10,8 +13,11 @@ All commands below are run from the repository root — `package.json` and
 
 - Node.js 20+
 - [`dioxus-cli`](https://dioxuslabs.com/learn/0.7/getting_started) (`dx`) on
-  `PATH`, matching the version pinned in `.github/workflows/deploy-pages.yml`
+  `PATH`, matching the version pinned in `.github/workflows/build-test.yml`
 - The `wasm32-unknown-unknown` Rust target: `rustup target add wasm32-unknown-unknown`
+
+CI does not need `dx` in the e2e job: it reuses the already-built
+`web-public` artifact.
 
 ## Setup
 
@@ -30,11 +36,38 @@ This starts `dx serve -p mailiner-app` automatically (see `playwright.config.ts`
 and waits for it to come up before running the tests. The first run can take a
 few minutes since it compiles the whole workspace to WASM.
 
+To exercise a release bundle the same way CI does (SPA static server, no
+`dx serve`):
+
+```bash
+dx build -p mailiner-app --release --web --debug-symbols=false
+MAILINER_E2E_SERVE_DIR=target/dx/mailiner-app/release/web/public npm run test:e2e
+```
+
+`npm run test:e2e` runs the offline **chromium** project only. It does not
+start docker-mail.
+
+## Live tests (docker-mail + proxy)
+
+`e2e/tests/live.spec.ts` connects through `ws-tcp-proxy` to the compose
+Dovecot/Postfix container. It is a separate Playwright project so the
+offline suite stays off the network.
+
+```bash
+docker compose up --build --wait
+npm run test:e2e:live
+```
+
+IMAP/SMTP host is `mail` (compose DNS + certificate SAN). The live helpers
+inject `docker/mail/tls/ca.crt` as an extra CA so a **release** WASM build
+accepts the test certificate. Debug `dx serve` already trusts that CA.
+
+GitHub Actions job **Playwright e2e (docker-mail)** checks out
+`mailiner-net/ws-tcp-proxy`, runs `docker compose up --wait`, and executes
+`--project=live` against the release web artifact.
+
 Account credentials are entered via the first-run onboarding form (or loaded
 from browser localStorage). No build-time `IMAP_PASSWORD` is required.
-Connecting to a real IMAP account needs the usual local setup described in
-the top-level `README.md` (including running `ws-tcp-proxy` and completing
-onboarding).
 
 ## Seeding an account (no live IMAP)
 
@@ -67,5 +100,5 @@ npm run test:e2e:ui
 npm run test:e2e:report
 
 # point tests at an already-running dev server instead of spawning one
-MAILINER_E2E_BASE_URL=http://127.0.0.1:8080 npx playwright test
+MAILINER_E2E_BASE_URL=http://127.0.0.1:8080 npx playwright test --project=chromium
 ```

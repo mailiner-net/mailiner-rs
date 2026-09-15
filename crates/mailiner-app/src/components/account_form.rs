@@ -538,6 +538,21 @@ pub fn use_form_test_status_cleanup(
     });
 }
 
+fn blur_moved_to_button(evt: &Event<dioxus::html::FocusData>) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        if let Some(fe) = evt.data().downcast::<web_sys::FocusEvent>()
+            && let Some(target) = fe.related_target()
+            && let Ok(el) = target.dyn_into::<web_sys::Element>()
+        {
+            return el.tag_name().eq_ignore_ascii_case("BUTTON");
+        }
+    }
+    let _ = evt;
+    false
+}
+
 #[component]
 pub fn FormField(
     label: String,
@@ -568,7 +583,14 @@ pub fn FormField(
                 oninput: move |e| oninput.call(e.value()),
                 onblur: {
                     let value = value.clone();
-                    move |_| onblur.call(value.clone())
+                    move |evt| {
+                        // Blur-then-click on Continue remounts the form if
+                        // lookup starts here, and the submit never fires.
+                        if blur_moved_to_button(&evt) {
+                            return;
+                        }
+                        onblur.call(value.clone());
+                    }
                 },
             }
         }

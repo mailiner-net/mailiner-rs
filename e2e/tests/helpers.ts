@@ -187,7 +187,45 @@ export function composeOverlay(page: Page) {
 
 /** Advance the setup wizard from its primary action. */
 export async function wizardContinue(page: Page, label = 'Continue') {
-  await page.getByRole('button', { name: label, exact: true }).click();
+  const btn = page.getByRole('button', { name: label, exact: true });
+  await expect(btn).toBeEnabled();
+  await btn.click();
+}
+
+/**
+ * Fill the email step, let autodiscover finish (blur onto the heading, not
+ * Continue — that click race remounts the form), then advance to Sign in.
+ */
+export async function completeEmailStep(
+  page: Page,
+  displayName: string,
+  email: string,
+) {
+  await expect(page.getByRole('heading', { name: 'Your email' })).toBeVisible();
+  await page.locator('#onboarding-display-name').fill(displayName);
+  await page.locator('#onboarding-email').fill(email);
+  await expect(page.locator('#onboarding-display-name')).toHaveValue(displayName);
+  await expect(page.locator('#onboarding-email')).toHaveValue(email);
+  await page.getByRole('heading', { name: 'Your email' }).click();
+  await expect(
+    page.getByText(/guessed imap|Could not look|already set|Looking up IMAP/i),
+  ).toBeVisible();
+  await expect(page.getByText(/Looking up IMAP/i)).toHaveCount(0, { timeout: 30_000 });
+  await wizardContinue(page);
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+}
+
+/** Fill the proxy URL if that step is shown; assert Continue stays on screen. */
+export async function completeProxyStepIfShown(page: Page, proxyUrl: string) {
+  const proxy = page.getByRole('heading', { name: 'How Mailiner connects' });
+  const unlock = page.getByRole('heading', { name: 'Protect this device' });
+  const review = page.getByRole('heading', { name: 'Review and connect' });
+  await expect(proxy.or(unlock).or(review)).toBeVisible();
+  if (await proxy.isVisible()) {
+    await page.locator('#onboarding-proxy-url').fill(proxyUrl);
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeVisible();
+    await wizardContinue(page);
+  }
 }
 
 /**

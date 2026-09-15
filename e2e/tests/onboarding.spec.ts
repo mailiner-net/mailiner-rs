@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { gotoPath, wizardContinue } from './helpers';
+import { completeEmailStep, completeProxyStepIfShown, gotoPath, wizardContinue } from './helpers';
 
 function validationStatus(page: import('@playwright/test').Page) {
   return page.locator('.onboarding-status-error');
@@ -45,20 +45,14 @@ test('wizard walks identity → sign-in → servers', async ({ page }) => {
 
   await expect(page.locator('#onboarding-display-name')).toBeVisible();
   await expect(page.locator('#onboarding-email')).toBeVisible();
-  await page.locator('#onboarding-display-name').fill('Ada Lovelace');
-  await page.locator('#onboarding-email').fill('ada@example.com');
-  await wizardContinue(page);
-
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await completeEmailStep(page, 'Ada Lovelace', 'ada@example.com');
   await expect(page.locator('#onboarding-imap-password')).toBeVisible();
   await expect(page.locator('#onboarding-auth-kind')).toHaveValue('password');
 });
 
 test('OAuth sign-in fields appear when the method is switched', async ({ page }) => {
   await startWizard(page);
-  await page.locator('#onboarding-display-name').fill('Ada Lovelace');
-  await page.locator('#onboarding-email').fill('ada@example.com');
-  await wizardContinue(page);
+  await completeEmailStep(page, 'Ada Lovelace', 'ada@example.com');
 
   await page.locator('#onboarding-auth-kind').selectOption('oauth2');
   await expect(page.locator('#onboarding-oauth-provider')).toBeVisible();
@@ -73,9 +67,7 @@ test('OAuth sign-in fields appear when the method is switched', async ({ page })
 
 test('mismatched unlock passphrase is rejected before connect', async ({ page }) => {
   await startWizard(page);
-  await page.locator('#onboarding-display-name').fill('Ada Lovelace');
-  await page.locator('#onboarding-email').fill('ada@example.com');
-  await wizardContinue(page);
+  await completeEmailStep(page, 'Ada Lovelace', 'ada@example.com');
 
   await page.locator('#onboarding-imap-password').fill('secret');
   await wizardContinue(page);
@@ -85,11 +77,7 @@ test('mismatched unlock passphrase is rejected before connect', async ({ page })
   await page.locator('#onboarding-imap-user').fill('ada@example.com');
   await wizardContinue(page);
 
-  // Debug prefill may skip the proxy step.
-  if (await page.getByRole('heading', { name: 'How Mailiner connects' }).isVisible()) {
-    await page.locator('#onboarding-proxy-url').fill('ws://127.0.0.1:59999/proxy');
-    await wizardContinue(page);
-  }
+  await completeProxyStepIfShown(page, 'ws://127.0.0.1:59999/proxy');
 
   await expect(page.getByRole('heading', { name: 'Protect this device' })).toBeVisible();
   await page.getByLabel('Unlock passphrase', { exact: true }).fill('correct-horse');

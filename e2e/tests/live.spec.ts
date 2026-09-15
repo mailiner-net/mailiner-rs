@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { composeButton, gotoPath, wizardContinue } from './helpers';
+import { completeEmailStep, completeProxyStepIfShown, composeButton, gotoPath, wizardContinue } from './helpers';
 import {
   LIVE_ACCOUNT_EMAIL,
   LIVE_ACCOUNT_NAME,
@@ -42,14 +42,7 @@ test('setup wizard Connect authenticates against docker-mail', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
   await page.getByRole('button', { name: 'Get started' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Your email' })).toBeVisible();
-  await page.locator('#onboarding-display-name').fill(LIVE_ACCOUNT_NAME);
-  await page.locator('#onboarding-email').fill(LIVE_ACCOUNT_EMAIL);
-  await page.locator('#onboarding-email').blur();
-  await expect(page.getByText(/guessed imap|Could not look|Looking up/)).toBeVisible();
-  await wizardContinue(page);
-
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await completeEmailStep(page, LIVE_ACCOUNT_NAME, LIVE_ACCOUNT_EMAIL);
   await page.locator('#onboarding-imap-password').fill(LIVE_ACCOUNT_PASSWORD);
   await wizardContinue(page);
 
@@ -61,10 +54,7 @@ test('setup wizard Connect authenticates against docker-mail', async ({ page }) 
   await page.locator('#onboarding-extra-ca-file').setInputFiles('docker/mail/tls/ca.crt');
   await wizardContinue(page);
 
-  if (await page.getByRole('heading', { name: 'How Mailiner connects' }).isVisible()) {
-    await page.locator('#onboarding-proxy-url').fill(LIVE_PROXY_URL);
-    await wizardContinue(page);
-  }
+  await completeProxyStepIfShown(page, LIVE_PROXY_URL);
 
   if (await page.getByRole('heading', { name: 'Protect this device' }).isVisible()) {
     await wizardContinue(page);

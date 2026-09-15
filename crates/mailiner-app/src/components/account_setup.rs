@@ -18,9 +18,8 @@ use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
     AccountIdentityFields, AccountImapFields, AccountOauthFields, AccountProxyFields,
     AccountSmtpFields, AccountTlsFields, FormAuth, FormField, FormPhase, FormStatusBanner,
-    LookupEditGuard,
-    StatusMessage, apply_form_auth, build_config_from_form, kind_label, provide_lookup_edit_guard,
-    start_server_lookup,
+    LookupEditGuard, StatusMessage, apply_form_auth, build_config_from_form, kind_label,
+    provide_lookup_edit_guard, start_server_lookup,
 };
 use crate::components::wizard::WizardShell;
 use crate::connection::ConnectionState;
@@ -28,7 +27,7 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::provider_preset::PresetFormFields;
 use crate::setup_wizard::{
-    SetupMode, SetupStep, include_proxy_step, last_used_proxy_source, setup_steps,
+    SetupMode, SetupStep, include_proxy_step_now, last_used_proxy_source, setup_steps,
 };
 
 /// First-run or add-account wizard.
@@ -173,12 +172,13 @@ pub fn AccountSetupWizard(mode: SetupMode) -> Element {
     });
 
     let busy = !matches!(phase(), FormPhase::Idle);
+    let requested = current();
     let steps = setup_steps(
         mode,
-        include_proxy_step(&model.proxy_base_url(), force_proxy()),
+        include_proxy_step_now(&model.proxy_base_url(), force_proxy(), requested),
     );
-    let step = if steps.contains(&current()) {
-        current()
+    let step = if steps.contains(&requested) {
+        requested
     } else {
         *steps.last().unwrap_or(&SetupStep::Email)
     };

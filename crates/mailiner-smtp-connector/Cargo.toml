@@ -7,7 +7,7 @@ edition = "2021"
 async-smtp = { version = "0.10.2", default-features = false, features = ["runtime-tokio"] }
 tokio = { workspace = true, features = ["io-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
-rustls = { version = "0.23", default-features = false, features = ["tls12", "std", "ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["tls12", "std", "ring"] }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 rustls-pki-types = { version = "1.12", features = ["web"] }
 webpki-roots = "0.26"

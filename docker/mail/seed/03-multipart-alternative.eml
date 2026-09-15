@@ -1,0 +1,39 @@
+From: Alice Example <alice@example.com>
+To: Dev User <dev@mailiner.test>
+Cc: Bob Example <bob@example.org>
+Subject: Meeting notes
+Date: Mon, 03 Aug 2026 14:30:00 +0000
+Message-ID: <meeting-notes@mailiner.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt-meeting-notes"
+
+--alt-meeting-notes
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Meeting notes
+=============
+
+- Ship the local mail container
+- Exercise multipart/alternative rendering
+- Prefer the HTML part in the viewer
+
+See you Thursday.
+
+--alt-meeting-notes
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Meeting notes</h2>
+  <ol>
+    <li>Ship the local mail container</li>
+    <li>Exercise <code>multipart/alternative</code> rendering</li>
+    <li>Prefer the <em>HTML</em> part in the viewer</li>
+  </ol>
+  <p>See you Thursday.</p>
+</body>
+</html>
+--alt-meeting-notes--

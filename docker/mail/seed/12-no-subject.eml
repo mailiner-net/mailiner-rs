@@ -1,0 +1,10 @@
+From: Quiet Sender <quiet@example.com>
+To: Dev User <dev@mailiner.test>
+Date: Tue, 11 Aug 2026 09:55:00 +0000
+Message-ID: <no-subject@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+This message deliberately has no Subject header so the UI can show its
+empty-subject fallback.

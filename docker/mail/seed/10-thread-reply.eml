@@ -1,0 +1,18 @@
+From: Dev User <dev@mailiner.test>
+To: Alice Example <alice@example.com>
+Subject: Re: Thread: lunch plans
+Date: Sun, 09 Aug 2026 12:22:00 +0000
+Message-ID: <thread-reply@mailiner.test>
+In-Reply-To: <thread-root@mailiner.test>
+References: <thread-root@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+On Sun, 09 Aug 2026, Alice Example wrote:
+> Are you free for lunch on Wednesday?
+
+Yes — 12:30 at the usual place works.
+
+This reply carries In-Reply-To and References so reply-prefill
+can pick up the thread.

@@ -1,0 +1,12 @@
+From: Alice Example <alice@example.com>
+To: Dev User <dev@mailiner.test>
+Subject: Thread: lunch plans
+Date: Sun, 09 Aug 2026 12:00:00 +0000
+Message-ID: <thread-root@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+Are you free for lunch on Wednesday?
+
+This is the root of a two-message thread (In-Reply-To / References).

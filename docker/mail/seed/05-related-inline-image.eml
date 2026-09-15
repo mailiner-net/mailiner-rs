@@ -1,0 +1,27 @@
+From: Design Team <design@mailiner.test>
+To: Dev User <dev@mailiner.test>
+Subject: Logo proof (inline image)
+Date: Wed, 05 Aug 2026 16:00:00 +0000
+Message-ID: <inline-image@mailiner.test>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="rel-logo"; type="text/html"
+
+--rel-logo
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Inline CID image (1&times;1 PNG) — should render after cid rehydration:</p>
+  <p><img src="cid:pixel@mailiner.test" alt="red pixel" width="64" height="64"></p>
+</body>
+</html>
+--rel-logo
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: <pixel@mailiner.test>
+Content-Disposition: inline; filename="pixel.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+--rel-logo--

@@ -1,0 +1,21 @@
+From: Not A Friend <phish@example.invalid>
+To: Dev User <dev@mailiner.test>
+Subject: Sanitizer bait (script + javascript: URL)
+Date: Wed, 12 Aug 2026 21:00:00 +0000
+Message-ID: <sanitizer-bait@mailiner.test>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 7bit
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>If the sanitizer works you should <strong>not</strong> see an alert
+  and the javascript: link should be stripped or neutralized.</p>
+  <script>alert("xss")</script>
+  <img src="x" onerror="alert('xss')">
+  <a href="javascript:alert(1)">click me</a>
+  <iframe src="https://example.invalid/frame"></iframe>
+  <p>Safe text after the bait.</p>
+</body>
+</html>

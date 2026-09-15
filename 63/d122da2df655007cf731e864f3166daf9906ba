@@ -1,0 +1,21 @@
+crates/mailiner-smtp-connector/Cargo.toml
+  s_3130fe667ed316::t_4f17758f1c20fd 10
+crates/mailiner-imap-connector/Cargo.toml
+  s_3130fe667ed316::t_1ec16b17aa6a55 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "63d122da2df655007cf731e864f3166daf9906ba",
+  "prompts": {},
+  "sessions": {
+    "s_3130fe667ed316": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0a6cf-86a4-7f31-9842-14bb5bd1f88b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

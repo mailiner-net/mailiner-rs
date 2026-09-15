@@ -10,7 +10,7 @@ async-compression = { version = "0.4", default-features = false, features = ["de
 async-imap = { git = "https://github.com/mailiner-net/async-imap", branch = "main", default-features = false, features = ["runtime-tokio"] }
 tokio = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
-rustls = { version = "0.23", default-features = false, features = [ "tls12", "std", "ring" ] }
+rustls = { version = "0.23.45", default-features = false, features = [ "tls12", "std", "ring" ] }
 ring = { version = "0.17", features = [ "wasm32_unknown_unknown_js" ]}
 rustls-pki-types = { version = "1.12", features = [ "web" ] }
 async-trait = "0.1"

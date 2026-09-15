@@ -1,0 +1,32 @@
+e2e/tests/helpers.ts
+  s_3130fe667ed316::t_76b50c631ed657 190-228
+e2e/tests/live.spec.ts
+  s_3130fe667ed316::t_bd8e8cd69b94fe 2,45,57
+crates/mailiner-app/src/components/account_form.rs
+  s_3130fe667ed316::t_a83cf36ccb1e41 586-593
+  s_3130fe667ed316::t_3f62d922c2a645 541-555
+e2e/tests/onboarding.spec.ts
+  s_3130fe667ed316::t_74dd7ebbd1de0b 2,48,55,70,80
+crates/mailiner-app/src/setup_wizard.rs
+  s_3130fe667ed316::t_7d4382e9412642 33-35,40-44,163-194
+crates/mailiner-app/src/components/account_setup.rs
+  s_3130fe667ed316::t_230136503282db 30,175,178,180-181
+crates/mailiner-app/Cargo.toml
+  s_3130fe667ed316::t_b84d23d0ed1f3a 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3f92f4eceb8262a8a1ed25dcf18e2006a319a0ed",
+  "prompts": {},
+  "sessions": {
+    "s_3130fe667ed316": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0a6cf-86a4-7f31-9842-14bb5bd1f88b",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

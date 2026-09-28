@@ -24,7 +24,6 @@ pub struct WebSocketStreamInner {
     web_socket: SendWrapper<Option<WebSocket>>,
     ready_state: WsReadyState,
     read_buf: Vec<u8>,
-    write_buf: Vec<u8>,
     read_wakers: Vec<Waker>,
     write_waiters: Vec<Waker>,
     open_wakers: Vec<Waker>,
@@ -48,7 +47,6 @@ impl WebSocketStreamInner {
             web_socket,
             ready_state: WsReadyState::Connecting,
             read_buf: Vec::with_capacity(4096),
-            write_buf: Vec::with_capacity(4096),
             read_wakers: Vec::new(),
             write_waiters: Vec::new(),
             open_wakers: Vec::new(),
@@ -145,9 +143,14 @@ impl WebSocketStreamInner {
 pub struct WebSocketStream {
     inner: Arc<Mutex<WebSocketStreamInner>>,
 
+    // Owned so the JS callbacks stay registered for the life of the stream.
+    #[allow(dead_code)]
     onopen_cb: SendWrapper<Closure<dyn FnMut()>>,
+    #[allow(dead_code)]
     onmessage_cb: SendWrapper<Closure<dyn FnMut(MessageEvent)>>,
+    #[allow(dead_code)]
     onerror_cb: SendWrapper<Closure<dyn FnMut(Event)>>,
+    #[allow(dead_code)]
     onclose_cb: SendWrapper<Closure<dyn FnMut(CloseEvent)>>,
 }
 
@@ -208,14 +211,6 @@ impl WebSocketStream {
             onerror_cb: SendWrapper::new(onerror_cb),
             onclose_cb: SendWrapper::new(onclose_cb),
         })
-    }
-
-    /// Current WebSocket readiness.
-    pub fn ready_state(&self) -> WsReadyState {
-        self.inner
-            .lock()
-            .expect("Failed to lock web socket")
-            .ready_state
     }
 
     /// Wait until the WebSocket is open, or fail if it errors/closes first.

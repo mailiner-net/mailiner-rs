@@ -32,7 +32,6 @@ use async_imap::{Client, Session};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
-use imap_proto::types::BodyStructure;
 use mail_parser::{Address, HeaderValue, MessageParser};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -240,14 +239,6 @@ where
     }
 }
 
-struct ImapClient<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Debug,
-{
-    client: Client<TlsStream<S>>,
-    session: Option<Session<ImapIo<S>>>,
-}
-
 #[derive(Debug)]
 enum ImapSession<S>
 where
@@ -268,6 +259,8 @@ where
     /// App-owned stable account id (not `imap-{username}`).
     account_id: AccountId,
     host: String,
+    /// Accepted by [`Self::new`]. The TCP stream is already dialed, so the session never reads it.
+    #[allow(dead_code)]
     port: u16,
     username: String,
     auth_kind: ImapAuthKind,
@@ -903,27 +896,6 @@ where
         }
     }
 
-    fn parse_folder_hierarchy(name: &str) -> (String, Option<String>) {
-        let parts: Vec<&str> = name.split('/').collect();
-        if parts.len() > 1 {
-            let parent = parts[..parts.len() - 1].join("/");
-            let name = parts.last().unwrap().to_string();
-            (name, Some(parent))
-        } else {
-            (name.to_string(), None)
-        }
-    }
-
-    fn has_attachments(bodystructure: Option<&BodyStructure<'_>>) -> bool {
-        match bodystructure {
-            Some(bs) => {
-                let part = bodystructure::convert_body_structure(bs);
-                bodystructure::structure_has_attachments(&part)
-            }
-            None => false,
-        }
-    }
-
     /// Extract raw bytes for a BODY.PEEK section from a FETCH response.
     ///
     /// Works for both full and partial (`BODY[sec]<origin>`) responses — the
@@ -992,6 +964,7 @@ where
 
     const MAX_DOWNLOAD: u64 = 100 * 1024 * 1024;
 
+    #[cfg(test)]
     async fn stream_raw_part_chunked(
         &self,
         folder_id: &FolderId,

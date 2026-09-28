@@ -30,10 +30,10 @@ pub fn ToastHost() -> Element {
                     *prev.borrow_mut() = Some(old);
                     return;
                 }
-                if *suppress_dismiss.peek() != Some(old.id) {
-                    if let Some(commit) = old.action.on_dismiss() {
-                        let _ = core.send(CoreEvent::CommitDismissed(commit));
-                    }
+                if *suppress_dismiss.peek() != Some(old.id)
+                    && let Some(commit) = old.action.on_dismiss()
+                {
+                    core.send(CoreEvent::CommitDismissed(commit));
                 }
             }
             *prev.borrow_mut() = current.clone();
@@ -97,7 +97,7 @@ pub fn ToastHost() -> Element {
                                 let undo = toast.action.undo();
                                 ctx.toast.set(None);
                                 if let Some(undo) = undo {
-                                    let _ = core.send(CoreEvent::Undo(undo));
+                                    core.send(CoreEvent::Undo(undo));
                                 }
                             }
                         },

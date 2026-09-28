@@ -23,11 +23,6 @@ impl<T: Clone> SparseList<T> {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.items.clear();
-        self.total_count = 0;
-    }
-
     pub fn insert(&mut self, index: usize, item: T) {
         if index < self.total_count {
             self.items.insert(index, item);
@@ -40,16 +35,6 @@ impl<T: Clone> SparseList<T> {
         for (offset, item) in items.into_iter().enumerate() {
             self.insert(start_index + offset, item);
         }
-    }
-
-    pub fn prepend(&mut self, item: T) {
-        let mut new_items = BTreeMap::new();
-        for (key, value) in self.items.iter() {
-            new_items.insert(key + 1, value.clone());
-        }
-        new_items.insert(0, item);
-        self.items = new_items;
-        self.total_count += 1;
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -76,13 +61,6 @@ impl<T: Clone> SparseList<T> {
         self.items.contains_key(&index)
     }
 
-    pub fn clear_range(&mut self, range: Range<usize>) {
-        let keys_to_remove: Vec<usize> = self.items.range(range).map(|(k, _)| *k).collect();
-        for key in keys_to_remove {
-            self.items.remove(&key);
-        }
-    }
-
     pub fn total_count(&self) -> usize {
         self.total_count
     }
@@ -102,11 +80,6 @@ impl<T: Clone> SparseList<T> {
 
     /// Cached rows in index order (holes are skipped).
     pub fn iter_indexed(&self) -> impl Iterator<Item = (usize, &T)> {
-        self.items.iter().map(|(k, v)| (*k, v))
-    }
-
-    /// Cached items in index order (skips holes).
-    pub fn iter_cached(&self) -> impl Iterator<Item = (usize, &T)> {
         self.items.iter().map(|(k, v)| (*k, v))
     }
 
@@ -576,17 +549,21 @@ where
             next
         };
         spawn(async move {
-            if let Some(element) = container_clone.read().as_ref() {
-                if let Ok(offset) = element.get_scroll_offset().await {
-                    if *scroll_generation.peek() != generation {
-                        return;
-                    }
-                    let total = props.items.peek().total_count();
-                    let height = *measured_height.peek();
-                    let vp =
-                        ViewportInfo::calculate(offset.y, height, current_item_height.get(), total);
-                    viewport_info.set(vp);
+            // Clone the Rc out of the signal before awaiting. Holding the read
+            // guard across `.await` blocks every writer for the duration of the
+            // scroll measurement.
+            let element = container_clone.read().clone();
+            if let Some(element) = element
+                && let Ok(offset) = element.get_scroll_offset().await
+            {
+                if *scroll_generation.peek() != generation {
+                    return;
                 }
+                let total = props.items.peek().total_count();
+                let height = *measured_height.peek();
+                let vp =
+                    ViewportInfo::calculate(offset.y, height, current_item_height.get(), total);
+                viewport_info.set(vp);
             }
 
             if let Some(debounce_ms) = props.debounce_ms {
@@ -606,12 +583,12 @@ where
             let buffered = vp.buffered_range(props.buffer_size, total);
             queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
 
-            if let Some(max_cached) = props.max_cached {
-                if items.cached_count() > max_cached {
-                    let keep = vp.buffered_range(props.buffer_size * 2, total);
-                    let mut items_signal = props.items;
-                    items_signal.write().evict_outside(keep, max_cached);
-                }
+            if let Some(max_cached) = props.max_cached
+                && items.cached_count() > max_cached
+            {
+                let keep = vp.buffered_range(props.buffer_size * 2, total);
+                let mut items_signal = props.items;
+                items_signal.write().evict_outside(keep, max_cached);
             }
         });
     };
@@ -764,11 +741,11 @@ mod tests {
     }
 
     #[test]
-    fn iter_cached_skips_holes() {
+    fn iter_indexed_skips_holes() {
         let mut list = SparseList::new(5);
         list.insert(0, "a");
         list.insert(2, "c");
-        let got: Vec<_> = list.iter_cached().map(|(i, v)| (i, *v)).collect();
+        let got: Vec<_> = list.iter_indexed().map(|(i, v)| (i, *v)).collect();
         assert_eq!(got, vec![(0, "a"), (2, "c")]);
     }
 
@@ -801,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)] // one range element, not a filled vec
     fn subtract_pending_splits_ranges() {
         let needed = vec![0..20];
         let pending = vec![5..10];

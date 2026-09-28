@@ -11,15 +11,15 @@ use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, AccountIdentity, AuthKind, DEFAULT_SMTP_PORT, ImapTlsMode, Oauth2Provider,
-    Oauth2Tokens, SmimeIdentity, SmtpTlsMode, extra_ca_pems_to_text, imap_tls_mode_from_legacy,
+    Oauth2Tokens, SmimeIdentity, SmtpTlsMode, extra_ca_pems_to_text,
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountConnectionFields, AccountIdentitiesFields, AccountOauthFields, AccountSignatureFields,
-    AccountSmimeFields, AccountSmtpFields, AccountTlsFields, FormAuth, FormPhase, FormStatusBanner,
-    StatusMessage, apply_form_auth, apply_smtp_test_outcome, build_config_from_form,
-    credentials_changed, kind_label, provide_lookup_edit_guard, start_smtp_test,
-    use_form_test_status_cleanup,
+    AccountConnectionFields, AccountFormInput, AccountIdentitiesFields, AccountOauthFields,
+    AccountSignatureFields, AccountSmimeFields, AccountSmtpFields, AccountTlsFields, FormAuth,
+    FormPhase, FormStatusBanner, StatusMessage, apply_form_auth, apply_smtp_test_outcome,
+    build_config_from_form, credentials_changed, kind_label, provide_lookup_edit_guard,
+    start_smtp_test, use_form_test_status_cleanup,
 };
 use crate::components::theme::ThemeSelect;
 use crate::connection::ConnectionState;
@@ -736,7 +736,7 @@ fn DataActionConfirm(
     let mut ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let wiping = *ctx.sign_out_pending.read();
-    let mut sign_out_error = ctx.sign_out_error;
+    let sign_out_error = ctx.sign_out_error;
     use_effect(move || {
         if let Some(err) = sign_out_error() {
             action_error.set(Some(format!(
@@ -1359,30 +1359,30 @@ pub fn AccountEditPage(id: String) -> Element {
             return;
         };
         status_message.set(None);
-        match build_config_from_form(
-            &account_id_test,
-            &display_name(),
-            &email(),
-            &imap_host(),
-            &imap_port(),
-            &imap_username(),
-            &imap_password(),
-            imap_tls_mode(),
-            &proxy_base_url(),
-            &proxy_token(),
-            &remote_host(),
-            &remote_port(),
-            &smtp_host(),
-            &smtp_port(),
-            &smtp_username(),
-            &smtp_password(),
-            smtp_tls_mode(),
-            &smtp_remote_host(),
-            &smtp_remote_port(),
-            &signature(),
-            &extra_ca_pems(),
-            orig.created_at,
-        )
+        match build_config_from_form(&AccountFormInput {
+            account_id: &account_id_test,
+            display_name: &display_name(),
+            email: &email(),
+            imap_host: &imap_host(),
+            imap_port: &imap_port(),
+            imap_username: &imap_username(),
+            imap_password: &imap_password(),
+            imap_tls_mode: imap_tls_mode(),
+            proxy_base_url: &proxy_base_url(),
+            proxy_token: &proxy_token(),
+            remote_host: &remote_host(),
+            remote_port: &remote_port(),
+            smtp_host: &smtp_host(),
+            smtp_port: &smtp_port(),
+            smtp_username: &smtp_username(),
+            smtp_password: &smtp_password(),
+            smtp_tls_mode: smtp_tls_mode(),
+            smtp_remote_host: &smtp_remote_host(),
+            smtp_remote_port: &smtp_remote_port(),
+            signature: &signature(),
+            extra_ca_pem: &extra_ca_pems(),
+            created_at: orig.created_at,
+        })
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         .map(|c| c.with_smime_identities(smime_identities()))
@@ -1412,30 +1412,30 @@ pub fn AccountEditPage(id: String) -> Element {
             return;
         };
         start_smtp_test(
-            build_config_from_form(
-                &account_id_smtp_test,
-                &display_name(),
-                &email(),
-                &imap_host(),
-                &imap_port(),
-                &imap_username(),
-                &imap_password(),
-                imap_tls_mode(),
-                &proxy_base_url(),
-                &proxy_token(),
-                &remote_host(),
-                &remote_port(),
-                &smtp_host(),
-                &smtp_port(),
-                &smtp_username(),
-                &smtp_password(),
-                smtp_tls_mode(),
-                &smtp_remote_host(),
-                &smtp_remote_port(),
-                &signature(),
-                &extra_ca_pems(),
-                orig.created_at,
-            )
+            build_config_from_form(&AccountFormInput {
+                account_id: &account_id_smtp_test,
+                display_name: &display_name(),
+                email: &email(),
+                imap_host: &imap_host(),
+                imap_port: &imap_port(),
+                imap_username: &imap_username(),
+                imap_password: &imap_password(),
+                imap_tls_mode: imap_tls_mode(),
+                proxy_base_url: &proxy_base_url(),
+                proxy_token: &proxy_token(),
+                remote_host: &remote_host(),
+                remote_port: &remote_port(),
+                smtp_host: &smtp_host(),
+                smtp_port: &smtp_port(),
+                smtp_username: &smtp_username(),
+                smtp_password: &smtp_password(),
+                smtp_tls_mode: smtp_tls_mode(),
+                smtp_remote_host: &smtp_remote_host(),
+                smtp_remote_port: &smtp_remote_port(),
+                signature: &signature(),
+                extra_ca_pem: &extra_ca_pems(),
+                created_at: orig.created_at,
+            })
             .and_then(|c| apply_form_auth(c, &current_auth()))
             .and_then(|c| c.with_identities(identities()))
             .map(|c| c.with_smime_identities(smime_identities())),
@@ -1454,30 +1454,30 @@ pub fn AccountEditPage(id: String) -> Element {
             return;
         };
         status_message.set(None);
-        let config = match build_config_from_form(
-            &account_id_save,
-            &display_name(),
-            &email(),
-            &imap_host(),
-            &imap_port(),
-            &imap_username(),
-            &imap_password(),
-            imap_tls_mode(),
-            &proxy_base_url(),
-            &proxy_token(),
-            &remote_host(),
-            &remote_port(),
-            &smtp_host(),
-            &smtp_port(),
-            &smtp_username(),
-            &smtp_password(),
-            smtp_tls_mode(),
-            &smtp_remote_host(),
-            &smtp_remote_port(),
-            &signature(),
-            &extra_ca_pems(),
-            orig.created_at,
-        )
+        let config = match build_config_from_form(&AccountFormInput {
+            account_id: &account_id_save,
+            display_name: &display_name(),
+            email: &email(),
+            imap_host: &imap_host(),
+            imap_port: &imap_port(),
+            imap_username: &imap_username(),
+            imap_password: &imap_password(),
+            imap_tls_mode: imap_tls_mode(),
+            proxy_base_url: &proxy_base_url(),
+            proxy_token: &proxy_token(),
+            remote_host: &remote_host(),
+            remote_port: &remote_port(),
+            smtp_host: &smtp_host(),
+            smtp_port: &smtp_port(),
+            smtp_username: &smtp_username(),
+            smtp_password: &smtp_password(),
+            smtp_tls_mode: smtp_tls_mode(),
+            smtp_remote_host: &smtp_remote_host(),
+            smtp_remote_port: &smtp_remote_port(),
+            signature: &signature(),
+            extra_ca_pem: &extra_ca_pems(),
+            created_at: orig.created_at,
+        })
         .and_then(|c| apply_form_auth(c, &current_auth()))
         .and_then(|c| c.with_identities(identities()))
         .map(|c| c.with_smime_identities(smime_identities()))

@@ -16,10 +16,10 @@ use crate::account_config::{
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
-    AccountIdentityFields, AccountImapFields, AccountOauthFields, AccountProxyFields,
-    AccountSmtpFields, AccountTlsFields, FormAuth, FormField, FormPhase, FormStatusBanner,
-    LookupEditGuard, StatusMessage, apply_form_auth, build_config_from_form, kind_label,
-    provide_lookup_edit_guard, start_server_lookup,
+    AccountFormInput, AccountIdentityFields, AccountImapFields, AccountOauthFields,
+    AccountProxyFields, AccountSmtpFields, AccountTlsFields, FormAuth, FormField, FormPhase,
+    FormStatusBanner, LookupEditGuard, ServerLookupUi, StatusMessage, apply_form_auth,
+    build_config_from_form, kind_label, provide_lookup_edit_guard, start_server_lookup,
 };
 use crate::components::wizard::WizardShell;
 use crate::connection::ConnectionState;
@@ -49,8 +49,8 @@ pub fn AccountSetupWizard(mode: SetupMode) -> Element {
 
     let mut model = use_account_form_model(&prefill);
 
-    let mut unlock_passphrase = use_signal(String::new);
-    let mut unlock_passphrase_confirm = use_signal(String::new);
+    let unlock_passphrase = use_signal(String::new);
+    let unlock_passphrase_confirm = use_signal(String::new);
     let mut force_proxy = use_signal(|| false);
     let mut current = use_signal(|| match mode {
         SetupMode::FirstRun => SetupStep::Welcome,
@@ -475,30 +475,30 @@ impl AccountFormModel {
     }
 
     fn build(self, account_id: &AccountId) -> Result<crate::account_config::AccountConfig, String> {
-        build_config_from_form(
+        build_config_from_form(&AccountFormInput {
             account_id,
-            &self.display_name(),
-            &self.email(),
-            &self.imap_host(),
-            &self.imap_port(),
-            &self.imap_username(),
-            &self.imap_password(),
-            self.imap_tls_mode(),
-            &self.proxy_base_url(),
-            &self.proxy_token(),
-            &self.remote_host(),
-            &self.remote_port(),
-            &self.smtp_host(),
-            &self.smtp_port(),
-            &self.smtp_username(),
-            &self.smtp_password(),
-            self.smtp_tls_mode(),
-            &self.smtp_remote_host(),
-            &self.smtp_remote_port(),
-            &self.signature(),
-            &self.extra_ca_pems(),
-            Utc::now(),
-        )
+            display_name: &self.display_name(),
+            email: &self.email(),
+            imap_host: &self.imap_host(),
+            imap_port: &self.imap_port(),
+            imap_username: &self.imap_username(),
+            imap_password: &self.imap_password(),
+            imap_tls_mode: self.imap_tls_mode(),
+            proxy_base_url: &self.proxy_base_url(),
+            proxy_token: &self.proxy_token(),
+            remote_host: &self.remote_host(),
+            remote_port: &self.remote_port(),
+            smtp_host: &self.smtp_host(),
+            smtp_port: &self.smtp_port(),
+            smtp_username: &self.smtp_username(),
+            smtp_password: &self.smtp_password(),
+            smtp_tls_mode: self.smtp_tls_mode(),
+            smtp_remote_host: &self.smtp_remote_host(),
+            smtp_remote_port: &self.smtp_remote_port(),
+            signature: &self.signature(),
+            extra_ca_pem: &self.extra_ca_pems(),
+            created_at: Utc::now(),
+        })
         .and_then(|c| apply_form_auth(c, &self.current_auth()))
     }
 }
@@ -509,21 +509,23 @@ fn trigger_lookup(mut model: AccountFormModel, guard: LookupEditGuard, busy: boo
         model.preset_fields(),
         true,
         busy,
-        guard.hosts_dirty,
-        guard.lookup_gen,
-        guard.lookup_status,
-        guard.last_discovered,
-        EventHandler::new(move |v| model.imap_host.set(v)),
-        EventHandler::new(move |v| model.imap_port.set(v)),
-        EventHandler::new(move |v| model.imap_username.set(v)),
-        EventHandler::new(move |v| model.smtp_host.set(v)),
-        EventHandler::new(move |v| model.smtp_port.set(v)),
-        EventHandler::new(move |v| model.smtp_username.set(v)),
-        EventHandler::new(move |v| {
-            let port = model.smtp_port().parse().unwrap_or(465);
-            model.smtp_tls_mode.set(tls_mode_from_legacy(v, port));
-        }),
-        EventHandler::new(move |v| model.smtp_open.set(v)),
+        ServerLookupUi {
+            hosts_dirty: guard.hosts_dirty,
+            lookup_gen: guard.lookup_gen,
+            lookup_status: guard.lookup_status,
+            last_discovered: guard.last_discovered,
+            set_imap_host: EventHandler::new(move |v| model.imap_host.set(v)),
+            set_imap_port: EventHandler::new(move |v| model.imap_port.set(v)),
+            set_imap_username: EventHandler::new(move |v| model.imap_username.set(v)),
+            set_smtp_host: EventHandler::new(move |v| model.smtp_host.set(v)),
+            set_smtp_port: EventHandler::new(move |v| model.smtp_port.set(v)),
+            set_smtp_username: EventHandler::new(move |v| model.smtp_username.set(v)),
+            set_smtp_use_tls: EventHandler::new(move |v| {
+                let port = model.smtp_port().parse().unwrap_or(465);
+                model.smtp_tls_mode.set(tls_mode_from_legacy(v, port));
+            }),
+            set_smtp_open: EventHandler::new(move |v| model.smtp_open.set(v)),
+        },
     );
 }
 

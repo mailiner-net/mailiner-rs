@@ -34,8 +34,9 @@ pub enum MailboxPickerMode {
 }
 
 /// Viewer panel state driven by core_loop load pipeline.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum MessageViewState {
+    #[default]
     Empty,
     Loading {
         message_id: MessageId,
@@ -67,12 +68,6 @@ pub enum MessageHeadersState {
         message_id: MessageId,
         message: String,
     },
-}
-
-impl Default for MessageViewState {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 /// Full RFC 822 dump for the open “View source” dialog.
@@ -233,12 +228,12 @@ impl AppContext {
     /// Show a preview, revoking the previously open dialog URL if it differs.
     pub fn open_attachment_preview(&self, preview: AttachmentPreview) {
         let mut preview_sig = self.attachment_preview;
-        if let Some(prev) = preview_sig.peek().clone() {
-            if prev.section != preview.section || prev.object_url != preview.object_url {
-                let mut blobs = self.attachment_blobs;
-                blobs.write().remove(&prev.section);
-                revoke_object_url(&prev.object_url);
-            }
+        if let Some(prev) = preview_sig.peek().clone()
+            && (prev.section != preview.section || prev.object_url != preview.object_url)
+        {
+            let mut blobs = self.attachment_blobs;
+            blobs.write().remove(&prev.section);
+            revoke_object_url(&prev.object_url);
         }
         preview_sig.set(Some(preview));
     }

@@ -104,8 +104,8 @@ fn spawn_fut(fut: impl std::future::Future<Output = ()> + 'static) {
     wasm_bindgen_futures::spawn_local(fut);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // WebSocketStream is !Send; host cargo-check cannot run SMTP I/O.
-        let _ = fut;
+        // WebSocketStream is !Send, so host builds cannot poll this future.
+        drop(fut);
     }
 }
 
@@ -260,20 +260,14 @@ where
     futures_util::pin_mut!(cancel_rx);
     match select(work, select(timeout, cancel_rx)).await {
         Either::Left((result, _)) => result,
-        Either::Right((Either::Left((_, work)), _)) => {
-            drop(work);
-            Err(ClassifiedSendError {
-                kind: SendErrorKind::Timeout,
-                message: "Sending timed out. Try again or check the proxy and SMTP host.".into(),
-            })
-        }
-        Either::Right((Either::Right((_, work)), _)) => {
-            drop(work);
-            Err(ClassifiedSendError {
-                kind: SendErrorKind::Cancelled,
-                message: "Sending was cancelled.".into(),
-            })
-        }
+        Either::Right((Either::Left((_, _work)), _)) => Err(ClassifiedSendError {
+            kind: SendErrorKind::Timeout,
+            message: "Sending timed out. Try again or check the proxy and SMTP host.".into(),
+        }),
+        Either::Right((Either::Right((_, _work)), _)) => Err(ClassifiedSendError {
+            kind: SendErrorKind::Cancelled,
+            message: "Sending was cancelled.".into(),
+        }),
     }
 }
 

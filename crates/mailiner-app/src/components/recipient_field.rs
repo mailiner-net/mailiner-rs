@@ -215,9 +215,9 @@ pub fn RecipientField(
                                 return;
                             }
                             evt.prevent_default();
-                            if show_list {
-                                if let Some(suggestion) = suggestions.get(active_idx) {
-                                    if !typed_overrides_suggestion(
+                            if show_list
+                                && let Some(suggestion) = suggestions.get(active_idx)
+                                    && !typed_overrides_suggestion(
                                         &draft(),
                                         &suggestion.contact.email,
                                     ) {
@@ -229,8 +229,6 @@ pub fn RecipientField(
                                         );
                                         return;
                                     }
-                                }
-                            }
                             let (next, leftover) = commit_input(&chips(), &draft(), true);
                             chips.set(next);
                             draft.set(leftover);

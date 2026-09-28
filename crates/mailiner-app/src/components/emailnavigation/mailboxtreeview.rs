@@ -242,7 +242,7 @@ fn UnifiedInboxItem() -> Element {
                     "All inboxes".into()
                 },
                 onclick: move |_| {
-                    let _ = core_tx.send(CoreEvent::SelectUnifiedInbox);
+                    core_tx.send(CoreEvent::SelectUnifiedInbox);
                 },
                 onkeydown: move |evt: KeyboardEvent| {
                     let activate = match evt.key() {
@@ -252,7 +252,7 @@ fn UnifiedInboxItem() -> Element {
                     };
                     if activate {
                         evt.prevent_default();
-                        let _ = core_tx.send(CoreEvent::SelectUnifiedInbox);
+                        core_tx.send(CoreEvent::SelectUnifiedInbox);
                     }
                 },
 
@@ -362,7 +362,7 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         if !selectable {
                             return;
                         }
-                        let _ = core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
+                        core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
                     }
                 },
 
@@ -445,7 +445,7 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         if drag.message_ids.is_empty() {
                             return;
                         }
-                        let _ = core_tx.send(CoreEvent::MoveMessages {
+                        core_tx.send(CoreEvent::MoveMessages {
                             mailbox_id: drag.source_mailbox,
                             message_ids: drag.message_ids,
                             dest_mailbox_id: dest_mailbox_id.clone(),
@@ -465,7 +465,7 @@ fn MailboxTreeViewItem(props: MailboxTreeViewItemProps) -> Element {
                         };
                         if activate {
                             evt.prevent_default();
-                            let _ = core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
+                            core_tx.send(CoreEvent::SelectMailbox(mailbox_id.clone()));
                         }
                     }
                 },
@@ -588,7 +588,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                         let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
                             return;
                         };
-                        let _ = core_tx.send(CoreEvent::CreateFolder {
+                        core_tx.send(CoreEvent::CreateFolder {
                             account_id,
                             parent_id: Some(create_mailbox.clone()),
                             name,
@@ -615,7 +615,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                             if new_name == rename_current {
                                 return;
                             }
-                            let _ = core_tx.send(CoreEvent::RenameFolder {
+                            core_tx.send(CoreEvent::RenameFolder {
                                 account_id,
                                 mailbox_id: rename_mailbox.clone(),
                                 new_name,
@@ -635,7 +635,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                             if !confirm_delete_folder(&title, has_children) {
                                 return;
                             }
-                            let _ = core_tx.send(CoreEvent::DeleteFolder {
+                            core_tx.send(CoreEvent::DeleteFolder {
                                 account_id,
                                 mailbox_id: delete_mailbox.clone(),
                             });
@@ -650,7 +650,7 @@ fn FolderContextMenu(menu: FolderMenu, onclose: EventHandler<MouseEvent>) -> Ele
                         role: "menuitem",
                         onclick: move |evt| {
                             if let Some(account_id) = account_id.clone() {
-                                let _ = core_tx.send(CoreEvent::SetFolderSubscribed {
+                                core_tx.send(CoreEvent::SetFolderSubscribed {
                                     account_id,
                                     mailbox_id: mailbox_id.clone(),
                                     subscribed: !subscribed,
@@ -704,7 +704,7 @@ fn SavedSearchItem(search: SavedSearch, on_menu: EventHandler<SearchMenu>) -> El
                 role: "button",
                 aria_current: if is_selected { "true" },
                 onclick: move |_| {
-                    let _ = core_tx.send(CoreEvent::OpenSavedSearch {
+                    core_tx.send(CoreEvent::OpenSavedSearch {
                         id: search_id.clone(),
                     });
                 },
@@ -778,7 +778,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
                         else {
                             return;
                         };
-                        let _ = core_tx.send(CoreEvent::RenameSavedSearch {
+                        core_tx.send(CoreEvent::RenameSavedSearch {
                             id: rename_id.clone(),
                             name,
                         });
@@ -794,7 +794,7 @@ fn SavedSearchContextMenu(menu: SearchMenu, onclose: EventHandler<MouseEvent>) -
                         if !confirm_delete_saved_search(&delete_name) {
                             return;
                         }
-                        let _ = core_tx.send(CoreEvent::DeleteSavedSearch {
+                        core_tx.send(CoreEvent::DeleteSavedSearch {
                             id: delete_id.clone(),
                         });
                     },

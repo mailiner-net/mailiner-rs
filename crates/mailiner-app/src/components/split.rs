@@ -3,9 +3,12 @@
 use dioxus::prelude::*;
 
 use crate::layout::{
-    clamp_folder_width_px, clamp_list_height_pct, clamp_list_width_px, persist_layout,
-    reset_folder_width, reset_list_height, reset_list_width, set_folder_width_px,
-    set_list_height_pct, set_list_width_px,
+    clamp_folder_width_px, persist_layout, reset_folder_width, reset_list_height, reset_list_width,
+    set_folder_width_px,
+};
+#[cfg(target_arch = "wasm32")]
+use crate::layout::{
+    clamp_list_height_pct, clamp_list_width_px, set_list_height_pct, set_list_width_px,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]

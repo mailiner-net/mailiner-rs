@@ -250,8 +250,8 @@ pub(crate) fn pick_oldest_queued(
         .iter()
         .filter(|i| {
             i.state == OutboxItemState::Queued
-                && !skip_accounts.iter().any(|id| *id == i.account_id)
-                && !skip_ids.iter().any(|id| *id == i.id)
+                && !skip_accounts.contains(&i.account_id)
+                && !skip_ids.contains(&i.id)
         })
         .min_by(|a, b| {
             a.created_at
@@ -532,9 +532,7 @@ mod tests {
 
     #[test]
     fn old_blob_without_sent_copy_decodes() {
-        let json = format!(
-            r#"{{"schema_version":1,"items":[{{"id":"i1","account_id":"a","mail_from":"me@x.com","rcpt_to":["you@x.com"],"rfc822_b64":"eHg=","message_id":"<id@x.com>","subject":"Hi","to_preview":"you","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","attempts":0,"last_error_kind":null,"last_error":null,"state":"queued"}}]}}"#
-        );
+        let json = r#"{"schema_version":1,"items":[{"id":"i1","account_id":"a","mail_from":"me@x.com","rcpt_to":["you@x.com"],"rfc822_b64":"eHg=","message_id":"<id@x.com>","subject":"Hi","to_preview":"you","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","attempts":0,"last_error_kind":null,"last_error":null,"state":"queued"}]}"#.to_string();
         let blob = OutboxBlob::decode(&json).expect("legacy blob");
         assert_eq!(blob.items.len(), 1);
         assert!(blob.items[0].bcc_header.is_none());

@@ -341,11 +341,6 @@ pub enum CoreEvent {
         config: AccountConfig,
     },
 
-    /// Account already in store (cold start, switch). Load via store, connect, list folders.
-    ConnectExisting {
-        account_id: AccountId,
-    },
-
     Reconnect {
         account_id: AccountId,
     },
@@ -393,7 +388,6 @@ pub enum CoreEvent {
         generation: u64,
         outcome: SmtpOutcome,
     },
-    DrainOutbox,
     RetryOutboxItem {
         id: crate::outbox_store::OutboxId,
     },
@@ -468,16 +462,28 @@ const NOOP_INTERVAL_MS: u32 = 30_000;
 ///
 /// `initial_bootstrap`: App opens the store and passes [`InitialBootstrap::Run`] with
 /// the resolved active id, or [`InitialBootstrap::Skip`] on store failure.
-pub async fn core_loop(
-    mut core_rx: UnboundedReceiver<CoreEvent>,
-    mut smtp_rx: SmtpUnboundedReceiver<CoreEvent>,
-    smtp_tx: UnboundedSender<CoreEvent>,
-    mut ctx: AppContext,
-    store: Rc<dyn AccountStore>,
-    outbox: Rc<dyn OutboxStore>,
-    cache: Rc<dyn MailCache>,
-    initial_bootstrap: InitialBootstrap,
-) {
+pub struct CoreLoop {
+    pub core_rx: UnboundedReceiver<CoreEvent>,
+    pub smtp_rx: SmtpUnboundedReceiver<CoreEvent>,
+    pub smtp_tx: UnboundedSender<CoreEvent>,
+    pub ctx: AppContext,
+    pub store: Rc<dyn AccountStore>,
+    pub outbox: Rc<dyn OutboxStore>,
+    pub cache: Rc<dyn MailCache>,
+    pub initial_bootstrap: InitialBootstrap,
+}
+
+pub async fn core_loop(input: CoreLoop) {
+    let CoreLoop {
+        mut core_rx,
+        mut smtp_rx,
+        smtp_tx,
+        mut ctx,
+        store,
+        outbox,
+        cache,
+        initial_bootstrap,
+    } = input;
     let mut manager = AccountConnectionManager::new(store, cache);
     let mut inflight = SmtpInflight::new();
     let mut pending_event: Option<CoreEvent> = None;
@@ -524,9 +530,9 @@ pub async fn core_loop(
             match recv_next_or_watch(&mut core_rx, &mut smtp_rx, watches, &manager, &ctx).await {
                 RecvOutcome::Event { event, follow_up } => {
                     if let Some(extra) = follow_up {
-                        pending_event = Some(extra);
+                        pending_event = Some(*extra);
                     }
-                    event
+                    *event
                 }
                 RecvOutcome::Continue => continue,
                 RecvOutcome::Closed => break,
@@ -537,9 +543,6 @@ pub async fn core_loop(
                 handle_bootstrap(&mut manager, &mut ctx, active).await;
             }
             CoreEvent::SelectAccount(account_id) => {
-                handle_select_account(&mut manager, &mut ctx, account_id).await;
-            }
-            CoreEvent::ConnectExisting { account_id } => {
                 handle_select_account(&mut manager, &mut ctx, account_id).await;
             }
             CoreEvent::Reconnect { account_id } => {
@@ -889,14 +892,16 @@ pub async fn core_loop(
                 handle_download_attachment(
                     &manager,
                     &mut ctx,
-                    account_id,
-                    mailbox_id,
-                    message_id,
-                    section,
-                    filename,
-                    content_type,
-                    encoding,
-                    size_hint,
+                    AttachmentRequest {
+                        account_id,
+                        mailbox_id,
+                        message_id,
+                        section,
+                        filename,
+                        content_type,
+                        encoding,
+                        size_hint,
+                    },
                 )
                 .await;
             }
@@ -956,14 +961,16 @@ pub async fn core_loop(
                 handle_preview_attachment(
                     &manager,
                     &mut ctx,
-                    account_id,
-                    mailbox_id,
-                    message_id,
-                    section,
-                    filename,
-                    content_type,
-                    encoding,
-                    size_hint,
+                    AttachmentRequest {
+                        account_id,
+                        mailbox_id,
+                        message_id,
+                        section,
+                        filename,
+                        content_type,
+                        encoding,
+                        size_hint,
+                    },
                 )
                 .await;
             }
@@ -977,18 +984,22 @@ pub async fn core_loop(
                 imap_draft,
             } => {
                 handle_send_message(
-                    &mut manager,
-                    &mut ctx,
-                    outbox.as_ref(),
-                    &smtp_tx,
-                    &mut inflight,
-                    account_id,
-                    request,
-                    display,
-                    draft_id,
-                    bcc_header,
-                    reply_source,
-                    imap_draft,
+                    SendLoop {
+                        manager: &mut manager,
+                        ctx: &mut ctx,
+                        outbox: outbox.as_ref(),
+                        smtp_tx: &smtp_tx,
+                        inflight: &mut inflight,
+                    },
+                    QueuedSend {
+                        account_id,
+                        request,
+                        display,
+                        draft_id,
+                        bcc_header,
+                        reply_source,
+                        imap_draft,
+                    },
                 )
                 .await;
             }
@@ -1007,16 +1018,6 @@ pub async fn core_loop(
                     &mut inflight,
                     generation,
                     outcome,
-                )
-                .await;
-            }
-            CoreEvent::DrainOutbox => {
-                drain_outbox(
-                    &mut manager,
-                    &mut ctx,
-                    outbox.as_ref(),
-                    &smtp_tx,
-                    &mut inflight,
                 )
                 .await;
             }
@@ -2158,11 +2159,9 @@ async fn persist_stale_move_counts(
         src.total_messages = src.total_messages.saturating_sub(moved);
         src.unread_messages = src.unread_messages.saturating_sub(unread);
     }
-    if !dest_is_all_mail {
-        if let Some(dst) = tree.counts.get_mut(dest.as_str()) {
-            dst.total_messages = dst.total_messages.saturating_add(moved);
-            dst.unread_messages = dst.unread_messages.saturating_add(unread);
-        }
+    if !dest_is_all_mail && let Some(dst) = tree.counts.get_mut(dest.as_str()) {
+        dst.total_messages = dst.total_messages.saturating_add(moved);
+        dst.unread_messages = dst.unread_messages.saturating_add(unread);
     }
     if let Err(e) = cache.save_folders(account_id, &tree).await {
         warn!("mail cache adjust folder totals failed: {e}");
@@ -3881,7 +3880,7 @@ fn queue_adjacent_prefetch(ctx: &AppContext, pending: &mut Option<PrefetchJob>) 
     let neighbors = neighbor_ids(ctx, message_id);
     let remaining: Vec<MessageId> = neighbors
         .iter()
-        .filter(|id| !ctx.message_bodies.borrow().contains(*id))
+        .filter(|id| !ctx.message_bodies.borrow().contains(id))
         .cloned()
         .collect();
     if remaining.is_empty() {
@@ -4249,10 +4248,8 @@ fn bump_mailbox_unread(
         }
         next
     };
-    if acknowledge {
-        if let Some(account_id) = account_id.as_ref() {
-            crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
-        }
+    if acknowledge && let Some(account_id) = account_id.as_ref() {
+        crate::ui_prefs::save_ack_unread(account_id, mailbox_id, unread);
     }
     observe_local_mailbox(ctx, mailbox_id);
 }
@@ -4405,14 +4402,14 @@ fn restore_snapshots(
     }
     let mut snapshots = snapshots;
     snapshots.sort_by_key(|s| s.index);
-    if let Some(ids) = new_ids {
-        if ids.len() == snapshots.len() {
-            for (snap, id) in snapshots.iter_mut().zip(ids) {
-                let mut next = (*snap.message).clone();
-                next.id = id.clone();
-                next.envelope.id = id.clone();
-                snap.message = Arc::new(next);
-            }
+    if let Some(ids) = new_ids
+        && ids.len() == snapshots.len()
+    {
+        for (snap, id) in snapshots.iter_mut().zip(ids) {
+            let mut next = (*snap.message).clone();
+            next.id = id.clone();
+            next.envelope.id = id.clone();
+            snap.message = Arc::new(next);
         }
     }
     {
@@ -4826,10 +4823,8 @@ async fn handle_sweep_snooze(manager: &AccountConnectionManager, ctx: &mut AppCo
         let id = MessageId::new(FolderId::new(row.mailbox_id.to_string()), row.uid.clone());
         set_later_keyword(manager, ctx, &row.account_id, &row.mailbox_id, &[id], false).await;
     }
-    if refresh {
-        if let (Some(account_id), Some(mailbox_id)) = (current_account, current_mailbox) {
-            handle_mailbox_activity(manager, ctx, account_id, mailbox_id).await;
-        }
+    if refresh && let (Some(account_id), Some(mailbox_id)) = (current_account, current_mailbox) {
+        handle_mailbox_activity(manager, ctx, account_id, mailbox_id).await;
     }
 }
 
@@ -5591,10 +5586,10 @@ async fn handle_delete_folder(
         to_delete.iter().any(|id| id == sel)
             || crate::mailbox::mailbox_is_ancestor(&mailbox_id, sel, &nodes)
     });
-    if selected_hit {
-        if let Some(inbox) = crate::mailbox::find_mailbox_with_role(&nodes, MailboxRole::Inbox) {
-            crate::ui_prefs::save_last_mailbox(&account_id, &inbox);
-        }
+    if selected_hit
+        && let Some(inbox) = crate::mailbox::find_mailbox_with_role(&nodes, MailboxRole::Inbox)
+    {
+        crate::ui_prefs::save_last_mailbox(&account_id, &inbox);
     }
 
     for id in &to_delete {
@@ -5969,10 +5964,7 @@ async fn handle_fetch_message_source(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_download_attachment(
-    manager: &AccountConnectionManager,
-    ctx: &mut AppContext,
+struct AttachmentRequest {
     account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
@@ -5981,7 +5973,23 @@ async fn handle_download_attachment(
     content_type: String,
     encoding: TransferEncoding,
     size_hint: Option<u64>,
+}
+
+async fn handle_download_attachment(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    request: AttachmentRequest,
 ) {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
@@ -6005,14 +6013,16 @@ async fn handle_download_attachment(
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        account_id.clone(),
-        mailbox_id.clone(),
-        message_id.clone(),
-        section.clone(),
-        filename,
-        content_type,
-        encoding,
-        size_hint,
+        AttachmentRequest {
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            message_id: message_id.clone(),
+            section: section.clone(),
+            filename,
+            content_type,
+            encoding,
+            size_hint,
+        },
     )
     .await
     else {
@@ -6049,19 +6059,21 @@ async fn handle_download_attachment(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_preview_attachment(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    account_id: AccountId,
-    mailbox_id: MailboxId,
-    message_id: MessageId,
-    section: String,
-    filename: String,
-    content_type: String,
-    encoding: TransferEncoding,
-    size_hint: Option<u64>,
+    request: AttachmentRequest,
 ) {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
@@ -6092,14 +6104,16 @@ async fn handle_preview_attachment(
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        account_id.clone(),
-        mailbox_id.clone(),
-        message_id.clone(),
-        section.clone(),
-        filename.clone(),
-        content_type.clone(),
-        encoding,
-        size_hint,
+        AttachmentRequest {
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            message_id: message_id.clone(),
+            section: section.clone(),
+            filename: filename.clone(),
+            content_type: content_type.clone(),
+            encoding,
+            size_hint,
+        },
     )
     .await
     else {
@@ -6166,7 +6180,6 @@ fn remember_or_revoke_blob(ctx: &mut AppContext, section: &str, finished: Finish
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn attachment_request_still_current(
     ctx: &AppContext,
     account_id: &AccountId,
@@ -6189,15 +6202,18 @@ fn attachment_request_still_current(
 async fn stream_attachment_blob(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    account_id: AccountId,
-    mailbox_id: MailboxId,
-    message_id: MessageId,
-    section: String,
-    filename: String,
-    content_type: String,
-    encoding: TransferEncoding,
-    size_hint: Option<u64>,
+    request: AttachmentRequest,
 ) -> Option<StreamingBlobDownload> {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     // Ignore if user navigated away or switched account.
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return None;
@@ -6911,7 +6927,7 @@ async fn purge_missing_accounts(
     };
     if let Ok(items) = outbox.list().await {
         for item in items {
-            if !known.iter().any(|id| *id == item.account_id) {
+            if !known.contains(&item.account_id) {
                 inflight.cancel_for_account(&item.account_id);
                 let _ = outbox.delete_for_account(&item.account_id).await;
             }
@@ -6920,12 +6936,15 @@ async fn purge_missing_accounts(
     refresh_outbox_signal(outbox, ctx).await;
 }
 
-async fn handle_send_message(
-    manager: &mut AccountConnectionManager,
-    ctx: &mut AppContext,
-    outbox: &dyn OutboxStore,
-    smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut SmtpInflight,
+struct SendLoop<'a> {
+    manager: &'a mut AccountConnectionManager,
+    ctx: &'a mut AppContext,
+    outbox: &'a dyn OutboxStore,
+    smtp_tx: &'a UnboundedSender<CoreEvent>,
+    inflight: &'a mut SmtpInflight,
+}
+
+struct QueuedSend {
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
@@ -6933,7 +6952,25 @@ async fn handle_send_message(
     bcc_header: Option<String>,
     reply_source: Option<MessageId>,
     imap_draft: Option<MessageId>,
-) {
+}
+
+async fn handle_send_message(loop_io: SendLoop<'_>, send: QueuedSend) {
+    let SendLoop {
+        manager,
+        ctx,
+        outbox,
+        smtp_tx,
+        inflight,
+    } = loop_io;
+    let QueuedSend {
+        account_id,
+        request,
+        display,
+        draft_id,
+        bcc_header,
+        reply_source,
+        imap_draft,
+    } = send;
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.set_send_status(
             account_id.clone(),
@@ -7330,20 +7367,20 @@ async fn handle_smtp_finished(
         SmtpOutcome::Send {
             result: Err(err), ..
         } => {
-            if let Some(id) = &flight.outbox_id {
-                if let Ok(Some(mut item)) = outbox.get(id).await {
-                    item.last_error_kind = Some(err.kind);
-                    item.last_error = Some(err.message.clone());
-                    item.updated_at = chrono::Utc::now();
-                    if err.kind == SendErrorKind::Cancelled
-                        || (err.kind.is_retryable() && item.attempts < MAX_OUTBOX_AUTO_ATTEMPTS)
-                    {
-                        item.state = OutboxItemState::Queued;
-                    } else {
-                        item.state = OutboxItemState::Failed;
-                    }
-                    let _ = outbox.upsert(&item).await;
+            if let Some(id) = &flight.outbox_id
+                && let Ok(Some(mut item)) = outbox.get(id).await
+            {
+                item.last_error_kind = Some(err.kind);
+                item.last_error = Some(err.message.clone());
+                item.updated_at = chrono::Utc::now();
+                if err.kind == SendErrorKind::Cancelled
+                    || (err.kind.is_retryable() && item.attempts < MAX_OUTBOX_AUTO_ATTEMPTS)
+                {
+                    item.state = OutboxItemState::Queued;
+                } else {
+                    item.state = OutboxItemState::Failed;
                 }
+                let _ = outbox.upsert(&item).await;
             }
             ctx.set_send_status(
                 flight.account_id.clone(),
@@ -7457,22 +7494,20 @@ async fn handle_save_imap_draft(
             return;
         }
     };
-    if let Some(old) = replace.as_ref() {
-        if new_id.as_ref() != Some(old) {
-            if let Err(e) = connector
-                .delete_messages(old.folder_id(), std::slice::from_ref(old))
-                .await
-            {
-                warn!("SaveImapDraft: delete old draft failed for {account_id}: {e}");
-            }
-        }
+    if let Some(old) = replace.as_ref()
+        && new_id.as_ref() != Some(old)
+        && let Err(e) = connector
+            .delete_messages(old.folder_id(), std::slice::from_ref(old))
+            .await
+    {
+        warn!("SaveImapDraft: delete old draft failed for {account_id}: {e}");
     }
     if let Some(id) = new_id.clone() {
         crate::draft_store::set_imap_draft(&account_id, &draft_id, Some(id.clone()));
-        if let Some(session) = ctx.compose_draft.write().as_mut() {
-            if session.draft.id.as_str() == draft_id {
-                session.imap_draft = Some(id);
-            }
+        if let Some(session) = ctx.compose_draft.write().as_mut()
+            && session.draft.id.as_str() == draft_id
+        {
+            session.imap_draft = Some(id);
         }
     }
     info!("SaveImapDraft: appended to {drafts} for {account_id}");
@@ -7597,11 +7632,18 @@ async fn handle_retry_outbox(
 
 enum RecvOutcome {
     Event {
-        event: CoreEvent,
-        follow_up: Option<CoreEvent>,
+        event: Box<CoreEvent>,
+        follow_up: Option<Box<CoreEvent>>,
     },
     Continue,
     Closed,
+}
+
+fn recv_event(event: CoreEvent, follow_up: Option<CoreEvent>) -> RecvOutcome {
+    RecvOutcome::Event {
+        event: Box::new(event),
+        follow_up: follow_up.map(Box::new),
+    }
 }
 
 fn watch_target(
@@ -7636,19 +7678,13 @@ async fn recv_next_or_watch(
     let recv = recv_next_event(core_rx, smtp_rx, watches);
     let Some((account_id, mailbox_id)) = watch_target(manager, ctx) else {
         return match recv.await {
-            Some(event) => RecvOutcome::Event {
-                event,
-                follow_up: None,
-            },
+            Some(event) => recv_event(event, None),
             None => RecvOutcome::Closed,
         };
     };
     let Some(connector) = manager.get(&account_id) else {
         return match recv.await {
-            Some(event) => RecvOutcome::Event {
-                event,
-                follow_up: None,
-            },
+            Some(event) => recv_event(event, None),
             None => RecvOutcome::Closed,
         };
     };
@@ -7689,25 +7725,22 @@ async fn recv_next_or_watch(
                 }
             };
             match ev {
-                Some(event) => RecvOutcome::Event { event, follow_up },
+                Some(event) => recv_event(event, follow_up),
                 None => match follow_up {
-                    Some(event) => RecvOutcome::Event {
-                        event,
-                        follow_up: None,
-                    },
+                    Some(event) => recv_event(event, None),
                     None => RecvOutcome::Closed,
                 },
             }
         }
         Either::Right((Ok(outcome), _)) => {
             if outcome.needs_refresh() {
-                RecvOutcome::Event {
-                    event: CoreEvent::MailboxActivity {
+                recv_event(
+                    CoreEvent::MailboxActivity {
                         account_id,
                         mailbox_id,
                     },
-                    follow_up: None,
-                }
+                    None,
+                )
             } else {
                 RecvOutcome::Continue
             }
@@ -7715,10 +7748,7 @@ async fn recv_next_or_watch(
         Either::Right((Err(e), _)) => {
             warn!("mailbox watch failed for {account_id}: {e}");
             manager.note_imap_error(&account_id, &e);
-            RecvOutcome::Event {
-                event: CoreEvent::SessionDropped { account_id },
-                follow_up: None,
-            }
+            recv_event(CoreEvent::SessionDropped { account_id }, None)
         }
     }
 }

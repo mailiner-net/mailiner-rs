@@ -123,7 +123,7 @@ pub fn AttachmentsFooter() -> Element {
                                                     &save_all_message,
                                                     &save_all_rows,
                                                 ) {
-                                                    let _ = core_tx.send(event);
+                                                    core_tx.send(event);
                                                 }
                                             },
                                             if any_busy {
@@ -296,7 +296,7 @@ fn AttachmentItem(
                             class: "attachment-preview-btn",
                             disabled: any_busy,
                             onclick: move |_| {
-                                let _ = core_tx.send(CoreEvent::PreviewAttachment {
+                                core_tx.send(CoreEvent::PreviewAttachment {
                                     account_id: account_for_preview.clone(),
                                     mailbox_id: mailbox_for_preview.clone(),
                                     message_id: message_for_preview.clone(),
@@ -318,7 +318,7 @@ fn AttachmentItem(
                         class: "attachment-download-btn",
                         disabled: any_busy,
                         onclick: move |_| {
-                            let _ = core_tx.send(attachment_download_event(
+                            core_tx.send(attachment_download_event(
                                 &account_id,
                                 &mailbox_id,
                                 &message_id,

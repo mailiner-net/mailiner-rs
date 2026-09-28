@@ -41,19 +41,23 @@ use crate::send::{
 };
 use crate::ui_prefs::{ComposeBodyMode, ComposePlacement};
 
+#[cfg(test)]
 fn looks_like_email(s: &str) -> bool {
     let s = s.trim();
     !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
 }
 
+#[cfg(test)]
 fn needs_quotes(name: &str) -> bool {
     name.contains([',', '<', '>', '"', '\\']) || looks_like_email(name)
 }
 
+#[cfg(test)]
 fn quote_display_name(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(test)]
 fn format_composer_address(addr: &ComposerAddress) -> String {
     match addr
         .name
@@ -69,6 +73,7 @@ fn format_composer_address(addr: &ComposerAddress) -> String {
     }
 }
 
+#[cfg(test)]
 fn join_address_list(addrs: &[ComposerAddress]) -> String {
     addrs
         .iter()
@@ -77,6 +82,7 @@ fn join_address_list(addrs: &[ComposerAddress]) -> String {
         .join(", ")
 }
 
+#[cfg(test)]
 fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
     let email = email.trim();
     if email.is_empty() {
@@ -105,6 +111,7 @@ fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
     apply_preferred_mode(draft, pref_to_body_mode(mode));
 }
 
+#[cfg(test)]
 fn find_unquoted(s: &str, needle: char) -> Option<usize> {
     let mut in_quotes = false;
     let mut escaped = false;
@@ -123,6 +130,7 @@ fn find_unquoted(s: &str, needle: char) -> Option<usize> {
     None
 }
 
+#[cfg(test)]
 fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
     let s = s.trim();
     if !s.ends_with('"') {
@@ -160,6 +168,7 @@ fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
 
 /// Last comma-separated token before `<email>` is the display name.
 /// Earlier email-like tokens are sibling recipients.
+#[cfg(test)]
 fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
     let before = before.trim();
     if before.is_empty() {
@@ -202,6 +211,7 @@ fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
 }
 
 /// Parse a compose field. Named mailboxes (`Name <email>`) keep the display name.
+#[cfg(test)]
 fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
     let mut out = Vec::new();
     let mut rest = raw.trim();
@@ -236,6 +246,7 @@ struct RecipientList {
 
 const DRAFT_SAVE_DEBOUNCE_MS: u32 = 300;
 
+#[cfg(test)]
 fn join_address_emails(addrs: &[ComposerAddress]) -> String {
     addrs
         .iter()
@@ -398,14 +409,14 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
 /// Open the saved draft for the compose account, or a blank compose.
 pub fn open_new_message(ctx: &mut AppContext) {
     let preferred = crate::ui_prefs::load_default_from_account();
-    if let Some(account) = resolve_compose_account(ctx, preferred.as_ref()) {
-        if let Some(mut session) = draft_store::load_draft(&account.id) {
-            session.account_id = account.id.clone();
-            let identity = resolve_account_identity(&account, session.draft.from.as_ref());
-            apply_current_from(&mut session, &identity_from_stored(&identity));
-            ctx.compose_draft.set(Some(session));
-            return;
-        }
+    if let Some(account) = resolve_compose_account(ctx, preferred.as_ref())
+        && let Some(mut session) = draft_store::load_draft(&account.id)
+    {
+        session.account_id = account.id.clone();
+        let identity = resolve_account_identity(&account, session.draft.from.as_ref());
+        apply_current_from(&mut session, &identity_from_stored(&identity));
+        ctx.compose_draft.set(Some(session));
+        return;
     }
     let Some((account, draft)) = new_message_draft(ctx) else {
         return;
@@ -461,7 +472,7 @@ pub fn open_reply_or_forward(
                 ctx,
                 ComposeSession {
                     account_id: account.id,
-                    title: title.into(),
+                    title,
                     draft,
                     reply_source,
                     imap_draft: None,
@@ -512,17 +523,29 @@ fn flatten_from_for_identity(
         .next()
 }
 
+#[derive(Clone, Copy)]
+struct ComposeSubmit {
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    submitted_id: Signal<Option<String>>,
+    attaching: Signal<bool>,
+    forward_fetching: Signal<bool>,
+}
+
 fn submit_compose(
     ctx: &AppContext,
     core: &Coroutine<CoreEvent>,
     form: ComposeForm,
-    mut error: Signal<Option<String>>,
-    mut submitting: Signal<bool>,
-    mut submitted_id: Signal<Option<String>>,
-    attaching: Signal<bool>,
-    forward_fetching: Signal<bool>,
+    submit: ComposeSubmit,
     dsn: Option<DsnRequest>,
 ) {
+    let ComposeSubmit {
+        mut error,
+        mut submitting,
+        mut submitted_id,
+        attaching,
+        forward_fetching,
+    } = submit;
     if submitting() || attaching() || forward_fetching() {
         return;
     }
@@ -778,37 +801,8 @@ fn toggle_original_attachments(
     }
 }
 
-fn session_with_live_fields(
-    session: &ComposeSession,
-    to: &[ComposerAddress],
-    to_draft: &str,
-    cc: &[ComposerAddress],
-    cc_draft: &str,
-    bcc: &[ComposerAddress],
-    bcc_draft: &str,
-    subject: &str,
-    body: &str,
-    html: &str,
-    mode: BodyMode,
-) -> ComposeSession {
-    let mut session = session.clone();
-    session.draft.to = commit_input(to, to_draft, true).0;
-    session.draft.cc = commit_input(cc, cc_draft, true).0;
-    session.draft.bcc = commit_input(bcc, bcc_draft, true).0;
-    session.draft.subject = subject.to_string();
-    session.draft.mode = mode;
-    let live_html = if mode == BodyMode::Rich {
-        live_html_snapshot(html)
-    } else {
-        String::new()
-    };
-    capture_live_body(&mut session.draft, body, &live_html);
-    session.draft.touch();
-    session
-}
-
-fn persist_live_draft(
-    compose_draft: Signal<Option<ComposeSession>>,
+#[derive(Clone, Copy)]
+struct ComposeFieldSignals {
     to: Signal<Vec<ComposerAddress>>,
     to_draft: Signal<String>,
     cc: Signal<Vec<ComposerAddress>>,
@@ -819,21 +813,56 @@ fn persist_live_draft(
     body: Signal<String>,
     html: Signal<String>,
     mode: Signal<BodyMode>,
+}
+
+fn session_with_live_fields(
+    session: &ComposeSession,
+    fields: ComposeFieldSignals,
+) -> ComposeSession {
+    let ComposeFieldSignals {
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+        html,
+        mode,
+    } = fields;
+    let to = to.peek();
+    let to_draft = to_draft.peek();
+    let cc = cc.peek();
+    let cc_draft = cc_draft.peek();
+    let bcc = bcc.peek();
+    let bcc_draft = bcc_draft.peek();
+    let subject = subject.peek();
+    let body = body.peek();
+    let html = html.peek();
+    let mode = *mode.peek();
+    let mut session = session.clone();
+    session.draft.to = commit_input(&to, &to_draft, true).0;
+    session.draft.cc = commit_input(&cc, &cc_draft, true).0;
+    session.draft.bcc = commit_input(&bcc, &bcc_draft, true).0;
+    session.draft.subject = subject.to_string();
+    session.draft.mode = mode;
+    let live_html = if mode == BodyMode::Rich {
+        live_html_snapshot(html.as_str())
+    } else {
+        String::new()
+    };
+    capture_live_body(&mut session.draft, body.as_str(), &live_html);
+    session.draft.touch();
+    session
+}
+
+fn persist_live_draft(
+    compose_draft: Signal<Option<ComposeSession>>,
+    fields: ComposeFieldSignals,
 ) -> Option<ComposeSession> {
     let session = compose_draft.peek().clone()?;
-    let live = session_with_live_fields(
-        &session,
-        &to.peek(),
-        &to_draft.peek(),
-        &cc.peek(),
-        &cc_draft.peek(),
-        &bcc.peek(),
-        &bcc_draft.peek(),
-        &subject.peek(),
-        &body.peek(),
-        &html.peek(),
-        *mode.peek(),
-    );
+    let live = session_with_live_fields(&session, fields);
     persist_session(&live);
     Some(live)
 }
@@ -872,50 +901,26 @@ fn queue_imap_draft_save(
         &account,
         session.draft.from.as_ref(),
     ));
-    match prepare_draft(&session.draft, &identity) {
-        Ok(prepared) => {
-            core.send(CoreEvent::SaveImapDraft {
-                account_id: session.account_id.clone(),
-                draft_id: session.draft.id.as_str().to_string(),
-                rfc822: prepared.rfc822,
-                replace: session.imap_draft.clone(),
-            });
-        }
-        Err(_) => {}
+    if let Ok(prepared) = prepare_draft(&session.draft, &identity) {
+        core.send(CoreEvent::SaveImapDraft {
+            account_id: session.account_id.clone(),
+            draft_id: session.draft.id.as_str().to_string(),
+            rfc822: prepared.rfc822,
+            replace: session.imap_draft.clone(),
+        });
     }
 }
 
 fn close_keeping_draft(
     mut save_gen: Signal<u32>,
     mut compose_draft: Signal<Option<ComposeSession>>,
-    to: Signal<Vec<ComposerAddress>>,
-    to_draft: Signal<String>,
-    cc: Signal<Vec<ComposerAddress>>,
-    cc_draft: Signal<String>,
-    bcc: Signal<Vec<ComposerAddress>>,
-    bcc_draft: Signal<String>,
-    subject: Signal<String>,
-    body: Signal<String>,
-    html: Signal<String>,
-    mode: Signal<BodyMode>,
+    fields: ComposeFieldSignals,
     accounts: Signal<HashMap<AccountId, Account>>,
     core: &Coroutine<CoreEvent>,
 ) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    if let Some(live) = persist_live_draft(
-        compose_draft,
-        to,
-        to_draft,
-        cc,
-        cc_draft,
-        bcc,
-        bcc_draft,
-        subject,
-        body,
-        html,
-        mode,
-    ) {
+    if let Some(live) = persist_live_draft(compose_draft, fields) {
         queue_imap_draft_save(accounts, core, &live);
     }
     compose_draft.set(None);
@@ -1263,10 +1268,10 @@ fn collect_clipboard_images(dt: &web_sys::DataTransfer) -> Vec<web_sys::File> {
     let mut out = Vec::new();
     if let Some(list) = dt.files() {
         for i in 0..list.length() {
-            if let Some(file) = list.item(i) {
-                if is_clipboard_image(&file) {
-                    out.push(file);
-                }
+            if let Some(file) = list.item(i)
+                && is_clipboard_image(&file)
+            {
+                out.push(file);
             }
         }
     }
@@ -1382,6 +1387,18 @@ pub fn ComposeOverlay() -> Element {
     let mut body = use_signal(String::new);
     let html = use_signal(String::new);
     let mode = use_signal(|| BodyMode::Plain);
+    let fields = ComposeFieldSignals {
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+        html,
+        mode,
+    };
     let mut html_tick = use_signal(|| 0u32);
     let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
@@ -1488,7 +1505,6 @@ pub fn ComposeOverlay() -> Element {
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
-        let core = core;
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
         let mut attaching = attaching;
@@ -1571,19 +1587,7 @@ pub fn ComposeOverlay() -> Element {
                 if open_draft_id(compose_draft).as_deref() != Some(draft_id.as_str()) {
                     return;
                 }
-                let _ = persist_live_draft(
-                    compose_draft,
-                    to,
-                    to_draft,
-                    cc,
-                    cc_draft,
-                    bcc,
-                    bcc_draft,
-                    subject,
-                    body,
-                    html,
-                    mode,
-                );
+                let _ = persist_live_draft(compose_draft, fields);
             });
         });
     }
@@ -1632,22 +1636,7 @@ pub fn ComposeOverlay() -> Element {
     let mut compose_placement = ctx.compose_placement;
     let docked = *compose_placement.read() == ComposePlacement::Docked;
     let run_close = move || {
-        close_keeping_draft(
-            save_gen,
-            compose_draft,
-            to,
-            to_draft,
-            cc,
-            cc_draft,
-            bcc,
-            bcc_draft,
-            subject,
-            body,
-            html,
-            mode,
-            ctx.accounts,
-            &core,
-        );
+        close_keeping_draft(save_gen, compose_draft, fields, ctx.accounts, &core);
     };
     let close = move |_| run_close();
     let discard = move |_| {
@@ -1714,11 +1703,13 @@ pub fn ComposeOverlay() -> Element {
                                     &ctx,
                                     &core,
                                     form,
-                                    error,
-                                    submitting,
-                                    submitted_id,
-                                    attaching,
-                                    forward_fetching,
+                                    ComposeSubmit {
+                                        error,
+                                        submitting,
+                                        submitted_id,
+                                        attaching,
+                                        forward_fetching,
+                                    },
                                     DsnRequest::new(notify_success(), notify_failure()),
                                 );
                             }
@@ -2215,11 +2206,13 @@ pub fn ComposeOverlay() -> Element {
                                         &ctx,
                                         &core,
                                         form,
-                                        error,
-                                        submitting,
-                                        submitted_id,
-                                        attaching,
-                                        forward_fetching,
+                                        ComposeSubmit {
+                                            error,
+                                            submitting,
+                                            submitted_id,
+                                            attaching,
+                                            forward_fetching,
+                                        },
                                         DsnRequest::new(notify_success(), notify_failure()),
                                     );
                                 }

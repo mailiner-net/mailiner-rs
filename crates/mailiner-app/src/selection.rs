@@ -105,11 +105,7 @@ impl MessageSelection {
         focus_index: Option<usize>,
     ) {
         self.ids = ids.into_iter().collect();
-        if self.ids.is_empty() {
-            self.ids.insert(focus.clone());
-        } else {
-            self.ids.insert(focus.clone());
-        }
+        self.ids.insert(focus.clone());
         self.focus = Some(focus);
         self.focus_at_index = focus_index;
         self.unread.retain(|id| self.ids.contains(id));

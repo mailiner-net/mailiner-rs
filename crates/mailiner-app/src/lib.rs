@@ -1,4 +1,9 @@
-//! Library surface for unit tests (formatters, loaders, download, account config).
+//! Mailiner application: mail session, UI, and on-device stores.
+//!
+//! Host builds do not compile the `wasm32` call sites, so `dead_code` is
+//! enforced on the wasm target (CI) rather than on every host artifact.
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
 pub mod a11y;
 pub mod account;
 pub mod account_config;
@@ -8,7 +13,11 @@ pub mod address_book;
 pub mod autocrypt;
 pub mod autodiscover;
 pub mod background_sync;
+pub mod components;
+pub mod connection;
+pub mod context;
 pub mod conversation;
+pub mod core_event;
 pub mod download;
 pub mod draft_store;
 pub mod formatter;
@@ -40,9 +49,11 @@ pub mod reconnect;
 pub mod selection;
 pub mod send;
 pub mod setup_wizard;
+pub mod shell;
 pub mod shortcuts;
 pub mod smime;
 pub mod smtp_inflight;
+pub mod smtp_session;
 pub mod snippet;
 pub mod snooze;
 pub mod source;
@@ -50,5 +61,7 @@ pub mod toast;
 pub mod ui_prefs;
 pub mod unified_inbox;
 pub mod vacation;
+pub mod websocket_stream;
 
-// connection / core_loop are binary-only (Dioxus signals + WASM WebSocket).
+pub use shell::{AccountStoreContext, AppBootstrapState, launch};
+pub(crate) use shell::{Route, resolve_active_id};

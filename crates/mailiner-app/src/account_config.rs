@@ -965,9 +965,7 @@ fn strip_url_userinfo(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_string();
     };
-    let authority_end = rest
-        .find(|ch| matches!(ch, '/' | '?' | '#'))
-        .unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, suffix) = rest.split_at(authority_end);
     match authority.rsplit_once('@') {
         Some((_, host)) => format!("{scheme}://{host}{suffix}"),
@@ -1107,12 +1105,11 @@ pub fn smtp_username(config: &AccountConfig) -> String {
 
 /// SMTP password: explicit SMTP secret if non-empty, else IMAP password.
 pub fn smtp_password(config: &AccountConfig) -> String {
-    if let Some(smtp) = &config.smtp {
-        if let Some(p) = &smtp.password {
-            if !p.is_empty() {
-                return p.clone();
-            }
-        }
+    if let Some(smtp) = &config.smtp
+        && let Some(p) = &smtp.password
+        && !p.is_empty()
+    {
+        return p.clone();
     }
     config.imap.password.clone()
 }

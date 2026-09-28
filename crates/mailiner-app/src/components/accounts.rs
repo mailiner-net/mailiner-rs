@@ -11,7 +11,7 @@ use crate::Route;
 use crate::account::AccountId;
 use crate::account_config::{
     AccountConfig, AccountIdentity, AuthKind, DEFAULT_SMTP_PORT, ImapTlsMode, Oauth2Provider,
-    Oauth2Tokens, SmimeIdentity, SmtpTlsMode, extra_ca_pems_to_text, imap_tls_mode_from_legacy,
+    Oauth2Tokens, SmimeIdentity, SmtpTlsMode, extra_ca_pems_to_text,
 };
 use crate::account_vault::{MIN_PASSPHRASE_CHARS, VaultState};
 use crate::components::account_form::{
@@ -736,7 +736,7 @@ fn DataActionConfirm(
     let mut ctx = use_context::<AppContext>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
     let wiping = *ctx.sign_out_pending.read();
-    let mut sign_out_error = ctx.sign_out_error;
+    let sign_out_error = ctx.sign_out_error;
     use_effect(move || {
         if let Some(err) = sign_out_error() {
             action_error.set(Some(format!(

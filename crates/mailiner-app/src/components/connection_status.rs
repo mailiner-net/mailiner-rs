@@ -36,10 +36,9 @@ pub fn ConnectionStatusBanner() -> Element {
         if matches!(
             state,
             ConnectionState::Connecting | ConnectionState::Authenticating | ConnectionState::Ready
-        ) {
-            if retry_pending() {
-                retry_pending.set(false);
-            }
+        ) && retry_pending()
+        {
+            retry_pending.set(false);
         }
     });
 
@@ -110,7 +109,7 @@ pub fn ConnectionStatusBanner() -> Element {
                             return;
                         }
                         retry_pending.set(true);
-                        let _ = core_tx.send(CoreEvent::Reconnect {
+                        core_tx.send(CoreEvent::Reconnect {
                             account_id: account_id_for_retry.clone(),
                         });
                     },

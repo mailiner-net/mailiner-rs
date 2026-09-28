@@ -44,7 +44,7 @@ async fn import_selected_files(
     }
     match parse_import_files(raw) {
         Ok(messages) => {
-            let _ = core_tx.send(CoreEvent::ImportMessages {
+            core_tx.send(CoreEvent::ImportMessages {
                 account_id,
                 mailbox_id,
                 messages,
@@ -202,7 +202,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: crate::i18n::t("list.unread_title"),
                         active: filter.unread,
                         on_toggle: move |_| {
-                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                            core_tx.send(CoreEvent::ToggleMessageListFilter {
                                 unread: true,
                                 flagged: false,
                                 has_attachment: false,
@@ -214,7 +214,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: crate::i18n::t("list.flagged_title"),
                         active: filter.flagged,
                         on_toggle: move |_| {
-                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                            core_tx.send(CoreEvent::ToggleMessageListFilter {
                                 unread: false,
                                 flagged: true,
                                 has_attachment: false,
@@ -226,7 +226,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                         title: crate::i18n::t("list.attachment_title"),
                         active: filter.has_attachment,
                         on_toggle: move |_| {
-                            let _ = core_tx.send(CoreEvent::ToggleMessageListFilter {
+                            core_tx.send(CoreEvent::ToggleMessageListFilter {
                                 unread: false,
                                 flagged: false,
                                 has_attachment: true,
@@ -285,7 +285,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                     value: "{sort.as_key()}",
                     onchange: move |evt| {
                         if let Some(next) = MessageSort::from_key(&evt.value()) {
-                            let _ = core_tx.send(CoreEvent::SetMessageSort(next));
+                            core_tx.send(CoreEvent::SetMessageSort(next));
                         }
                     },
                     for option in MessageSort::ALL {
@@ -365,7 +365,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             if !confirm_empty_trash() {
                                 return;
                             }
-                            let _ = core_tx.send(CoreEvent::EmptyTrash {
+                            core_tx.send(CoreEvent::EmptyTrash {
                                 account_id: account_id.clone(),
                                 mailbox_id: mailbox_id.clone(),
                             });
@@ -385,7 +385,7 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                             let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
                                 return;
                             };
-                            let _ = core_tx.send(CoreEvent::CreateFolder {
+                            core_tx.send(CoreEvent::CreateFolder {
                                 account_id: account_id.clone(),
                                 parent_id: None,
                                 name,

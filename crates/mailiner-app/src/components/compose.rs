@@ -41,19 +41,23 @@ use crate::send::{
 };
 use crate::ui_prefs::{ComposeBodyMode, ComposePlacement};
 
+#[cfg(test)]
 fn looks_like_email(s: &str) -> bool {
     let s = s.trim();
     !s.is_empty() && s.contains('@') && !s.contains(char::is_whitespace)
 }
 
+#[cfg(test)]
 fn needs_quotes(name: &str) -> bool {
     name.contains([',', '<', '>', '"', '\\']) || looks_like_email(name)
 }
 
+#[cfg(test)]
 fn quote_display_name(name: &str) -> String {
     format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(test)]
 fn format_composer_address(addr: &ComposerAddress) -> String {
     match addr
         .name
@@ -69,6 +73,7 @@ fn format_composer_address(addr: &ComposerAddress) -> String {
     }
 }
 
+#[cfg(test)]
 fn join_address_list(addrs: &[ComposerAddress]) -> String {
     addrs
         .iter()
@@ -77,6 +82,7 @@ fn join_address_list(addrs: &[ComposerAddress]) -> String {
         .join(", ")
 }
 
+#[cfg(test)]
 fn named_composer_address(name: &str, email: &str) -> Option<ComposerAddress> {
     let email = email.trim();
     if email.is_empty() {
@@ -105,6 +111,7 @@ fn apply_compose_body_mode(draft: &mut DraftDocument, mode: ComposeBodyMode) {
     apply_preferred_mode(draft, pref_to_body_mode(mode));
 }
 
+#[cfg(test)]
 fn find_unquoted(s: &str, needle: char) -> Option<usize> {
     let mut in_quotes = false;
     let mut escaped = false;
@@ -123,6 +130,7 @@ fn find_unquoted(s: &str, needle: char) -> Option<usize> {
     None
 }
 
+#[cfg(test)]
 fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
     let s = s.trim();
     if !s.ends_with('"') {
@@ -160,6 +168,7 @@ fn split_trailing_quoted(s: &str) -> Option<(&str, String)> {
 
 /// Last comma-separated token before `<email>` is the display name.
 /// Earlier email-like tokens are sibling recipients.
+#[cfg(test)]
 fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
     let before = before.trim();
     if before.is_empty() {
@@ -202,6 +211,7 @@ fn take_display_name(before: &str, out: &mut Vec<ComposerAddress>) -> String {
 }
 
 /// Parse a compose field. Named mailboxes (`Name <email>`) keep the display name.
+#[cfg(test)]
 fn parse_address_list(raw: &str) -> Vec<ComposerAddress> {
     let mut out = Vec::new();
     let mut rest = raw.trim();
@@ -236,6 +246,7 @@ struct RecipientList {
 
 const DRAFT_SAVE_DEBOUNCE_MS: u32 = 300;
 
+#[cfg(test)]
 fn join_address_emails(addrs: &[ComposerAddress]) -> String {
     addrs
         .iter()
@@ -398,14 +409,14 @@ fn open_new_draft(ctx: &mut AppContext, account: Account, draft: DraftDocument) 
 /// Open the saved draft for the compose account, or a blank compose.
 pub fn open_new_message(ctx: &mut AppContext) {
     let preferred = crate::ui_prefs::load_default_from_account();
-    if let Some(account) = resolve_compose_account(ctx, preferred.as_ref()) {
-        if let Some(mut session) = draft_store::load_draft(&account.id) {
-            session.account_id = account.id.clone();
-            let identity = resolve_account_identity(&account, session.draft.from.as_ref());
-            apply_current_from(&mut session, &identity_from_stored(&identity));
-            ctx.compose_draft.set(Some(session));
-            return;
-        }
+    if let Some(account) = resolve_compose_account(ctx, preferred.as_ref())
+        && let Some(mut session) = draft_store::load_draft(&account.id)
+    {
+        session.account_id = account.id.clone();
+        let identity = resolve_account_identity(&account, session.draft.from.as_ref());
+        apply_current_from(&mut session, &identity_from_stored(&identity));
+        ctx.compose_draft.set(Some(session));
+        return;
     }
     let Some((account, draft)) = new_message_draft(ctx) else {
         return;
@@ -461,7 +472,7 @@ pub fn open_reply_or_forward(
                 ctx,
                 ComposeSession {
                     account_id: account.id,
-                    title: title.into(),
+                    title,
                     draft,
                     reply_source,
                     imap_draft: None,
@@ -512,6 +523,7 @@ fn flatten_from_for_identity(
         .next()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn submit_compose(
     ctx: &AppContext,
     core: &Coroutine<CoreEvent>,
@@ -778,6 +790,7 @@ fn toggle_original_attachments(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn session_with_live_fields(
     session: &ComposeSession,
     to: &[ComposerAddress],
@@ -807,6 +820,7 @@ fn session_with_live_fields(
     session
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_live_draft(
     compose_draft: Signal<Option<ComposeSession>>,
     to: Signal<Vec<ComposerAddress>>,
@@ -872,19 +886,17 @@ fn queue_imap_draft_save(
         &account,
         session.draft.from.as_ref(),
     ));
-    match prepare_draft(&session.draft, &identity) {
-        Ok(prepared) => {
-            core.send(CoreEvent::SaveImapDraft {
-                account_id: session.account_id.clone(),
-                draft_id: session.draft.id.as_str().to_string(),
-                rfc822: prepared.rfc822,
-                replace: session.imap_draft.clone(),
-            });
-        }
-        Err(_) => {}
+    if let Ok(prepared) = prepare_draft(&session.draft, &identity) {
+        core.send(CoreEvent::SaveImapDraft {
+            account_id: session.account_id.clone(),
+            draft_id: session.draft.id.as_str().to_string(),
+            rfc822: prepared.rfc822,
+            replace: session.imap_draft.clone(),
+        });
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn close_keeping_draft(
     mut save_gen: Signal<u32>,
     mut compose_draft: Signal<Option<ComposeSession>>,
@@ -1263,10 +1275,10 @@ fn collect_clipboard_images(dt: &web_sys::DataTransfer) -> Vec<web_sys::File> {
     let mut out = Vec::new();
     if let Some(list) = dt.files() {
         for i in 0..list.length() {
-            if let Some(file) = list.item(i) {
-                if is_clipboard_image(&file) {
-                    out.push(file);
-                }
+            if let Some(file) = list.item(i)
+                && is_clipboard_image(&file)
+            {
+                out.push(file);
             }
         }
     }
@@ -1488,7 +1500,6 @@ pub fn ComposeOverlay() -> Element {
     // Apply a newly opened draft once (do not clobber typing).
     {
         let ctx = ctx.clone();
-        let core = core;
         let mut last_draft_id = last_draft_id;
         let mut submitting = submitting;
         let mut attaching = attaching;

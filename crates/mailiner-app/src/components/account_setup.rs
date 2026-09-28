@@ -49,8 +49,8 @@ pub fn AccountSetupWizard(mode: SetupMode) -> Element {
 
     let mut model = use_account_form_model(&prefill);
 
-    let mut unlock_passphrase = use_signal(String::new);
-    let mut unlock_passphrase_confirm = use_signal(String::new);
+    let unlock_passphrase = use_signal(String::new);
+    let unlock_passphrase_confirm = use_signal(String::new);
     let mut force_proxy = use_signal(|| false);
     let mut current = use_signal(|| match mode {
         SetupMode::FirstRun => SetupStep::Welcome,

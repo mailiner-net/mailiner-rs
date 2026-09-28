@@ -202,7 +202,7 @@ mod web {
             let Ok(edit) = document.create_element("div") else {
                 return;
             };
-            let _ = edit.set_id(EDITOR_INNER_ID);
+            edit.set_id(EDITOR_INNER_ID);
             let _ = edit.set_attribute("contenteditable", "true");
             let _ = edit.set_attribute("spellcheck", SPELLCHECK);
             let _ = edit.set_attribute("role", "textbox");

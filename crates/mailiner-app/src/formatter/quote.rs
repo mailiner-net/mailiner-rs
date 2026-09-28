@@ -265,10 +265,7 @@ fn replaced_element_is_visible(tag: &str, attrs: &str) -> bool {
     if has_boolean_hidden(attrs) {
         return false;
     }
-    if attr_value(attrs, "style")
-        .as_deref()
-        .is_some_and(style_decl_hidden)
-    {
+    if attr_value(attrs, "style").is_some_and(style_decl_hidden) {
         return false;
     }
     let tag = tag.to_ascii_lowercase();
@@ -279,13 +276,13 @@ fn replaced_element_is_visible(tag: &str, attrs: &str) -> bool {
             if src.trim().is_empty() && srcset.trim().is_empty() {
                 return false;
             }
-            match (
-                parse_px(attr_value(attrs, "width")),
-                parse_px(attr_value(attrs, "height")),
-            ) {
-                (Some(w), Some(h)) if w <= 1 && h <= 1 => false,
-                _ => true,
-            }
+            !matches!(
+                (
+                    parse_px(attr_value(attrs, "width")),
+                    parse_px(attr_value(attrs, "height")),
+                ),
+                (Some(w), Some(h)) if w <= 1 && h <= 1
+            )
         }
         "hr" | "picture" | "canvas" | "video" | "audio" | "object" | "embed" | "iframe" => true,
         _ => !attr_value(attrs, "src")

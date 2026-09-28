@@ -170,7 +170,7 @@ fn SubscribeRow(entry: crate::mailbox::MailboxEntry) -> Element {
                             let Some(account_id) = account_id.clone() else {
                                 return;
                             };
-                            let _ = core.send(CoreEvent::SetFolderSubscribed {
+                            core.send(CoreEvent::SetFolderSubscribed {
                                 account_id,
                                 mailbox_id: id.clone(),
                                 subscribed: next,
@@ -203,6 +203,6 @@ fn hide_unsubscribed_selection(ctx: &AppContext, core: &Coroutine<CoreEvent>) {
         return;
     }
     if let Some(inbox) = crate::mailbox::find_mailbox_with_role(&nodes, MailboxRole::Inbox) {
-        let _ = core.send(CoreEvent::SelectMailbox(inbox));
+        core.send(CoreEvent::SelectMailbox(inbox));
     }
 }

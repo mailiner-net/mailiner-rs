@@ -141,7 +141,7 @@ fn resolve_cid(
     if ct_main == "image/svg+xml" || ct_main.contains("svg") {
         return None;
     }
-    if !SAFE_IMAGE_TYPES.iter().any(|t| *t == ct_main) {
+    if !SAFE_IMAGE_TYPES.contains(&ct_main) {
         return None;
     }
 
@@ -345,7 +345,12 @@ mod tests {
     #[test]
     fn strips_script() {
         let html = html_part("<p>Hi<script>alert(1)</script></p>");
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(r.html.contains("Hi"));
         assert!(!r.html.to_ascii_lowercase().contains("<script"));
     }
@@ -353,7 +358,12 @@ mod tests {
     #[test]
     fn keeps_inline_styles() {
         let html = html_part(r#"<p class="lead" style="color:#c00;font-size:16px">Hi</p>"#);
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(r.html.contains("style="), "{r:?}");
         assert!(r.html.contains("color"), "{r:?}");
         assert!(r.html.contains("font-size"), "{r:?}");
@@ -364,7 +374,12 @@ mod tests {
     fn strips_remote_url_from_inline_style_by_default() {
         let html =
             html_part(r#"<p style="background:url(https://evil.example/x.png);color:red">Hi</p>"#);
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(!r.html.contains("evil.example"), "{r:?}");
         assert!(r.html.contains("color"), "{r:?}");
     }
@@ -374,7 +389,7 @@ mod tests {
         let html = html_part(r#"<p style="background:url(https://ok.example/x.png)">Hi</p>"#);
         let r = format_html(
             &html,
-            &[html.clone()],
+            std::slice::from_ref(&html),
             &FormatOptions {
                 allow_remote_resources: true,
                 prefer_plain: false,
@@ -389,7 +404,12 @@ mod tests {
         let html = html_part(
             r##"<table width="512" cellpadding="0" cellspacing="0" bgcolor="#ffffff"><tr><td align="center" valign="top">x</td></tr></table>"##,
         );
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(r.html.contains("width="), "{r:?}");
         assert!(r.html.contains("cellpadding="), "{r:?}");
         assert!(r.html.contains("cellspacing="), "{r:?}");
@@ -401,7 +421,12 @@ mod tests {
     #[test]
     fn keeps_body_selector_for_document_mount() {
         let html = html_part("<style>body {font-family: Arial}</style><p>Hi</p>");
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         let lower = r.html.to_ascii_lowercase();
         assert!(lower.contains("body {") || lower.contains("body{"), "{r:?}");
         assert!(!lower.contains(":host"), "{r:?}");
@@ -412,7 +437,12 @@ mod tests {
         let html = html_part(
             "<p>Thanks.</p><blockquote><p>Hello<script>alert(1)</script></p></blockquote>",
         );
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(r.html.contains("<details class=\"mlnr-quote\">"), "{r:?}");
         assert!(r.html.contains("Show quoted text"), "{r:?}");
         assert!(r.html.contains("Thanks."), "{r:?}");
@@ -424,7 +454,12 @@ mod tests {
     #[test]
     fn does_not_wrap_blockquote_when_it_is_the_whole_body() {
         let html = html_part("<blockquote><p>Forwarded</p></blockquote>");
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(!r.html.contains("<details"), "{r:?}");
         assert!(r.html.contains("Forwarded"), "{r:?}");
     }
@@ -434,7 +469,12 @@ mod tests {
         let html = html_part(
             r#"<blockquote><p>old</p></blockquote><p><img src="data:image/png;base64,aaaa"></p>"#,
         );
-        let r = format_html(&html, &[html.clone()], &FormatOptions::default()).unwrap();
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(!r.html.contains("<details"), "{r:?}");
     }
 }

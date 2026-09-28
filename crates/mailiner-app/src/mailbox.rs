@@ -23,9 +23,9 @@ impl MailboxId {
     }
 }
 
-impl ToString for MailboxId {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl std::fmt::Display for MailboxId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -553,9 +553,7 @@ pub fn mailbox_tree_filter_ids(
     nodes: &HashMap<MailboxId, MailboxNode>,
     query: &str,
 ) -> Option<HashSet<MailboxId>> {
-    if query.split_whitespace().next().is_none() {
-        return None;
-    }
+    query.split_whitespace().next()?;
     let entries = collect_mailbox_entries(roots, nodes);
     let mut visible = HashSet::new();
     for entry in filter_mailbox_entries(&entries, query) {

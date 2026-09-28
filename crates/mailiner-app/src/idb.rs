@@ -19,7 +19,7 @@ use web_sys::{
 };
 
 use crate::account_store::AccountStoreError;
-use crate::mail_cache::{BrowserMailCache, MailCache};
+use crate::mail_cache::BrowserMailCache;
 use crate::object_cache::ObjectStoreMailCache;
 use crate::offline_cache::{IDB_DB_NAME, IDB_STORES, IDB_VERSION, JsonObjectStore};
 

@@ -47,7 +47,7 @@ fn prefetch_sections(parts: &[MessagePart]) -> Vec<String> {
 
 /// In-memory LRU of decoded bodies so opening a prefetched neighbor does not re-FETCH.
 #[derive(Debug)]
-pub(crate) struct LoadedMessageCache {
+pub struct LoadedMessageCache {
     entries: HashMap<MessageId, Arc<LoadedMessage>>,
     lru: VecDeque<MessageId>,
     cap: usize,

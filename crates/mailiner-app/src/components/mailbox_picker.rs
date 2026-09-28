@@ -5,6 +5,7 @@ use std::rc::Rc;
 use dioxus::html::Key;
 use dioxus::prelude::*;
 use mailiner_core::MailboxRole;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
 use super::icons::{Icon, IconButton, IconKind};
@@ -115,7 +116,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
             let mut picker = ctx.mailbox_picker;
             match mode {
                 MailboxPickerMode::Jump => {
-                    let _ = core.send(CoreEvent::JumpToMailbox(id));
+                    core.send(CoreEvent::JumpToMailbox(id));
                 }
                 MailboxPickerMode::Move | MailboxPickerMode::Copy => {
                     let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() else {
@@ -150,7 +151,7 @@ fn MailboxPicker(mode: MailboxPickerMode) -> Element {
                             dest_mailbox_id: id,
                         }
                     };
-                    let _ = core.send(event);
+                    core.send(event);
                 }
             }
             picker.set(None);

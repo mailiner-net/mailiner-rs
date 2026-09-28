@@ -6,8 +6,9 @@ use mailiner_mime::{MAX_BINARY_DECODE_BYTES, StreamingTransferDecoder};
 /// Hard cap for attachment downloads (decoded size). Larger than cid image cap.
 pub const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum DownloadStatus {
+    #[default]
     Idle,
     /// Enqueued by Save all; IMAP fetch has not started.
     Queued,
@@ -23,12 +24,6 @@ pub enum DownloadStatus {
 impl DownloadStatus {
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Queued | Self::InProgress { .. })
-    }
-}
-
-impl Default for DownloadStatus {
-    fn default() -> Self {
-        Self::Idle
     }
 }
 
@@ -108,15 +103,15 @@ pub fn attachment_filename(
     description: &Option<String>,
     content_type: &str,
 ) -> String {
-    if let Some(f) = filename {
-        if !f.is_empty() {
-            return f.clone();
-        }
+    if let Some(f) = filename
+        && !f.is_empty()
+    {
+        return f.clone();
     }
-    if let Some(d) = description {
-        if !d.is_empty() {
-            return d.clone();
-        }
+    if let Some(d) = description
+        && !d.is_empty()
+    {
+        return d.clone();
     }
     let ext = match primary_mime(content_type).to_ascii_lowercase().as_str() {
         "application/pdf" => "pdf",
@@ -153,7 +148,7 @@ fn sanitize_filename_stem(raw: &str) -> String {
     let mut last_was_space = false;
     for ch in raw.chars() {
         if ch.is_whitespace() {
-            if !last_was_space && !out.is_empty() && out.len() + 1 <= MAX_EML_STEM {
+            if !last_was_space && !out.is_empty() && out.len() < MAX_EML_STEM {
                 out.push(' ');
                 last_was_space = true;
             }

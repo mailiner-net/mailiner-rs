@@ -397,6 +397,7 @@ pub struct FormAuth {
 }
 
 impl FormAuth {
+    #[cfg(test)]
     pub fn password() -> Self {
         Self::default()
     }

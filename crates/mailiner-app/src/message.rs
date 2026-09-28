@@ -31,7 +31,7 @@ pub struct Message {
 
 impl Message {
     /// Display name when the address is `Name <email>`, otherwise the raw string.
-    pub fn from_preview(&self) -> &str {
+    pub fn sender_preview(&self) -> &str {
         preview_mailbox(&self.from)
     }
 
@@ -72,7 +72,7 @@ impl Message {
         {
             return email;
         }
-        let preview = self.from_preview();
+        let preview = self.sender_preview();
         if preview.is_empty() { "?" } else { preview }
     }
 }
@@ -102,10 +102,11 @@ fn nonempty_email(addr: &EmailAddr) -> Option<&str> {
 }
 
 pub(crate) fn preview_mailbox(value: &str) -> &str {
-    if let Some((name, rest)) = value.split_once(" <") {
-        if !name.is_empty() && rest.ends_with('>') {
-            return name;
-        }
+    if let Some((name, rest)) = value.split_once(" <")
+        && !name.is_empty()
+        && rest.ends_with('>')
+    {
+        return name;
     }
     value
 }
@@ -121,6 +122,35 @@ pub(crate) fn next_flag_value(known: impl IntoIterator<Item = bool>) -> bool {
         all_on &= on;
     }
     !any || !all_on
+}
+
+impl From<Envelope> for Message {
+    fn from(envelope: Envelope) -> Self {
+        Self {
+            id: envelope.id.clone(),
+            subject: envelope.subject.clone().unwrap_or_default(),
+            from: envelope
+                .from
+                .as_ref()
+                .map(EmailAddress::to_string)
+                .unwrap_or_default(),
+            to: envelope
+                .to
+                .as_ref()
+                .map(EmailAddress::to_string)
+                .unwrap_or_default(),
+            cc: envelope.cc.as_ref().map(EmailAddress::to_string),
+            bcc: envelope.bcc.as_ref().map(EmailAddress::to_string),
+            date: envelope.date,
+            has_attachments: envelope.has_attachments,
+            is_read: envelope.is_read,
+            is_answered: envelope.is_answered,
+            is_starred: envelope.is_starred,
+            is_flagged: envelope.is_flagged,
+            snippet: envelope.snippet.clone(),
+            envelope,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -328,34 +358,5 @@ mod tests {
         };
         let msg = Message::from(envelope);
         assert_eq!(msg.sender_email(), Some("ada@example.com"));
-    }
-}
-
-impl From<Envelope> for Message {
-    fn from(envelope: Envelope) -> Self {
-        Self {
-            id: envelope.id.clone(),
-            subject: envelope.subject.clone().unwrap_or_default(),
-            from: envelope
-                .from
-                .as_ref()
-                .map(EmailAddress::to_string)
-                .unwrap_or_default(),
-            to: envelope
-                .to
-                .as_ref()
-                .map(EmailAddress::to_string)
-                .unwrap_or_default(),
-            cc: envelope.cc.as_ref().map(EmailAddress::to_string),
-            bcc: envelope.bcc.as_ref().map(EmailAddress::to_string),
-            date: envelope.date,
-            has_attachments: envelope.has_attachments,
-            is_read: envelope.is_read,
-            is_answered: envelope.is_answered,
-            is_starred: envelope.is_starred,
-            is_flagged: envelope.is_flagged,
-            snippet: envelope.snippet.clone(),
-            envelope,
-        }
     }
 }

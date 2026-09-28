@@ -123,7 +123,7 @@ fn run_shortcut(
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::ArchiveMessages {
+            core.send(CoreEvent::ArchiveMessages {
                 account_id,
                 mailbox_id,
                 message_ids,
@@ -137,41 +137,41 @@ fn run_shortcut(
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::MoveToJunk {
+            core.send(CoreEvent::MoveToJunk {
                 account_id,
                 mailbox_id,
                 message_ids,
             });
         }
         ShortcutId::NextMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent {
+            core.send(CoreEvent::SelectAdjacent {
                 delta: 1,
                 extend: false,
             });
         }
         ShortcutId::PrevMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent {
+            core.send(CoreEvent::SelectAdjacent {
                 delta: -1,
                 extend: false,
             });
         }
         ShortcutId::ExtendNextMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent {
+            core.send(CoreEvent::SelectAdjacent {
                 delta: 1,
                 extend: true,
             });
         }
         ShortcutId::ExtendPrevMessage => {
-            let _ = core.send(CoreEvent::SelectAdjacent {
+            core.send(CoreEvent::SelectAdjacent {
                 delta: -1,
                 extend: true,
             });
         }
         ShortcutId::NextUnread => {
-            let _ = core.send(CoreEvent::SelectAdjacentUnread { delta: 1 });
+            core.send(CoreEvent::SelectAdjacentUnread { delta: 1 });
         }
         ShortcutId::PrevUnread => {
-            let _ = core.send(CoreEvent::SelectAdjacentUnread { delta: -1 });
+            core.send(CoreEvent::SelectAdjacentUnread { delta: -1 });
         }
         ShortcutId::ScrollMessageDown => {
             if !set_focused_conversation_expanded(ctx, core, true) {
@@ -196,7 +196,7 @@ fn run_shortcut(
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::MoveToTrash {
+            core.send(CoreEvent::MoveToTrash {
                 mailbox_id,
                 message_ids,
             });
@@ -205,7 +205,7 @@ fn run_shortcut(
             let Some((mailbox_id, message_ids)) = require_selected_messages(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::DeleteMessages {
+            core.send(CoreEvent::DeleteMessages {
                 mailbox_id,
                 message_ids,
             });
@@ -214,7 +214,7 @@ fn run_shortcut(
             let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::ToggleStar {
+            core.send(CoreEvent::ToggleStar {
                 account_id,
                 mailbox_id,
                 message_ids,
@@ -224,7 +224,7 @@ fn run_shortcut(
             let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::ToggleFlag {
+            core.send(CoreEvent::ToggleFlag {
                 account_id,
                 mailbox_id,
                 message_ids,
@@ -234,7 +234,7 @@ fn run_shortcut(
             let Some((account_id, mailbox_id, message_ids)) = require_toggle_target(ctx) else {
                 return;
             };
-            let _ = core.send(CoreEvent::TogglePin {
+            core.send(CoreEvent::TogglePin {
                 account_id,
                 mailbox_id,
                 message_ids,
@@ -250,7 +250,7 @@ fn run_shortcut(
             help_open.set(true);
         }
         ShortcutId::SelectAll => {
-            let _ = core.send(CoreEvent::SelectAllKnown);
+            core.send(CoreEvent::SelectAllKnown);
         }
     }
 }
@@ -337,7 +337,7 @@ fn toggle_focused_conversation(ctx: &mut AppContext, core: Coroutine<CoreEvent>)
         }
     }
     if expanding {
-        let _ = core.send(CoreEvent::SelectMessage(target));
+        core.send(CoreEvent::SelectMessage(target));
     }
 }
 
@@ -379,7 +379,7 @@ fn set_focused_conversation_expanded(
         }
     }
     if want {
-        let _ = core.send(CoreEvent::SelectMessage(target));
+        core.send(CoreEvent::SelectMessage(target));
     }
     true
 }
@@ -434,7 +434,6 @@ pub fn ShortcutsHost() -> Element {
     use_hook(|| {
         let mut ctx = ctx.clone();
         let mut help_open = help_open;
-        let core = core;
         let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
             if evt.ctrl_key() || evt.meta_key() || evt.alt_key() {
                 if is_select_all_chord(&evt)

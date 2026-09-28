@@ -576,17 +576,21 @@ where
             next
         };
         spawn(async move {
-            if let Some(element) = container_clone.read().as_ref() {
-                if let Ok(offset) = element.get_scroll_offset().await {
-                    if *scroll_generation.peek() != generation {
-                        return;
-                    }
-                    let total = props.items.peek().total_count();
-                    let height = *measured_height.peek();
-                    let vp =
-                        ViewportInfo::calculate(offset.y, height, current_item_height.get(), total);
-                    viewport_info.set(vp);
+            // Clone the Rc out of the signal before awaiting. Holding the read
+            // guard across `.await` blocks every writer for the duration of the
+            // scroll measurement.
+            let element = container_clone.read().clone();
+            if let Some(element) = element
+                && let Ok(offset) = element.get_scroll_offset().await
+            {
+                if *scroll_generation.peek() != generation {
+                    return;
                 }
+                let total = props.items.peek().total_count();
+                let height = *measured_height.peek();
+                let vp =
+                    ViewportInfo::calculate(offset.y, height, current_item_height.get(), total);
+                viewport_info.set(vp);
             }
 
             if let Some(debounce_ms) = props.debounce_ms {
@@ -606,12 +610,12 @@ where
             let buffered = vp.buffered_range(props.buffer_size, total);
             queue_missing_fetches(&items, buffered, &pending_ranges, props.on_need_range);
 
-            if let Some(max_cached) = props.max_cached {
-                if items.cached_count() > max_cached {
-                    let keep = vp.buffered_range(props.buffer_size * 2, total);
-                    let mut items_signal = props.items;
-                    items_signal.write().evict_outside(keep, max_cached);
-                }
+            if let Some(max_cached) = props.max_cached
+                && items.cached_count() > max_cached
+            {
+                let keep = vp.buffered_range(props.buffer_size * 2, total);
+                let mut items_signal = props.items;
+                items_signal.write().evict_outside(keep, max_cached);
             }
         });
     };
@@ -801,6 +805,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)] // one range element, not a filled vec
     fn subtract_pending_splits_ranges() {
         let needed = vec![0..20];
         let pending = vec![5..10];

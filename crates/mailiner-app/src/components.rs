@@ -23,7 +23,6 @@ mod unlock;
 pub mod virtual_scroll;
 mod wizard;
 
-pub use account_setup::AccountSetupWizard;
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
 pub use compose::ComposeOverlay;
 pub use connection_status::ConnectionStatusBanner;

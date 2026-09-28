@@ -17,15 +17,15 @@ use crate::resolve_active_id;
 /// Full-page unlock form shown when the account blob has a vault.
 #[component]
 pub fn UnlockForm() -> Element {
-    let mut bootstrap = use_context::<Signal<AppBootstrapState>>();
+    let bootstrap = use_context::<Signal<AppBootstrapState>>();
     let mut ctx = use_context::<AppContext>();
     let store_ctx = use_context::<Signal<Option<AccountStoreContext>>>();
     let core_tx = use_coroutine_handle::<CoreEvent>();
 
     let mut passphrase = use_signal(String::new);
-    let mut busy = use_signal(|| false);
+    let busy = use_signal(|| false);
     let mut confirm_wipe = use_signal(|| false);
-    let mut status_message = use_signal(|| None::<StatusMessage>);
+    let status_message = use_signal(|| None::<StatusMessage>);
 
     let wiping = *ctx.sign_out_pending.read();
 
@@ -135,6 +135,7 @@ pub fn UnlockForm() -> Element {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_unlock(
     mut bootstrap: Signal<AppBootstrapState>,
     mut ctx: AppContext,

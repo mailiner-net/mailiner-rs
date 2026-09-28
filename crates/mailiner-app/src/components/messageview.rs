@@ -262,7 +262,7 @@ pub fn MessageView() -> Element {
     let ctx = use_context::<AppContext>();
     let mut allow_remote = use_signal(|| crate::ui_prefs::remote_image_decision(None).allowed());
     let mut prefer_plain = use_signal(|| false);
-    let mut formatted_html = use_signal(|| String::new());
+    let mut formatted_html = use_signal(String::new);
     let mut prevented_remote = use_signal(|| false);
     let mut had_remote = use_signal(|| false);
     let last_msg_key = use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(None::<String>)));
@@ -1212,7 +1212,7 @@ fn MessageHeader(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::ToggleStar {
+                                core_tx.send(CoreEvent::ToggleStar {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
@@ -1243,7 +1243,7 @@ fn MessageHeader(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                core_tx.send(CoreEvent::ToggleFlag {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
@@ -1274,7 +1274,7 @@ fn MessageHeader(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::TogglePin {
+                                core_tx.send(CoreEvent::TogglePin {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
@@ -1364,7 +1364,7 @@ fn MessageHeader(
                                 ctx.message_headers.set(MessageHeadersState::Loading {
                                     message_id: message_id.clone(),
                                 });
-                                let _ = core_tx.send(CoreEvent::FetchMessageHeaders {
+                                core_tx.send(CoreEvent::FetchMessageHeaders {
                                     mailbox_id,
                                     message_id: message_id.clone(),
                                 });
@@ -1401,7 +1401,7 @@ fn MessageHeader(
                                     message_id: message_id.clone(),
                                     request_id,
                                 });
-                                let _ = core_tx.send(CoreEvent::FetchMessageSource {
+                                core_tx.send(CoreEvent::FetchMessageSource {
                                     account_id,
                                     mailbox_id,
                                     message_id: message_id.clone(),
@@ -1536,7 +1536,7 @@ fn MessageHeader(
                                     if items.is_empty() {
                                         return;
                                     }
-                                    let _ = core_tx.send(CoreEvent::ExportMessages {
+                                    core_tx.send(CoreEvent::ExportMessages {
                                         account_id,
                                         mailbox_id,
                                         items,
@@ -1545,7 +1545,7 @@ fn MessageHeader(
                                     });
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::SaveMessageEml {
+                                core_tx.send(CoreEvent::SaveMessageEml {
                                     account_id,
                                     mailbox_id,
                                     message_id: message.id.clone(),
@@ -1586,7 +1586,7 @@ fn MessageHeader(
                                 if items.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::ExportMessages {
+                                core_tx.send(CoreEvent::ExportMessages {
                                     account_id,
                                     mailbox_id,
                                     items,
@@ -1614,7 +1614,7 @@ fn MessageHeader(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::MarkRead {
+                                core_tx.send(CoreEvent::MarkRead {
                                     mailbox_id,
                                     message_ids: ids.clone(),
                                     is_read: !is_read,
@@ -1655,7 +1655,7 @@ fn MessageHeader(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::MoveMessages {
+                                core_tx.send(CoreEvent::MoveMessages {
                                     mailbox_id,
                                     message_ids: ids.clone(),
                                     dest_mailbox_id: MailboxId::from(dest),
@@ -1693,7 +1693,7 @@ fn MessageHeader(
                                     if ids.is_empty() {
                                         return;
                                     }
-                                    let _ = core_tx.send(CoreEvent::ArchiveMessages {
+                                    core_tx.send(CoreEvent::ArchiveMessages {
                                         account_id,
                                         mailbox_id,
                                         message_ids: ids.clone(),
@@ -1721,7 +1721,7 @@ fn MessageHeader(
                                     if ids.is_empty() {
                                         return;
                                     }
-                                    let _ = core_tx.send(CoreEvent::MoveToJunk {
+                                    core_tx.send(CoreEvent::MoveToJunk {
                                         account_id,
                                         mailbox_id,
                                         message_ids: ids.clone(),
@@ -1767,7 +1767,7 @@ fn MessageHeader(
                                         _ => return,
                                     }
                                 }
-                                let _ = core_tx.send(CoreEvent::MoveToTrash {
+                                core_tx.send(CoreEvent::MoveToTrash {
                                     mailbox_id,
                                     message_ids: ids.clone(),
                                 });
@@ -1870,7 +1870,7 @@ fn SnoozeMenu(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::SnoozeMessages {
+                                core_tx.send(CoreEvent::SnoozeMessages {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),
@@ -1930,7 +1930,7 @@ fn LabelsMenu(
                                 if ids.is_empty() {
                                     return;
                                 }
-                                let _ = core_tx.send(CoreEvent::ToggleKeyword {
+                                core_tx.send(CoreEvent::ToggleKeyword {
                                     account_id,
                                     mailbox_id,
                                     message_ids: ids.clone(),

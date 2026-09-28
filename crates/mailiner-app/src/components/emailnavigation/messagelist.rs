@@ -43,7 +43,7 @@ fn send_export(
     if items.is_empty() {
         return;
     }
-    let _ = core_tx.send(CoreEvent::ExportMessages {
+    core_tx.send(CoreEvent::ExportMessages {
         account_id,
         mailbox_id,
         items,
@@ -175,7 +175,7 @@ pub fn MessageList() -> Element {
         };
         let end = (range.start + 50).min(range.end);
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
-            let _ = core_tx.send(CoreEvent::FetchMessageRange {
+            core_tx.send(CoreEvent::FetchMessageRange {
                 mailbox_id,
                 range: range.start..end,
             });
@@ -184,7 +184,7 @@ pub fn MessageList() -> Element {
 
     let on_need_range = move |range: Range<usize>| {
         if let Some(mailbox_id) = ctx.selected_mailbox.peek().clone() {
-            let _ = core_tx.send(CoreEvent::FetchMessageRange { mailbox_id, range });
+            core_tx.send(CoreEvent::FetchMessageRange { mailbox_id, range });
         }
     };
 
@@ -286,7 +286,7 @@ pub fn MessageList() -> Element {
                             if evt.key() == Key::Enter {
                                 evt.prevent_default();
                                 let query = list_text_filter.peek().clone();
-                                let _ = core_tx.send(CoreEvent::ApplyMailboxSearch { query });
+                                core_tx.send(CoreEvent::ApplyMailboxSearch { query });
                             } else if evt.key() == Key::Escape
                                 && (!list_text_filter.peek().is_empty()
                                     || mailiner_core::mailbox_search_is_active(
@@ -295,7 +295,7 @@ pub fn MessageList() -> Element {
                             {
                                 evt.prevent_default();
                                 list_text_filter.set(String::new());
-                                let _ = core_tx.send(CoreEvent::ApplyMailboxSearch {
+                                core_tx.send(CoreEvent::ApplyMailboxSearch {
                                     query: String::new(),
                                 });
                             }
@@ -307,7 +307,7 @@ pub fn MessageList() -> Element {
                         title: "Search this folder (Enter)",
                         onclick: move |_| {
                             let query = list_text_filter.peek().clone();
-                            let _ = core_tx.send(CoreEvent::ApplyMailboxSearch { query });
+                            core_tx.send(CoreEvent::ApplyMailboxSearch { query });
                         },
                         "Search"
                     }
@@ -336,7 +336,7 @@ pub fn MessageList() -> Element {
                                 ) else {
                                     return;
                                 };
-                                let _ = core_tx.send(CoreEvent::SaveMailboxSearch { name, query });
+                                core_tx.send(CoreEvent::SaveMailboxSearch { name, query });
                             },
                             "Save"
                         }
@@ -409,7 +409,7 @@ pub fn MessageList() -> Element {
                         },
                         disabled: !has_known,
                         onclick: move |_| {
-                            let _ = core_tx.send(CoreEvent::SelectAllKnown);
+                            core_tx.send(CoreEvent::SelectAllKnown);
                         },
                         "Select all"
                     }
@@ -423,7 +423,7 @@ pub fn MessageList() -> Element {
                         },
                         disabled: !has_known,
                         onclick: move |_| {
-                            let _ = core_tx.send(CoreEvent::SelectUnreadKnown);
+                            core_tx.send(CoreEvent::SelectUnreadKnown);
                         },
                         "Unread"
                     }
@@ -437,7 +437,7 @@ pub fn MessageList() -> Element {
                         },
                         disabled: !has_known,
                         onclick: move |_| {
-                            let _ = core_tx.send(CoreEvent::InvertSelection);
+                            core_tx.send(CoreEvent::InvertSelection);
                         },
                         "Invert"
                     }
@@ -678,12 +678,12 @@ fn MessageListItem(
             aria_label: if is_thread {
                 format!(
                     "{}, {}, {} messages",
-                    message.from_preview(),
+                    message.sender_preview(),
                     message.subject,
                     thread_count
                 )
             } else {
-                format!("{}, {}", message.from_preview(), message.subject)
+                format!("{}, {}", message.sender_preview(), message.subject)
             },
             draggable: if unified_row { "false" } else { "true" },
 
@@ -695,12 +695,11 @@ fn MessageListItem(
 
             onclick: move |evt: MouseEvent| {
                 evt.prevent_default();
-                if is_thread && !thread_expanded {
-                    if let Some(id) = thread_id.clone() {
+                if is_thread && !thread_expanded
+                    && let Some(id) = thread_id.clone() {
                         expanded_conversations.write().insert(id);
                     }
-                }
-                let _ = core_tx.send(CoreEvent::SelectListClick {
+                core_tx.send(CoreEvent::SelectListClick {
                     message_id: message_id.clone(),
                     index,
                     extend: evt.modifiers().shift(),
@@ -772,7 +771,7 @@ fn MessageListItem(
                     class: "message-list-item-top",
                     div {
                         class: "message-from",
-                        "{message.from_preview()}"
+                        "{message.sender_preview()}"
                         if is_thread {
                             span {
                                 class: "message-thread-count",
@@ -815,7 +814,7 @@ fn MessageListItem(
                                 let Some(account_id) = star_account.clone() else {
                                     return;
                                 };
-                                let _ = core_tx.send(CoreEvent::ToggleStar {
+                                core_tx.send(CoreEvent::ToggleStar {
                                     account_id,
                                     mailbox_id: star_mailbox.clone(),
                                     message_ids: vec![star_id.clone()],
@@ -839,7 +838,7 @@ fn MessageListItem(
                                 let Some(account_id) = flag_account.clone() else {
                                     return;
                                 };
-                                let _ = core_tx.send(CoreEvent::ToggleFlag {
+                                core_tx.send(CoreEvent::ToggleFlag {
                                     account_id,
                                     mailbox_id: flag_mailbox.clone(),
                                     message_ids: vec![flag_id.clone()],
@@ -863,7 +862,7 @@ fn MessageListItem(
                                 let Some(account_id) = pin_account.clone() else {
                                     return;
                                 };
-                                let _ = core_tx.send(CoreEvent::TogglePin {
+                                core_tx.send(CoreEvent::TogglePin {
                                     account_id,
                                     mailbox_id: pin_mailbox.clone(),
                                     message_ids: vec![pin_id.clone()],

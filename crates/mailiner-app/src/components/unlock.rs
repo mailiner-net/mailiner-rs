@@ -46,13 +46,15 @@ pub fn UnlockForm() -> Element {
                     onsubmit: move |evt| {
                         evt.prevent_default();
                         start_unlock(
-                            bootstrap,
-                            ctx.clone(),
-                            store_ctx,
-                            core_tx,
-                            passphrase,
-                            busy,
-                            status_message,
+                            UnlockRequest {
+                                bootstrap,
+                                ctx: ctx.clone(),
+                                store_ctx,
+                                core_tx,
+                                passphrase,
+                                busy,
+                                status_message,
+                            },
                             wiping,
                         );
                     },
@@ -135,17 +137,26 @@ pub fn UnlockForm() -> Element {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn start_unlock(
-    mut bootstrap: Signal<AppBootstrapState>,
-    mut ctx: AppContext,
+struct UnlockRequest {
+    bootstrap: Signal<AppBootstrapState>,
+    ctx: AppContext,
     store_ctx: Signal<Option<AccountStoreContext>>,
     core_tx: Coroutine<CoreEvent>,
-    mut passphrase: Signal<String>,
-    mut busy: Signal<bool>,
-    mut status_message: Signal<Option<StatusMessage>>,
-    wiping: bool,
-) {
+    passphrase: Signal<String>,
+    busy: Signal<bool>,
+    status_message: Signal<Option<StatusMessage>>,
+}
+
+fn start_unlock(form: UnlockRequest, wiping: bool) {
+    let UnlockRequest {
+        mut bootstrap,
+        mut ctx,
+        store_ctx,
+        core_tx,
+        mut passphrase,
+        mut busy,
+        mut status_message,
+    } = form;
     if busy() || wiping {
         return;
     }

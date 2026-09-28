@@ -468,17 +468,28 @@ const NOOP_INTERVAL_MS: u32 = 30_000;
 ///
 /// `initial_bootstrap`: App opens the store and passes [`InitialBootstrap::Run`] with
 /// the resolved active id, or [`InitialBootstrap::Skip`] on store failure.
-#[allow(clippy::too_many_arguments)]
-pub async fn core_loop(
-    mut core_rx: UnboundedReceiver<CoreEvent>,
-    mut smtp_rx: SmtpUnboundedReceiver<CoreEvent>,
-    smtp_tx: UnboundedSender<CoreEvent>,
-    mut ctx: AppContext,
-    store: Rc<dyn AccountStore>,
-    outbox: Rc<dyn OutboxStore>,
-    cache: Rc<dyn MailCache>,
-    initial_bootstrap: InitialBootstrap,
-) {
+pub struct CoreLoop {
+    pub core_rx: UnboundedReceiver<CoreEvent>,
+    pub smtp_rx: SmtpUnboundedReceiver<CoreEvent>,
+    pub smtp_tx: UnboundedSender<CoreEvent>,
+    pub ctx: AppContext,
+    pub store: Rc<dyn AccountStore>,
+    pub outbox: Rc<dyn OutboxStore>,
+    pub cache: Rc<dyn MailCache>,
+    pub initial_bootstrap: InitialBootstrap,
+}
+
+pub async fn core_loop(input: CoreLoop) {
+    let CoreLoop {
+        mut core_rx,
+        mut smtp_rx,
+        smtp_tx,
+        mut ctx,
+        store,
+        outbox,
+        cache,
+        initial_bootstrap,
+    } = input;
     let mut manager = AccountConnectionManager::new(store, cache);
     let mut inflight = SmtpInflight::new();
     let mut pending_event: Option<CoreEvent> = None;
@@ -890,14 +901,16 @@ pub async fn core_loop(
                 handle_download_attachment(
                     &manager,
                     &mut ctx,
-                    account_id,
-                    mailbox_id,
-                    message_id,
-                    section,
-                    filename,
-                    content_type,
-                    encoding,
-                    size_hint,
+                    AttachmentRequest {
+                        account_id,
+                        mailbox_id,
+                        message_id,
+                        section,
+                        filename,
+                        content_type,
+                        encoding,
+                        size_hint,
+                    },
                 )
                 .await;
             }
@@ -957,14 +970,16 @@ pub async fn core_loop(
                 handle_preview_attachment(
                     &manager,
                     &mut ctx,
-                    account_id,
-                    mailbox_id,
-                    message_id,
-                    section,
-                    filename,
-                    content_type,
-                    encoding,
-                    size_hint,
+                    AttachmentRequest {
+                        account_id,
+                        mailbox_id,
+                        message_id,
+                        section,
+                        filename,
+                        content_type,
+                        encoding,
+                        size_hint,
+                    },
                 )
                 .await;
             }
@@ -978,18 +993,22 @@ pub async fn core_loop(
                 imap_draft,
             } => {
                 handle_send_message(
-                    &mut manager,
-                    &mut ctx,
-                    outbox.as_ref(),
-                    &smtp_tx,
-                    &mut inflight,
-                    account_id,
-                    request,
-                    display,
-                    draft_id,
-                    bcc_header,
-                    reply_source,
-                    imap_draft,
+                    SendLoop {
+                        manager: &mut manager,
+                        ctx: &mut ctx,
+                        outbox: outbox.as_ref(),
+                        smtp_tx: &smtp_tx,
+                        inflight: &mut inflight,
+                    },
+                    QueuedSend {
+                        account_id,
+                        request,
+                        display,
+                        draft_id,
+                        bcc_header,
+                        reply_source,
+                        imap_draft,
+                    },
                 )
                 .await;
             }
@@ -5964,10 +5983,7 @@ async fn handle_fetch_message_source(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_download_attachment(
-    manager: &AccountConnectionManager,
-    ctx: &mut AppContext,
+struct AttachmentRequest {
     account_id: AccountId,
     mailbox_id: MailboxId,
     message_id: MessageId,
@@ -5976,7 +5992,23 @@ async fn handle_download_attachment(
     content_type: String,
     encoding: TransferEncoding,
     size_hint: Option<u64>,
+}
+
+async fn handle_download_attachment(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    request: AttachmentRequest,
 ) {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
@@ -6000,14 +6032,16 @@ async fn handle_download_attachment(
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        account_id.clone(),
-        mailbox_id.clone(),
-        message_id.clone(),
-        section.clone(),
-        filename,
-        content_type,
-        encoding,
-        size_hint,
+        AttachmentRequest {
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            message_id: message_id.clone(),
+            section: section.clone(),
+            filename,
+            content_type,
+            encoding,
+            size_hint,
+        },
     )
     .await
     else {
@@ -6044,19 +6078,21 @@ async fn handle_download_attachment(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_preview_attachment(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    account_id: AccountId,
-    mailbox_id: MailboxId,
-    message_id: MessageId,
-    section: String,
-    filename: String,
-    content_type: String,
-    encoding: TransferEncoding,
-    size_hint: Option<u64>,
+    request: AttachmentRequest,
 ) {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return;
     }
@@ -6087,14 +6123,16 @@ async fn handle_preview_attachment(
     let Some(download) = stream_attachment_blob(
         manager,
         ctx,
-        account_id.clone(),
-        mailbox_id.clone(),
-        message_id.clone(),
-        section.clone(),
-        filename.clone(),
-        content_type.clone(),
-        encoding,
-        size_hint,
+        AttachmentRequest {
+            account_id: account_id.clone(),
+            mailbox_id: mailbox_id.clone(),
+            message_id: message_id.clone(),
+            section: section.clone(),
+            filename: filename.clone(),
+            content_type: content_type.clone(),
+            encoding,
+            size_hint,
+        },
     )
     .await
     else {
@@ -6161,7 +6199,6 @@ fn remember_or_revoke_blob(ctx: &mut AppContext, section: &str, finished: Finish
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn attachment_request_still_current(
     ctx: &AppContext,
     account_id: &AccountId,
@@ -6181,19 +6218,21 @@ fn attachment_request_still_current(
         )
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn stream_attachment_blob(
     manager: &AccountConnectionManager,
     ctx: &mut AppContext,
-    account_id: AccountId,
-    mailbox_id: MailboxId,
-    message_id: MessageId,
-    section: String,
-    filename: String,
-    content_type: String,
-    encoding: TransferEncoding,
-    size_hint: Option<u64>,
+    request: AttachmentRequest,
 ) -> Option<StreamingBlobDownload> {
+    let AttachmentRequest {
+        account_id,
+        mailbox_id,
+        message_id,
+        section,
+        filename,
+        content_type,
+        encoding,
+        size_hint,
+    } = request;
     // Ignore if user navigated away or switched account.
     if !attachment_request_still_current(ctx, &account_id, &mailbox_id, &message_id) {
         return None;
@@ -6916,13 +6955,15 @@ async fn purge_missing_accounts(
     refresh_outbox_signal(outbox, ctx).await;
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_send_message(
-    manager: &mut AccountConnectionManager,
-    ctx: &mut AppContext,
-    outbox: &dyn OutboxStore,
-    smtp_tx: &UnboundedSender<CoreEvent>,
-    inflight: &mut SmtpInflight,
+struct SendLoop<'a> {
+    manager: &'a mut AccountConnectionManager,
+    ctx: &'a mut AppContext,
+    outbox: &'a dyn OutboxStore,
+    smtp_tx: &'a UnboundedSender<CoreEvent>,
+    inflight: &'a mut SmtpInflight,
+}
+
+struct QueuedSend {
     account_id: AccountId,
     request: SubmitRequest,
     display: OutboxDisplay,
@@ -6930,7 +6971,25 @@ async fn handle_send_message(
     bcc_header: Option<String>,
     reply_source: Option<MessageId>,
     imap_draft: Option<MessageId>,
-) {
+}
+
+async fn handle_send_message(loop_io: SendLoop<'_>, send: QueuedSend) {
+    let SendLoop {
+        manager,
+        ctx,
+        outbox,
+        smtp_tx,
+        inflight,
+    } = loop_io;
+    let QueuedSend {
+        account_id,
+        request,
+        display,
+        draft_id,
+        bcc_header,
+        reply_source,
+        imap_draft,
+    } = send;
     let Some(config) = manager.resolve_config(&account_id).await else {
         ctx.set_send_status(
             account_id.clone(),

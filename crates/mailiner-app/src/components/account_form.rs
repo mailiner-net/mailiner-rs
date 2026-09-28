@@ -176,25 +176,44 @@ fn invalidate_lookup(mut lookup_gen: Signal<u64>, mut lookup_status: Signal<Look
     lookup_status.set(LookupStatus::Idle);
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Lookup progress plus the host fields a successful lookup writes.
+#[derive(Clone, Copy)]
+pub(crate) struct ServerLookupUi {
+    pub hosts_dirty: Signal<bool>,
+    pub lookup_gen: Signal<u64>,
+    pub lookup_status: Signal<LookupStatus>,
+    pub last_discovered: Signal<Option<DiscoveredConfig>>,
+    pub set_imap_host: EventHandler<String>,
+    pub set_imap_port: EventHandler<String>,
+    pub set_imap_username: EventHandler<String>,
+    pub set_smtp_host: EventHandler<String>,
+    pub set_smtp_port: EventHandler<String>,
+    pub set_smtp_username: EventHandler<String>,
+    pub set_smtp_use_tls: EventHandler<bool>,
+    pub set_smtp_open: EventHandler<bool>,
+}
+
 pub(crate) fn start_server_lookup(
     email: String,
     fields: PresetFormFields,
     force: bool,
     busy: bool,
-    mut hosts_dirty: Signal<bool>,
-    mut lookup_gen: Signal<u64>,
-    mut lookup_status: Signal<LookupStatus>,
-    mut last_discovered: Signal<Option<DiscoveredConfig>>,
-    set_imap_host: EventHandler<String>,
-    set_imap_port: EventHandler<String>,
-    set_imap_username: EventHandler<String>,
-    set_smtp_host: EventHandler<String>,
-    set_smtp_port: EventHandler<String>,
-    set_smtp_username: EventHandler<String>,
-    set_smtp_use_tls: EventHandler<bool>,
-    set_smtp_open: EventHandler<bool>,
+    ui: ServerLookupUi,
 ) {
+    let ServerLookupUi {
+        mut hosts_dirty,
+        mut lookup_gen,
+        mut lookup_status,
+        mut last_discovered,
+        set_imap_host,
+        set_imap_port,
+        set_imap_username,
+        set_smtp_host,
+        set_smtp_port,
+        set_smtp_username,
+        set_smtp_use_tls,
+        set_smtp_open,
+    } = ui;
     if busy {
         return;
     }
@@ -252,31 +271,58 @@ pub(crate) fn start_server_lookup(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn build_config_from_form(
-    account_id: &AccountId,
-    display_name: &str,
-    email: &str,
-    imap_host: &str,
-    imap_port: &str,
-    imap_username: &str,
-    imap_password: &str,
-    imap_tls_mode: ImapTlsMode,
-    proxy_base_url: &str,
-    proxy_token: &str,
-    remote_host: &str,
-    remote_port: &str,
-    smtp_host: &str,
-    smtp_port: &str,
-    smtp_username: &str,
-    smtp_password: &str,
-    smtp_tls_mode: SmtpTlsMode,
-    smtp_remote_host: &str,
-    smtp_remote_port: &str,
-    signature: &str,
-    extra_ca_pem: &str,
-    created_at: chrono::DateTime<Utc>,
-) -> Result<AccountConfig, String> {
+/// Values from the account form, borrowed for the duration of [`build_config_from_form`].
+#[derive(Clone, Copy)]
+pub struct AccountFormInput<'a> {
+    pub account_id: &'a AccountId,
+    pub display_name: &'a str,
+    pub email: &'a str,
+    pub imap_host: &'a str,
+    pub imap_port: &'a str,
+    pub imap_username: &'a str,
+    pub imap_password: &'a str,
+    pub imap_tls_mode: ImapTlsMode,
+    pub proxy_base_url: &'a str,
+    pub proxy_token: &'a str,
+    pub remote_host: &'a str,
+    pub remote_port: &'a str,
+    pub smtp_host: &'a str,
+    pub smtp_port: &'a str,
+    pub smtp_username: &'a str,
+    pub smtp_password: &'a str,
+    pub smtp_tls_mode: SmtpTlsMode,
+    pub smtp_remote_host: &'a str,
+    pub smtp_remote_port: &'a str,
+    pub signature: &'a str,
+    pub extra_ca_pem: &'a str,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+pub fn build_config_from_form(input: &AccountFormInput<'_>) -> Result<AccountConfig, String> {
+    let AccountFormInput {
+        account_id,
+        display_name,
+        email,
+        imap_host,
+        imap_port,
+        imap_username,
+        imap_password,
+        imap_tls_mode,
+        proxy_base_url,
+        proxy_token,
+        remote_host,
+        remote_port,
+        smtp_host,
+        smtp_port,
+        smtp_username,
+        smtp_password,
+        smtp_tls_mode,
+        smtp_remote_host,
+        smtp_remote_port,
+        signature,
+        extra_ca_pem,
+        created_at,
+    } = *input;
     let display_name = display_name.trim();
     let email = email.trim();
     let host = imap_host.trim().to_string();
@@ -798,18 +844,20 @@ pub fn AccountIdentityFields(
                             fields.clone(),
                             false,
                             busy,
-                            hosts_dirty,
-                            lookup_gen,
-                            lookup_status,
-                            last_discovered,
-                            set_imap_host,
-                            set_imap_port,
-                            set_imap_username,
-                            set_smtp_host,
-                            set_smtp_port,
-                            set_smtp_username,
-                            set_smtp_use_tls,
-                            set_smtp_open,
+                            ServerLookupUi {
+                                hosts_dirty,
+                                lookup_gen,
+                                lookup_status,
+                                last_discovered,
+                                set_imap_host,
+                                set_imap_port,
+                                set_imap_username,
+                                set_smtp_host,
+                                set_smtp_port,
+                                set_smtp_username,
+                                set_smtp_use_tls,
+                                set_smtp_open,
+                            },
                         );
                     }
                 },
@@ -861,18 +909,20 @@ pub fn AccountIdentityFields(
                                     fields.clone(),
                                     true,
                                     busy,
-                                    hosts_dirty,
-                                    lookup_gen,
-                                    lookup_status,
-                                    last_discovered,
-                                    set_imap_host,
-                                    set_imap_port,
-                                    set_imap_username,
-                                    set_smtp_host,
-                                    set_smtp_port,
-                                    set_smtp_username,
-                                    set_smtp_use_tls,
-                                    set_smtp_open,
+                                    ServerLookupUi {
+                                        hosts_dirty,
+                                        lookup_gen,
+                                        lookup_status,
+                                        last_discovered,
+                                        set_imap_host,
+                                        set_imap_port,
+                                        set_imap_username,
+                                        set_smtp_host,
+                                        set_smtp_port,
+                                        set_smtp_username,
+                                        set_smtp_use_tls,
+                                        set_smtp_open,
+                                    },
                                 );
                             }
                         },
@@ -2014,30 +2064,31 @@ mod tests {
         smtp_remote_host: &str,
         smtp_remote_port: &str,
     ) -> Result<AccountConfig, String> {
-        build_config_from_form(
-            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
-            "Work",
-            "user@example.com",
-            "imap.example.com",
+        let account_id = AccountId::new("550e8400-e29b-41d4-a716-446655440000");
+        build_config_from_form(&AccountFormInput {
+            account_id: &account_id,
+            display_name: "Work",
+            email: "user@example.com",
+            imap_host: "imap.example.com",
             imap_port,
-            "user@example.com",
-            "secret",
+            imap_username: "user@example.com",
+            imap_password: "secret",
             imap_tls_mode,
-            "ws://localhost:9400/proxy",
-            "token",
-            "",
-            "",
+            proxy_base_url: "ws://localhost:9400/proxy",
+            proxy_token: "token",
+            remote_host: "",
+            remote_port: "",
             smtp_host,
             smtp_port,
-            "",
-            "",
+            smtp_username: "",
+            smtp_password: "",
             smtp_tls_mode,
             smtp_remote_host,
             smtp_remote_port,
-            "",
-            "",
-            Utc::now(),
-        )
+            signature: "",
+            extra_ca_pem: "",
+            created_at: Utc::now(),
+        })
     }
 
     fn form(
@@ -2186,30 +2237,31 @@ jxqLaQgrhy4NGyFRZkLX7NtLiZfb3L1GOfKzitV7h7Sa+kLkf5oZrrjgoD7gGFCx
 13nLK36fqa7TdSarmCTjaUnk5P0oyLpkeNJSiZF+XHTejL/3jAho/l90ji0F9KxC
 nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
 -----END CERTIFICATE-----";
-        let config = build_config_from_form(
-            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
-            "Work",
-            "user@example.com",
-            "imap.example.com",
-            "993",
-            "user@example.com",
-            "secret",
-            ImapTlsMode::Implicit,
-            "ws://localhost:9400/proxy",
-            "token",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            SmtpTlsMode::Implicit,
-            "",
-            "",
-            "",
-            pem,
-            Utc::now(),
-        )
+        let account_id = AccountId::new("550e8400-e29b-41d4-a716-446655440000");
+        let config = build_config_from_form(&AccountFormInput {
+            account_id: &account_id,
+            display_name: "Work",
+            email: "user@example.com",
+            imap_host: "imap.example.com",
+            imap_port: "993",
+            imap_username: "user@example.com",
+            imap_password: "secret",
+            imap_tls_mode: ImapTlsMode::Implicit,
+            proxy_base_url: "ws://localhost:9400/proxy",
+            proxy_token: "token",
+            remote_host: "",
+            remote_port: "",
+            smtp_host: "",
+            smtp_port: "",
+            smtp_username: "",
+            smtp_password: "",
+            smtp_tls_mode: SmtpTlsMode::Implicit,
+            smtp_remote_host: "",
+            smtp_remote_port: "",
+            signature: "",
+            extra_ca_pem: pem,
+            created_at: Utc::now(),
+        })
         .unwrap();
         assert_eq!(config.extra_ca_pems.len(), 1);
         assert!(config.extra_ca_pems[0].contains("BEGIN CERTIFICATE"));
@@ -2217,30 +2269,31 @@ nJwqI0fvxoBNVYHtAzKsaIAL9lb6rzzsbkDB
 
     #[test]
     fn form_invalid_extra_ca_pem_is_error() {
-        let err = build_config_from_form(
-            &AccountId::new("550e8400-e29b-41d4-a716-446655440000"),
-            "Work",
-            "user@example.com",
-            "imap.example.com",
-            "993",
-            "user@example.com",
-            "secret",
-            ImapTlsMode::Implicit,
-            "ws://localhost:9400/proxy",
-            "token",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            SmtpTlsMode::Implicit,
-            "",
-            "",
-            "",
-            "not a certificate",
-            Utc::now(),
-        )
+        let account_id = AccountId::new("550e8400-e29b-41d4-a716-446655440000");
+        let err = build_config_from_form(&AccountFormInput {
+            account_id: &account_id,
+            display_name: "Work",
+            email: "user@example.com",
+            imap_host: "imap.example.com",
+            imap_port: "993",
+            imap_username: "user@example.com",
+            imap_password: "secret",
+            imap_tls_mode: ImapTlsMode::Implicit,
+            proxy_base_url: "ws://localhost:9400/proxy",
+            proxy_token: "token",
+            remote_host: "",
+            remote_port: "",
+            smtp_host: "",
+            smtp_port: "",
+            smtp_username: "",
+            smtp_password: "",
+            smtp_tls_mode: SmtpTlsMode::Implicit,
+            smtp_remote_host: "",
+            smtp_remote_port: "",
+            signature: "",
+            extra_ca_pem: "not a certificate",
+            created_at: Utc::now(),
+        })
         .unwrap_err();
         assert!(err.contains("Extra CA certificates"), "{err}");
     }

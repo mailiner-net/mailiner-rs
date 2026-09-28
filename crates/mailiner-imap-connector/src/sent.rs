@@ -176,13 +176,15 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                 push_folder(
                     &mut out,
                     &mut seen,
-                    account_id,
-                    &m.name,
-                    None,
-                    None,
-                    m.role(),
-                    true,
-                    m.subscribed,
+                    PushFolder {
+                        account_id,
+                        full_name: &m.name,
+                        leaf: None,
+                        parent: None,
+                        role: m.role(),
+                        selectable: true,
+                        subscribed: m.subscribed,
+                    },
                 );
             }
             Some(d) => {
@@ -204,13 +206,15 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
                     push_folder(
                         &mut out,
                         &mut seen,
-                        account_id,
-                        &full,
-                        Some(leaf),
-                        parent.as_deref(),
-                        role,
-                        selectable,
-                        subscribed,
+                        PushFolder {
+                            account_id,
+                            full_name: &full,
+                            leaf: Some(leaf),
+                            parent: parent.as_deref(),
+                            role,
+                            selectable,
+                            subscribed,
+                        },
                     );
                 }
             }
@@ -219,18 +223,30 @@ pub fn folders_from_listed(account_id: &AccountId, listed: &[ListedMailbox]) -> 
     out
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_folder(
-    out: &mut Vec<Folder>,
-    seen: &mut std::collections::HashSet<String>,
-    account_id: &AccountId,
-    full_name: &str,
-    leaf: Option<&str>,
-    parent: Option<&str>,
+struct PushFolder<'a> {
+    account_id: &'a AccountId,
+    full_name: &'a str,
+    leaf: Option<&'a str>,
+    parent: Option<&'a str>,
     role: MailboxRole,
     selectable: bool,
     subscribed: bool,
+}
+
+fn push_folder(
+    out: &mut Vec<Folder>,
+    seen: &mut std::collections::HashSet<String>,
+    folder: PushFolder<'_>,
 ) {
+    let PushFolder {
+        account_id,
+        full_name,
+        leaf,
+        parent,
+        role,
+        selectable,
+        subscribed,
+    } = folder;
     if !seen.insert(full_name.to_string()) {
         if selectable {
             if let Some(existing) = out.iter_mut().find(|f| f.id.as_str() == full_name) {

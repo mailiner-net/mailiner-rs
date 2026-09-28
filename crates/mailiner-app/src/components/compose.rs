@@ -523,18 +523,29 @@ fn flatten_from_for_identity(
         .next()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy)]
+struct ComposeSubmit {
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    submitted_id: Signal<Option<String>>,
+    attaching: Signal<bool>,
+    forward_fetching: Signal<bool>,
+}
+
 fn submit_compose(
     ctx: &AppContext,
     core: &Coroutine<CoreEvent>,
     form: ComposeForm,
-    mut error: Signal<Option<String>>,
-    mut submitting: Signal<bool>,
-    mut submitted_id: Signal<Option<String>>,
-    attaching: Signal<bool>,
-    forward_fetching: Signal<bool>,
+    submit: ComposeSubmit,
     dsn: Option<DsnRequest>,
 ) {
+    let ComposeSubmit {
+        mut error,
+        mut submitting,
+        mut submitted_id,
+        attaching,
+        forward_fetching,
+    } = submit;
     if submitting() || attaching() || forward_fetching() {
         return;
     }
@@ -790,39 +801,8 @@ fn toggle_original_attachments(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn session_with_live_fields(
-    session: &ComposeSession,
-    to: &[ComposerAddress],
-    to_draft: &str,
-    cc: &[ComposerAddress],
-    cc_draft: &str,
-    bcc: &[ComposerAddress],
-    bcc_draft: &str,
-    subject: &str,
-    body: &str,
-    html: &str,
-    mode: BodyMode,
-) -> ComposeSession {
-    let mut session = session.clone();
-    session.draft.to = commit_input(to, to_draft, true).0;
-    session.draft.cc = commit_input(cc, cc_draft, true).0;
-    session.draft.bcc = commit_input(bcc, bcc_draft, true).0;
-    session.draft.subject = subject.to_string();
-    session.draft.mode = mode;
-    let live_html = if mode == BodyMode::Rich {
-        live_html_snapshot(html)
-    } else {
-        String::new()
-    };
-    capture_live_body(&mut session.draft, body, &live_html);
-    session.draft.touch();
-    session
-}
-
-#[allow(clippy::too_many_arguments)]
-fn persist_live_draft(
-    compose_draft: Signal<Option<ComposeSession>>,
+#[derive(Clone, Copy)]
+struct ComposeFieldSignals {
     to: Signal<Vec<ComposerAddress>>,
     to_draft: Signal<String>,
     cc: Signal<Vec<ComposerAddress>>,
@@ -833,21 +813,56 @@ fn persist_live_draft(
     body: Signal<String>,
     html: Signal<String>,
     mode: Signal<BodyMode>,
+}
+
+fn session_with_live_fields(
+    session: &ComposeSession,
+    fields: ComposeFieldSignals,
+) -> ComposeSession {
+    let ComposeFieldSignals {
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+        html,
+        mode,
+    } = fields;
+    let to = to.peek();
+    let to_draft = to_draft.peek();
+    let cc = cc.peek();
+    let cc_draft = cc_draft.peek();
+    let bcc = bcc.peek();
+    let bcc_draft = bcc_draft.peek();
+    let subject = subject.peek();
+    let body = body.peek();
+    let html = html.peek();
+    let mode = *mode.peek();
+    let mut session = session.clone();
+    session.draft.to = commit_input(&to, &to_draft, true).0;
+    session.draft.cc = commit_input(&cc, &cc_draft, true).0;
+    session.draft.bcc = commit_input(&bcc, &bcc_draft, true).0;
+    session.draft.subject = subject.to_string();
+    session.draft.mode = mode;
+    let live_html = if mode == BodyMode::Rich {
+        live_html_snapshot(html.as_str())
+    } else {
+        String::new()
+    };
+    capture_live_body(&mut session.draft, body.as_str(), &live_html);
+    session.draft.touch();
+    session
+}
+
+fn persist_live_draft(
+    compose_draft: Signal<Option<ComposeSession>>,
+    fields: ComposeFieldSignals,
 ) -> Option<ComposeSession> {
     let session = compose_draft.peek().clone()?;
-    let live = session_with_live_fields(
-        &session,
-        &to.peek(),
-        &to_draft.peek(),
-        &cc.peek(),
-        &cc_draft.peek(),
-        &bcc.peek(),
-        &bcc_draft.peek(),
-        &subject.peek(),
-        &body.peek(),
-        &html.peek(),
-        *mode.peek(),
-    );
+    let live = session_with_live_fields(&session, fields);
     persist_session(&live);
     Some(live)
 }
@@ -896,38 +911,16 @@ fn queue_imap_draft_save(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn close_keeping_draft(
     mut save_gen: Signal<u32>,
     mut compose_draft: Signal<Option<ComposeSession>>,
-    to: Signal<Vec<ComposerAddress>>,
-    to_draft: Signal<String>,
-    cc: Signal<Vec<ComposerAddress>>,
-    cc_draft: Signal<String>,
-    bcc: Signal<Vec<ComposerAddress>>,
-    bcc_draft: Signal<String>,
-    subject: Signal<String>,
-    body: Signal<String>,
-    html: Signal<String>,
-    mode: Signal<BodyMode>,
+    fields: ComposeFieldSignals,
     accounts: Signal<HashMap<AccountId, Account>>,
     core: &Coroutine<CoreEvent>,
 ) {
     let next = *save_gen.peek() + 1;
     save_gen.set(next);
-    if let Some(live) = persist_live_draft(
-        compose_draft,
-        to,
-        to_draft,
-        cc,
-        cc_draft,
-        bcc,
-        bcc_draft,
-        subject,
-        body,
-        html,
-        mode,
-    ) {
+    if let Some(live) = persist_live_draft(compose_draft, fields) {
         queue_imap_draft_save(accounts, core, &live);
     }
     compose_draft.set(None);
@@ -1394,6 +1387,18 @@ pub fn ComposeOverlay() -> Element {
     let mut body = use_signal(String::new);
     let html = use_signal(String::new);
     let mode = use_signal(|| BodyMode::Plain);
+    let fields = ComposeFieldSignals {
+        to,
+        to_draft,
+        cc,
+        cc_draft,
+        bcc,
+        bcc_draft,
+        subject,
+        body,
+        html,
+        mode,
+    };
     let mut html_tick = use_signal(|| 0u32);
     let mut show_cc_bcc = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
@@ -1582,19 +1587,7 @@ pub fn ComposeOverlay() -> Element {
                 if open_draft_id(compose_draft).as_deref() != Some(draft_id.as_str()) {
                     return;
                 }
-                let _ = persist_live_draft(
-                    compose_draft,
-                    to,
-                    to_draft,
-                    cc,
-                    cc_draft,
-                    bcc,
-                    bcc_draft,
-                    subject,
-                    body,
-                    html,
-                    mode,
-                );
+                let _ = persist_live_draft(compose_draft, fields);
             });
         });
     }
@@ -1643,22 +1636,7 @@ pub fn ComposeOverlay() -> Element {
     let mut compose_placement = ctx.compose_placement;
     let docked = *compose_placement.read() == ComposePlacement::Docked;
     let run_close = move || {
-        close_keeping_draft(
-            save_gen,
-            compose_draft,
-            to,
-            to_draft,
-            cc,
-            cc_draft,
-            bcc,
-            bcc_draft,
-            subject,
-            body,
-            html,
-            mode,
-            ctx.accounts,
-            &core,
-        );
+        close_keeping_draft(save_gen, compose_draft, fields, ctx.accounts, &core);
     };
     let close = move |_| run_close();
     let discard = move |_| {
@@ -1725,11 +1703,13 @@ pub fn ComposeOverlay() -> Element {
                                     &ctx,
                                     &core,
                                     form,
-                                    error,
-                                    submitting,
-                                    submitted_id,
-                                    attaching,
-                                    forward_fetching,
+                                    ComposeSubmit {
+                                        error,
+                                        submitting,
+                                        submitted_id,
+                                        attaching,
+                                        forward_fetching,
+                                    },
                                     DsnRequest::new(notify_success(), notify_failure()),
                                 );
                             }
@@ -2226,11 +2206,13 @@ pub fn ComposeOverlay() -> Element {
                                         &ctx,
                                         &core,
                                         form,
-                                        error,
-                                        submitting,
-                                        submitted_id,
-                                        attaching,
-                                        forward_fetching,
+                                        ComposeSubmit {
+                                            error,
+                                            submitting,
+                                            submitted_id,
+                                            attaching,
+                                            forward_fetching,
+                                        },
                                         DsnRequest::new(notify_success(), notify_failure()),
                                     );
                                 }

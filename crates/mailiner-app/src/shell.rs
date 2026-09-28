@@ -17,7 +17,7 @@ use crate::components::{
     ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
-use crate::core_event::{CoreEvent, InitialBootstrap, core_loop};
+use crate::core_event::{CoreEvent, CoreLoop, InitialBootstrap, core_loop};
 use crate::mail_cache::{BrowserMailCache, InMemoryMailCache, MailCache};
 use crate::message_loader::LoadedMessageCache;
 use crate::outbox_store::{BrowserOutboxStore, InMemoryOutboxStore, OutboxStore};
@@ -458,16 +458,16 @@ fn App() -> Element {
         async move {
             let outcome = run_bootstrap(&mut ctx, bootstrap_state, store_ctx).await;
             let (smtp_tx, smtp_rx) = futures_channel::mpsc::unbounded();
-            core_loop(
+            core_loop(CoreLoop {
                 core_rx,
                 smtp_rx,
                 smtp_tx,
                 ctx,
-                outcome.store,
-                outcome.outbox,
-                outcome.cache,
-                outcome.initial_bootstrap,
-            )
+                store: outcome.store,
+                outbox: outcome.outbox,
+                cache: outcome.cache,
+                initial_bootstrap: outcome.initial_bootstrap,
+            })
             .await;
         }
     });

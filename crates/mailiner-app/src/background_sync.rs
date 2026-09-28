@@ -23,8 +23,8 @@ pub enum EnsureConnectedMode {
     /// Connect this account and keep other live sessions.
     ///
     /// After Ready, evict the least-recently used session if over
-    /// [`MAX_CONNECTED_ACCOUNTS`]. Used by `SelectAccount`, `ConnectExisting`,
-    /// `Bootstrap`, and `Reconnect`.
+    /// [`MAX_CONNECTED_ACCOUNTS`]. Used by `SelectAccount`, `Bootstrap`, and
+    /// `Reconnect`.
     Switch,
     /// Trial / first-save connect: never tears down other sessions or evicts.
     ///

@@ -23,11 +23,6 @@ impl<T: Clone> SparseList<T> {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.items.clear();
-        self.total_count = 0;
-    }
-
     pub fn insert(&mut self, index: usize, item: T) {
         if index < self.total_count {
             self.items.insert(index, item);
@@ -40,16 +35,6 @@ impl<T: Clone> SparseList<T> {
         for (offset, item) in items.into_iter().enumerate() {
             self.insert(start_index + offset, item);
         }
-    }
-
-    pub fn prepend(&mut self, item: T) {
-        let mut new_items = BTreeMap::new();
-        for (key, value) in self.items.iter() {
-            new_items.insert(key + 1, value.clone());
-        }
-        new_items.insert(0, item);
-        self.items = new_items;
-        self.total_count += 1;
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -76,13 +61,6 @@ impl<T: Clone> SparseList<T> {
         self.items.contains_key(&index)
     }
 
-    pub fn clear_range(&mut self, range: Range<usize>) {
-        let keys_to_remove: Vec<usize> = self.items.range(range).map(|(k, _)| *k).collect();
-        for key in keys_to_remove {
-            self.items.remove(&key);
-        }
-    }
-
     pub fn total_count(&self) -> usize {
         self.total_count
     }
@@ -102,11 +80,6 @@ impl<T: Clone> SparseList<T> {
 
     /// Cached rows in index order (holes are skipped).
     pub fn iter_indexed(&self) -> impl Iterator<Item = (usize, &T)> {
-        self.items.iter().map(|(k, v)| (*k, v))
-    }
-
-    /// Cached items in index order (skips holes).
-    pub fn iter_cached(&self) -> impl Iterator<Item = (usize, &T)> {
         self.items.iter().map(|(k, v)| (*k, v))
     }
 
@@ -768,11 +741,11 @@ mod tests {
     }
 
     #[test]
-    fn iter_cached_skips_holes() {
+    fn iter_indexed_skips_holes() {
         let mut list = SparseList::new(5);
         list.insert(0, "a");
         list.insert(2, "c");
-        let got: Vec<_> = list.iter_cached().map(|(i, v)| (i, *v)).collect();
+        let got: Vec<_> = list.iter_indexed().map(|(i, v)| (i, *v)).collect();
         assert_eq!(got, vec![(0, "a"), (2, "c")]);
     }
 

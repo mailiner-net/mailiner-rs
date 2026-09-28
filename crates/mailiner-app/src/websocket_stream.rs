@@ -213,14 +213,6 @@ impl WebSocketStream {
         })
     }
 
-    /// Current WebSocket readiness.
-    pub fn ready_state(&self) -> WsReadyState {
-        self.inner
-            .lock()
-            .expect("Failed to lock web socket")
-            .ready_state
-    }
-
     /// Wait until the WebSocket is open, or fail if it errors/closes first.
     pub fn wait_until_open(&self) -> WaitUntilOpen {
         WaitUntilOpen {

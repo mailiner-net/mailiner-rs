@@ -341,11 +341,6 @@ pub enum CoreEvent {
         config: AccountConfig,
     },
 
-    /// Account already in store (cold start, switch). Load via store, connect, list folders.
-    ConnectExisting {
-        account_id: AccountId,
-    },
-
     Reconnect {
         account_id: AccountId,
     },
@@ -393,7 +388,6 @@ pub enum CoreEvent {
         generation: u64,
         outcome: SmtpOutcome,
     },
-    DrainOutbox,
     RetryOutboxItem {
         id: crate::outbox_store::OutboxId,
     },
@@ -549,9 +543,6 @@ pub async fn core_loop(input: CoreLoop) {
                 handle_bootstrap(&mut manager, &mut ctx, active).await;
             }
             CoreEvent::SelectAccount(account_id) => {
-                handle_select_account(&mut manager, &mut ctx, account_id).await;
-            }
-            CoreEvent::ConnectExisting { account_id } => {
                 handle_select_account(&mut manager, &mut ctx, account_id).await;
             }
             CoreEvent::Reconnect { account_id } => {
@@ -1027,16 +1018,6 @@ pub async fn core_loop(input: CoreLoop) {
                     &mut inflight,
                     generation,
                     outcome,
-                )
-                .await;
-            }
-            CoreEvent::DrainOutbox => {
-                drain_outbox(
-                    &mut manager,
-                    &mut ctx,
-                    outbox.as_ref(),
-                    &smtp_tx,
-                    &mut inflight,
                 )
                 .await;
             }

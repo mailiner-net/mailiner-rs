@@ -97,14 +97,6 @@ impl ConnectError {
         }
     }
 
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self {
-            kind: ConnectErrorKind::Internal,
-            message: message.into(),
-            retryable: true,
-        }
-    }
-
     pub fn from_kind(kind: ConnectErrorKind, detail: &str) -> Self {
         let (message, retryable) = match kind {
             ConnectErrorKind::NetworkOrProxy => (
@@ -204,11 +196,6 @@ pub fn set_connection_state(ctx: &mut AppContext, account_id: &AccountId, state:
     ctx.connection_states
         .write()
         .insert(account_id.clone(), state);
-}
-
-/// Remove a connection-state entry (e.g. ephemeral test `request_id` after UI dismisses).
-pub fn clear_connection_state(ctx: &mut AppContext, account_id: &AccountId) {
-    ctx.connection_states.write().remove(account_id);
 }
 
 /// Per-account connector manager. Owned only by `core_loop`.
@@ -367,8 +354,8 @@ impl AccountConnectionManager {
 
     /// Invalidate pending auto-reconnect timers for every account except `keep`.
     ///
-    /// Needed when switching accounts: a failed session may have no connector
-    /// left, so [`Self::disconnect_others`] would not bump its generation.
+    /// A failed session may have no connector left, so its generation would
+    /// otherwise stay put and a stale timer could still fire.
     pub fn cancel_pending_reconnects(&mut self, keep: Option<&AccountId>, ctx: &mut AppContext) {
         let ids: Vec<AccountId> = {
             let states = ctx.connection_states.read();
@@ -481,20 +468,6 @@ impl AccountConnectionManager {
     /// Remove a death watch without bumping generation (avoids a closed-watch busy loop).
     pub fn remove_ws_watch(&mut self, account_id: &AccountId) {
         self.ws_watches.remove(account_id);
-    }
-
-    /// Disconnect all accounts except optionally `keep`.
-    pub async fn disconnect_others(&mut self, keep: Option<&AccountId>, ctx: &mut AppContext) {
-        let ids: Vec<AccountId> = self
-            .connectors
-            .keys()
-            .filter(|id| keep.is_none_or(|k| k != *id))
-            .cloned()
-            .collect();
-        for id in ids {
-            self.disconnect_account(&id, ctx).await;
-        }
-        self.cancel_pending_reconnects(keep, ctx);
     }
 
     /// Account ids with a connector or a cached config (including memory-only).
@@ -678,8 +651,7 @@ impl AccountConnectionManager {
     ///
     /// On success leaves `connection_states[request_id] = Ready` so the UI can show
     /// “Connection successful”. The ephemeral connector is dropped (not installed in
-    /// the long-lived map). **UI owns cleanup:** call [`clear_connection_state`] when
-    /// the user dismisses the success indicator so ephemeral keys do not accumulate.
+    /// the long-lived map).
     pub async fn test_connection(
         &mut self,
         request_id: &AccountId,
@@ -700,7 +672,7 @@ impl AccountConnectionManager {
                 if let Err(e) = connector.disconnect().await {
                     warn!("test connection disconnect: {}", e);
                 }
-                // Leave Ready for UI observation; UI clears via clear_connection_state.
+                // Leave Ready so the form can show success. The trial connector is already dropped.
                 set_connection_state(ctx, request_id, ConnectionState::Ready);
                 Ok(())
             }

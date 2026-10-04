@@ -489,7 +489,7 @@ fn App() -> Element {
         let closure = Closure::wrap(Box::new(move |_evt: web_sys::Event| {
             // Unblock a core-loop IMAP read before the offline event is queued.
             crate::websocket_stream::abort_live_sockets();
-            let _ = offline_tx.send(CoreEvent::BrowserOffline);
+            offline_tx.send(CoreEvent::BrowserOffline);
         }) as Box<dyn FnMut(_)>);
         if let Some(window) = web_sys::window() {
             let _ = window

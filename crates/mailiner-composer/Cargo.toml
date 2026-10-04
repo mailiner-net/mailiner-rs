@@ -12,7 +12,7 @@ mailiner-html = { path = "../mailiner-html" }
 mailiner-mime = { path = "../mailiner-mime" }
 regex = "1"
 thiserror = "2.0"
-uuid = { version = "1.16", features = ["v4", "js"] }
+uuid = { version = "1.27", features = ["v4", "js"] }
 wasm-bindgen = { version = "0.2", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "ClipboardEvent",

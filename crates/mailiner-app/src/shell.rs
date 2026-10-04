@@ -4,6 +4,8 @@ use std::rc::Rc;
 use dioxus::logger::tracing::{info, warn};
 use dioxus::prelude::*;
 use mailiner_core::ids::AccountId;
+use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 
 use crate::account_store::{
     AccountStore, AccountStoreError, BrowserAccountStore, InMemoryAccountStore,
@@ -480,6 +482,21 @@ fn App() -> Element {
                 snooze_tx.send(CoreEvent::SweepSnooze);
             }
         });
+    });
+
+    let offline_tx = _tx;
+    use_hook(move || {
+        let closure = Closure::wrap(Box::new(move |_evt: web_sys::Event| {
+            // Unblock a core-loop IMAP read before the offline event is queued.
+            crate::websocket_stream::abort_live_sockets();
+            let _ = offline_tx.send(CoreEvent::BrowserOffline);
+        }) as Box<dyn FnMut(_)>);
+        if let Some(window) = web_sys::window() {
+            let _ = window
+                .add_event_listener_with_callback("offline", closure.as_ref().unchecked_ref());
+        }
+        // `use_hook` keeps the `Rc` for the life of the app root.
+        Rc::new(closure)
     });
 
     rsx! {

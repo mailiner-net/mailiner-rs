@@ -28,7 +28,12 @@ web-time = "1.1"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-tokio = { version = "1", features = ["rt", "macros", "io-util"] }
+mailiner-core = { path = "../mailiner-core" }
+mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
+rustls = { version = "0.23.45", default-features = false, features = ["tls12", "std", "ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+webpki-roots = "0.26"
 
 [features]
 # Trust docker/mail/tls/ca.crt (the local Dovecot/Postfix container).

@@ -26,7 +26,7 @@ use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::components::virtual_scroll::{
     SparseList, UnreadScan, adjacent_index, index_after_removal, next_unread_index,
-    unread_scan_from, unread_scan_resume,
+    unread_scan_from, unread_scan_from_dropped, unread_scan_resume,
 };
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
@@ -350,6 +350,9 @@ pub enum CoreEvent {
         account_id: AccountId,
     },
 
+    /// The browser went offline. Drop live sessions and do not reconnect.
+    BrowserOffline,
+
     /// Timer-fired auto-reconnect (generation must still match).
     AutoReconnect {
         account_id: AccountId,
@@ -550,6 +553,9 @@ pub async fn core_loop(input: CoreLoop) {
             }
             CoreEvent::SessionDropped { account_id } => {
                 handle_session_dropped(&mut manager, &mut ctx, &smtp_tx, account_id).await;
+            }
+            CoreEvent::BrowserOffline => {
+                handle_browser_offline(&mut manager, &mut ctx);
             }
             CoreEvent::AutoReconnect {
                 account_id,
@@ -1253,12 +1259,56 @@ async fn handle_reconnect(
     }
 }
 
+fn browser_is_online() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .map(|window| window.navigator().on_line())
+            .unwrap_or(true)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
+/// Drop sessions that would otherwise retry while the browser has no network.
+fn handle_browser_offline(manager: &mut AccountConnectionManager, ctx: &mut AppContext) {
+    if browser_is_online() {
+        return;
+    }
+    let ids: Vec<AccountId> = ctx
+        .connection_states
+        .read()
+        .iter()
+        .filter_map(|(id, state)| {
+            matches!(
+                state,
+                ConnectionState::Ready
+                    | ConnectionState::Reconnecting { .. }
+                    | ConnectionState::Connecting
+                    | ConnectionState::Authenticating
+            )
+            .then_some(id.clone())
+        })
+        .collect();
+    for id in ids {
+        manager.drop_dead_connector(&id);
+        manager.reset_reconnect_attempts(&id);
+        set_connection_state(ctx, &id, ConnectionState::Disconnected);
+    }
+}
+
 async fn handle_session_dropped(
     manager: &mut AccountConnectionManager,
     ctx: &mut AppContext,
     event_tx: &UnboundedSender<CoreEvent>,
     account_id: AccountId,
 ) {
+    if !browser_is_online() {
+        handle_browser_offline(manager, ctx);
+        return;
+    }
     let busy = ctx
         .connection_states
         .read()
@@ -1357,6 +1407,12 @@ async fn start_auto_reconnect(
     event_tx: &UnboundedSender<CoreEvent>,
     account_id: AccountId,
 ) {
+    if !browser_is_online() {
+        manager.drop_dead_connector(&account_id);
+        manager.reset_reconnect_attempts(&account_id);
+        set_connection_state(ctx, &account_id, ConnectionState::Disconnected);
+        return;
+    }
     let failed = manager.reconnect_attempts(&account_id);
     let Some(delay_ms) = reconnect_backoff_ms(failed) else {
         manager.reset_reconnect_attempts(&account_id);
@@ -3396,12 +3452,22 @@ fn current_list_index(ctx: &AppContext) -> Option<usize> {
 
 fn unread_scan_start(ctx: &AppContext, delta: i32) -> Option<usize> {
     let stored = ctx.selection.read().focus_at_index();
-    let live = ctx
-        .selection
-        .read()
-        .focus()
-        .cloned()
-        .and_then(|id| ctx.messages.read().position(|m| m.id == id));
+    let focus_id = ctx.selection.read().focus().cloned();
+    let messages = ctx.messages.read();
+    let live = focus_id
+        .as_ref()
+        .and_then(|id| messages.position(|m| m.id == *id));
+    // Evicting a still-present row leaves a hole at `stored`. Removal (unread
+    // filter, mark-read) either shrinks the list or slides a different id in.
+    let dropped = match (focus_id.as_ref(), stored) {
+        (Some(id), Some(idx)) if live.is_none() => {
+            idx >= messages.total_count() || messages.get(idx).is_some_and(|m| m.id != *id)
+        }
+        _ => false,
+    };
+    if let (true, Some(idx)) = (dropped, stored) {
+        return unread_scan_from_dropped(idx, delta);
+    }
     unread_scan_from(stored, live, delta)
 }
 

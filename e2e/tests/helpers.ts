@@ -6,6 +6,11 @@ export const ACCOUNTS_STORAGE_KEY = 'mailiner.accounts.v1';
 export const MAIL_CACHE_STORAGE_KEY = 'mailiner.cache.v1';
 /** Matches `E2E_SKIP_CONNECT_KEY` in `local_data.rs`. */
 export const E2E_SKIP_CONNECT_KEY = 'mailiner.e2e.skipConnect';
+/**
+ * Set once per browser context. Init scripts run on every navigation, so
+ * later reloads must not put the original account blob back.
+ */
+export const E2E_SEEDED_KEY = 'mailiner.e2e.seeded';
 
 export const E2E_ACCOUNT_ID = 'e2e-account-1';
 export const E2E_ACCOUNT_NAME = 'E2E Work';
@@ -135,17 +140,22 @@ export async function seedAccount(page: Page, options: SeedOptions = {}) {
   const accounts = JSON.stringify(plaintextAccountBlob());
   const cache = options.cache ? JSON.stringify(mailCacheBlob()) : null;
   await page.addInitScript(
-    ({ accountsKey, cacheKey, skipKey, accountsJson, cacheJson }) => {
+    ({ accountsKey, cacheKey, skipKey, seededKey, accountsJson, cacheJson }) => {
+      if (localStorage.getItem(seededKey) === '1') {
+        return;
+      }
       localStorage.setItem(accountsKey, accountsJson);
       localStorage.setItem(skipKey, '1');
       if (cacheJson) {
         localStorage.setItem(cacheKey, cacheJson);
       }
+      localStorage.setItem(seededKey, '1');
     },
     {
       accountsKey: ACCOUNTS_STORAGE_KEY,
       cacheKey: MAIL_CACHE_STORAGE_KEY,
       skipKey: E2E_SKIP_CONNECT_KEY,
+      seededKey: E2E_SEEDED_KEY,
       accountsJson: accounts,
       cacheJson: cache,
     },
@@ -233,9 +243,14 @@ export async function completeProxyStepIfShown(page: Page, proxyUrl: string) {
  * Playwright's page.keyboard can land in the folder-filter input; the app
  * listener also ignores events whose target is an input.
  */
-export async function pressShortcut(page: Page, key: string, shift = false) {
+export async function pressShortcut(
+  page: Page,
+  key: string,
+  shift = false,
+  ctrl = false,
+) {
   await page.evaluate(
-    ({ key, shift }) => {
+    ({ key, shift, ctrl }) => {
       const active = document.activeElement;
       if (
         active instanceof HTMLElement &&
@@ -247,11 +262,23 @@ export async function pressShortcut(page: Page, key: string, shift = false) {
         new KeyboardEvent('keydown', {
           key,
           shiftKey: shift,
+          ctrlKey: ctrl,
           bubbles: true,
           cancelable: true,
         }),
       );
     },
-    { key, shift },
+    { key, shift, ctrl },
   );
+}
+
+/** Accept the next `window.prompt` / `confirm`. Register before the click. */
+export function acceptNextDialog(page: Page, value?: string) {
+  page.once('dialog', (dialog) => {
+    void dialog.accept(value);
+  });
+}
+
+export function subjectPattern(subject: string) {
+  return new RegExp(subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 }

@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 use dioxus::logger::tracing::{error, info};
@@ -154,10 +154,55 @@ pub struct WebSocketStream {
     onclose_cb: SendWrapper<Closure<dyn FnMut(CloseEvent)>>,
 }
 
+fn live_sockets() -> &'static Mutex<Vec<Weak<Mutex<WebSocketStreamInner>>>> {
+    static LIVE_SOCKETS: Mutex<Vec<Weak<Mutex<WebSocketStreamInner>>>> = Mutex::new(Vec::new());
+    &LIVE_SOCKETS
+}
+
+fn register_live_socket(inner: &Arc<Mutex<WebSocketStreamInner>>) {
+    let mut live = live_sockets().lock().expect("Failed to lock live sockets");
+    live.retain(|slot| slot.strong_count() > 0);
+    live.push(Arc::downgrade(inner));
+}
+
+/// Fail every live browser socket so a blocked IMAP read can finish.
+///
+/// `BrowserOffline` sits in the core channel until the in-flight read returns.
+/// Chrome does not fail that read on its own when the browser goes offline.
+/// The socket is closed after the mutex is released: `close()` can dispatch
+/// `onclose` on this turn, and that callback locks the same mutex.
+pub fn abort_live_sockets() {
+    let weaks = {
+        let mut live = live_sockets().lock().expect("Failed to lock live sockets");
+        std::mem::take(&mut *live)
+    };
+    for weak in weaks {
+        let Some(inner) = weak.upgrade() else {
+            continue;
+        };
+        let socket = {
+            let mut guard = inner.lock().expect("Failed to lock web socket");
+            if !matches!(
+                guard.ready_state,
+                WsReadyState::Closed | WsReadyState::Error
+            ) {
+                guard.ready_state = WsReadyState::Closed;
+            }
+            let socket = std::mem::take(&mut *guard.web_socket);
+            guard.wake_all();
+            socket
+        };
+        if let Some(ws) = socket {
+            let _ = ws.close();
+        }
+    }
+}
+
 impl WebSocketStream {
     /// Create a WebSocket stream. Returns an error if the URL is invalid.
     pub fn try_new(url: &str) -> io::Result<Self> {
         let inner = Arc::new(Mutex::new(WebSocketStreamInner::try_new(url)?));
+        register_live_socket(&inner);
 
         let inner_clone = Arc::clone(&inner);
         let onopen_cb = Closure::<dyn FnMut()>::new(move || {

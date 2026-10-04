@@ -22,7 +22,7 @@ pub use watch::{MailboxChange, MailboxWatchOutcome};
 use std::fmt::Debug;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -286,6 +286,9 @@ where
     has_condstore: AtomicBool,
     /// RFC 7162 `ENABLE QRESYNC` succeeded on this session.
     has_qresync: AtomicBool,
+    /// Which star atom this server accepted. `0` unknown, `1` `\Starred`, `2` `$Starred`.
+    /// Dovecot rejects `\Starred` as an unknown system flag; Gmail accepts it.
+    star_atom: AtomicU8,
     /// Last [`prepare_folder_list`] index (UID order). Rebuilt when SELECT EXISTS changes.
     list_index: Mutex<Option<ListIndex>>,
     /// Per-folder UIDVALIDITY + HIGHESTMODSEQ + UID set for incremental SELECT.
@@ -354,6 +357,7 @@ where
             has_compress: AtomicBool::new(false),
             has_condstore: AtomicBool::new(false),
             has_qresync: AtomicBool::new(false),
+            star_atom: AtomicU8::new(STAR_ATOM_UNKNOWN),
             list_index: Mutex::new(None),
             folder_sync: Mutex::new(HashMap::new()),
         }
@@ -1599,6 +1603,14 @@ where
 /// UID set covering every message in the selected mailbox (`UID STORE 1:*`).
 const ALL_UIDS: &str = "1:*";
 
+/// Gmail's star. Dovecot rejects this as an unknown system flag.
+const STAR_SYSTEM: &str = "\\Starred";
+/// Keyword fallback for servers that only allow non-`\` atoms.
+const STAR_KEYWORD: &str = "$Starred";
+const STAR_ATOM_UNKNOWN: u8 = 0;
+const STAR_ATOM_SYSTEM: u8 = 1;
+const STAR_ATOM_KEYWORD: u8 = 2;
+
 fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
     match flag {
         EnvelopeFlag::Read => "\\Seen",
@@ -1606,9 +1618,65 @@ fn imap_flag_atom(flag: EnvelopeFlag) -> &'static str {
         EnvelopeFlag::Flagged => "\\Flagged",
         EnvelopeFlag::Draft => "\\Draft",
         EnvelopeFlag::Deleted => "\\Deleted",
-        EnvelopeFlag::Starred => "\\Starred",
+        EnvelopeFlag::Starred => STAR_SYSTEM,
         EnvelopeFlag::Keyword(keyword) => keyword.atom(),
     }
+}
+
+fn flag_store_query(atom: &str, on: bool) -> String {
+    if on {
+        format!("+FLAGS.SILENT ({atom})")
+    } else {
+        format!("-FLAGS.SILENT ({atom})")
+    }
+}
+
+fn is_invalid_system_flag(err: &impl std::fmt::Display) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("invalid system flag") || msg.contains("unknown system flag")
+}
+
+fn is_star_atom(name: &str) -> bool {
+    name.eq_ignore_ascii_case(STAR_SYSTEM) || name.eq_ignore_ascii_case(STAR_KEYWORD)
+}
+
+/// STORE the star. Try `\Starred` first, then `$Starred` when the server
+/// rejects the system flag, and remember which atom worked on this session.
+async fn store_star_flag<S>(
+    session: &mut Session<ImapIo<S>>,
+    preference: &AtomicU8,
+    uids: &str,
+    on: bool,
+) -> MailinerResult<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let atoms: &[&str] = match preference.load(Ordering::Relaxed) {
+        STAR_ATOM_KEYWORD => &[STAR_KEYWORD],
+        STAR_ATOM_SYSTEM => &[STAR_SYSTEM],
+        _ => &[STAR_SYSTEM, STAR_KEYWORD],
+    };
+    let mut last_err = None;
+    for atom in atoms {
+        match drain_uid_store(session, uids, &flag_store_query(atom, on)).await {
+            Ok(()) => {
+                preference.store(
+                    if *atom == STAR_KEYWORD {
+                        STAR_ATOM_KEYWORD
+                    } else {
+                        STAR_ATOM_SYSTEM
+                    },
+                    Ordering::Relaxed,
+                );
+                return Ok(());
+            }
+            Err(e) if is_invalid_system_flag(&e) && *atom == STAR_SYSTEM => {
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("star store tried at least one atom"))
 }
 
 async fn drop_mismatched_search_uids(
@@ -1675,7 +1743,7 @@ pub(crate) fn parse_flags<'a>(flags: impl Iterator<Item = Flag<'a>>) -> ParsedFl
             Flag::Flagged => parsed.is_flagged = true,
             Flag::Draft => parsed.is_draft = true,
             Flag::Deleted => parsed.is_deleted = true,
-            Flag::Custom(name) if name == "\\Starred" => parsed.is_starred = true,
+            Flag::Custom(name) if is_star_atom(&name) => parsed.is_starred = true,
             Flag::Custom(name)
                 if is_imap_keyword(&name)
                     && !parsed
@@ -1982,12 +2050,11 @@ async fn drain_uid_store<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Debug + Send,
 {
-    let stream = session
-        .uid_store(uids, query)
-        .await
-        .map_err(|e| ImapError::Imap(format!("Failed to store flags: {e}")))?;
-    stream
-        .try_collect::<Vec<_>>()
+    // `uid_store` + `try_collect` drops the tagged Done, so a BAD such as
+    // "Invalid system flag \STARRED" looks like success and the `$Starred`
+    // retry never runs.
+    session
+        .run_command_and_check_ok(format!("UID STORE {uids} {query}"))
         .await
         .map_err(|e| ImapError::Imap(format!("Failed to store flags: {e}")))?;
     Ok(())
@@ -2438,13 +2505,12 @@ where
         select_mailbox(session, &self.selected_mailbox, folder_id.as_str()).await?;
 
         for (flag, value) in flags {
+            if matches!(flag, EnvelopeFlag::Starred) {
+                store_star_flag(session, &self.star_atom, &uids, *value).await?;
+                continue;
+            }
             let atom = imap_flag_atom(*flag);
-            let query = if *value {
-                format!("+FLAGS.SILENT ({atom})")
-            } else {
-                format!("-FLAGS.SILENT ({atom})")
-            };
-            drain_uid_store(session, &uids, &query).await?;
+            drain_uid_store(session, &uids, &flag_store_query(atom, *value)).await?;
         }
         drop(imap);
         drop_mismatched_search_uids(&self.list_index, message_ids, flags).await;
@@ -2653,6 +2719,11 @@ where
                 .create(&full_name)
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to create folder: {e}")))?;
+            // LIST refresh uses LSUB. An unsubscribed mailbox stays out of the tree.
+            session
+                .subscribe(&full_name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to subscribe to {full_name}: {e}")))?;
         }
 
         let (_, leaf) = mailbox_parent_and_leaf(&full_name, delim);
@@ -2692,6 +2763,12 @@ where
                 .rename(folder_id.as_str(), &full_name)
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to rename folder: {e}")))?;
+            // LSUB hides a mailbox that is not subscribed under the new name.
+            // A second SUBSCRIBE is fine when the server already moved it.
+            session
+                .subscribe(&full_name)
+                .await
+                .map_err(|e| ImapError::Imap(format!("Failed to subscribe to {full_name}: {e}")))?;
         }
         self.forget_folder_tree(folder_id, delim).await;
 
@@ -3098,6 +3175,13 @@ Received-SPF: pass\r\n\
         assert_eq!(imap_flag_atom(EnvelopeFlag::Deleted), "\\Deleted");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Draft), "\\Draft");
         assert_eq!(imap_flag_atom(EnvelopeFlag::Starred), "\\Starred");
+        assert!(is_invalid_system_flag(
+            &"UID STORE failed: Invalid system flag \\STARRED"
+        ));
+        assert!(is_invalid_system_flag(
+            &"IMAP error: Failed to store flags: bad response: code: None, info: Some(\"Invalid system flag \\STARRED\")"
+        ));
+        assert!(!is_invalid_system_flag(&"connection reset"));
         assert_eq!(
             imap_flag_atom(EnvelopeFlag::Keyword(ImapKeyword::Important)),
             "$Important"
@@ -3121,6 +3205,7 @@ Received-SPF: pass\r\n\
         let flags = parse_flags(
             [
                 Flag::Custom("\\Starred".into()),
+                Flag::Custom("$Starred".into()),
                 Flag::Custom("$Important".into()),
                 Flag::Custom("ProjectX".into()),
                 Flag::Custom("$Important".into()),

@@ -37,12 +37,13 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /live\.spec\.ts/,
+      // `live.spec.ts` and `live-*.spec.ts` need docker-mail.
+      testIgnore: /live.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'live',
-      testMatch: /live\.spec\.ts/,
+      testMatch: /live.*\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],

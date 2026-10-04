@@ -3995,6 +3995,7 @@ dependencies = [
  "mail-parser",
  "mailiner-core",
  "mailiner-mime",
+ "mailiner-smtp-connector",
  "ring",
  "rustls",
  "rustls-pki-types",

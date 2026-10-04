@@ -91,6 +91,16 @@ pub fn format_html(
                     return caps.get(0).unwrap().as_str().to_string();
                 }
 
+                // Links navigate; they are not remote images or stylesheets.
+                // Keep http(s), mailto, fragments, and relative URLs. Drop
+                // scriptable and protocol-relative hrefs without the banner.
+                if attr == "href" {
+                    if is_navigation_href(vtrim) {
+                        return caps.get(0).unwrap().as_str().to_string();
+                    }
+                    return String::new();
+                }
+
                 // Strip the attribute entirely. Allow-remote re-formats from the
                 // retained original HTML source (no URL stored in sanitized output).
                 prevented = true;
@@ -112,6 +122,28 @@ fn is_safe_data_image(lower: &str) -> bool {
     SAFE_IMAGE_TYPES
         .iter()
         .any(|t| lower.starts_with(&format!("data:{t}")))
+}
+
+/// `href` values that navigate instead of fetching a subresource.
+///
+/// Remote images and stylesheets are blocked separately. A normal link must
+/// stay clickable while those are blocked, and must not raise the banner.
+fn is_navigation_href(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower.is_empty()
+        || lower.starts_with("javascript:")
+        || lower.starts_with("vbscript:")
+        || lower.starts_with("data:")
+        || lower.starts_with("cid:")
+        || lower.starts_with("//")
+    {
+        return false;
+    }
+    lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with('#')
+        || !lower.contains(':')
 }
 
 fn resolve_cid(
@@ -353,6 +385,59 @@ mod tests {
         .unwrap();
         assert!(r.html.contains("Hi"));
         assert!(!r.html.to_ascii_lowercase().contains("<script"));
+    }
+
+    #[test]
+    fn keeps_https_link_when_remote_resources_blocked() {
+        let html = html_part(r#"<p><a href="https://mailiner.test">link</a></p>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn strips_unsafe_href_without_remote_banner() {
+        for href in [
+            "javascript:alert(1)",
+            "vbscript:msgbox(1)",
+            "data:text/html,hi",
+            "//evil.example/phish",
+        ] {
+            let html = html_part(&format!(r#"<a href="{href}">x</a>"#));
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(
+                !r.html.to_ascii_lowercase().contains(href),
+                "{href} survived in {}",
+                r.html
+            );
+            assert!(!r.prevented_remote_resources, "{href} raised the banner");
+        }
+    }
+
+    #[test]
+    fn blocked_image_still_flags_remote_resources_beside_a_link() {
+        let html = html_part(
+            r#"<a href="https://mailiner.test">link</a><img src="https://evil.example/a.png">"#,
+        );
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.html.contains("evil.example"), "{r:?}");
+        assert!(r.prevented_remote_resources);
     }
 
     #[test]

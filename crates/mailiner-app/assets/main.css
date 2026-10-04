@@ -1251,7 +1251,8 @@ a.accounts-link-btn {
 /* Nav header: account name + settings gear */
 .pane-header-title {
     flex: 1 1 auto;
-    min-width: 0;
+    /* `min-width: 0` let the account link shrink to an empty box. */
+    min-width: 5rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -49,9 +49,13 @@ start docker-mail.
 
 ## Live tests (docker-mail + proxy)
 
-`e2e/tests/live.spec.ts` connects through `ws-tcp-proxy` to the compose
-Dovecot/Postfix container. It is a separate Playwright project so the
-offline suite stays off the network.
+`e2e/tests/live.spec.ts` and `e2e/tests/live-*.spec.ts` connect through
+`ws-tcp-proxy` to the compose Dovecot/Postfix container. They are a separate
+Playwright project so the offline suite stays off the network. Mutating
+cases create a private folder and copy a seed message into it; they must
+not move or delete the shared Inbox fixtures. Rust checks against the same
+container (`MAILINER_IT=1 cargo test -p mailiner-imap-connector --test docker_mail`)
+stay out of a normal `cargo test`.
 
 ```bash
 docker compose up --build --wait

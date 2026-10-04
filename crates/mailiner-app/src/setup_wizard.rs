@@ -42,6 +42,23 @@ pub fn include_proxy_step_now(proxy_url: &str, force: bool, current: SetupStep) 
     include_proxy_step(proxy_url, force) || current == SetupStep::Proxy
 }
 
+/// Next step after Continue.
+///
+/// "Change connection" jumps from Review back to Proxy. Continue on that
+/// visit returns to Review. The step after Proxy (Unlock, on first run)
+/// was already completed to reach Review. Other steps still advance in order.
+pub fn advance_step(
+    steps: &[SetupStep],
+    current: SetupStep,
+    return_to_review: bool,
+) -> Option<SetupStep> {
+    if return_to_review && current == SetupStep::Proxy {
+        return Some(SetupStep::Review);
+    }
+    let index = steps.iter().position(|step| *step == current)?;
+    steps.get(index + 1).copied()
+}
+
 /// Ordered steps for `mode`.
 pub fn setup_steps(mode: SetupMode, include_proxy: bool) -> Vec<SetupStep> {
     let mut steps = Vec::with_capacity(7);
@@ -150,6 +167,23 @@ mod tests {
                 SetupStep::Proxy,
                 SetupStep::Review,
             ]
+        );
+    }
+
+    #[test]
+    fn change_connection_continue_returns_to_review() {
+        let steps = setup_steps(SetupMode::FirstRun, true);
+        assert_eq!(
+            advance_step(&steps, SetupStep::Proxy, true),
+            Some(SetupStep::Review)
+        );
+        assert_eq!(
+            advance_step(&steps, SetupStep::Proxy, false),
+            Some(SetupStep::Unlock)
+        );
+        assert_eq!(
+            advance_step(&steps, SetupStep::Servers, true),
+            Some(SetupStep::Proxy)
         );
     }
 

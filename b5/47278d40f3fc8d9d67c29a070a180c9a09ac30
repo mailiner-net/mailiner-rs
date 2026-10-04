@@ -1,0 +1,39 @@
+package.json
+  s_f819b2b503c426::t_7c00699c924f60 13-15
+crates/mailiner-app/Cargo.toml
+  s_f819b2b503c426::t_6a63ec29f13733 14,22-23,27,132,134
+.cargo/config.toml
+  s_f819b2b503c426::t_297d33f36fe741 1
+crates/mailiner-core/Cargo.toml
+  s_f819b2b503c426::t_57f5ac78bbbb17 7,12
+crates/mailiner-imap-connector/Cargo.toml
+  s_f819b2b503c426::t_d5659eb3f1070e 15,24-25
+crates/mailiner-composer/Cargo.toml
+  s_f819b2b503c426::t_056d33dfff7395 15
+Cargo.toml
+  s_f819b2b503c426::t_b292d67e4bebd4 15
+crates/mailiner-html/Cargo.toml
+  s_f819b2b503c426::t_fda873d683df9e 10
+crates/mailiner-mime/Cargo.toml
+  s_f819b2b503c426::t_0f6d750633dd32 11
+crates/mailiner-smtp-connector/Cargo.toml
+  s_f819b2b503c426::t_d37c2b3761eb67 12-13
+.github/workflows/build-test.yml
+  s_f819b2b503c426::t_ab2166353e1f22 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b547278d40f3fc8d9d67c29a070a180c9a09ac30",
+  "prompts": {},
+  "sessions": {
+    "s_f819b2b503c426": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a10832-87d5-7eb0-92a7-f5ae578efb06",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

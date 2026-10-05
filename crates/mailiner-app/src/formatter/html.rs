@@ -53,75 +53,21 @@ pub fn format_html(
         prevented = true;
     }
 
-    // 2) Process remote-capable attributes
+    // 2) Process remote-capable attributes. Tag lookup reads the same haystack
+    // the regex is scanning, so the body is not cloned per attribute.
     for attr in ["src", "srcset", "href", "imagesrcset", "background"] {
         let re = re_attr(attr);
-        let current = body.clone();
-        body = re
-            .replace_all(&current, |caps: &regex::Captures| {
-                let prefix = caps.get(1).unwrap().as_str();
-                let q = caps.get(2).unwrap().as_str();
-                let value = caps.get(3).unwrap().as_str();
-                let q2 = caps.get(4).unwrap().as_str();
-                let vtrim = value.trim();
-                let lower = vtrim.to_ascii_lowercase();
-
-                if lower.starts_with("cid:") {
-                    let cid = vtrim[4..].trim();
-                    if let Some((data_url, part_id)) =
-                        resolve_cid(cid, all_parts, part.nested_in.as_deref())
-                    {
-                        inlined.push(part_id);
-                        return format!("{prefix}{q}{data_url}{q2}");
-                    }
-                    return String::new();
-                }
-
-                if lower.starts_with("javascript:") || lower.starts_with("vbscript:") {
-                    return String::new();
-                }
-
-                if lower.starts_with("data:") {
-                    if is_safe_data_image(&lower) {
-                        return caps.get(0).unwrap().as_str().to_string();
-                    }
-                    return String::new();
-                }
-
-                if opts.allow_remote_resources {
-                    return caps.get(0).unwrap().as_str().to_string();
-                }
-
-                // Anchors navigate; they are not remote images or stylesheets.
-                // Keep http(s), mailto, fragments, and relative URLs. Drop
-                // scriptable and protocol-relative hrefs without the banner.
-                // `<link>` and `<base>` hrefs are subresources. Ammonia drops
-                // those tags, but the banner still has to record that a remote
-                // target was removed.
-                if attr == "href" {
-                    let attr_at = caps.get(0).unwrap().start();
-                    if is_navigation_element(&current, attr_at) {
-                        if is_navigation_href(vtrim) {
-                            return caps.get(0).unwrap().as_str().to_string();
-                        }
-                        return String::new();
-                    }
-                    if tag_name_before(&current, attr_at).is_some() {
-                        prevented = true;
-                        return String::new();
-                    }
-                    if is_navigation_href(vtrim) {
-                        return caps.get(0).unwrap().as_str().to_string();
-                    }
-                    return String::new();
-                }
-
-                // Strip the attribute entirely. Allow-remote re-formats from the
-                // retained original HTML source (no URL stored in sanitized output).
-                prevented = true;
-                String::new()
-            })
-            .into_owned();
+        body = RemoteAttrRewrite {
+            re: &re,
+            html: &body,
+            attr,
+            opts,
+            all_parts,
+            part,
+            prevented: &mut prevented,
+            inlined: &mut inlined,
+        }
+        .apply();
     }
 
     let cleaned = collapse_trailing_blockquotes(&ammonia_clean(&body, opts.allow_remote_resources));
@@ -131,6 +77,96 @@ pub fn format_html(
         prevented_remote_resources: prevented,
         inlined_part_ids: inlined,
     })
+}
+
+struct RemoteAttrRewrite<'a> {
+    re: &'a regex::Regex,
+    html: &'a str,
+    attr: &'a str,
+    opts: &'a FormatOptions,
+    all_parts: &'a [MessagePart],
+    part: &'a MessagePart,
+    prevented: &'a mut bool,
+    inlined: &'a mut Vec<String>,
+}
+
+impl RemoteAttrRewrite<'_> {
+    fn apply(self) -> String {
+        let RemoteAttrRewrite {
+            re,
+            html,
+            attr,
+            opts,
+            all_parts,
+            part,
+            prevented,
+            inlined,
+        } = self;
+        re.replace_all(html, |caps: &regex::Captures| {
+            let prefix = caps.get(1).unwrap().as_str();
+            let q = caps.get(2).unwrap().as_str();
+            let value = caps.get(3).unwrap().as_str();
+            let q2 = caps.get(4).unwrap().as_str();
+            let vtrim = value.trim();
+            let lower = vtrim.to_ascii_lowercase();
+
+            if lower.starts_with("cid:") {
+                let cid = vtrim[4..].trim();
+                if let Some((data_url, part_id)) =
+                    resolve_cid(cid, all_parts, part.nested_in.as_deref())
+                {
+                    inlined.push(part_id);
+                    return format!("{prefix}{q}{data_url}{q2}");
+                }
+                return String::new();
+            }
+
+            if lower.starts_with("javascript:") || lower.starts_with("vbscript:") {
+                return String::new();
+            }
+
+            if lower.starts_with("data:") {
+                if is_safe_data_image(&lower) {
+                    return caps.get(0).unwrap().as_str().to_string();
+                }
+                return String::new();
+            }
+
+            if opts.allow_remote_resources {
+                return caps.get(0).unwrap().as_str().to_string();
+            }
+
+            // Anchors navigate; they are not remote images or stylesheets.
+            // Keep http(s), mailto, fragments, and relative URLs. Drop
+            // scriptable and protocol-relative hrefs without the banner.
+            // `<link>` and `<base>` hrefs are subresources. Ammonia drops
+            // those tags, but the banner still has to record that a remote
+            // target was removed.
+            if attr == "href" {
+                let attr_at = caps.get(0).unwrap().start();
+                if is_navigation_element(html, attr_at) {
+                    if is_navigation_href(vtrim) {
+                        return caps.get(0).unwrap().as_str().to_string();
+                    }
+                    return String::new();
+                }
+                if tag_name_before(html, attr_at).is_some() {
+                    *prevented = true;
+                    return String::new();
+                }
+                if is_navigation_href(vtrim) {
+                    return caps.get(0).unwrap().as_str().to_string();
+                }
+                return String::new();
+            }
+
+            // Strip the attribute entirely. Allow-remote re-formats from the
+            // retained original HTML source (no URL stored in sanitized output).
+            *prevented = true;
+            String::new()
+        })
+        .into_owned()
+    }
 }
 
 fn is_safe_data_image(lower: &str) -> bool {

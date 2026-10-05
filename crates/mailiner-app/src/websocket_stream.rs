@@ -171,7 +171,7 @@ fn register_live_socket(inner: &Arc<Mutex<WebSocketStreamInner>>) {
 /// Chrome does not fail that read on its own when the browser goes offline.
 /// The socket is closed after the mutex is released: `close()` can dispatch
 /// `onclose` on this turn, and that callback locks the same mutex.
-pub fn abort_live_sockets() {
+pub(crate) fn abort_live_sockets() {
     let weaks = {
         let mut live = live_sockets().lock().expect("Failed to lock live sockets");
         std::mem::take(&mut *live)

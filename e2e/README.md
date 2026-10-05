@@ -53,7 +53,9 @@ start docker-mail.
 `ws-tcp-proxy` to the compose Dovecot/Postfix container. They are a separate
 Playwright project so the offline suite stays off the network. Mutating
 cases create a private folder and copy a seed message into it; they must
-not move or delete the shared Inbox fixtures. Rust checks against the same
+not move or delete the shared Inbox fixtures. Empty Trash is the exception:
+it empties the shared Trash mailbox, and the test appends the seeded Trash
+message back afterward. Rust checks against the same
 container (`MAILINER_IT=1 cargo test -p mailiner-imap-connector --test docker_mail`)
 stay out of a normal `cargo test`.
 

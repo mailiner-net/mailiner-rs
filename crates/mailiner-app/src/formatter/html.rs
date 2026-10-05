@@ -56,8 +56,9 @@ pub fn format_html(
     // 2) Process remote-capable attributes
     for attr in ["src", "srcset", "href", "imagesrcset", "background"] {
         let re = re_attr(attr);
+        let current = body.clone();
         body = re
-            .replace_all(&body, |caps: &regex::Captures| {
+            .replace_all(&current, |caps: &regex::Captures| {
                 let prefix = caps.get(1).unwrap().as_str();
                 let q = caps.get(2).unwrap().as_str();
                 let value = caps.get(3).unwrap().as_str();
@@ -91,10 +92,24 @@ pub fn format_html(
                     return caps.get(0).unwrap().as_str().to_string();
                 }
 
-                // Links navigate; they are not remote images or stylesheets.
+                // Anchors navigate; they are not remote images or stylesheets.
                 // Keep http(s), mailto, fragments, and relative URLs. Drop
                 // scriptable and protocol-relative hrefs without the banner.
+                // `<link>` and `<base>` hrefs are subresources. Ammonia drops
+                // those tags, but the banner still has to record that a remote
+                // target was removed.
                 if attr == "href" {
+                    let attr_at = caps.get(0).unwrap().start();
+                    if is_navigation_element(&current, attr_at) {
+                        if is_navigation_href(vtrim) {
+                            return caps.get(0).unwrap().as_str().to_string();
+                        }
+                        return String::new();
+                    }
+                    if tag_name_before(&current, attr_at).is_some() {
+                        prevented = true;
+                        return String::new();
+                    }
                     if is_navigation_href(vtrim) {
                         return caps.get(0).unwrap().as_str().to_string();
                     }
@@ -139,11 +154,66 @@ fn is_navigation_href(value: &str) -> bool {
     {
         return false;
     }
-    lower.starts_with("https://")
+    if lower.starts_with("https://")
         || lower.starts_with("http://")
         || lower.starts_with("mailto:")
         || lower.starts_with('#')
-        || !lower.contains(':')
+    {
+        return true;
+    }
+    // A scheme is `name:` in the segment before the first `/`, `?`, or `#`.
+    // `?next=https://example.test` and `dir/a:b` are relative and stay.
+    let head = lower
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(lower.as_str());
+    !head.contains(':')
+}
+
+/// Element that owns the attribute match at `attr_at`.
+///
+/// Quote-aware so a `>` inside an earlier attribute value is not the end of
+/// the tag. `None` when the match is not inside a start tag.
+fn tag_name_before(html: &str, attr_at: usize) -> Option<&str> {
+    let head = html.get(..attr_at)?;
+    let bytes = head.as_bytes();
+    let mut i = bytes.len();
+    let mut quote: Option<u8> = None;
+    while i > 0 {
+        i -= 1;
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'>' => return None,
+            b'<' => {
+                let rest = head[i + 1..].trim_start();
+                if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
+                    return None;
+                }
+                let name_len = rest
+                    .find(|ch: char| ch.is_ascii_whitespace() || ch == '/' || ch == '>')
+                    .unwrap_or(rest.len());
+                let name = &rest[..name_len];
+                if name.is_empty() {
+                    return None;
+                }
+                return Some(name);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_navigation_element(html: &str, attr_at: usize) -> bool {
+    tag_name_before(html, attr_at)
+        .is_some_and(|name| name.eq_ignore_ascii_case("a") || name.eq_ignore_ascii_case("area"))
 }
 
 fn resolve_cid(
@@ -397,6 +467,86 @@ mod tests {
         )
         .unwrap();
         assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn keeps_relative_href_with_a_colon_after_the_path() {
+        for href in [
+            "?next=https://example.test",
+            "dir/a:b",
+            "/files/a:b",
+            "#section:1",
+        ] {
+            let html = html_part(&format!(r#"<p><a href="{href}">x</a></p>"#));
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(r.html.contains(href), "{href} dropped from {}", r.html);
+            assert!(!r.prevented_remote_resources, "{href} raised the banner");
+        }
+    }
+
+    #[test]
+    fn strips_unknown_scheme_without_remote_banner() {
+        let html = html_part(r#"<a href="foo:bar">x</a>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(!r.html.contains("foo:bar"), "{}", r.html);
+        assert!(!r.prevented_remote_resources);
+    }
+
+    #[test]
+    fn link_and_base_hrefs_are_blocked_remote_resources() {
+        for html_src in [
+            r#"<link rel="stylesheet" href="https://evil.example/a.css">"#,
+            r#"<base href="https://evil.example/">"#,
+            r#"<a title="a>b" href="https://mailiner.test">ok</a><link href="https://evil.example/b.css">"#,
+        ] {
+            let html = html_part(html_src);
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(!r.html.contains("evil.example"), "{html_src} -> {}", r.html);
+            assert!(
+                r.prevented_remote_resources,
+                "{html_src} did not raise the banner"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_gt_in_anchor_title_stays_a_link() {
+        let html = html_part(r#"<a title="a>b" href="https://mailiner.test">ok</a>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn area_href_is_navigation() {
+        let html = html_part(r#"<map><area href="https://mailiner.test"></map>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert!(!r.prevented_remote_resources, "{r:?}");
     }
 

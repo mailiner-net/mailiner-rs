@@ -2719,11 +2719,17 @@ where
                 .create(&full_name)
                 .await
                 .map_err(|e| ImapError::Imap(format!("Failed to create folder: {e}")))?;
-            // LIST refresh uses LSUB. An unsubscribed mailbox stays out of the tree.
-            session
-                .subscribe(&full_name)
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to subscribe to {full_name}: {e}")))?;
+            // The default tree lists subscribed folders only. Roll back a CREATE
+            // we could not subscribe, so the caller's error matches the server.
+            if let Err(e) = session.subscribe(&full_name).await {
+                let msg = match session.delete(&full_name).await {
+                    Ok(()) => format!("Failed to subscribe to {full_name}: {e}"),
+                    Err(delete_err) => format!(
+                        "Failed to subscribe to {full_name}: {e}; the mailbox was left in place ({delete_err})"
+                    ),
+                };
+                return Err(ImapError::Imap(msg).into());
+            }
         }
 
         let (_, leaf) = mailbox_parent_and_leaf(&full_name, delim);
@@ -2753,7 +2759,7 @@ where
             ));
         }
 
-        {
+        let subscribed = {
             let mut imap = self.imap.lock().await;
             let ImapSession::Authenticated(session) = &mut *imap else {
                 return Err(ImapError::NotAuthenticated.into());
@@ -2765,11 +2771,19 @@ where
                 .map_err(|e| ImapError::Imap(format!("Failed to rename folder: {e}")))?;
             // LSUB hides a mailbox that is not subscribed under the new name.
             // A second SUBSCRIBE is fine when the server already moved it.
-            session
-                .subscribe(&full_name)
-                .await
-                .map_err(|e| ImapError::Imap(format!("Failed to subscribe to {full_name}: {e}")))?;
-        }
+            // RENAME has already committed, so a subscribe failure still returns
+            // the new folder and the caller refreshes the tree.
+            match session.subscribe(&full_name).await {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        "Renamed {} to {full_name} but subscribe failed: {e}",
+                        folder_id.as_str()
+                    );
+                    false
+                }
+            }
+        };
         self.forget_folder_tree(folder_id, delim).await;
 
         let (parent, leaf) = mailbox_parent_and_leaf(&full_name, delim);
@@ -2783,7 +2797,7 @@ where
             parent_id: parent,
             role,
             selectable: true,
-            subscribed: true,
+            subscribed,
         })
     }
 

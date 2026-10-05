@@ -1355,6 +1355,12 @@ async fn handle_auto_reconnect(
     if manager.current_generation(&account_id) != generation {
         return;
     }
+    // The timer can fire after the browser goes offline. Reconnecting here
+    // holds the core loop for the connect timeout and delays BrowserOffline.
+    if !browser_is_online() {
+        handle_browser_offline(manager, ctx);
+        return;
+    }
     if ctx.selected_account.read().as_ref() != Some(&account_id) {
         return;
     }
@@ -5606,10 +5612,17 @@ async fn handle_rename_folder(
                 invalidate_mailbox_messages(manager.cache(), &account_id, &id).await;
             }
             list_folders_soft(manager, ctx, &account_id).await;
-            ctx.show_toast(ToastAction::info(format!(
-                "Renamed folder to {}",
-                folder.name
-            )));
+            if folder.subscribed {
+                ctx.show_toast(ToastAction::info(format!(
+                    "Renamed folder to {}",
+                    folder.name
+                )));
+            } else {
+                ctx.show_toast(ToastAction::error(format!(
+                    "Renamed folder to {}, but it could not be subscribed",
+                    folder.name
+                )));
+            }
         }
         Err(e) => {
             error!("Failed to rename folder: {e}");

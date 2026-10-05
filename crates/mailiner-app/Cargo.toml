@@ -11,7 +11,7 @@ name = "mailiner_app"
 path = "src/lib.rs"
 
 [dependencies]
-dioxus = { version = "0.7.9", default-features = false, features = [
+dioxus = { version = "0.7.10", default-features = false, features = [
     "launch",
     "lib",
     "logger",
@@ -19,12 +19,12 @@ dioxus = { version = "0.7.9", default-features = false, features = [
     "web",
 ] }
 futures-util = "0.3"
-gloo-timers = { version = "0.3", features = ["futures"] }
-uuid = { version = "1.18", features = ["v4", "js"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
+uuid = { version = "1.27", features = ["v4", "js"] }
 mailiner-core = { path = "../mailiner-core" }
 mailiner-mime = { path = "../mailiner-mime" }
 ammonia = "4.0"
-linkify = "0.10"
+linkify = "0.11"
 base64 = "0.22"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -129,8 +129,9 @@ spki = { version = "0.7", default-features = false, features = ["alloc"] }
 x509-cert = { version = "0.2", default-features = false, features = ["pem"] }
 p12-keystore = "0.1"
 
-# getrandom 0.3 (via p12-keystore / uuid) needs the wasm_js backend on
+# getrandom 0.3 (via p12-keystore / rand 0.9) needs the wasm_js backend on
 # wasm32-unknown-unknown. Pair with `--cfg getrandom_backend="wasm_js"`.
+# uuid 1.27 uses the `js` feature on wasm, not this crate.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.3", default-features = false, features = ["wasm_js"] }
 

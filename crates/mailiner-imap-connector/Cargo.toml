@@ -12,7 +12,7 @@ tokio = { workspace = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 rustls = { version = "0.23.45", default-features = false, features = [ "tls12", "std", "ring" ] }
 ring = { version = "0.17", features = [ "wasm32_unknown_unknown_js" ]}
-rustls-pki-types = { version = "1.12", features = [ "web" ] }
+rustls-pki-types = { version = "1.15", features = [ "web" ] }
 async-trait = "0.1"
 chrono = "0.4"
 thiserror = "2.0"
@@ -21,8 +21,8 @@ imap-proto = "0.16"
 mail-parser = "0.10"
 mailiner-core = { path = "../mailiner-core" }
 mailiner-mime = { path = "../mailiner-mime" } 
-uuid = { version = "1.16", features = ["js"] }
-webpki-roots = "0.26"
+uuid = { version = "1.27", features = ["js"] }
+webpki-roots = "1"
 tracing = { version = "0.1" }
 web-time = "1.1"
 

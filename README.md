@@ -200,6 +200,10 @@ That starts `dx serve` locally. The same suite runs in GitHub Actions on pull
 requests and on every push / merge to `main` (it serves the release web
 artifact).
 
+Visual layout is a separate Playwright project (`npm run test:e2e:visual`).
+Baselines are committed screenshots from the Playwright Ubuntu image, because
+the UI font is the host `system-ui`. Details are in [`e2e/README.md`](e2e/README.md).
+
 A second **live** suite talks to docker-mail through the compose proxy:
 
 ```

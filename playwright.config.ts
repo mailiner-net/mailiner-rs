@@ -25,6 +25,12 @@ export default defineConfig({
   timeout: 60_000,
   expect: {
     timeout: 15_000,
+    toHaveScreenshot: {
+      animations: 'disabled',
+      caret: 'hide',
+      scale: 'css',
+      stylePath: './e2e/screenshot.css',
+    },
   },
 
   use: {
@@ -37,13 +43,37 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /live\.spec\.ts/,
+      testIgnore: [/live\.spec\.ts/, /visual\.spec\.ts/],
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'live',
       testMatch: /live\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // Pixel baselines. Locale, timezone, and color scheme are pinned because
+      // list dates use Intl and the theme follows prefers-color-scheme.
+      // Update snapshots in the arm64 variant of
+      // mcr.microsoft.com/playwright:v1.63.0-noble. CI runs the amd64 variant
+      // of that tag. See e2e/README.md.
+      name: 'visual',
+      testMatch: /visual\.spec\.ts/,
+      retries: 0,
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor: 1,
+        colorScheme: 'light',
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        reducedMotion: 'reduce',
+        // Optional local browser when Playwright's Chromium build is unavailable.
+        // Baselines still have to come from the CI image. See e2e/README.md.
+        ...(process.env.MAILINER_CHROME_PATH
+          ? { launchOptions: { executablePath: process.env.MAILINER_CHROME_PATH } }
+          : {}),
+      },
     },
   ],
 

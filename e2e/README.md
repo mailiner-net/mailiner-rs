@@ -45,7 +45,48 @@ MAILINER_E2E_SERVE_DIR=target/dx/mailiner-app/release/web/public npm run test:e2
 ```
 
 `npm run test:e2e` runs the offline **chromium** project only. It does not
-start docker-mail.
+start docker-mail, and it does not run the visual project.
+
+## Visual layout
+
+`e2e/tests/visual.spec.ts` is a separate **visual** project. It screenshots a
+handful of settled offline screens (onboarding, stacked and classic inbox,
+dark inbox, narrow folder pane, compose, settings) and compares them to PNGs
+committed under `e2e/tests/visual.spec.ts-snapshots/`. Behavior tests stay in
+the chromium project. The live project is not a baseline: the mailbox changes,
+and list dates are rendered from the current time.
+
+The body font is `system-ui`, so the same page rasterizes differently on
+Fedora, macOS, and Ubuntu. CI runs the amd64 variant of
+`mcr.microsoft.com/playwright:v1.63.0-noble` (see
+`.github/workflows/build-test.yml`). The committed PNGs are from the arm64
+variant of that same tag: Chromium 153 and the image's Ubuntu fonts, which is
+as close as this machine can get to the CI binary. Antialiasing can still
+differ between the two builds. Bump the tag when `@playwright/test` changes.
+A local `npm run test:e2e:visual` on the host browser will fail even when the
+layout is right.
+
+Update baselines from the repository root after a release web build:
+
+```bash
+dx build -p mailiner-app --release --web --debug-symbols=false --locked
+docker run --rm --platform linux/arm64 --ipc=host \
+  -v "$PWD":/work -w /work -u root \
+  -e CI=true \
+  -e MAILINER_E2E_SERVE_DIR=/work/target/dx/mailiner-app/release/web/public \
+  -e MAILINER_E2E_PORT=8080 \
+  mcr.microsoft.com/playwright:v1.63.0-noble \
+  bash -lc "npx playwright test --project=visual --update-snapshots && chown -R $(id -u):$(id -g) e2e/tests/visual.spec.ts-snapshots"
+```
+
+Review the PNG diff, then commit the snapshots. The visual job uploads
+`playwright-report-visual` with the expected image, the actual image, and the
+diff when a comparison fails.
+
+The project pins viewport `1280×800`, `en-US`, `UTC`, light color scheme, and
+reduced motion. Specs also freeze the clock and set `mailiner.ui.theme` so a
+row dated 2024 does not change format and the dark tokens do not follow the
+host theme.
 
 ## Live tests (docker-mail + proxy)
 

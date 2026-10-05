@@ -248,6 +248,62 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # system-ui glyph rasterization differs across distros, so this job runs in
+  # the Playwright image rather than on the host Ubuntu font stack. Regenerate
+  # snapshots in this same image. Keep the tag in lockstep with
+  # @playwright/test in package-lock.json. See e2e/README.md.
+  e2e-visual:
+    name: Playwright visual
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user root --ipc=host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-public
+          path: e2e-public
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run visual tests
+        env:
+          CI: true
+          MAILINER_E2E_SERVE_DIR: e2e-public
+          MAILINER_E2E_PORT: "8080"
+        run: npm run test:e2e:visual
+
+      - name: Upload visual report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-visual
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload visual test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results-visual
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   e2e-live:
     name: Playwright e2e (docker-mail)
     needs: build

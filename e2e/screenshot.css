@@ -1,0 +1,10 @@
+/* Scrollbar glyphs differ by host and steal width from the layout under test. */
+* {
+    scrollbar-width: none !important;
+}
+
+*::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+}

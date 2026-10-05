@@ -1,0 +1,44 @@
+package.json
+  s_f16c16b436ccd4::t_c7d7142426fa72 9-10
+README.md
+  s_f16c16b436ccd4::t_248afa2011923a 203-206
+e2e/screenshot.css
+  s_f16c16b436ccd4::t_7354a0ed7dda2c 1-10
+e2e/README.md
+  s_f16c16b436ccd4::t_3b9fbea5f29b08 79
+  s_f16c16b436ccd4::t_6a878bc2bf9803 68
+  s_f16c16b436ccd4::t_c052368def588a 60-67,73,82
+  s_f16c16b436ccd4::t_af489360895a65 48-59,69-72,74-78,80-81,83-89
+e2e/tests/visual.spec.ts
+  s_f16c16b436ccd4::t_0849619dc126a7 26-27
+  s_f16c16b436ccd4::t_5c3c492f64c0ac 78
+  s_f16c16b436ccd4::t_e6745fb7a8fb81 1-4,7-25,28-42,44-46,52-77,79-102,106-136
+  s_f16c16b436ccd4::t_7f55cc93f6f3e1 51,105
+  s_f16c16b436ccd4::t_24d8eabbfc2e86 103
+  s_f16c16b436ccd4::t_047b5bbfafb106 43,47-50
+  s_f16c16b436ccd4::t_d678084c15a1c6 104
+  s_f16c16b436ccd4::t_ca3ad7376a2470 5-6
+playwright.config.ts
+  s_f16c16b436ccd4::t_3a3bc52c735f97 28-33,46,54-56,60-70,76
+  s_f16c16b436ccd4::t_95f2a04d12b819 71-75
+  s_f16c16b436ccd4::t_6f2a6a243f1c42 57-59
+.github/workflows/build-test.yml
+  s_f16c16b436ccd4::t_3afa4deff716b0 251-253
+  s_f16c16b436ccd4::t_4360db7103ee92 254-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "de822d5e9ef5e94f4ce503bd85a1808d50902dac",
+  "prompts": {},
+  "sessions": {
+    "s_f16c16b436ccd4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a10da1-57db-7401-a076-91b0829b6689",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

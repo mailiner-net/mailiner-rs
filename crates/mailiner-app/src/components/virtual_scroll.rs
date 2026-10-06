@@ -381,6 +381,42 @@ pub fn unread_scan_from_dropped(stored: usize, delta: i32) -> Option<usize> {
     }
 }
 
+/// Where the focused row sits in the cache when an unread scan starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnreadScanOrigin {
+    pub stored: Option<usize>,
+    pub live: Option<usize>,
+    /// The focused row left `stored` (unread filter, mark-read, or move).
+    /// A hole at `stored` is also what an evicted row looks like, so it is not
+    /// this signal.
+    pub removed: bool,
+    /// `stored` is past the list or holds a different cached id.
+    /// Treated as removal only when `live` is missing, so a hole is not.
+    pub slot_reused: bool,
+    pub delta: i32,
+}
+
+/// Exclusive start index for an unread scan.
+///
+/// `removed` includes the vacated slot even when the successor is not cached.
+/// Without it, a hole stays on the [`unread_scan_from`] path and the scan
+/// starts after that slot.
+pub fn unread_scan_origin(origin: UnreadScanOrigin) -> Option<usize> {
+    let UnreadScanOrigin {
+        stored,
+        live,
+        removed,
+        slot_reused,
+        delta,
+    } = origin;
+    if (removed || (live.is_none() && slot_reused))
+        && let Some(stored) = stored
+    {
+        return unread_scan_from_dropped(stored, delta);
+    }
+    unread_scan_from(stored, live, delta)
+}
+
 /// Exclusive start so the next scan re-checks `hole` (now loaded) without
 /// walking the already-examined prefix again.
 pub fn unread_scan_resume(hole: usize, delta: i32) -> Option<usize> {
@@ -993,6 +1029,58 @@ mod tests {
             scan(&after_drop, unread_scan_from_dropped(1, 1), 1),
             UnreadScan::Found(1)
         );
+    }
+
+    #[test]
+    fn unread_scan_from_dropped_includes_uncached_successor() {
+        // Focused row removed at 1; the row that slid into 1 is not cached.
+        let after_drop = [Some(true), None, Some(true)];
+        assert_eq!(
+            scan(&after_drop, unread_scan_from_dropped(1, 1), 1),
+            UnreadScan::Hole(1)
+        );
+        // Starting at the stored index itself skips that hole.
+        assert_eq!(scan(&after_drop, Some(1), 1), UnreadScan::Found(2));
+    }
+
+    fn origin(
+        stored: Option<usize>,
+        live: Option<usize>,
+        removed: bool,
+        slot_reused: bool,
+        delta: i32,
+    ) -> Option<usize> {
+        unread_scan_origin(UnreadScanOrigin {
+            stored,
+            live,
+            removed,
+            slot_reused,
+            delta,
+        })
+    }
+
+    #[test]
+    fn unread_scan_origin_uses_removal_signal_for_a_hole() {
+        let rows = [Some(true), None, Some(true)];
+        // Evicted but still present. A hole is not removal.
+        assert_eq!(
+            scan(&rows, origin(Some(1), None, false, false, 1), 1),
+            UnreadScan::Found(2)
+        );
+        // Unread filter, mark-read, or move said the focused row left.
+        assert_eq!(
+            scan(&rows, origin(Some(1), None, true, false, 1), 1),
+            UnreadScan::Hole(1)
+        );
+        // A different cached id is still removal without the signal.
+        let slid = [Some(true), Some(false)];
+        assert_eq!(
+            scan(&slid, origin(Some(0), None, false, true, 1), 1),
+            UnreadScan::Found(0)
+        );
+        // Downward relocate with a known live index matches the vacated-slot start.
+        assert_eq!(origin(Some(2), Some(5), true, false, 1), Some(1));
+        assert_eq!(origin(Some(2), Some(5), false, false, 1), Some(1));
     }
 
     #[test]

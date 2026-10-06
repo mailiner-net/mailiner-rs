@@ -16,6 +16,10 @@ pub struct MessageSelection {
     anchor_index: Option<usize>,
     /// Index of `focus` when it was focused (before unread-sort relocate).
     focus_at_index: Option<usize>,
+    /// `focus_at_index` is a slot the focused row left. Next/previous unread
+    /// includes it. Unread filter, mark-read, and move set this. A cache hole
+    /// does not: eviction of a still-present row looks the same.
+    focus_removed: bool,
     /// Last-known unread members. Survives virtual-list eviction.
     unread: HashSet<MessageId>,
 }
@@ -46,6 +50,11 @@ impl MessageSelection {
         self.focus_at_index
     }
 
+    /// The focused row left [`Self::focus_at_index`].
+    pub fn focus_removed(&self) -> bool {
+        self.focus_removed
+    }
+
     pub fn anchor_index(&self) -> Option<usize> {
         self.anchor_index
     }
@@ -62,6 +71,31 @@ impl MessageSelection {
         *self = Self::default();
     }
 
+    fn set_focus_at_index(&mut self, index: Option<usize>) {
+        self.focus_at_index = index;
+        self.focus_removed = false;
+    }
+
+    /// The focused row left [`Self::focus_at_index`]. No index, no signal.
+    pub fn note_focus_removed(&mut self) {
+        if self.focus_at_index.is_some() {
+            self.focus_removed = true;
+        }
+    }
+
+    pub fn clear_focus_removed(&mut self) {
+        self.focus_removed = false;
+    }
+
+    /// Drop the open message and remember `index` as the slot it vacated.
+    pub fn dismiss_removed_focus(&mut self, index: usize) {
+        *self = Self {
+            focus_at_index: Some(index),
+            focus_removed: true,
+            ..Self::default()
+        };
+    }
+
     /// Replace the set with a single message (plain click / arrow).
     pub fn replace(&mut self, id: MessageId, index: Option<usize>) {
         self.ids.clear();
@@ -69,7 +103,7 @@ impl MessageSelection {
         self.ids.insert(id.clone());
         self.focus = Some(id);
         self.anchor_index = index;
-        self.focus_at_index = index;
+        self.set_focus_at_index(index);
     }
 
     /// Ctrl/Cmd+click: toggle membership. Focus follows the clicked row.
@@ -85,12 +119,12 @@ impl MessageSelection {
             self.unread.remove(&id);
             if self.focus.as_ref() == Some(&id) {
                 self.focus = self.ids.iter().next().cloned();
-                self.focus_at_index = None;
+                self.set_focus_at_index(None);
             }
         } else {
             self.ids.insert(id.clone());
             self.focus = Some(id);
-            self.focus_at_index = index;
+            self.set_focus_at_index(index);
         }
         self.anchor_index = index;
     }
@@ -107,7 +141,7 @@ impl MessageSelection {
         self.ids = ids.into_iter().collect();
         self.ids.insert(focus.clone());
         self.focus = Some(focus);
-        self.focus_at_index = focus_index;
+        self.set_focus_at_index(focus_index);
         self.unread.retain(|id| self.ids.contains(id));
         if self.anchor_index.is_none() {
             self.anchor_index = focus_index;
@@ -118,7 +152,7 @@ impl MessageSelection {
     pub fn note_focus(&mut self, id: MessageId, index: Option<usize>) {
         self.ids.insert(id.clone());
         self.focus = Some(id);
-        self.focus_at_index = index;
+        self.set_focus_at_index(index);
     }
 
     pub fn remove_ids(&mut self, gone: &HashSet<MessageId>) {
@@ -126,7 +160,7 @@ impl MessageSelection {
         self.unread.retain(|id| !gone.contains(id));
         if self.focus.as_ref().is_some_and(|id| gone.contains(id)) {
             self.focus = self.ids.iter().next().cloned();
-            self.focus_at_index = None;
+            self.set_focus_at_index(None);
         }
     }
 
@@ -167,9 +201,11 @@ impl MessageSelection {
         } else {
             None
         };
+        let keep_removed = keep_focus_at.is_some() && self.focus_removed;
         self.ids = set;
         self.focus = keep_focus.or_else(|| ordered.first().cloned());
         self.focus_at_index = keep_focus_at;
+        self.focus_removed = keep_removed;
         // Drop a pre-bulk Shift start; caller syncs from the live focus index.
         self.anchor_index = None;
     }
@@ -541,5 +577,37 @@ mod tests {
     fn drag_empty_selection_is_the_row() {
         let s = MessageSelection::default();
         assert_eq!(drag_message_ids(&s, &id("a")), vec![id("a")]);
+    }
+
+    #[test]
+    fn focus_removed_clears_when_focus_moves() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(2));
+        s.note_focus_removed();
+        assert!(s.focus_removed());
+        assert_eq!(s.focus_at_index(), Some(2));
+        s.replace(id("b"), Some(3));
+        assert!(!s.focus_removed());
+        assert_eq!(s.focus_at_index(), Some(3));
+    }
+
+    #[test]
+    fn dismiss_removed_focus_keeps_the_vacated_slot() {
+        let mut s = MessageSelection::default();
+        s.replace(id("a"), Some(2));
+        s.note_unread(&id("a"), true);
+        s.dismiss_removed_focus(2);
+        assert!(s.is_empty());
+        assert_eq!(s.focus(), None);
+        assert_eq!(s.focus_at_index(), Some(2));
+        assert!(s.focus_removed());
+        assert_eq!(s.unread_among(&[id("a")]), 0);
+    }
+
+    #[test]
+    fn note_focus_removed_needs_an_index() {
+        let mut s = MessageSelection::default();
+        s.note_focus_removed();
+        assert!(!s.focus_removed());
     }
 }

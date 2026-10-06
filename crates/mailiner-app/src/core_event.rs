@@ -25,8 +25,8 @@ use crate::account::AccountId;
 use crate::account_config::AccountConfig;
 use crate::account_store::AccountStore;
 use crate::components::virtual_scroll::{
-    SparseList, UnreadScan, adjacent_index, index_after_removal, next_unread_index,
-    unread_scan_from, unread_scan_from_dropped, unread_scan_resume,
+    SparseList, UnreadScan, UnreadScanOrigin, adjacent_index, index_after_removal,
+    next_unread_index, unread_scan_origin, unread_scan_resume,
 };
 use crate::connection::{
     AccountConnectionManager, ConnectErrorKind, ConnectionState, EnsureConnectedMode,
@@ -3457,24 +3457,31 @@ fn current_list_index(ctx: &AppContext) -> Option<usize> {
 }
 
 fn unread_scan_start(ctx: &AppContext, delta: i32) -> Option<usize> {
-    let stored = ctx.selection.read().focus_at_index();
-    let focus_id = ctx.selection.read().focus().cloned();
+    let selection = ctx.selection.read();
+    let stored = selection.focus_at_index();
+    let removed = selection.focus_removed();
+    let focus_id = selection.focus().cloned();
+    drop(selection);
     let messages = ctx.messages.read();
     let live = focus_id
         .as_ref()
         .and_then(|id| messages.position(|m| m.id == *id));
-    // Evicting a still-present row leaves a hole at `stored`. Removal (unread
-    // filter, mark-read) either shrinks the list or slides a different id in.
-    let dropped = match (focus_id.as_ref(), stored) {
-        (Some(id), Some(idx)) if live.is_none() => {
+    // A hole at `stored` is also an evicted row that is still in the list.
+    // Only an explicit removal, a different cached id, or an index past the
+    // end means the focused row left that slot.
+    let slot_reused = match (focus_id.as_ref(), stored) {
+        (Some(id), Some(idx)) => {
             idx >= messages.total_count() || messages.get(idx).is_some_and(|m| m.id != *id)
         }
         _ => false,
     };
-    if let (true, Some(idx)) = (dropped, stored) {
-        return unread_scan_from_dropped(idx, delta);
-    }
-    unread_scan_from(stored, live, delta)
+    unread_scan_origin(UnreadScanOrigin {
+        stored,
+        live,
+        removed,
+        slot_reused,
+        delta,
+    })
 }
 
 /// Same window `select_list_index` fetches when a keyboard move lands on a hole.
@@ -3879,16 +3886,33 @@ async fn select_after_removed_row_mark(
         return;
     };
     let filter = *ctx.message_list_filter.peek();
-    let total = ctx.messages.read().total_count();
-    let index = if filter.is_empty() {
-        index_after_removal(total, removed_index)
-    } else {
-        next_cached_filter_index(ctx, removed_index, filter)
-    };
+    let index = successor_after_removal(ctx, removed_index, filter);
     let Some(index) = index else {
         return;
     };
     select_list_index(manager, ctx, index, true, auto_mark).await;
+}
+
+/// Index of the row that slid into `removed_index`.
+///
+/// An uncached successor is that row when every list entry matches the
+/// filter. Attachment is the client-side exception, so a hole there still
+/// waits for a cached match.
+fn successor_after_removal(
+    ctx: &AppContext,
+    removed_index: usize,
+    filter: MessageListFilter,
+) -> Option<usize> {
+    let total = ctx.messages.read().total_count();
+    let index = index_after_removal(total, removed_index)?;
+    if filter.is_empty() {
+        return Some(index);
+    }
+    let uncached = ctx.messages.read().get(index).is_none();
+    if uncached && !filter.has_attachment {
+        return Some(index);
+    }
+    next_cached_filter_index(ctx, removed_index, filter)
 }
 
 fn next_cached_filter_index(
@@ -4447,8 +4471,8 @@ fn take_messages_from_ui(
     }
     ctx.selection.write().remove_ids(&idset);
     ctx.message_bodies.borrow_mut().remove_many(ids);
-    if selected_removed_index.is_some() {
-        ctx.selection.write().clear();
+    if let Some(index) = selected_removed_index {
+        ctx.selection.write().dismiss_removed_focus(index);
         ctx.message_view.set(MessageViewState::Empty);
         ctx.message_headers.set(MessageHeadersState::Closed);
         ctx.message_source.set(MessageSourceState::Closed);
@@ -5077,18 +5101,54 @@ async fn clear_selection_if_focus_gone(
     message_ids: &[MessageId],
 ) {
     let focus = ctx.selection.read().focus().cloned();
+    let targeted = focus.as_ref().is_some_and(|id| message_ids.contains(id));
     let gone = focus
         .as_ref()
         .is_some_and(|id| ctx.messages.read().position(|m| m.id == *id).is_none());
     if gone {
         let idx = ctx.selection.read().focus_at_index();
-        ctx.selection.write().clear();
+        if let Some(index) = idx.filter(|_| targeted) {
+            ctx.selection.write().dismiss_removed_focus(index);
+        } else {
+            ctx.selection.write().clear();
+        }
         ctx.message_view.set(MessageViewState::Empty);
         ctx.download_status.set(HashMap::new());
         select_after_removed_row_mark(manager, ctx, idx, false).await;
     } else {
         let gone: HashSet<_> = message_ids.iter().cloned().collect();
         ctx.selection.write().remove_ids(&gone);
+    }
+}
+
+/// Remember a downward unread-sort move of the focused row so the next `n`
+/// includes the slot it left, even when the successor is not cached.
+fn note_mark_read_focus_move(
+    ctx: &mut AppContext,
+    message_ids: &[MessageId],
+    moves: &[(usize, usize)],
+    now_read: bool,
+) {
+    let focus_marked = ctx
+        .selection
+        .read()
+        .focus()
+        .is_some_and(|id| message_ids.contains(id));
+    if !focus_marked {
+        return;
+    }
+    if !now_read {
+        ctx.selection.write().clear_focus_removed();
+        return;
+    }
+    let Some(stored) = ctx.selection.read().focus_at_index() else {
+        return;
+    };
+    let moved_down = moves
+        .iter()
+        .any(|(from, to)| *from == stored && *to > stored);
+    if moved_down {
+        ctx.selection.write().note_focus_removed();
     }
 }
 
@@ -5110,6 +5170,16 @@ async fn relocate_unread_sort_rows(
         ctx.messages
             .write()
             .remove_matching(|m| idset.contains(&m.id));
+        // Auto-mark leaves the selection on the dropped row. `n` must include
+        // the slot the next match slid into, including when that row is uncached.
+        if ctx
+            .selection
+            .read()
+            .focus()
+            .is_some_and(|id| message_ids.contains(id))
+        {
+            ctx.selection.write().note_focus_removed();
+        }
         return;
     }
     if *ctx.message_sort.peek() != MessageSort::Unread || message_ids.is_empty() {
@@ -5121,6 +5191,7 @@ async fn relocate_unread_sort_rows(
             if moves.is_empty() {
                 return;
             }
+            note_mark_read_focus_move(ctx, message_ids, &moves, now_read);
             let mut list = ctx.messages.write();
             for (from, to) in moves {
                 list.relocate(from, to);

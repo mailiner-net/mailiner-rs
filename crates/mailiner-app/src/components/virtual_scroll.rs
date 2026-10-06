@@ -368,6 +368,19 @@ pub fn unread_scan_from(stored: Option<usize>, live: Option<usize>, delta: i32) 
     }
 }
 
+/// Forward scan after the focused row was removed from the list.
+///
+/// An unread-only list drops the row on mark-read and slides the next unread
+/// into `stored`. A forward scan must include that index. A backward scan
+/// still starts at `stored` so the step lands on the previous row.
+pub fn unread_scan_from_dropped(stored: usize, delta: i32) -> Option<usize> {
+    if delta > 0 {
+        stored.checked_sub(1)
+    } else {
+        Some(stored)
+    }
+}
+
 /// Exclusive start so the next scan re-checks `hole` (now loaded) without
 /// walking the already-examined prefix again.
 pub fn unread_scan_resume(hole: usize, delta: i32) -> Option<usize> {
@@ -964,6 +977,22 @@ mod tests {
         // Mark-unread moves the row up: scan from live, not the vacated slot.
         assert_eq!(unread_scan_from(Some(5), Some(2), 1), Some(2));
         assert_eq!(unread_scan_from(Some(5), Some(2), -1), Some(2));
+    }
+
+    #[test]
+    fn unread_scan_from_dropped_includes_the_slid_row() {
+        assert_eq!(unread_scan_from_dropped(0, 1), None);
+        assert_eq!(unread_scan_from_dropped(2, 1), Some(1));
+        assert_eq!(unread_scan_from_dropped(2, -1), Some(2));
+        let after_drop = [Some(true), Some(true)];
+        assert_eq!(
+            scan(&after_drop, unread_scan_from_dropped(0, 1), 1),
+            UnreadScan::Found(0)
+        );
+        assert_eq!(
+            scan(&after_drop, unread_scan_from_dropped(1, 1), 1),
+            UnreadScan::Found(1)
+        );
     }
 
     #[test]

@@ -146,8 +146,31 @@ mod web {
     use crate::editor::SPELLCHECK;
     use crate::sanitize::sanitize_for_edit;
     use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::prelude::wasm_bindgen;
     use wasm_bindgen::JsCast;
-    use web_sys::{HtmlDocument, HtmlElement, ShadowRoot, ShadowRootInit, ShadowRootMode};
+    use web_sys::{
+        Element, HtmlDocument, HtmlElement, Node, Selection, ShadowRoot, ShadowRootInit,
+        ShadowRootMode,
+    };
+
+    /// `document.execCommand` does not apply inside an open shadow root.
+    /// `ShadowRoot.getSelection` is the selection the caret actually uses.
+    /// A local extension type keeps the method off `web_sys::ShadowRoot`.
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(extends = ShadowRoot, js_name = ShadowRoot)]
+        type ShadowRootSelection;
+
+        #[wasm_bindgen(catch, method, js_name = getSelection)]
+        fn get_selection(
+            this: &ShadowRootSelection,
+        ) -> Result<Option<Selection>, wasm_bindgen::JsValue>;
+    }
+
+    fn shadow_get_selection(shadow: &ShadowRoot) -> Option<Selection> {
+        let ext: &ShadowRootSelection = shadow.unchecked_ref();
+        ext.get_selection().ok().flatten()
+    }
 
     fn document() -> Option<web_sys::Document> {
         web_sys::window()?.document()
@@ -303,6 +326,9 @@ mod web {
         command: EditorCommand,
         link_href: Option<&str>,
     ) -> bool {
+        if inline_tag(command).is_some() && apply_inline_format(host_id, command) {
+            return true;
+        }
         let saved = save_selection();
         let owned;
         let value = match command {
@@ -326,6 +352,183 @@ mod web {
             restore_selection(range);
         }
         exec_cmd(command.exec_name(), value)
+    }
+
+    fn inline_tag(command: EditorCommand) -> Option<(&'static str, &'static [&'static str])> {
+        match command {
+            EditorCommand::Bold => Some(("strong", &["strong", "b"])),
+            EditorCommand::Italic => Some(("em", &["em", "i"])),
+            EditorCommand::Underline => Some(("u", &["u"])),
+            _ => None,
+        }
+    }
+
+    /// Bold / italic / underline against the shadow-root selection.
+    ///
+    /// A collapsed caret that is not already inside the mark inserts an empty
+    /// wrapper with a zero-width space so the browser keeps the element, and
+    /// the caret is placed after that space. A second click on the same mark
+    /// moves the caret out of it. A non-collapsed selection is wrapped.
+    fn apply_inline_format(host_id: &str, command: EditorCommand) -> bool {
+        let Some((tag, aliases)) = inline_tag(command) else {
+            return false;
+        };
+        if !focus_editor(host_id) {
+            return false;
+        }
+        let Some(host) = host_el(host_id) else {
+            return false;
+        };
+        let Some(shadow) = host.shadow_root() else {
+            return false;
+        };
+        let Some(edit) = editable(&shadow) else {
+            return false;
+        };
+        let Some(sel) = selection_in_editor(&shadow, &edit) else {
+            return false;
+        };
+        if sel.range_count() == 0 {
+            return false;
+        }
+        let Ok(range) = sel.get_range_at(0) else {
+            return false;
+        };
+        let applied = if range.collapsed() {
+            let inside = range
+                .start_container()
+                .ok()
+                .and_then(|node| formatting_ancestor(&node, aliases, &edit));
+            if let Some(existing) = inside {
+                place_caret_after(&sel, &existing)
+            } else {
+                insert_collapsed_wrapper(&sel, &range, tag)
+            }
+        } else {
+            wrap_range(&sel, &range, tag)
+        };
+        if applied {
+            let _ = edit.focus();
+        }
+        applied
+    }
+
+    fn selection_in_editor(shadow: &ShadowRoot, edit: &HtmlElement) -> Option<Selection> {
+        let existing = shadow_get_selection(shadow).or_else(|| document_selection_inside(edit));
+        if let Some(sel) = existing {
+            let inside = sel.range_count() > 0
+                && sel
+                    .anchor_node()
+                    .is_some_and(|node| edit.contains(Some(&node)));
+            if inside {
+                return Some(sel);
+            }
+        }
+        let sel = shadow_get_selection(shadow)
+            .or_else(|| web_sys::window()?.get_selection().ok().flatten())?;
+        let document = document()?;
+        let range = document.create_range().ok()?;
+        if let Some(paragraph) = edit.query_selector("p").ok().flatten() {
+            range.set_start(&paragraph, 0).ok()?;
+        } else {
+            range.set_start(edit, 0).ok()?;
+        }
+        range.collapse_with_to_start(true);
+        sel.remove_all_ranges().ok()?;
+        sel.add_range(&range).ok()?;
+        Some(sel)
+    }
+
+    fn document_selection_inside(edit: &HtmlElement) -> Option<Selection> {
+        let sel = web_sys::window()?.get_selection().ok().flatten()?;
+        let anchor = sel.anchor_node()?;
+        edit.contains(Some(&anchor)).then_some(sel)
+    }
+
+    fn formatting_ancestor(node: &Node, tags: &[&str], root: &HtmlElement) -> Option<Element> {
+        let root_node: &Node = root;
+        let mut current = Some(node.clone());
+        while let Some(n) = current {
+            if n.is_same_node(Some(root_node)) {
+                return None;
+            }
+            if let Some(el) = n.dyn_ref::<Element>() {
+                let name = el.tag_name();
+                if tags.iter().any(|tag| name.eq_ignore_ascii_case(tag)) {
+                    return Some(el.clone());
+                }
+            }
+            current = n.parent_node();
+        }
+        None
+    }
+
+    fn place_caret_after(sel: &Selection, el: &Element) -> bool {
+        let Some(document) = document() else {
+            return false;
+        };
+        let Ok(range) = document.create_range() else {
+            return false;
+        };
+        if range.set_start_after(el).is_err() {
+            return false;
+        }
+        range.collapse_with_to_start(true);
+        if sel.remove_all_ranges().is_err() {
+            return false;
+        }
+        sel.add_range(&range).is_ok()
+    }
+
+    fn insert_collapsed_wrapper(sel: &Selection, range: &web_sys::Range, tag: &str) -> bool {
+        let Some(document) = document() else {
+            return false;
+        };
+        let Ok(el) = document.create_element(tag) else {
+            return false;
+        };
+        let text = document.create_text_node("\u{200b}");
+        if el.append_child(&text).is_err() {
+            return false;
+        }
+        if range.insert_node(&el).is_err() {
+            return false;
+        }
+        if range.set_start(&text, 1).is_err() {
+            return false;
+        }
+        range.collapse_with_to_start(true);
+        if sel.remove_all_ranges().is_err() {
+            return false;
+        }
+        sel.add_range(range).is_ok()
+    }
+
+    fn wrap_range(sel: &Selection, range: &web_sys::Range, tag: &str) -> bool {
+        let Some(document) = document() else {
+            return false;
+        };
+        let Ok(el) = document.create_element(tag) else {
+            return false;
+        };
+        if range.surround_contents(&el).is_err() {
+            let Ok(fragment) = range.extract_contents() else {
+                return false;
+            };
+            if el.append_child(&fragment).is_err() {
+                return false;
+            }
+            if range.insert_node(&el).is_err() {
+                return false;
+            }
+        }
+        if sel.remove_all_ranges().is_err() {
+            return false;
+        }
+        if range.select_node_contents(&el).is_err() {
+            return false;
+        }
+        sel.add_range(range).is_ok()
     }
 }
 

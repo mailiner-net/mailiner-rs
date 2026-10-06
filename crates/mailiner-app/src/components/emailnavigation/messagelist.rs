@@ -669,6 +669,7 @@ fn MessageListItem(
             class: if indented { "is-thread-member" },
             class: if is_thread { "is-thread" },
             role: "option",
+            "data-index": "{index}",
             aria_selected: if is_selected { "true" } else { "false" },
             aria_expanded: if is_thread {
                 Some(if thread_expanded { "true" } else { "false" })

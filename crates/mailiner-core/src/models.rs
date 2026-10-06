@@ -379,7 +379,8 @@ impl ImapKeyword {
 
 /// IMAP flag names used by [`crate::connector::EmailConnector::update_envelope_flags`].
 ///
-/// `Starred` is the custom `\Starred` atom; `Flagged` is standard `\Flagged`.
+/// `Starred` is `\Starred`, or `$Starred` when the server rejects that system flag.
+/// `Flagged` is standard `\Flagged`.
 /// [`Self::Keyword`] is one of the built-in custom keywords.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -424,7 +425,7 @@ pub struct Envelope {
     pub is_flagged: bool,
     pub is_draft: bool,
     pub is_deleted: bool,
-    /// Custom IMAP keywords (not system flags or `\Starred`).
+    /// Custom IMAP keywords (not system flags or the star atom).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keywords: Vec<String>,
     pub has_attachments: bool,

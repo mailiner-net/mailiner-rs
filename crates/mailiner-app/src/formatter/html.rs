@@ -53,50 +53,21 @@ pub fn format_html(
         prevented = true;
     }
 
-    // 2) Process remote-capable attributes
+    // 2) Process remote-capable attributes. Tag lookup reads the same haystack
+    // the regex is scanning, so the body is not cloned per attribute.
     for attr in ["src", "srcset", "href", "imagesrcset", "background"] {
         let re = re_attr(attr);
-        body = re
-            .replace_all(&body, |caps: &regex::Captures| {
-                let prefix = caps.get(1).unwrap().as_str();
-                let q = caps.get(2).unwrap().as_str();
-                let value = caps.get(3).unwrap().as_str();
-                let q2 = caps.get(4).unwrap().as_str();
-                let vtrim = value.trim();
-                let lower = vtrim.to_ascii_lowercase();
-
-                if lower.starts_with("cid:") {
-                    let cid = vtrim[4..].trim();
-                    if let Some((data_url, part_id)) =
-                        resolve_cid(cid, all_parts, part.nested_in.as_deref())
-                    {
-                        inlined.push(part_id);
-                        return format!("{prefix}{q}{data_url}{q2}");
-                    }
-                    return String::new();
-                }
-
-                if lower.starts_with("javascript:") || lower.starts_with("vbscript:") {
-                    return String::new();
-                }
-
-                if lower.starts_with("data:") {
-                    if is_safe_data_image(&lower) {
-                        return caps.get(0).unwrap().as_str().to_string();
-                    }
-                    return String::new();
-                }
-
-                if opts.allow_remote_resources {
-                    return caps.get(0).unwrap().as_str().to_string();
-                }
-
-                // Strip the attribute entirely. Allow-remote re-formats from the
-                // retained original HTML source (no URL stored in sanitized output).
-                prevented = true;
-                String::new()
-            })
-            .into_owned();
+        body = RemoteAttrRewrite {
+            re: &re,
+            html: &body,
+            attr,
+            opts,
+            all_parts,
+            part,
+            prevented: &mut prevented,
+            inlined: &mut inlined,
+        }
+        .apply();
     }
 
     let cleaned = collapse_trailing_blockquotes(&ammonia_clean(&body, opts.allow_remote_resources));
@@ -108,10 +79,177 @@ pub fn format_html(
     })
 }
 
+struct RemoteAttrRewrite<'a> {
+    re: &'a regex::Regex,
+    html: &'a str,
+    attr: &'a str,
+    opts: &'a FormatOptions,
+    all_parts: &'a [MessagePart],
+    part: &'a MessagePart,
+    prevented: &'a mut bool,
+    inlined: &'a mut Vec<String>,
+}
+
+impl RemoteAttrRewrite<'_> {
+    fn apply(self) -> String {
+        let RemoteAttrRewrite {
+            re,
+            html,
+            attr,
+            opts,
+            all_parts,
+            part,
+            prevented,
+            inlined,
+        } = self;
+        re.replace_all(html, |caps: &regex::Captures| {
+            let prefix = caps.get(1).unwrap().as_str();
+            let q = caps.get(2).unwrap().as_str();
+            let value = caps.get(3).unwrap().as_str();
+            let q2 = caps.get(4).unwrap().as_str();
+            let vtrim = value.trim();
+            let lower = vtrim.to_ascii_lowercase();
+
+            if lower.starts_with("cid:") {
+                let cid = vtrim[4..].trim();
+                if let Some((data_url, part_id)) =
+                    resolve_cid(cid, all_parts, part.nested_in.as_deref())
+                {
+                    inlined.push(part_id);
+                    return format!("{prefix}{q}{data_url}{q2}");
+                }
+                return String::new();
+            }
+
+            if lower.starts_with("javascript:") || lower.starts_with("vbscript:") {
+                return String::new();
+            }
+
+            if lower.starts_with("data:") {
+                if is_safe_data_image(&lower) {
+                    return caps.get(0).unwrap().as_str().to_string();
+                }
+                return String::new();
+            }
+
+            if opts.allow_remote_resources {
+                return caps.get(0).unwrap().as_str().to_string();
+            }
+
+            // Anchors navigate; they are not remote images or stylesheets.
+            // Keep http(s), mailto, fragments, and relative URLs. Drop
+            // scriptable and protocol-relative hrefs without the banner.
+            // `<link>` and `<base>` hrefs are subresources. Ammonia drops
+            // those tags, but the banner still has to record that a remote
+            // target was removed.
+            if attr == "href" {
+                let attr_at = caps.get(0).unwrap().start();
+                if is_navigation_element(html, attr_at) {
+                    if is_navigation_href(vtrim) {
+                        return caps.get(0).unwrap().as_str().to_string();
+                    }
+                    return String::new();
+                }
+                if tag_name_before(html, attr_at).is_some() {
+                    *prevented = true;
+                    return String::new();
+                }
+                if is_navigation_href(vtrim) {
+                    return caps.get(0).unwrap().as_str().to_string();
+                }
+                return String::new();
+            }
+
+            // Strip the attribute entirely. Allow-remote re-formats from the
+            // retained original HTML source (no URL stored in sanitized output).
+            *prevented = true;
+            String::new()
+        })
+        .into_owned()
+    }
+}
+
 fn is_safe_data_image(lower: &str) -> bool {
     SAFE_IMAGE_TYPES
         .iter()
         .any(|t| lower.starts_with(&format!("data:{t}")))
+}
+
+/// `href` values that navigate instead of fetching a subresource.
+///
+/// Remote images and stylesheets are blocked separately. A normal link must
+/// stay clickable while those are blocked, and must not raise the banner.
+fn is_navigation_href(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower.is_empty()
+        || lower.starts_with("javascript:")
+        || lower.starts_with("vbscript:")
+        || lower.starts_with("data:")
+        || lower.starts_with("cid:")
+        || lower.starts_with("//")
+    {
+        return false;
+    }
+    if lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with('#')
+    {
+        return true;
+    }
+    // A scheme is `name:` in the segment before the first `/`, `?`, or `#`.
+    // `?next=https://example.test` and `dir/a:b` are relative and stay.
+    let head = lower
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(lower.as_str());
+    !head.contains(':')
+}
+
+/// Element that owns the attribute match at `attr_at`.
+///
+/// Quote-aware so a `>` inside an earlier attribute value is not the end of
+/// the tag. `None` when the match is not inside a start tag.
+fn tag_name_before(html: &str, attr_at: usize) -> Option<&str> {
+    let head = html.get(..attr_at)?;
+    let bytes = head.as_bytes();
+    let mut i = bytes.len();
+    let mut quote: Option<u8> = None;
+    while i > 0 {
+        i -= 1;
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'>' => return None,
+            b'<' => {
+                let rest = head[i + 1..].trim_start();
+                if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
+                    return None;
+                }
+                let name_len = rest
+                    .find(|ch: char| ch.is_ascii_whitespace() || ch == '/' || ch == '>')
+                    .unwrap_or(rest.len());
+                let name = &rest[..name_len];
+                if name.is_empty() {
+                    return None;
+                }
+                return Some(name);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_navigation_element(html: &str, attr_at: usize) -> bool {
+    tag_name_before(html, attr_at)
+        .is_some_and(|name| name.eq_ignore_ascii_case("a") || name.eq_ignore_ascii_case("area"))
 }
 
 fn resolve_cid(
@@ -353,6 +491,139 @@ mod tests {
         .unwrap();
         assert!(r.html.contains("Hi"));
         assert!(!r.html.to_ascii_lowercase().contains("<script"));
+    }
+
+    #[test]
+    fn keeps_https_link_when_remote_resources_blocked() {
+        let html = html_part(r#"<p><a href="https://mailiner.test">link</a></p>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn keeps_relative_href_with_a_colon_after_the_path() {
+        for href in [
+            "?next=https://example.test",
+            "dir/a:b",
+            "/files/a:b",
+            "#section:1",
+        ] {
+            let html = html_part(&format!(r#"<p><a href="{href}">x</a></p>"#));
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(r.html.contains(href), "{href} dropped from {}", r.html);
+            assert!(!r.prevented_remote_resources, "{href} raised the banner");
+        }
+    }
+
+    #[test]
+    fn strips_unknown_scheme_without_remote_banner() {
+        let html = html_part(r#"<a href="foo:bar">x</a>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(!r.html.contains("foo:bar"), "{}", r.html);
+        assert!(!r.prevented_remote_resources);
+    }
+
+    #[test]
+    fn link_and_base_hrefs_are_blocked_remote_resources() {
+        for html_src in [
+            r#"<link rel="stylesheet" href="https://evil.example/a.css">"#,
+            r#"<base href="https://evil.example/">"#,
+            r#"<a title="a>b" href="https://mailiner.test">ok</a><link href="https://evil.example/b.css">"#,
+        ] {
+            let html = html_part(html_src);
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(!r.html.contains("evil.example"), "{html_src} -> {}", r.html);
+            assert!(
+                r.prevented_remote_resources,
+                "{html_src} did not raise the banner"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_gt_in_anchor_title_stays_a_link() {
+        let html = html_part(r#"<a title="a>b" href="https://mailiner.test">ok</a>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn area_href_is_navigation() {
+        let html = html_part(r#"<map><area href="https://mailiner.test"></map>"#);
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(!r.prevented_remote_resources, "{r:?}");
+    }
+
+    #[test]
+    fn strips_unsafe_href_without_remote_banner() {
+        for href in [
+            "javascript:alert(1)",
+            "vbscript:msgbox(1)",
+            "data:text/html,hi",
+            "//evil.example/phish",
+        ] {
+            let html = html_part(&format!(r#"<a href="{href}">x</a>"#));
+            let r = format_html(
+                &html,
+                std::slice::from_ref(&html),
+                &FormatOptions::default(),
+            )
+            .unwrap();
+            assert!(
+                !r.html.to_ascii_lowercase().contains(href),
+                "{href} survived in {}",
+                r.html
+            );
+            assert!(!r.prevented_remote_resources, "{href} raised the banner");
+        }
+    }
+
+    #[test]
+    fn blocked_image_still_flags_remote_resources_beside_a_link() {
+        let html = html_part(
+            r#"<a href="https://mailiner.test">link</a><img src="https://evil.example/a.png">"#,
+        );
+        let r = format_html(
+            &html,
+            std::slice::from_ref(&html),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+        assert!(r.html.contains("https://mailiner.test"), "{r:?}");
+        assert!(!r.html.contains("evil.example"), "{r:?}");
+        assert!(r.prevented_remote_resources);
     }
 
     #[test]

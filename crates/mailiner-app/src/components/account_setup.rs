@@ -27,7 +27,7 @@ use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::provider_preset::PresetFormFields;
 use crate::setup_wizard::{
-    SetupMode, SetupStep, include_proxy_step_now, last_used_proxy_source, setup_steps,
+    SetupMode, SetupStep, advance_step, include_proxy_step_now, last_used_proxy_source, setup_steps,
 };
 
 /// First-run or add-account wizard.
@@ -52,6 +52,9 @@ pub fn AccountSetupWizard(mode: SetupMode) -> Element {
     let unlock_passphrase = use_signal(String::new);
     let unlock_passphrase_confirm = use_signal(String::new);
     let mut force_proxy = use_signal(|| false);
+    // Set when Review's "Change connection" jumps back to Proxy. Continue
+    // then returns to Review; Back leaves the flag set.
+    let mut return_to_review = use_signal(|| false);
     let mut current = use_signal(|| match mode {
         SetupMode::FirstRun => SetupStep::Welcome,
         SetupMode::AddAccount => SetupStep::Email,
@@ -261,14 +264,19 @@ pub fn AccountSetupWizard(mode: SetupMode) -> Element {
                 }
                 return;
             }
-            if let Some(next) = steps.get(step_index + 1) {
-                current.set(*next);
+            let back_to_review = return_to_review();
+            if let Some(next) = advance_step(&steps, step, back_to_review) {
+                if step == SetupStep::Proxy && next == SetupStep::Review {
+                    return_to_review.set(false);
+                }
+                current.set(next);
             }
         }
     };
 
     let go_proxy = EventHandler::new(move |_| {
         force_proxy.set(true);
+        return_to_review.set(true);
         current.set(SetupStep::Proxy);
         status_message.set(None);
     });

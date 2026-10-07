@@ -1,0 +1,24 @@
+crates/mailiner-imap-connector/Cargo.toml
+  s_a8184a707f4296::t_1decfd4a8b7169 31
+crates/mailiner-imap-connector/tests/docker_mail.rs
+  s_a8184a707f4296::t_801fb76292f88c 561-562
+  s_a8184a707f4296::t_0564cc264f003b 202-227
+  s_a8184a707f4296::t_2e7db21cd3d599 9
+  s_a8184a707f4296::t_579bd5d665a62c 160-201,481-482
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b661628cd06fa67962c43c2e3cc547ada9f8a2ff",
+  "prompts": {},
+  "sessions": {
+    "s_a8184a707f4296": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a117b9-7150-77b1-bb7f-58362dad9ce9",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

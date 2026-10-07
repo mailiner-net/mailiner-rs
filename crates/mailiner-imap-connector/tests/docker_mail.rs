@@ -6,6 +6,7 @@
 //!
 //! The suite shares the `dev@mailiner.test` mailbox and does not re-seed it.
 //! Tests that append or submit mail expunge those messages when they finish.
+//! Those tests hold one flock so two processes cannot expunge each other.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -153,6 +154,74 @@ fn expunge_subject(mailbox: &str, subject: &str) {
             }
         }
         Err(err) => eprintln!("cleanup expunge {mailbox} {subject}: {err}"),
+    }
+}
+
+/// Exclusive lock for tests that expunge by subject prefix.
+///
+/// Prefix expunge also matches another process's in-flight message. `flock`
+/// is released when the holding process exits, including after a hard kill,
+/// so the next run can still remove that leftover.
+struct SharedMailboxLock {
+    file: std::fs::File,
+}
+
+impl SharedMailboxLock {
+    fn acquire() -> Self {
+        use std::os::unix::io::AsRawFd;
+        let path = std::env::temp_dir().join("mailiner-docker-mail-it.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open docker-mail integration lock");
+        let fd = file.as_raw_fd();
+        // SAFETY: `fd` belongs to `file`, which stays open until this guard drops.
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        assert!(
+            rc == 0,
+            "flock docker-mail integration lock: {}",
+            std::io::Error::last_os_error()
+        );
+        Self { file }
+    }
+}
+
+impl Drop for SharedMailboxLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        let fd = self.file.as_raw_fd();
+        // SAFETY: same owned fd as `acquire`. Closing the file releases the lock too.
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
+}
+
+#[test]
+fn shared_mailbox_lock_is_exclusive() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let started = Arc::new(Barrier::new(2));
+    let held = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let started = Arc::clone(&started);
+        let held = Arc::clone(&held);
+        handles.push(thread::spawn(move || {
+            started.wait();
+            let _lock = SharedMailboxLock::acquire();
+            let now = held.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(now, 0, "two holders at once");
+            thread::sleep(Duration::from_millis(80));
+            held.fetch_sub(1, Ordering::SeqCst);
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("lock thread");
     }
 }
 
@@ -409,6 +478,8 @@ async fn smtp_submit_is_readable_over_imap() {
         eprintln!("skip smtp_submit_is_readable_over_imap: set MAILINER_IT=1");
         return;
     }
+    // Declared first so it drops after `_cleanup` and the expunge stays inside the lock.
+    let _lock = SharedMailboxLock::acquire();
     let _cleanup = SubjectCleanup {
         mailboxes: &["INBOX", "Sent"],
         prefix: "it-smtp",
@@ -487,6 +558,8 @@ async fn idle_reports_a_message_appended_during_the_wait() {
         eprintln!("skip idle_reports_a_message_appended_during_the_wait: set MAILINER_IT=1");
         return;
     }
+    // Declared first so it drops after `_cleanup` and the expunge stays inside the lock.
+    let _lock = SharedMailboxLock::acquire();
     let imap = connect_imap(PASSWORD).await;
     assert!(imap.supports_idle(), "Dovecot should advertise IDLE");
     let inbox = folder(&imap, MailboxRole::Inbox).await;

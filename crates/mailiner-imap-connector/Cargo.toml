@@ -28,6 +28,7 @@ web-time = "1.1"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+libc = "0.2.190"
 mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }
 

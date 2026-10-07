@@ -407,14 +407,13 @@ const SHARED_MAILBOXES = new Set([
  */
 export async function cleanupMailbox(name: string): Promise<void> {
   if (SHARED_MAILBOXES.has(name)) {
-    console.warn(`refusing to delete shared mailbox ${name}`);
-    return;
+    throw new Error(`refusing to delete shared mailbox ${name}`);
   }
   try {
     await doveadm(['mailbox', 'delete', '-u', LIVE_ACCOUNT_EMAIL, '-s', name]);
   } catch (err) {
     if (!ignoredCleanupError(err)) {
-      console.warn(String(err));
+      throw err;
     }
   }
 }
@@ -437,7 +436,7 @@ export async function cleanupSubject(mailbox: string, subject: string): Promise<
     ]);
   } catch (err) {
     if (!ignoredCleanupError(err)) {
-      console.warn(String(err));
+      throw err;
     }
   }
 }

@@ -118,8 +118,9 @@ fn unique_subject(prefix: &str) -> String {
     format!("{prefix}-{nanos}-{}", std::process::id())
 }
 
-/// Expunge messages this test added. `subject` must not be a substring of a
-/// seed subject in `mailbox` (doveadm SUBJECT is a substring match).
+/// Expunge messages whose Subject contains `subject`. doveadm SUBJECT is a
+/// substring match, so a stable test prefix also removes mail left by a
+/// killed earlier run. `subject` must not be a substring of a seed subject.
 fn expunge_subject(mailbox: &str, subject: &str) {
     let output = Command::new("docker")
         .args(["ps", "-q", "--filter", "publish=993"])
@@ -157,13 +158,15 @@ fn expunge_subject(mailbox: &str, subject: &str) {
 
 struct SubjectCleanup {
     mailboxes: &'static [&'static str],
-    subject: String,
+    /// Stable prefix of this test's subjects. Drop expunges every match,
+    /// including a message whose full subject was lost when a run was killed.
+    prefix: &'static str,
 }
 
 impl Drop for SubjectCleanup {
     fn drop(&mut self) {
         for mailbox in self.mailboxes {
-            expunge_subject(mailbox, &self.subject);
+            expunge_subject(mailbox, self.prefix);
         }
     }
 }
@@ -406,11 +409,11 @@ async fn smtp_submit_is_readable_over_imap() {
         eprintln!("skip smtp_submit_is_readable_over_imap: set MAILINER_IT=1");
         return;
     }
-    let cleanup = SubjectCleanup {
+    let _cleanup = SubjectCleanup {
         mailboxes: &["INBOX", "Sent"],
-        subject: unique_subject("it-smtp"),
+        prefix: "it-smtp",
     };
-    let subject = cleanup.subject.as_str();
+    let subject = unique_subject("it-smtp");
     let raw = format!(
         "From: Dev User <{USER}>\r\n\
          To: Dev User <{USER}>\r\n\
@@ -496,11 +499,11 @@ async fn idle_reports_a_message_appended_during_the_wait() {
     .await
     .expect("select inbox");
 
-    let cleanup = SubjectCleanup {
+    let _cleanup = SubjectCleanup {
         mailboxes: &["INBOX"],
-        subject: unique_subject("it-idle"),
+        prefix: "it-idle",
     };
-    let subject = cleanup.subject.as_str();
+    let subject = unique_subject("it-idle");
     let raw = format!(
         "From: Alice Example <alice@example.com>\nTo: Dev User <{USER}>\nSubject: {subject}\n\nidle\n"
     );

@@ -6,6 +6,7 @@ import {
   bodyText,
   cleanupSubject,
   gotoLiveMail,
+  mailboxHasSubject,
   messageRows,
   openFolder,
   openSubject,
@@ -29,11 +30,32 @@ async function expectBody(page: Page, text: string) {
   await expect.poll(async () => bodyText(page), { timeout: 20_000 }).toContain(text);
 }
 
-/** Self-sends land in Inbox and Sent. A failed send can also leave a Draft. */
+/**
+ * Self-sends land in Inbox and Sent. A failed send can also leave a Draft.
+ * Poll briefly: a timed-out assertion can return while SMTP is still storing
+ * the message.
+ */
 async function cleanupSentCopy(subject: string) {
-  await cleanupSubject('INBOX', subject);
-  await cleanupSubject('Sent', subject);
-  await cleanupSubject('Drafts', subject);
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    await cleanupSubject('INBOX', subject);
+    await cleanupSubject('Sent', subject);
+    await cleanupSubject('Drafts', subject);
+    const stillThere = (
+      await Promise.all([
+        mailboxHasSubject('INBOX', subject),
+        mailboxHasSubject('Sent', subject),
+        mailboxHasSubject('Drafts', subject),
+      ])
+    ).some(Boolean);
+    if (!stillThere) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`message ${subject} still present after cleanup`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 async function fillTo(page: Page, email: string) {

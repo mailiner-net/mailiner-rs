@@ -56,10 +56,10 @@ shares one Dovecot account and does not re-seed `mail-data` between tests.
 Mutating cases prefer a private folder, copied from a seed or appended with
 a unique subject, and delete that folder afterward. They must not move or
 delete the shared Inbox fixtures. A test that has to write Inbox, Sent,
-Archive, Junk, or Trash deletes only its own messages afterward, matched by
-subject. Empty Trash is the exception: it empties the shared Trash mailbox,
-and the test appends `docker/mail/seed/trashed.eml` back when that seed is
-no longer present. Rust checks against the same container
+Drafts, Archive, Junk, or Trash deletes only its own messages afterward,
+matched by subject. Empty Trash is the exception: it empties the shared
+Trash mailbox, and the test appends `docker/mail/seed/trashed.eml` back
+when that seed is no longer present. Rust checks against the same container
 (`MAILINER_IT=1 cargo test -p mailiner-imap-connector --test docker_mail`)
 stay out of a normal `cargo test` and expunge the messages they append.
 

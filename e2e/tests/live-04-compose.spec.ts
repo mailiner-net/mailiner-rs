@@ -4,7 +4,9 @@ import {
   LIVE_ACCOUNT_EMAIL,
   bodyHtml,
   bodyText,
+  cleanupSubject,
   gotoLiveMail,
+  mailboxHasSubject,
   messageRows,
   openFolder,
   openSubject,
@@ -26,6 +28,34 @@ function newMessage(page: Page) {
 
 async function expectBody(page: Page, text: string) {
   await expect.poll(async () => bodyText(page), { timeout: 20_000 }).toContain(text);
+}
+
+/**
+ * Self-sends land in Inbox and Sent. A failed send can also leave a Draft.
+ * Poll briefly: a timed-out assertion can return while SMTP is still storing
+ * the message.
+ */
+async function cleanupSentCopy(subject: string) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    await cleanupSubject('INBOX', subject);
+    await cleanupSubject('Sent', subject);
+    await cleanupSubject('Drafts', subject);
+    const stillThere = (
+      await Promise.all([
+        mailboxHasSubject('INBOX', subject),
+        mailboxHasSubject('Sent', subject),
+        mailboxHasSubject('Drafts', subject),
+      ])
+    ).some(Boolean);
+    if (!stillThere) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`message ${subject} still present after cleanup`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 async function fillTo(page: Page, email: string) {
@@ -66,111 +96,127 @@ test('forward starts a new recipient list', async ({ page }) => {
 
 test('a plain send to yourself is delivered', async ({ page }) => {
   const subject = uniqueName('send');
-  await composeButton(page).click();
-  const compose = newMessage(page);
-  await expect(compose).toBeVisible();
-  await fillTo(page, LIVE_ACCOUNT_EMAIL);
-  await compose.getByLabel('Subject').fill(subject);
-  await compose.locator('textarea').fill('hello from the e2e send');
-  await compose.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
+  try {
+    await composeButton(page).click();
+    const compose = newMessage(page);
+    await expect(compose).toBeVisible();
+    await fillTo(page, LIVE_ACCOUNT_EMAIL);
+    await compose.getByLabel('Subject').fill(subject);
+    await compose.locator('textarea').fill('hello from the e2e send');
+    await compose.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
 
-  await openFolder(page, 'Sent');
-  await openSubject(page, subject);
-  await expectBody(page, 'hello from the e2e send');
+    await openFolder(page, 'Sent');
+    await openSubject(page, subject);
+    await expectBody(page, 'hello from the e2e send');
 
-  await openFolder(page, /Inbox/);
-  await openSubject(page, subject);
-  await expectBody(page, 'hello from the e2e send');
+    await openFolder(page, /Inbox/);
+    await openSubject(page, subject);
+    await expectBody(page, 'hello from the e2e send');
+  } finally {
+    await cleanupSentCopy(subject);
+  }
 });
 
 test('a rich send survives a round trip', async ({ page }) => {
   const subject = uniqueName('rich');
-  await composeButton(page).click();
-  const compose = newMessage(page);
-  await fillTo(page, LIVE_ACCOUNT_EMAIL);
-  await compose.getByLabel('Subject').fill(subject);
-  await compose.getByRole('button', { name: 'Rich', exact: true }).click();
-  await compose.locator('#mailiner-compose-editor').click();
-  await compose.getByRole('button', { name: 'Bold', exact: true }).click();
-  await page.keyboard.type('boldword');
-  await compose.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
+  try {
+    await composeButton(page).click();
+    const compose = newMessage(page);
+    await fillTo(page, LIVE_ACCOUNT_EMAIL);
+    await compose.getByLabel('Subject').fill(subject);
+    await compose.getByRole('button', { name: 'Rich', exact: true }).click();
+    await compose.locator('#mailiner-compose-editor').click();
+    await compose.getByRole('button', { name: 'Bold', exact: true }).click();
+    await page.keyboard.type('boldword');
+    await compose.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
 
-  await openFolder(page, /Inbox/);
-  await openSubject(page, subject);
-  await expectBody(page, 'boldword');
-  const html = await bodyHtml(page);
-  expect(html).toMatch(/<(?:b|strong)\b|font-weight:\s*(?:bold|[6-9]00)/i);
+    await openFolder(page, /Inbox/);
+    await openSubject(page, subject);
+    await expectBody(page, 'boldword');
+    const html = await bodyHtml(page);
+    expect(html).toMatch(/<(?:b|strong)\b|font-weight:\s*(?:bold|[6-9]00)/i);
+  } finally {
+    await cleanupSentCopy(subject);
+  }
 });
 
 test('an attachment survives a round trip', async ({ page }) => {
   const subject = uniqueName('attach');
-  await composeButton(page).click();
-  const compose = newMessage(page);
-  await fillTo(page, LIVE_ACCOUNT_EMAIL);
-  await compose.getByLabel('Subject').fill(subject);
-  await compose.locator('textarea').fill('see attachment');
-  await compose.getByLabel('Attach files').setInputFiles({
-    name: 'note.txt',
-    mimeType: 'text/plain',
-    buffer: Buffer.from('attachment-bytes-e2e'),
-  });
-  await expect(compose.getByText('note.txt')).toBeVisible();
-  await compose.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
+  try {
+    await composeButton(page).click();
+    const compose = newMessage(page);
+    await fillTo(page, LIVE_ACCOUNT_EMAIL);
+    await compose.getByLabel('Subject').fill(subject);
+    await compose.locator('textarea').fill('see attachment');
+    await compose.getByLabel('Attach files').setInputFiles({
+      name: 'note.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('attachment-bytes-e2e'),
+    });
+    await expect(compose.getByText('note.txt')).toBeVisible();
+    await compose.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.locator('.toast-message', { hasText: 'Sent' })).toBeVisible({ timeout: 40_000 });
 
-  await openFolder(page, /Inbox/);
-  await openSubject(page, subject);
-  await revealAttachments(page);
-  const item = page.locator('.attachment-item', { hasText: 'note.txt' });
-  await expect(item).toBeVisible();
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    item.getByRole('button', { name: 'Download', exact: true }).click(),
-  ]);
-  const text = await download.createReadStream().then(
-    (stream) =>
-      new Promise<string>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-        stream.on('error', reject);
-      }),
-  );
-  expect(text).toContain('attachment-bytes-e2e');
+    await openFolder(page, /Inbox/);
+    await openSubject(page, subject);
+    await revealAttachments(page);
+    const item = page.locator('.attachment-item', { hasText: 'note.txt' });
+    await expect(item).toBeVisible();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      item.getByRole('button', { name: 'Download', exact: true }).click(),
+    ]);
+    const text = await download.createReadStream().then(
+      (stream) =>
+        new Promise<string>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+          stream.on('error', reject);
+        }),
+    );
+    expect(text).toContain('attachment-bytes-e2e');
+  } finally {
+    await cleanupSentCopy(subject);
+  }
 });
 
 test('closing compose restores the draft and discard removes it', async ({ page }) => {
   const subject = uniqueName('draft');
-  await composeButton(page).click();
-  const compose = newMessage(page);
-  await compose.getByLabel('Subject').fill(subject);
-  await compose.locator('textarea').fill('draft body stays');
-  await compose.getByRole('button', { name: 'Close', exact: true }).last().click();
-  await expect(compose).toHaveCount(0);
+  try {
+    await composeButton(page).click();
+    const compose = newMessage(page);
+    await compose.getByLabel('Subject').fill(subject);
+    await compose.locator('textarea').fill('draft body stays');
+    await compose.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await expect(compose).toHaveCount(0);
 
-  await composeButton(page).click();
-  const restored = newMessage(page);
-  await expect(restored.getByLabel('Subject')).toHaveValue(subject);
-  await expect(restored.locator('textarea')).toHaveValue(/draft body stays/);
-  // The modal backdrop covers the folder tree. Dock the draft, then open Drafts.
-  await restored.getByRole('button', { name: 'Dock to bottom' }).click();
-  // Docking leaves a region, not a dialog. Discard is on the page.
-  const docked = page.getByRole('region', { name: 'New message' });
-  await expect(docked).toBeVisible();
+    await composeButton(page).click();
+    const restored = newMessage(page);
+    await expect(restored.getByLabel('Subject')).toHaveValue(subject);
+    await expect(restored.locator('textarea')).toHaveValue(/draft body stays/);
+    // The modal backdrop covers the folder tree. Dock the draft, then open Drafts.
+    await restored.getByRole('button', { name: 'Dock to bottom' }).click();
+    // Docking leaves a region, not a dialog. Discard is on the page.
+    const docked = page.getByRole('region', { name: 'New message' });
+    await expect(docked).toBeVisible();
 
-  await openFolder(page, 'Drafts');
-  await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
-    timeout: 30_000,
-  });
+    await openFolder(page, 'Drafts');
+    await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
+      timeout: 30_000,
+    });
 
-  await page.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(docked).toHaveCount(0);
-  await openFolder(page, 'Drafts');
-  await expect(messageRows(page).filter({ hasText: subject })).toHaveCount(0, {
-    timeout: 20_000,
-  });
+    await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(docked).toHaveCount(0);
+    await openFolder(page, 'Drafts');
+    await expect(messageRows(page).filter({ hasText: subject })).toHaveCount(0, {
+      timeout: 20_000,
+    });
+  } finally {
+    await cleanupSubject('Drafts', subject);
+  }
 });
 
 test('a non-address in To does not send', async ({ page }) => {

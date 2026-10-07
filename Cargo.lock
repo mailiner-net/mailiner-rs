@@ -3991,6 +3991,7 @@ dependencies = [
  "flate2",
  "futures",
  "imap-proto",
+ "libc",
  "mail-parser",
  "mailiner-core",
  "mailiner-mime",

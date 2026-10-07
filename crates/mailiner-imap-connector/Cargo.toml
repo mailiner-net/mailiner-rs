@@ -31,6 +31,9 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 mailiner-smtp-connector = { path = "../mailiner-smtp-connector" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.190"
+
 [features]
 # Trust docker/mail/tls/ca.crt (the local Dovecot/Postfix container).
 # Enabled automatically in debug builds; wire this from mailiner-app's

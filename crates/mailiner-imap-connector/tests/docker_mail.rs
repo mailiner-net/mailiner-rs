@@ -1,8 +1,14 @@
+#![cfg(unix)]
 //! Live checks against the docker-mail container.
 //!
 //! Skipped unless `MAILINER_IT=1`. Start the stack first:
 //! `docker compose up --build --wait` from the repo root.
 //! IMAP host on the certificate is `mail`; the published port is 127.0.0.1:993.
+//!
+//! The suite shares the `dev@mailiner.test` mailbox and does not re-seed it.
+//! Tests that append or submit mail expunge those messages when they finish.
+//! Those tests hold one flock so two processes cannot expunge each other.
+//! The suite is Unix-only because of that lock.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -105,6 +111,135 @@ fn mail_container() -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     id
+}
+
+fn unique_subject(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{nanos}-{}", std::process::id())
+}
+
+/// Expunge messages whose Subject contains `subject`. doveadm SUBJECT is a
+/// substring match, so a stable test prefix also removes mail left by a
+/// killed earlier run. `subject` must not be a substring of a seed subject.
+fn expunge_subject(mailbox: &str, subject: &str) {
+    let output = Command::new("docker")
+        .args(["ps", "-q", "--filter", "publish=993"])
+        .output();
+    let Ok(output) = output else {
+        eprintln!("cleanup: docker ps failed; left {mailbox} subject {subject}");
+        return;
+    };
+    let id = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !output.status.success() || id.is_empty() {
+        eprintln!("cleanup: no mail container; left {mailbox} subject {subject}");
+        return;
+    }
+    match Command::new("docker")
+        .args([
+            "exec", &id, "doveadm", "expunge", "-u", USER, "mailbox", mailbox, "subject", subject,
+        ])
+        .output()
+    {
+        Ok(result) if result.status.success() => {}
+        Ok(result) => {
+            let err = String::from_utf8_lossy(&result.stderr);
+            if !err.contains("doesn't exist") {
+                eprintln!("cleanup expunge {mailbox} {subject}: {err}");
+            }
+        }
+        Err(err) => eprintln!("cleanup expunge {mailbox} {subject}: {err}"),
+    }
+}
+
+/// Exclusive lock for tests that expunge by subject prefix.
+///
+/// Prefix expunge also matches another process's in-flight message. `flock`
+/// is released when the holding process exits, including after a hard kill,
+/// so the next run can still remove that leftover.
+struct SharedMailboxLock {
+    file: std::fs::File,
+}
+
+impl SharedMailboxLock {
+    fn acquire() -> Self {
+        use std::os::unix::io::AsRawFd;
+        let path = std::env::temp_dir().join("mailiner-docker-mail-it.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open docker-mail integration lock");
+        let fd = file.as_raw_fd();
+        // SAFETY: `fd` belongs to `file`, which stays open until this guard drops.
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        assert!(
+            rc == 0,
+            "flock docker-mail integration lock: {}",
+            std::io::Error::last_os_error()
+        );
+        Self { file }
+    }
+}
+
+impl Drop for SharedMailboxLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        let fd = self.file.as_raw_fd();
+        // SAFETY: same owned fd as `acquire`. Closing the file releases the lock too.
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
+}
+
+#[test]
+fn shared_mailbox_lock_is_exclusive() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let started = Arc::new(Barrier::new(2));
+    let held = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let started = Arc::clone(&started);
+        let held = Arc::clone(&held);
+        handles.push(thread::spawn(move || {
+            started.wait();
+            let _lock = SharedMailboxLock::acquire();
+            let now = held.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(now, 0, "two holders at once");
+            thread::sleep(Duration::from_millis(80));
+            held.fetch_sub(1, Ordering::SeqCst);
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("lock thread");
+    }
+}
+
+struct SubjectCleanup {
+    mailboxes: &'static [&'static str],
+    /// Stable prefix of this test's subjects. Drop expunges every match,
+    /// including a message whose full subject was lost when a run was killed.
+    prefix: &'static str,
+}
+
+impl Drop for SubjectCleanup {
+    fn drop(&mut self) {
+        for mailbox in self.mailboxes {
+            expunge_subject(mailbox, self.prefix);
+        }
+    }
 }
 
 fn deliver(mailbox: &str, raw: &str) {
@@ -345,7 +480,13 @@ async fn smtp_submit_is_readable_over_imap() {
         eprintln!("skip smtp_submit_is_readable_over_imap: set MAILINER_IT=1");
         return;
     }
-    let subject = format!("it-smtp-{}", std::process::id());
+    // Declared first so it drops after `_cleanup` and the expunge stays inside the lock.
+    let _lock = SharedMailboxLock::acquire();
+    let _cleanup = SubjectCleanup {
+        mailboxes: &["INBOX", "Sent"],
+        prefix: "it-smtp",
+    };
+    let subject = unique_subject("it-smtp");
     let raw = format!(
         "From: Dev User <{USER}>\r\n\
          To: Dev User <{USER}>\r\n\
@@ -419,6 +560,8 @@ async fn idle_reports_a_message_appended_during_the_wait() {
         eprintln!("skip idle_reports_a_message_appended_during_the_wait: set MAILINER_IT=1");
         return;
     }
+    // Declared first so it drops after `_cleanup` and the expunge stays inside the lock.
+    let _lock = SharedMailboxLock::acquire();
     let imap = connect_imap(PASSWORD).await;
     assert!(imap.supports_idle(), "Dovecot should advertise IDLE");
     let inbox = folder(&imap, MailboxRole::Inbox).await;
@@ -431,7 +574,11 @@ async fn idle_reports_a_message_appended_during_the_wait() {
     .await
     .expect("select inbox");
 
-    let subject = format!("it-idle-{}", std::process::id());
+    let _cleanup = SubjectCleanup {
+        mailboxes: &["INBOX"],
+        prefix: "it-idle",
+    };
+    let subject = unique_subject("it-idle");
     let raw = format!(
         "From: Alice Example <alice@example.com>\nTo: Dev User <{USER}>\nSubject: {subject}\n\nidle\n"
     );

@@ -3,6 +3,9 @@
 //! Skipped unless `MAILINER_IT=1`. Start the stack first:
 //! `docker compose up --build --wait` from the repo root.
 //! IMAP host on the certificate is `mail`; the published port is 127.0.0.1:993.
+//!
+//! The suite shares the `dev@mailiner.test` mailbox and does not re-seed it.
+//! Tests that append or submit mail expunge those messages when they finish.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -105,6 +108,64 @@ fn mail_container() -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     id
+}
+
+fn unique_subject(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{nanos}-{}", std::process::id())
+}
+
+/// Expunge messages this test added. `subject` must not be a substring of a
+/// seed subject in `mailbox` (doveadm SUBJECT is a substring match).
+fn expunge_subject(mailbox: &str, subject: &str) {
+    let output = Command::new("docker")
+        .args(["ps", "-q", "--filter", "publish=993"])
+        .output();
+    let Ok(output) = output else {
+        eprintln!("cleanup: docker ps failed; left {mailbox} subject {subject}");
+        return;
+    };
+    let id = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !output.status.success() || id.is_empty() {
+        eprintln!("cleanup: no mail container; left {mailbox} subject {subject}");
+        return;
+    }
+    match Command::new("docker")
+        .args([
+            "exec", &id, "doveadm", "expunge", "-u", USER, "mailbox", mailbox, "subject", subject,
+        ])
+        .output()
+    {
+        Ok(result) if result.status.success() => {}
+        Ok(result) => {
+            let err = String::from_utf8_lossy(&result.stderr);
+            if !err.contains("doesn't exist") {
+                eprintln!("cleanup expunge {mailbox} {subject}: {err}");
+            }
+        }
+        Err(err) => eprintln!("cleanup expunge {mailbox} {subject}: {err}"),
+    }
+}
+
+struct SubjectCleanup {
+    mailboxes: &'static [&'static str],
+    subject: String,
+}
+
+impl Drop for SubjectCleanup {
+    fn drop(&mut self) {
+        for mailbox in self.mailboxes {
+            expunge_subject(mailbox, &self.subject);
+        }
+    }
 }
 
 fn deliver(mailbox: &str, raw: &str) {
@@ -345,7 +406,11 @@ async fn smtp_submit_is_readable_over_imap() {
         eprintln!("skip smtp_submit_is_readable_over_imap: set MAILINER_IT=1");
         return;
     }
-    let subject = format!("it-smtp-{}", std::process::id());
+    let cleanup = SubjectCleanup {
+        mailboxes: &["INBOX", "Sent"],
+        subject: unique_subject("it-smtp"),
+    };
+    let subject = cleanup.subject.as_str();
     let raw = format!(
         "From: Dev User <{USER}>\r\n\
          To: Dev User <{USER}>\r\n\
@@ -431,7 +496,11 @@ async fn idle_reports_a_message_appended_during_the_wait() {
     .await
     .expect("select inbox");
 
-    let subject = format!("it-idle-{}", std::process::id());
+    let cleanup = SubjectCleanup {
+        mailboxes: &["INBOX"],
+        subject: unique_subject("it-idle"),
+    };
+    let subject = cleanup.subject.as_str();
     let raw = format!(
         "From: Alice Example <alice@example.com>\nTo: Dev User <{USER}>\nSubject: {subject}\n\nidle\n"
     );

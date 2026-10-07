@@ -13,6 +13,8 @@ import {
   LIVE_PROXY_URL,
   LIVE_WELCOME_SUBJECT,
   bodyText,
+  cleanupMailbox,
+  cleanupSubject,
   connectThroughWizard,
   createFolder,
   deleteFolder,
@@ -146,25 +148,32 @@ test('a new folder can be created, renamed, and removed', async ({ page }) => {
   await gotoLiveMail(page);
   const name = uniqueName('folder');
   const renamed = `${name}-renamed`;
-  await createFolder(page, name);
+  try {
+    await createFolder(page, name);
 
-  await folderItem(page, name).click({ button: 'right' });
-  acceptNextDialog(page, renamed);
-  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
-  await expect(folderItem(page, renamed)).toBeVisible({ timeout: 20_000 });
+    await folderItem(page, name).click({ button: 'right' });
+    acceptNextDialog(page, renamed);
+    await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+    await expect(folderItem(page, renamed)).toBeVisible({ timeout: 20_000 });
 
-  await folderItem(page, renamed).click({ button: 'right' });
-  await page.getByRole('menuitem', { name: 'Unsubscribe', exact: true }).click();
-  await expect(folderItem(page, renamed)).toHaveCount(0);
+    await folderItem(page, renamed).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Unsubscribe', exact: true }).click();
+    await expect(folderItem(page, renamed)).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Folder subscriptions' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Folder subscriptions' });
-  await dialog.getByLabel('Filter folders').fill(renamed);
-  await dialog.getByLabel(`Subscribe to ${renamed}`).check();
-  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(folderItem(page, renamed)).toBeVisible({ timeout: 20_000 });
+    await page.getByRole('button', { name: 'Folder subscriptions' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Folder subscriptions' });
+    await dialog.getByLabel('Filter folders').fill(renamed);
+    await dialog.getByLabel(`Subscribe to ${renamed}`).check();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(folderItem(page, renamed)).toBeVisible({ timeout: 20_000 });
 
-  await deleteFolder(page, renamed);
+    await deleteFolder(page, renamed);
+  } finally {
+    // Unsubscribe hides the folder from the tree, so a failure there would
+    // leave it on the server. Delete both names even when the UI cannot see them.
+    await cleanupMailbox(renamed);
+    await cleanupMailbox(name);
+  }
 });
 
 test('import .eml appends to the current folder', async ({ page }) => {
@@ -181,7 +190,7 @@ test('import .eml appends to the current folder', async ({ page }) => {
     await page.getByRole('option', { name: /no subject|Quiet Sender/ }).first().click();
     await expect.poll(async () => bodyText(page)).toContain('deliberately has no Subject');
   } finally {
-    await deleteFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });
 
@@ -238,92 +247,117 @@ test('print opens a document with the subject and body', async ({ page }) => {
 test('a saved filter moves a matching message when the folder is opened', async ({ page }) => {
   await seedLiveAccount(page);
   await gotoLiveMail(page);
+  const folder = uniqueName('filt');
   const subject = uniqueName('filter');
   const other = uniqueName('keep');
-  await deliverRaw('INBOX', simpleMessage('Ada Lovelace <ada@example.com>', subject, 'move me'));
-  await deliverRaw('INBOX', simpleMessage('Ada Lovelace <ada@example.com>', other, 'leave me'));
+  try {
+    await createFolder(page, folder);
+    await deliverRaw('INBOX', simpleMessage('Ada Lovelace <ada@example.com>', subject, 'move me'));
+    await deliverRaw('INBOX', simpleMessage('Ada Lovelace <ada@example.com>', other, 'leave me'));
 
-  await page.getByRole('link', { name: 'Settings' }).click();
-  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Add filter' }).click();
-  await page.locator('#settings-filter-name').fill(subject);
-  await page.getByLabel('Subject contains').fill(subject);
-  await page.getByLabel('Move to folder').selectOption({ label: 'Archive' });
-  await page.getByLabel('Mark as read').check();
-  await page.getByRole('button', { name: 'Add filter', exact: true }).last().click();
-  await expect(page.getByText(subject).first()).toBeVisible();
+    await page.getByRole('link', { name: 'Settings' }).click();
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Add filter' }).click();
+    await page.locator('#settings-filter-name').fill(subject);
+    await page.getByLabel('Subject contains').fill(subject);
+    await page.getByLabel('Move to folder').selectOption({ label: folder });
+    await page.getByLabel('Mark as read').check();
+    await page.getByRole('button', { name: 'Add filter', exact: true }).last().click();
+    await expect(page.getByText(subject).first()).toBeVisible();
 
-  await page.getByRole('link', { name: 'Back to mail' }).click();
-  await expect(composeButton(page)).toBeVisible();
-  await openFolder(page, /Inbox/);
-  await expect(page.getByText(/Filed \d+ message/)).toBeVisible({ timeout: 30_000 });
-  await openFolder(page, 'Archive');
-  await openSubject(page, subject);
-  await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible();
+    await page.getByRole('link', { name: 'Back to mail' }).click();
+    await expect(composeButton(page)).toBeVisible();
+    await openFolder(page, /Inbox/);
+    await expect(page.getByText(/Filed \d+ message/)).toBeVisible({ timeout: 30_000 });
+    await openFolder(page, folder);
+    await openSubject(page, subject);
+    await expect(page.getByRole('button', { name: 'Mark unread' })).toBeVisible();
 
-  await openFolder(page, /Inbox/);
-  await openSubject(page, other);
-  await expect.poll(async () => bodyText(page)).toContain('leave me');
+    await openFolder(page, /Inbox/);
+    await openSubject(page, other);
+    await expect.poll(async () => bodyText(page)).toContain('leave me');
+  } finally {
+    await cleanupSubject('INBOX', subject);
+    await cleanupSubject('INBOX', other);
+    await cleanupMailbox(folder);
+  }
 });
 
 test('vacation sends one reply and does not send a second', async ({ page }) => {
   await seedLiveAccount(page);
   await gotoLiveMail(page);
   const subject = uniqueName('vacation');
-  await gotoPath(page, '/settings');
-  const vacation = page.locator('.settings-section', { hasText: 'Vacation' });
-  await vacation.locator('#settings-vacation-subject').fill(subject);
-  await vacation.locator('#settings-vacation-body').fill('Away for e2e.');
-  await vacation.getByRole('checkbox', { name: 'Enabled' }).check();
-  await expect(page.getByText('Vacation settings saved.')).toBeVisible();
+  const firstInbound = uniqueName('from-vac');
+  const secondInbound = uniqueName('from-vac-2');
+  try {
+    await gotoPath(page, '/settings');
+    const vacation = page.locator('.settings-section', { hasText: 'Vacation' });
+    await vacation.locator('#settings-vacation-subject').fill(subject);
+    await vacation.locator('#settings-vacation-body').fill('Away for e2e.');
+    await vacation.getByRole('checkbox', { name: 'Enabled' }).check();
+    await expect(page.getByText('Vacation settings saved.')).toBeVisible();
 
-  await gotoPath(page, '/');
-  await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 45_000 });
-  // Dateless mail is stamped "now" on every FETCH, so other unread senders on
-  // the first page can each get one reply. Count stability is for this sender.
-  const sender = `Vacation Sender <vacation-${subject}@example.com>`;
-  const sentRows = () => messageRows(page).filter({ hasText: subject });
-  await deliverRaw('INBOX', simpleMessage(sender, uniqueName('from-vac'), 'ping'));
-  await openFolder(page, /Inbox/);
-  await openFolder(page, 'Sent');
-  await expect(sentRows().first()).toBeVisible({ timeout: 40_000 });
-  // Opening the inbox replies to every new sender on the first page. Those
-  // copies reach Sent after the folder list is already on screen, so sample
-  // only once the count has stopped growing.
-  let previous = -1;
-  let firstCount = 0;
-  await expect
-    .poll(
-      async () => {
-        const count = await sentRows().count();
-        const stable = count > 0 && count === previous;
-        previous = count;
-        if (stable) {
-          firstCount = count;
-        }
-        return stable;
-      },
-      { timeout: 20_000, intervals: [2_000] },
-    )
-    .toBe(true);
+    await gotoPath(page, '/');
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 45_000 });
+    // Dateless mail is stamped "now" on every FETCH, so other unread senders on
+    // the first page can each get one reply. Count stability is for this sender.
+    const sender = `Vacation Sender <vacation-${subject}@example.com>`;
+    const sentRows = () => messageRows(page).filter({ hasText: subject });
+    await deliverRaw('INBOX', simpleMessage(sender, firstInbound, 'ping'));
+    await openFolder(page, /Inbox/);
+    await openFolder(page, 'Sent');
+    await expect(sentRows().first()).toBeVisible({ timeout: 40_000 });
+    // Opening the inbox replies to every new sender on the first page. Those
+    // copies reach Sent after the folder list is already on screen, so sample
+    // only once the count has stopped growing.
+    let previous = -1;
+    let firstCount = 0;
+    await expect
+      .poll(
+        async () => {
+          const count = await sentRows().count();
+          const stable = count > 0 && count === previous;
+          previous = count;
+          if (stable) {
+            firstCount = count;
+          }
+          return stable;
+        },
+        { timeout: 20_000, intervals: [2_000] },
+      )
+      .toBe(true);
 
-  await deliverRaw('INBOX', simpleMessage(sender, uniqueName('from-vac-2'), 'ping again'));
-  await openFolder(page, /Inbox/);
-  await openFolder(page, 'Sent');
-  await expect(sentRows()).toHaveCount(firstCount, { timeout: 20_000 });
-  await page.waitForTimeout(1_500);
-  await expect(sentRows()).toHaveCount(firstCount);
+    await deliverRaw('INBOX', simpleMessage(sender, secondInbound, 'ping again'));
+    await openFolder(page, /Inbox/);
+    await openFolder(page, 'Sent');
+    await expect(sentRows()).toHaveCount(firstCount, { timeout: 20_000 });
+    await page.waitForTimeout(1_500);
+    await expect(sentRows()).toHaveCount(firstCount);
+  } finally {
+    await cleanupSubject('INBOX', firstInbound);
+    await cleanupSubject('INBOX', secondInbound);
+    // Postfix rewrites every recipient to this account, so each auto-reply
+    // is delivered to Inbox as well as appended to Sent.
+    await cleanupSubject('INBOX', subject);
+    await cleanupSubject('Sent', subject);
+  }
 });
 
 test('mail delivered while the folder is open shows up on its own', async ({ page }) => {
   await seedLiveAccount(page);
   await gotoLiveMail(page);
-  await openFolder(page, /Inbox/);
+  const folder = uniqueName('idlebox');
   const subject = uniqueName('idle');
-  await deliverRaw('INBOX', simpleMessage('Ada Lovelace <ada@example.com>', subject, 'arrived live'));
-  await expect(page.getByRole('option', { name: new RegExp(subject) }).first()).toBeVisible({
-    timeout: 40_000,
-  });
+  try {
+    await createFolder(page, folder);
+    await openFolder(page, folder);
+    await deliverRaw(folder, simpleMessage('Ada Lovelace <ada@example.com>', subject, 'arrived live'));
+    await expect(page.getByRole('option', { name: new RegExp(subject) }).first()).toBeVisible({
+      timeout: 40_000,
+    });
+  } finally {
+    await cleanupMailbox(folder);
+  }
 });
 
 test('going offline and Retry recover the session', async ({ page }) => {

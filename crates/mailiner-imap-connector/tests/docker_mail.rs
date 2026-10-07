@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Live checks against the docker-mail container.
 //!
 //! Skipped unless `MAILINER_IT=1`. Start the stack first:
@@ -7,6 +8,7 @@
 //! The suite shares the `dev@mailiner.test` mailbox and does not re-seed it.
 //! Tests that append or submit mail expunge those messages when they finish.
 //! Those tests hold one flock so two processes cannot expunge each other.
+//! The suite is Unix-only because of that lock.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;

@@ -235,6 +235,55 @@ test('the phone compose sheet can be filled and closed', async ({ page }) => {
   await expect(page.getByRole('treeitem', { name: /Inbox/ })).toBeVisible();
 });
 
+/** Same-origin script and WASM pathnames this document has already requested. */
+async function loadedShellAssetPaths(page: import('@playwright/test').Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const workerPaths = new Set();
+    const regs = await navigator.serviceWorker.getRegistrations();
+    for (const reg of regs) {
+      for (const worker of [reg.active, reg.waiting, reg.installing]) {
+        if (worker) workerPaths.add(new URL(worker.scriptURL).pathname);
+      }
+    }
+
+    const paths = new Set();
+    const add = (raw: string) => {
+      const url = new URL(raw, location.href);
+      if (url.origin !== location.origin) return;
+      if (!/\.(?:js|wasm)$/.test(url.pathname)) return;
+      // The worker script is fetched by registration, not by the page's
+      // controlled `fetch` handler, so it is not stored in Cache Storage.
+      if (workerPaths.has(url.pathname)) return;
+      paths.add(url.pathname);
+    };
+
+    for (const script of document.scripts) {
+      if (script.src) add(script.src);
+    }
+    for (const entry of performance.getEntriesByType('resource')) {
+      add(entry.name);
+    }
+    return [...paths];
+  });
+}
+
+/** Loaded shell paths that are not yet keys in any Cache Storage cache. */
+async function shellAssetsMissing(
+  page: import('@playwright/test').Page,
+  paths: string[],
+): Promise<string[]> {
+  return page.evaluate(async (paths) => {
+    const cached = new Set();
+    for (const name of await caches.keys()) {
+      const cache = await caches.open(name);
+      for (const request of await cache.keys()) {
+        cached.add(new URL(request.url).pathname);
+      }
+    }
+    return paths.filter((path) => !cached.has(path));
+  }, paths);
+}
+
 test('going offline still paints the shell', async ({ page }) => {
   await gotoPath(page);
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
@@ -247,9 +296,14 @@ test('going offline still paints the shell', async ({ page }) => {
     )
     .toBe(true);
   // The first navigation may have finished before the worker claimed the page.
-  // Reload once online so the worker caches the shell, then reload offline.
+  // Reload once online so the worker caches the shell. `cache.put` is not
+  // awaited, so the heading can paint before those responses are stored.
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
+  const shellAssets = await loadedShellAssetPaths(page);
+  expect(shellAssets.some((path) => path.endsWith('.js'))).toBe(true);
+  expect(shellAssets.some((path) => path.endsWith('.wasm'))).toBe(true);
+  await expect.poll(() => shellAssetsMissing(page, shellAssets)).toEqual([]);
   await page.context().setOffline(true);
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();

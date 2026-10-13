@@ -1,0 +1,21 @@
+e2e/tests/live-01-render.spec.ts
+  s_4a7eb1286b9ff5::t_088e4cd59157f6 154,156-158
+  s_4a7eb1286b9ff5::t_a13fa80c79e313 24-45
+  s_4a7eb1286b9ff5::t_4410bd5a75d841 126,129-130,132-134,137-139,141-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9829717c90e9a234c00b6eabf11d817dc7b4a8b2",
+  "prompts": {},
+  "sessions": {
+    "s_4a7eb1286b9ff5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a136c6-ee65-7cd2-8c09-361b49c7844f",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

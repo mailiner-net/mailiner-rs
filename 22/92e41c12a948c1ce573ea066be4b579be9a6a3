@@ -1,0 +1,19 @@
+e2e/tests/mailbox.spec.ts
+  s_bcdae90d00b897::t_2cfc8e1f75a14a 232-234
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2292e41c12a948c1ce573ea066be4b579be9a6a3",
+  "prompts": {},
+  "sessions": {
+    "s_bcdae90d00b897": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a136ac-6628-7da1-bc5a-bdee06ba2673",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

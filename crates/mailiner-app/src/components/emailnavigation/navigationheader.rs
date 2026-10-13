@@ -376,42 +376,45 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
             }
 
             if props.mode == Mode::MailboxTreeView {
-                if let Some(account_id) = current_account_id.clone() {
-                    button {
-                        class: "folder-new",
-                        title: crate::i18n::t("folder.new"),
-                        aria_label: crate::i18n::t("folder.new"),
-                        onclick: move |_| {
-                            let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
-                                return;
-                            };
-                            core_tx.send(CoreEvent::CreateFolder {
-                                account_id: account_id.clone(),
-                                parent_id: None,
-                                name,
-                            });
-                        },
-                        {crate::i18n::t("folder.new")}
+                div {
+                    class: "pane-header-actions",
+                    if let Some(account_id) = current_account_id.clone() {
+                        button {
+                            class: "folder-new",
+                            title: crate::i18n::t("folder.new"),
+                            aria_label: crate::i18n::t("folder.new"),
+                            onclick: move |_| {
+                                let Some(name) = prompt_folder_name(&crate::i18n::t("folder.new_name"), "") else {
+                                    return;
+                                };
+                                core_tx.send(CoreEvent::CreateFolder {
+                                    account_id: account_id.clone(),
+                                    parent_id: None,
+                                    name,
+                                });
+                            },
+                            {crate::i18n::t("folder.new")}
+                        }
                     }
-                }
-                ThemeSelect { class: "theme-select pane-header-theme", }
-                button {
-                    class: "folder-subscribe-btn",
-                    title: crate::i18n::t("nav.subscriptions_title"),
-                    aria_label: crate::i18n::t("nav.subscriptions"),
-                    onclick: move |_| {
-                        folder_subscribe_open.set(true);
-                    },
-                    {crate::i18n::t("nav.subscriptions")}
-                }
-                Link {
-                    to: Route::SettingsView {},
-                    class: "pane-header-settings",
-                    title: crate::i18n::t("nav.settings"),
-                    aria_label: crate::i18n::t("nav.settings"),
-                    Icon {
-                        size: 22,
-                        icon: IconKind::Cog6Tooth,
+                    ThemeSelect { class: "theme-select pane-header-theme", }
+                    button {
+                        class: "folder-subscribe-btn",
+                        title: crate::i18n::t("nav.subscriptions_title"),
+                        aria_label: crate::i18n::t("nav.subscriptions"),
+                        onclick: move |_| {
+                            folder_subscribe_open.set(true);
+                        },
+                        {crate::i18n::t("nav.subscriptions")}
+                    }
+                    Link {
+                        to: Route::SettingsView {},
+                        class: "pane-header-settings",
+                        title: crate::i18n::t("nav.settings"),
+                        aria_label: crate::i18n::t("nav.settings"),
+                        Icon {
+                            size: 22,
+                            icon: IconKind::Cog6Tooth,
+                        }
                     }
                 }
             }

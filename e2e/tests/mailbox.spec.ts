@@ -229,7 +229,9 @@ async function expectFolderHeaderFits(
   await expect(actions).toBeVisible();
 
   const titleBox = await boxInside(title);
-  expect(titleBox.clientWidth, JSON.stringify(titleBox)).toBeGreaterThanOrEqual(72);
+  // 5rem at the default 16px root font. A lower floor would hide a regression
+  // of the account-title minimum.
+  expect(titleBox.clientWidth, JSON.stringify(titleBox)).toBeGreaterThanOrEqual(80);
   if (options.fullTitle) {
     expect(titleBox.textFits, JSON.stringify(titleBox)).toBe(true);
   }

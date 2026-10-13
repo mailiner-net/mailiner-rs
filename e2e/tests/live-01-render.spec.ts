@@ -21,6 +21,28 @@ async function expectBody(page: import('@playwright/test').Page, text: string) {
   await expect.poll(async () => bodyText(page), { timeout: 20_000 }).toContain(text);
 }
 
+/** Remote subresources in `docker/mail/seed/06-html-remote-image.eml`. */
+const FIXTURE_REMOTE_URLS = [
+  'https://example.net/tracker.png',
+  'https://example.net/bg.png',
+] as const;
+
+function watchFixtureRemote(page: import('@playwright/test').Page) {
+  const hits: string[] = [];
+  page.on('request', (req) => {
+    const url = req.url();
+    if (FIXTURE_REMOTE_URLS.some((needle) => url.includes(needle))) {
+      hits.push(url);
+    }
+  });
+  return {
+    /** Fixture URLs that have been requested, in fixture order. */
+    seen() {
+      return FIXTURE_REMOTE_URLS.filter((needle) => hits.some((url) => url.includes(needle)));
+    },
+  };
+}
+
 test('HTML-only announcement renders the HTML part', async ({ page }) => {
   await openSubject(page, 'HTML-only announcement');
   await expectBody(page, 'HTML only');
@@ -101,21 +123,25 @@ test('an inline CID image is rehydrated', async ({ page }) => {
 });
 
 test('remote images stay blocked until Allow', async ({ page }) => {
-  const hits: string[] = [];
-  page.on('request', (req) => {
-    if (req.url().includes('example.net/tracker.png')) {
-      hits.push(req.url());
-    }
-  });
+  const remote = watchFixtureRemote(page);
   await openSubject(page, 'Remote image should stay blocked');
   await expect(page.getByText('remote resources (images, styles) were blocked')).toBeVisible();
-  expect(hits).toEqual([]);
+  await expectBody(page, 'Styled with a remote background.');
+  expect(remote.seen()).toEqual([]);
   const blocked = await bodyHtml(page);
-  expect(blocked).not.toContain('https://example.net/tracker.png');
+  for (const url of FIXTURE_REMOTE_URLS) {
+    expect(blocked).not.toContain(url);
+  }
 
   await page.getByRole('button', { name: 'Allow', exact: true }).click();
-  await expect.poll(() => hits.length, { timeout: 15_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(() => remote.seen(), { timeout: 15_000 })
+    .toEqual([...FIXTURE_REMOTE_URLS]);
   await expect(page.getByText('Remote resources are shown for this message.')).toBeVisible();
+  const allowed = await bodyHtml(page);
+  for (const url of FIXTURE_REMOTE_URLS) {
+    expect(allowed).toContain(url);
+  }
 });
 
 test('always-allow is scoped to the sender and persists', async ({ page }) => {
@@ -125,14 +151,11 @@ test('always-allow is scoped to the sender and persists', async ({ page }) => {
 
   await page.reload();
   await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 45_000 });
-  const hits: string[] = [];
-  page.on('request', (req) => {
-    if (req.url().includes('example.net/tracker.png')) {
-      hits.push(req.url());
-    }
-  });
+  const remote = watchFixtureRemote(page);
   await openSubject(page, 'Remote image should stay blocked');
-  await expect.poll(() => hits.length, { timeout: 15_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(() => remote.seen(), { timeout: 15_000 })
+    .toEqual([...FIXTURE_REMOTE_URLS]);
   await expect(page.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0);
 
   await openSubject(page, 'HTML-only announcement');

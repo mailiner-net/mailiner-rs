@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { acceptNextDialog, pressShortcut } from './helpers';
 import {
   LIVE_WELCOME_SUBJECT,
+  cleanupMailbox,
+  cleanupSubject,
   copySelectionTo,
   createFolder,
-  deleteFolder,
   deliverRaw,
   gotoLiveMail,
+  mailboxHasSubject,
   messageRows,
   moveSelectionTo,
   openFolder,
@@ -15,6 +17,7 @@ import {
   searchFolder,
   seedLiveAccount,
   seedPrivateCopy,
+  seedPrivateMessage,
   simpleMessage,
   uniqueName,
 } from './live-helpers';
@@ -25,10 +28,6 @@ test.beforeEach(async ({ page }) => {
   await seedLiveAccount(page);
   await gotoLiveMail(page);
 });
-
-async function cleanupFolder(page: Page, name: string) {
-  await deleteFolder(page, name).catch(() => undefined);
-}
 
 test('copy leaves the original in place', async ({ page }) => {
   const folder = uniqueName('copy');
@@ -47,7 +46,7 @@ test('copy leaves the original in place', async ({ page }) => {
     await openFolder(page, folder);
     await openSubject(page, LIVE_WELCOME_SUBJECT);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });
 
@@ -69,8 +68,8 @@ test('move removes the message from the source folder', async ({ page }) => {
     await openFolder(page, dest);
     await openSubject(page, LIVE_WELCOME_SUBJECT);
   } finally {
-    await cleanupFolder(page, dest);
-    await cleanupFolder(page, source);
+    await cleanupMailbox(dest);
+    await cleanupMailbox(source);
   }
 });
 
@@ -89,45 +88,50 @@ test('undo puts a moved message back', async ({ page }) => {
     await openFolder(page, dest);
     await expect(page.getByText('No messages', { exact: true })).toBeVisible({ timeout: 20_000 });
   } finally {
-    await cleanupFolder(page, dest);
-    await cleanupFolder(page, source);
+    await cleanupMailbox(dest);
+    await cleanupMailbox(source);
   }
 });
 
 test('archive files the copy in Archive', async ({ page }) => {
   const folder = uniqueName('arch');
+  const subject = uniqueName('archmsg');
   try {
-    await seedPrivateCopy(page, folder, 'Base64-encoded plain text');
+    await seedPrivateMessage(page, folder, subject, 'archive me');
     await page.getByRole('button', { name: 'Archive', exact: true }).click();
     await expect(page.getByText('Moved to Archive', { exact: true })).toBeVisible({
       timeout: 20_000,
     });
     await openFolder(page, 'Archive');
-    await openSubject(page, 'Base64-encoded plain text');
+    await openSubject(page, subject);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupSubject('Archive', subject);
+    await cleanupMailbox(folder);
   }
 });
 
 test('junk files the copy in Junk', async ({ page }) => {
   const folder = uniqueName('junk');
+  const subject = uniqueName('junkmsg');
   try {
-    await seedPrivateCopy(page, folder, 'Base64-encoded plain text');
+    await seedPrivateMessage(page, folder, subject, 'junk me');
     await page.getByRole('button', { name: 'Junk', exact: true }).click();
     await expect(page.getByText('Moved to Junk', { exact: true })).toBeVisible({
       timeout: 20_000,
     });
     await openFolder(page, 'Junk');
-    await openSubject(page, 'Base64-encoded plain text');
+    await openSubject(page, subject);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupSubject('Junk', subject);
+    await cleanupMailbox(folder);
   }
 });
 
 test('trash files the copy in Trash and leaves the inbox seed', async ({ page }) => {
   const folder = uniqueName('trash');
+  const subject = uniqueName('trashmsg');
   try {
-    await seedPrivateCopy(page, folder, LIVE_WELCOME_SUBJECT);
+    await seedPrivateMessage(page, folder, subject, 'trash me');
     await page.getByRole('button', { name: 'Trash', exact: true }).click();
     await expect(page.getByText('Moved to Trash')).toBeVisible({ timeout: 20_000 });
     await openFolder(page, /Inbox/);
@@ -136,27 +140,30 @@ test('trash files the copy in Trash and leaves the inbox seed', async ({ page })
       timeout: 20_000,
     });
     await openFolder(page, 'Trash');
-    await openSubject(page, LIVE_WELCOME_SUBJECT);
+    await openSubject(page, subject);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupSubject('Trash', subject);
+    await cleanupMailbox(folder);
   }
 });
 
 test('permanent delete removes the copy from Trash', async ({ page }) => {
   const folder = uniqueName('perm');
+  const subject = uniqueName('permmsg');
   try {
-    await seedPrivateCopy(page, folder, 'HTML-only announcement');
+    await seedPrivateMessage(page, folder, subject, 'delete me');
     await page.getByRole('button', { name: 'Trash', exact: true }).click();
     await expect(page.getByText('Moved to Trash')).toBeVisible({ timeout: 20_000 });
     await openFolder(page, 'Trash');
-    await openSubject(page, 'HTML-only announcement');
+    await openSubject(page, subject);
     acceptNextDialog(page);
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(page.getByText('Deleted')).toBeVisible({ timeout: 20_000 });
-    await searchFolder(page, 'HTML-only announcement');
-    await expect(page.getByRole('option', { name: /HTML-only announcement/ })).toHaveCount(0);
+    await searchFolder(page, subject);
+    await expect(page.getByRole('option', { name: new RegExp(subject) })).toHaveCount(0);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupSubject('Trash', subject);
+    await cleanupMailbox(folder);
   }
 });
 
@@ -187,7 +194,16 @@ test('empty Trash deletes everything in Trash, including the seed', async ({ pag
     await expect(page.getByText('No messages')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole('option', { name: /Already in Trash/ })).toHaveCount(0);
   } finally {
-    await deliverRaw('Trash', readFileSync('docker/mail/seed/trashed.eml', 'utf8')).catch(() => undefined);
+    // Empty Trash clears the shared mailbox, including the seed. Put the seed
+    // back only when it is gone, so a failure before Empty does not duplicate it.
+    await cleanupSubject('INBOX', subject);
+    await cleanupSubject('Trash', subject);
+    const seeded = await mailboxHasSubject('Trash', 'Already in Trash').catch(() => false);
+    if (!seeded) {
+      await deliverRaw('Trash', readFileSync('docker/mail/seed/trashed.eml', 'utf8')).catch(
+        () => undefined,
+      );
+    }
   }
 });
 
@@ -220,7 +236,7 @@ test('star, flag, and pin survive a folder change and a reload', async ({ page }
     await expect(after.getByRole('button', { name: 'Unflag' })).toBeVisible();
     await expect(after.getByRole('button', { name: 'Unpin' })).toBeVisible();
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });
 
@@ -232,7 +248,7 @@ test('mark unread sets the row back to unread', async ({ page }) => {
     await expect(page.locator('.message-list-item.unread').first()).toBeVisible();
     await expect(page.getByRole('treeitem', { name: new RegExp(`${folder}, \\d+ unread`) })).toBeVisible();
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });
 
@@ -245,33 +261,37 @@ test('snooze hides the copy', async ({ page }) => {
     await expect(page.getByText(/Snoozed until/)).toBeVisible();
     await expect(page.getByRole('option', { name: /Welcome to Mailiner/ })).toHaveCount(0);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });
 
 test('star, flag, archive, and trash fire from the keyboard', async ({ page }) => {
   const folder = uniqueName('keys');
+  const archived = uniqueName('keys-arch');
+  const trashed = uniqueName('keys-trash');
   try {
-    await seedPrivateCopy(page, folder, LIVE_WELCOME_SUBJECT);
+    await seedPrivateMessage(page, folder, archived, 'archive from the keyboard');
     await pressShortcut(page, 's');
     await expect(
-      page.getByRole('option', { name: /Welcome to Mailiner/ }).first().getByRole('button', { name: 'Unstar' }),
+      page.getByRole('option', { name: new RegExp(archived) }).first().getByRole('button', { name: 'Unstar' }),
     ).toBeVisible();
     await pressShortcut(page, 'i');
     await expect(
-      page.getByRole('option', { name: /Welcome to Mailiner/ }).first().getByRole('button', { name: 'Unflag' }),
+      page.getByRole('option', { name: new RegExp(archived) }).first().getByRole('button', { name: 'Unflag' }),
     ).toBeVisible();
     await pressShortcut(page, 'e');
     await expect(page.getByText('Moved to Archive', { exact: true })).toBeVisible({
       timeout: 20_000,
     });
 
-    await seedPrivateCopy(page, `${folder}-del`, 'Meeting notes');
+    await seedPrivateMessage(page, `${folder}-del`, trashed, 'trash from the keyboard');
     await pressShortcut(page, 'Delete');
     await expect(page.getByText('Moved to Trash')).toBeVisible({ timeout: 20_000 });
   } finally {
-    await cleanupFolder(page, folder);
-    await cleanupFolder(page, `${folder}-del`);
+    await cleanupSubject('Archive', archived);
+    await cleanupSubject('Trash', trashed);
+    await cleanupMailbox(folder);
+    await cleanupMailbox(`${folder}-del`);
   }
 });
 
@@ -301,8 +321,8 @@ test('a multi-selection moves every selected row', async ({ page }) => {
     });
     await expect(page.getByRole('option', { name: /Sanitizer bait/ })).toBeVisible();
   } finally {
-    await cleanupFolder(page, dest);
-    await cleanupFolder(page, source);
+    await cleanupMailbox(dest);
+    await cleanupMailbox(source);
   }
 });
 
@@ -323,6 +343,6 @@ test('select-all plus mark read clears the unread count', async ({ page }) => {
     await expect(page.locator('#message-list-scroll .message-list-item.unread')).toHaveCount(0);
     await expect(page.locator('#message-list-scroll .message-list-item')).toHaveCount(2);
   } finally {
-    await cleanupFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });

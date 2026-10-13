@@ -248,7 +248,8 @@ export async function moveSelectionTo(page: Page, folder: string) {
 
 /**
  * Copy `sourceSubject` from Inbox into a new folder and open the copy.
- * `cleanup` deletes the folder when the test still can (the copy may have been moved).
+ * The caller deletes `folder` afterward. Do not use this when the copy is
+ * moved into a shared mailbox: the copy keeps the seed subject.
  */
 export async function seedPrivateCopy(page: Page, folder: string, sourceSubject: string) {
   await createFolder(page, folder);
@@ -257,6 +258,21 @@ export async function seedPrivateCopy(page: Page, folder: string, sourceSubject:
   await copySelectionTo(page, folder);
   await openFolder(page, folder);
   await openSubject(page, sourceSubject);
+}
+
+/**
+ * Append a new message into a new folder and open it.
+ * `subject` stays unique so a later move into Archive, Junk, or Trash can be
+ * expunged without matching a seed.
+ */
+export async function seedPrivateMessage(page: Page, folder: string, subject: string, body = 'e2e') {
+  await createFolder(page, folder);
+  await deliverRaw(
+    folder,
+    simpleMessage('Ada Lovelace <ada-e2e@example.com>', subject, body),
+  );
+  await openFolder(page, folder);
+  await openSubject(page, subject);
 }
 
 let folderSeq = 0;
@@ -341,6 +357,102 @@ export function simpleMessage(from: string, subject: string, body: string) {
     body,
     '',
   ].join('\n');
+}
+
+function doveadm(args: string[]): Promise<string> {
+  return mailContainerId().then(
+    (id) =>
+      new Promise((resolve, reject) => {
+        const child = spawn('docker', ['exec', id, 'doveadm', ...args], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        let err = '';
+        child.stdout.on('data', (chunk) => {
+          out += String(chunk);
+        });
+        child.stderr.on('data', (chunk) => {
+          err += String(chunk);
+        });
+        child.on('error', reject);
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve(out);
+          } else {
+            reject(new Error(`doveadm ${args[0]} exited ${code}: ${err || out}`));
+          }
+        });
+      }),
+  );
+}
+
+function ignoredCleanupError(err: unknown): boolean {
+  return String(err).includes("doesn't exist");
+}
+
+const SHARED_MAILBOXES = new Set([
+  'INBOX',
+  'Inbox',
+  'Sent',
+  'Drafts',
+  'Trash',
+  'Junk',
+  'Archive',
+]);
+
+/**
+ * Delete a private folder created by a test, including one the UI cannot see
+ * (unsubscribed, or the page is no longer on mail). Already-gone is success.
+ * Shared special-use mailboxes are refused.
+ */
+export async function cleanupMailbox(name: string): Promise<void> {
+  if (SHARED_MAILBOXES.has(name)) {
+    throw new Error(`refusing to delete shared mailbox ${name}`);
+  }
+  try {
+    await doveadm(['mailbox', 'delete', '-u', LIVE_ACCOUNT_EMAIL, '-s', name]);
+  } catch (err) {
+    if (!ignoredCleanupError(err)) {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Expunge messages whose Subject contains `subject` from one mailbox.
+ * doveadm's SUBJECT query is a substring match, so `subject` must not be a
+ * substring of a seed subject in that mailbox. A missing message is success.
+ */
+export async function cleanupSubject(mailbox: string, subject: string): Promise<void> {
+  try {
+    await doveadm([
+      'expunge',
+      '-u',
+      LIVE_ACCOUNT_EMAIL,
+      'mailbox',
+      mailbox,
+      'subject',
+      subject,
+    ]);
+  } catch (err) {
+    if (!ignoredCleanupError(err)) {
+      throw err;
+    }
+  }
+}
+
+/** True when the mailbox has a message whose Subject contains `subject`. */
+export async function mailboxHasSubject(mailbox: string, subject: string): Promise<boolean> {
+  const out = await doveadm([
+    'search',
+    '-u',
+    LIVE_ACCOUNT_EMAIL,
+    'mailbox',
+    mailbox,
+    'subject',
+    subject,
+  ]);
+  return out.trim().length > 0;
 }
 
 export type WizardOptions = {

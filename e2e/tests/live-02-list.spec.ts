@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { pressShortcut } from './helpers';
 import {
+  cleanupMailbox,
+  cleanupSubject,
   createFolder,
-  deleteFolder,
   deliverRaw,
   gotoLiveMail,
   messageIndex,
@@ -24,21 +25,29 @@ test.beforeEach(async ({ page }) => {
 
 test('unread hides mail the seed already marked seen', async ({ page }) => {
   const subject = uniqueName('unseen');
-  await deliverRaw(
-    'INBOX',
-    simpleMessage('Unread Sender <unread-e2e@example.com>', subject, 'still new'),
-  );
-  await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
-    timeout: 40_000,
-  });
-  await page.getByRole('button', { name: 'Show unread messages' }).click();
-  await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect(messageRows(page).filter({ hasText: 'Welcome to Mailiner' })).toHaveCount(0);
-  await expect(messageRows(page).filter({ hasText: 'HTML-only announcement' })).toHaveCount(0);
-  await expect(messageRows(page).filter({ hasText: 'Meeting notes' })).toHaveCount(0);
-  await expect(page.locator('#message-list-scroll .message-list-item:not(.unread)')).toHaveCount(0);
+  try {
+    await deliverRaw(
+      'INBOX',
+      simpleMessage('Unread Sender <unread-e2e@example.com>', subject, 'still new'),
+    );
+    // The folder is already open. Select it again so the append is in the
+    // fetch, including when older mail fills the list.
+    await openFolder(page, 'Sent');
+    await openFolder(page, /Inbox/);
+    await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
+      timeout: 40_000,
+    });
+    await page.getByRole('button', { name: 'Show unread messages' }).click();
+    await expect(messageRows(page).filter({ hasText: subject }).first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(messageRows(page).filter({ hasText: 'Welcome to Mailiner' })).toHaveCount(0);
+    await expect(messageRows(page).filter({ hasText: 'HTML-only announcement' })).toHaveCount(0);
+    await expect(messageRows(page).filter({ hasText: 'Meeting notes' })).toHaveCount(0);
+    await expect(page.locator('#message-list-scroll .message-list-item:not(.unread)')).toHaveCount(0);
+  } finally {
+    await cleanupSubject('INBOX', subject);
+  }
 });
 
 test('search finds a decoded subject and clears back to the list', async ({ page }) => {
@@ -61,16 +70,20 @@ test('a search with no hit shows the empty state', async ({ page }) => {
 
 test('unread-first sort lifts an unseen row above the welcome message', async ({ page }) => {
   const subject = uniqueName('oldunread');
-  // Older than the seed, so date order keeps it below Welcome. Unread-first does not.
-  const raw = simpleMessage('Old Unread <old-unread@example.com>', subject, 'from 1998').replace(
-    'MIME-Version: 1.0',
-    'Date: Thu, 01 Jan 1998 00:00:00 +0000\nMIME-Version: 1.0',
-  );
-  await deliverRaw('INBOX', raw);
-  await page.getByLabel('Sort messages').selectOption('unread');
-  const unseen = await messageIndex(page, new RegExp(subject));
-  const welcome = await messageIndex(page, /Welcome to Mailiner/);
-  expect(unseen).toBeLessThan(welcome);
+  try {
+    // Older than the seed, so date order keeps it below Welcome. Unread-first does not.
+    const raw = simpleMessage('Old Unread <old-unread@example.com>', subject, 'from 1998').replace(
+      'MIME-Version: 1.0',
+      'Date: Thu, 01 Jan 1998 00:00:00 +0000\nMIME-Version: 1.0',
+    );
+    await deliverRaw('INBOX', raw);
+    await page.getByLabel('Sort messages').selectOption('unread');
+    const unseen = await messageIndex(page, new RegExp(subject));
+    const welcome = await messageIndex(page, /Welcome to Mailiner/);
+    expect(unseen).toBeLessThan(welcome);
+  } finally {
+    await cleanupSubject('INBOX', subject);
+  }
 });
 
 test('jump-to-folder selects a real mailbox', async ({ page }) => {
@@ -133,6 +146,6 @@ test('next and previous move the selection', async ({ page }) => {
       { timeout: 20_000 },
     );
   } finally {
-    await deleteFolder(page, folder);
+    await cleanupMailbox(folder);
   }
 });

@@ -1,0 +1,21 @@
+e2e/tests/offline-coverage.spec.ts
+  s_7fed5115c1dedb::t_44b90f814a4921 276
+  s_7fed5115c1dedb::t_c959be2009327a 238-240,242-248,250-275,277-286,299-300,303-306
+  s_7fed5115c1dedb::t_464121b7f37c24 241,249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1abbd932c6bac8941e689de0d92d515c455f4032",
+  "prompts": {},
+  "sessions": {
+    "s_7fed5115c1dedb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a1368d-e95f-7f70-9893-8549d56e84cc",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

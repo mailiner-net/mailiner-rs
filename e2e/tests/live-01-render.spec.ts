@@ -28,17 +28,28 @@ const FIXTURE_REMOTE_URLS = [
 ] as const;
 
 function watchFixtureRemote(page: import('@playwright/test').Page) {
-  const hits: string[] = [];
+  const beforeAllow: string[] = [];
+  const afterAllow: string[] = [];
+  let allowing = false;
   page.on('request', (req) => {
     const url = req.url();
-    if (FIXTURE_REMOTE_URLS.some((needle) => url.includes(needle))) {
-      hits.push(url);
+    if (!FIXTURE_REMOTE_URLS.some((needle) => url.includes(needle))) {
+      return;
     }
+    (allowing ? afterAllow : beforeAllow).push(url);
   });
+  const matched = (hits: string[]) =>
+    FIXTURE_REMOTE_URLS.filter((needle) => hits.some((hit) => hit.includes(needle)));
   return {
-    /** Fixture URLs that have been requested, in fixture order. */
-    seen() {
-      return FIXTURE_REMOTE_URLS.filter((needle) => hits.some((url) => url.includes(needle)));
+    /** Attribute later requests to Allow. Call synchronously, with no await before the click. */
+    markAllowed() {
+      allowing = true;
+    },
+    beforeAllow() {
+      return matched(beforeAllow);
+    },
+    afterAllow() {
+      return matched(afterAllow);
     },
   };
 }
@@ -127,16 +138,19 @@ test('remote images stay blocked until Allow', async ({ page }) => {
   await openSubject(page, 'Remote image should stay blocked');
   await expect(page.getByText('remote resources (images, styles) were blocked')).toBeVisible();
   await expectBody(page, 'Styled with a remote background.');
-  expect(remote.seen()).toEqual([]);
   const blocked = await bodyHtml(page);
   for (const url of FIXTURE_REMOTE_URLS) {
     expect(blocked).not.toContain(url);
   }
+  // A fetch that starts while the blocked body is being read must not
+  // satisfy the post-Allow assertion.
+  expect(remote.beforeAllow()).toEqual([]);
 
+  remote.markAllowed();
   await page.getByRole('button', { name: 'Allow', exact: true }).click();
   await expect
-    .poll(() => remote.seen(), { timeout: 15_000 })
-    .toEqual([...FIXTURE_REMOTE_URLS]);
+    .poll(() => ({ before: remote.beforeAllow(), after: remote.afterAllow() }), { timeout: 15_000 })
+    .toEqual({ before: [], after: [...FIXTURE_REMOTE_URLS] });
   await expect(page.getByText('Remote resources are shown for this message.')).toBeVisible();
   const allowed = await bodyHtml(page);
   for (const url of FIXTURE_REMOTE_URLS) {
@@ -152,10 +166,11 @@ test('always-allow is scoped to the sender and persists', async ({ page }) => {
   await page.reload();
   await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 45_000 });
   const remote = watchFixtureRemote(page);
+  remote.markAllowed();
   await openSubject(page, 'Remote image should stay blocked');
   await expect
-    .poll(() => remote.seen(), { timeout: 15_000 })
-    .toEqual([...FIXTURE_REMOTE_URLS]);
+    .poll(() => ({ before: remote.beforeAllow(), after: remote.afterAllow() }), { timeout: 15_000 })
+    .toEqual({ before: [], after: [...FIXTURE_REMOTE_URLS] });
   await expect(page.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0);
 
   await openSubject(page, 'HTML-only announcement');

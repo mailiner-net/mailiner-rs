@@ -26,14 +26,14 @@ export const E2E_MESSAGE_FROM = 'Ada Lovelace';
 export const E2E_PROXY_URL = 'ws://127.0.0.1:59999/proxy';
 
 /** Plaintext (no vault) account blob — bootstrap goes to Ready without unlock. */
-export function plaintextAccountBlob() {
+export function plaintextAccountBlob(displayName: string = E2E_ACCOUNT_NAME) {
   return {
     schema_version: 1,
     active_account_id: E2E_ACCOUNT_ID,
     accounts: [
       {
         id: E2E_ACCOUNT_ID,
-        display_name: E2E_ACCOUNT_NAME,
+        display_name: displayName,
         email: E2E_ACCOUNT_EMAIL,
         imap: {
           host: 'imap.example.com',
@@ -133,11 +133,15 @@ function cachedEnvelope() {
 export type SeedOptions = {
   /** When true, also write `mailiner.cache.v1` (folders + one message). */
   cache?: boolean;
+  /** Overrides the seeded account display name. */
+  displayName?: string;
 };
 
 /** Inject the account (and optional mail cache) before the first document script. */
 export async function seedAccount(page: Page, options: SeedOptions = {}) {
-  const accounts = JSON.stringify(plaintextAccountBlob());
+  const accounts = JSON.stringify(
+    plaintextAccountBlob(options.displayName ?? E2E_ACCOUNT_NAME),
+  );
   const cache = options.cache ? JSON.stringify(mailCacheBlob()) : null;
   await page.addInitScript(
     ({ accountsKey, cacheKey, skipKey, seededKey, accountsJson, cacheJson }) => {

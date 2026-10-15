@@ -382,4 +382,44 @@ mod tests {
         let classed = sanitize_for_export("<strong class=\"x\">\u{200b}Hi</strong>");
         assert_eq!(classed, "<strong class=\"x\">Hi</strong>");
     }
+
+    #[test]
+    fn export_zwsp_does_not_panic_on_multibyte_text() {
+        let out = sanitize_for_export("<p>a\u{200b}b</p><strong>你好世界</strong>");
+        assert_eq!(out, "<p>a\u{200b}b</p><strong>你好世界</strong>");
+        assert_eq!(
+            sanitize_for_export("<strong>\u{200b}你好</strong>"),
+            "<strong>你好</strong>"
+        );
+        assert_eq!(
+            sanitize_for_export("<strong>你好\u{200b}</strong>"),
+            "<strong>你好\u{200b}</strong>"
+        );
+    }
+
+    #[test]
+    fn export_strips_leading_zwsp_nested_in_span() {
+        assert_eq!(
+            sanitize_for_export("<strong><span>\u{200b}Hi</span></strong>"),
+            "<strong><span>Hi</span></strong>"
+        );
+        assert_eq!(
+            sanitize_for_export("<p>Hi<strong><span>\u{200b}</span></strong></p>"),
+            "<p>Hi</p>"
+        );
+        assert_eq!(
+            sanitize_for_export("<strong><span><span>\u{200b}Yes</span></span></strong>"),
+            "<strong><span><span>Yes</span></span></strong>"
+        );
+        // Not leading: a word-break wrapped in a span stays.
+        assert_eq!(
+            sanitize_for_export("<strong>a<span>\u{200b}</span>b</strong>"),
+            "<strong>a<span>\u{200b}</span>b</strong>"
+        );
+        // Outside a formatting tag, the span is ordinary text.
+        assert_eq!(
+            sanitize_for_export("<p><span>\u{200b}x</span></p>"),
+            "<p><span>\u{200b}x</span></p>"
+        );
+    }
 }

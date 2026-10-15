@@ -4,8 +4,9 @@
 //! so the browser keeps the element. [`crate::sanitize_for_edit`] must leave
 //! that character in place: it runs on every editor sync and would delete the
 //! live caret. Export removes a `strong`/`b`/`em`/`i`/`u` element whose text
-//! is only U+200B, and a leading U+200B inside those tags. A U+200B anywhere
-//! else (including a pasted word-break hint) stays.
+//! is only U+200B, and a leading U+200B inside those tags, including when a
+//! nested inline such as `<span>` sits between the tag and the marker. A
+//! U+200B anywhere else (including a pasted word-break hint) stays.
 
 use std::ops::Range;
 
@@ -40,8 +41,7 @@ fn mentions_zwsp(html: &str) -> bool {
 }
 
 fn starts_with_zwsp_entity(raw: &str) -> bool {
-    (raw.len() >= 7 && raw[..7].eq_ignore_ascii_case("&#8203;"))
-        || (raw.len() >= 8 && raw[..8].eq_ignore_ascii_case("&#x200b;"))
+    ascii_prefix_eq(raw, "&#8203;") || ascii_prefix_eq(raw, "&#x200b;")
 }
 
 fn trim_leading_zwsp(raw: &str) -> &str {
@@ -64,7 +64,16 @@ fn trim_leading_zwsp(raw: &str) -> &str {
 }
 
 fn raw_starts_with_entity(raw: &str, entity: &str) -> bool {
-    raw.len() >= entity.len() && raw[..entity.len()].eq_ignore_ascii_case(entity)
+    ascii_prefix_eq(raw, entity)
+}
+
+/// `true` when `raw` begins with `prefix`.
+///
+/// [`str::get`] refuses a cut that is not a char boundary, so a multibyte
+/// character in the prefix window does not panic the way `raw[..n]` would.
+fn ascii_prefix_eq(raw: &str, prefix: &str) -> bool {
+    raw.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 fn is_format_tag(tag: &str) -> bool {
@@ -294,42 +303,69 @@ fn clean_children(html: &str, children: &mut Vec<Node>) {
 }
 
 fn strip_leading_zwsp_nodes(html: &str, children: &mut Vec<Node>) {
-    while let Some(first) = children.first_mut() {
-        if !matches!(first.kind, NodeKind::Text) {
-            break;
+    loop {
+        if children.is_empty() {
+            return;
         }
-        let raw = &html[first.span.start..first.span.end];
-        let trimmed = trim_leading_zwsp(raw);
-        if trimmed.len() == raw.len() {
-            break;
+        if matches!(children[0].kind, NodeKind::Text) {
+            let start = children[0].span.start;
+            let end = children[0].span.end;
+            let raw = &html[start..end];
+            let trimmed = trim_leading_zwsp(raw);
+            if trimmed.len() == raw.len() {
+                return;
+            }
+            children[0].span.start = start + (raw.len() - trimmed.len());
+            if children[0].span.is_empty() {
+                children.remove(0);
+                continue;
+            }
+            return;
         }
-        first.span.start += raw.len() - trimmed.len();
-        if first.span.is_empty() {
+        // A `<br>` or `<img>` is real content, so a marker after it is not leading.
+        if matches!(children[0].kind, NodeKind::Element { void: true, .. }) {
+            return;
+        }
+        // `<strong><span>\u{200b}</span></strong>`: the span's only text is the
+        // marker. Drop the wrapper and keep looking.
+        if !element_has_content(html, &children[0]) {
             children.remove(0);
             continue;
         }
-        break;
+        if let NodeKind::Element {
+            children: inner, ..
+        } = &mut children[0].kind
+        {
+            // `<strong><span>\u{200b}Hi</span></strong>`: the marker is the
+            // first text in the nested inline, not a direct child.
+            strip_leading_zwsp_nodes(html, inner);
+        }
+        return;
+    }
+}
+
+fn element_has_content(html: &str, node: &Node) -> bool {
+    match &node.kind {
+        NodeKind::Text => {
+            let raw = &html[node.span.start..node.span.end];
+            !raw.is_empty() && !trim_leading_zwsp(raw).is_empty()
+        }
+        NodeKind::Element { void: true, .. } => true,
+        NodeKind::Element { children, .. } => children
+            .iter()
+            .any(|child| element_has_content(html, child)),
     }
 }
 
 /// A formatting element whose remaining text is empty or only U+200B.
 ///
-/// Nested marker-only wrappers are removed first, so an outer tag that held
-/// only those wrappers is content-free too and is removed here.
+/// Nested marker-only wrappers count as empty, so an outer tag that held only
+/// those wrappers is removed here.
 fn is_content_free_format(html: &str, node: &Node) -> bool {
-    let NodeKind::Element { tag, children, .. } = &node.kind else {
+    let NodeKind::Element { tag, .. } = &node.kind else {
         return false;
     };
-    if !is_format_tag(tag) {
-        return false;
-    }
-    !children.iter().any(|child| match &child.kind {
-        NodeKind::Text => {
-            let raw = &html[child.span.start..child.span.end];
-            !raw.is_empty() && !trim_leading_zwsp(raw).is_empty()
-        }
-        NodeKind::Element { .. } => true,
-    })
+    is_format_tag(tag) && !element_has_content(html, node)
 }
 
 fn emit(out: &mut String, html: &str, nodes: &[Node]) {

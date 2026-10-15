@@ -31,12 +31,15 @@ pub fn OauthCallbackPage() -> Element {
 
 /// In-app router path (`/`, `/settings/accounts`). Rejects protocol-relative
 /// and absolute URLs so the same-tab return cannot leave this origin.
+///
+/// ASCII controls are rejected too. The URL parser removes tab and newlines
+/// before resolving the reference, so `/\t/evil.example` would become
+/// `//evil.example` and navigate off this origin.
 fn is_app_route(path: &str) -> bool {
-    path.starts_with('/')
-        && !path.starts_with("//")
-        && !path.contains('\\')
-        && !path.contains(':')
-        && !path.contains('\0')
+    if path.bytes().any(|b| b.is_ascii_control()) {
+        return false;
+    }
+    path.starts_with('/') && !path.starts_with("//") && !path.contains('\\') && !path.contains(':')
 }
 
 fn handle_callback(status: &mut Signal<String>) {
@@ -94,5 +97,24 @@ fn handle_callback(status: &mut Signal<String>) {
         status.set("Returning to Mailiner…".into());
         let _ = window.location().assign(&return_path);
         let _ = result;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_app_route;
+
+    #[test]
+    fn return_path_stays_on_this_origin() {
+        assert!(is_app_route("/"));
+        assert!(is_app_route("/settings/accounts"));
+        assert!(!is_app_route("//evil.example"));
+        assert!(!is_app_route("///evil.example"));
+        assert!(!is_app_route("/\t/evil.example"));
+        assert!(!is_app_route("/\t//evil.example"));
+        assert!(!is_app_route("/\n/evil.example"));
+        assert!(!is_app_route("/\r/evil.example"));
+        assert!(!is_app_route("https://evil.example/"));
+        assert!(!is_app_route("/\\evil"));
     }
 }

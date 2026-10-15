@@ -20,6 +20,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   DX_VERSION: "0.7.10"
+  # Repository variable. Empty keeps the host-root build and the root e2e
+  # server. A value such as `app` is the deploy prefix for the web build and
+  # for Playwright (`MAILINER_E2E_BASE_PATH`).
+  MAILINER_WEB_BASE_PATH: ${{ vars.MAILINER_WEB_BASE_PATH }}
+  MAILINER_E2E_BASE_PATH: ${{ vars.MAILINER_WEB_BASE_PATH }}
 
 jobs:
   lint:
@@ -161,8 +166,10 @@ jobs:
           if [ -n "${MAILINER_WEB_BASE_PATH:-}" ]; then
             base="${MAILINER_WEB_BASE_PATH#/}"
             base="${base%/}"
-            printf '/%s    /%s/index.html   200\n/%s/*    /%s/index.html   200\n' \
-              "$base" "$base" "$base" "$base" > "$PUBLIC_DIR/_redirects"
+            # Bare `/app` is outside the service-worker scope (`/app/`).
+            # Redirect it, then rewrite the slashed prefix to the SPA shell.
+            printf '/%s    /%s/   301\n/%s/    /%s/index.html   200\n/%s/*    /%s/index.html   200\n' \
+              "$base" "$base" "$base" "$base" "$base" "$base" > "$PUBLIC_DIR/_redirects"
           else
             printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
           fi

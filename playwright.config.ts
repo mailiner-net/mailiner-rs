@@ -8,6 +8,20 @@ const PORT = process.env.MAILINER_E2E_PORT ?? '8080';
 const BASE_URL = process.env.MAILINER_E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 const SERVE_DIR = process.env.MAILINER_E2E_SERVE_DIR;
 const SKIP_WEBSERVER = process.env.MAILINER_E2E_SKIP_WEBSERVER === '1';
+/** Deploy prefix without slashes. Empty means the host root. */
+const SERVE_PREFIX = (process.env.MAILINER_E2E_BASE_PATH ?? '').replace(/^\/+|\/+$/g, '');
+
+function webServerCommand(): string {
+  if (!SERVE_DIR) {
+    return `dx serve -p mailiner-app --port ${PORT}`;
+  }
+  // `serve -s` rewrites every miss to `/index.html`. A prefixed artifact has
+  // that file at `/app/index.html`, so the prefix server does the fallback.
+  if (!SERVE_PREFIX) {
+    return `npx --no-install serve -s ${SERVE_DIR} -l tcp://127.0.0.1:${PORT}`;
+  }
+  return 'node e2e/prefix-static-server.mjs';
+}
 
 /**
  * Mailiner is a Dioxus/WASM app. Locally `dx serve` compiles the workspace
@@ -51,10 +65,8 @@ export default defineConfig({
   webServer: SKIP_WEBSERVER
     ? undefined
     : {
-        command: SERVE_DIR
-          ? `npx --no-install serve -s ${SERVE_DIR} -l tcp://127.0.0.1:${PORT}`
-          : `dx serve -p mailiner-app --port ${PORT}`,
-        url: BASE_URL,
+        command: webServerCommand(),
+        url: SERVE_DIR && SERVE_PREFIX ? `${BASE_URL}/${SERVE_PREFIX}/` : BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: SERVE_DIR ? 60_000 : 5 * 60_000,
       },

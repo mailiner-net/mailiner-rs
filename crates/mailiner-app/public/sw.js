@@ -31,6 +31,9 @@ function inScope(url) {
   }
   const base = BASE.pathname;
   const path = url.pathname;
+  // The registration scope of `/app/sw.js` is `/app/`. A request for bare
+  // `/app` is outside that scope, so this worker never sees it. Hosting
+  // redirects `/app` to `/app/` (Pages `_redirects`) and that URL is in scope.
   return path === base || path + "/" === base || path.startsWith(base);
 }
 

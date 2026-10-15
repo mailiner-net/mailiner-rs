@@ -47,6 +47,20 @@ MAILINER_E2E_SERVE_DIR=target/dx/mailiner-app/release/web/public npm run test:e2
 `npm run test:e2e` runs the offline **chromium** project only. It does not
 start docker-mail.
 
+To run that suite against a non-root deploy locally, serve with a base path and
+point the tests at it (`MAILINER_E2E_BASE_URL` stays the origin). In CI, set
+the `MAILINER_WEB_BASE_PATH` Actions variable: the release artifact is nested
+under that prefix and Playwright receives it as `MAILINER_E2E_BASE_PATH`.
+Unset, the artifact and the tests stay at `/`.
+
+```bash
+dx serve -p mailiner-app --port 8096 --base-path /app
+MAILINER_E2E_SKIP_WEBSERVER=1 \
+  MAILINER_E2E_BASE_URL=http://127.0.0.1:8096 \
+  MAILINER_E2E_BASE_PATH=/app \
+  npm run test:e2e
+```
+
 ## Live tests (docker-mail + proxy)
 
 `e2e/tests/live.spec.ts` and `e2e/tests/live-*.spec.ts` connect through

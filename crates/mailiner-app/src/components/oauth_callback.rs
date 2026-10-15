@@ -29,6 +29,21 @@ pub fn OauthCallbackPage() -> Element {
     }
 }
 
+/// In-app router path (`/`, `/settings/accounts`). Rejects protocol-relative
+/// and absolute URLs so the same-tab return cannot leave this origin.
+///
+/// A leading `/` cannot be a scheme, so a colon in the path or query
+/// (`/settings?provider=imap:ssl`) stays on this origin. ASCII controls are
+/// rejected: the URL parser removes tab and newlines, so `/\t/evil.example`
+/// would become `//evil.example`. A backslash is rejected for the same
+/// reason: in a special URL it is treated as `/`.
+fn is_app_route(path: &str) -> bool {
+    if path.bytes().any(|b| b.is_ascii_control()) {
+        return false;
+    }
+    path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
+}
+
 fn handle_callback(status: &mut Signal<String>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -73,12 +88,36 @@ fn handle_callback(status: &mut Signal<String>) {
             }
         }
 
+        // Router path (`/settings`), not a browser path. `with_base` adds the
+        // deploy prefix so a same-tab return from `/app/oauth/callback` does
+        // not land on the host root.
         let return_path = pending
             .and_then(|p| p.return_path)
-            .filter(|p| p.starts_with('/'))
+            .filter(|p| is_app_route(p))
             .unwrap_or_else(|| "/".into());
+        let return_path = crate::base_path::with_base(&return_path);
         status.set("Returning to Mailiner…".into());
         let _ = window.location().assign(&return_path);
         let _ = result;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_app_route;
+
+    #[test]
+    fn return_path_stays_on_this_origin() {
+        assert!(is_app_route("/"));
+        assert!(is_app_route("/settings/accounts"));
+        assert!(is_app_route("/settings/accounts?provider=imap:ssl"));
+        assert!(!is_app_route("//evil.example"));
+        assert!(!is_app_route("///evil.example"));
+        assert!(!is_app_route("/\t/evil.example"));
+        assert!(!is_app_route("/\t//evil.example"));
+        assert!(!is_app_route("/\n/evil.example"));
+        assert!(!is_app_route("/\r/evil.example"));
+        assert!(!is_app_route("https://evil.example/"));
+        assert!(!is_app_route("/\\evil"));
     }
 }

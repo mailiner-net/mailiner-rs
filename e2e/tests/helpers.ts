@@ -166,9 +166,30 @@ export async function seedAccount(page: Page, options: SeedOptions = {}) {
   );
 }
 
+/**
+ * Deploy prefix without a trailing slash (`''` at the host root, `/app` when
+ * the suite is pointed at `dx serve --base-path /app`).
+ * `MAILINER_E2E_BASE_URL` stays the origin; this prefix is applied to app paths
+ * so a leading `/` does not escape the mount.
+ */
+export function appPrefix(): string {
+  const base = (process.env.MAILINER_E2E_BASE_PATH ?? '').replace(/^\/+|\/+$/g, '');
+  return base ? `/${base}` : '';
+}
+
+/** Root path (`/settings`) rewritten under [`appPrefix`]. */
+export function appPath(path = '/'): string {
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  const prefix = appPrefix();
+  if (!prefix) {
+    return suffix;
+  }
+  return suffix === '/' ? `${prefix}/` : `${prefix}${suffix}`;
+}
+
 /** Navigate without waiting for WASM `load` (can stall on a cold `dx serve`). */
 export async function gotoPath(page: Page, path = '/') {
-  await page.goto(path, { waitUntil: 'domcontentloaded' });
+  await page.goto(appPath(path), { waitUntil: 'domcontentloaded' });
 }
 
 /** Main mail chrome after a seeded Ready bootstrap. */

@@ -5,6 +5,10 @@
 # HTML title tag content
 title = "Mailiner"
 
+# Leave base_path unset so the default site stays at the host root.
+# A subpath deploy passes `--base-path /app` (or MAILINER_WEB_BASE_PATH in CI).
+# Setting it here would bake that prefix into every `dx serve` and release.
+
 # include `assets` in web platform
 [web.resource]
 

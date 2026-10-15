@@ -18,7 +18,11 @@ use crate::account_config::{
 /// Refresh this many seconds before `expires_at`.
 pub const REFRESH_SKEW_SECS: i64 = 60;
 
-/// Same-origin path the provider must redirect to after consent.
+/// Router path the provider must redirect to after consent.
+///
+/// The public URL is [`redirect_uri_from_origin`]: `{origin}` plus this path,
+/// with the deploy prefix when the app is not at the host root
+/// (`https://mailiner.net/app/oauth/callback`).
 pub const OAUTH_CALLBACK_PATH: &str = "/oauth/callback";
 
 /// sessionStorage key for the in-flight PKCE request (no tokens).
@@ -150,9 +154,22 @@ impl Oauth2Provider {
     }
 }
 
-/// Redirect URI operators must register: `{origin}/oauth/callback`.
+/// Redirect URI operators must register.
+///
+/// At the host root this is `{origin}/oauth/callback`. Under a deploy prefix
+/// it is `{origin}/app/oauth/callback` (the prefix comes from the Dioxus base
+/// path). The account form shows the exact value.
 pub fn redirect_uri_from_origin(origin: &str) -> String {
-    format!("{}{OAUTH_CALLBACK_PATH}", origin.trim_end_matches('/'))
+    redirect_uri_for(crate::base_path::current().as_deref(), origin)
+}
+
+/// [`redirect_uri_from_origin`] with an explicit prefix (`None` = host root).
+pub fn redirect_uri_for(base: Option<&str>, origin: &str) -> String {
+    format!(
+        "{}{}",
+        origin.trim_end_matches('/'),
+        crate::base_path::with_prefix(base, OAUTH_CALLBACK_PATH)
+    )
 }
 
 /// RFC 7636 S256 challenge from a verifier.
@@ -823,12 +840,16 @@ mod tests {
     #[test]
     fn redirect_uri_from_origin_appends_callback() {
         assert_eq!(
-            redirect_uri_from_origin("https://mail.example"),
+            redirect_uri_for(None, "https://mail.example"),
             "https://mail.example/oauth/callback"
         );
         assert_eq!(
-            redirect_uri_from_origin("http://localhost:8080/"),
+            redirect_uri_for(Some("."), "http://localhost:8080/"),
             "http://localhost:8080/oauth/callback"
+        );
+        assert_eq!(
+            redirect_uri_for(Some("/app/"), "https://mailiner.net"),
+            "https://mailiner.net/app/oauth/callback"
         );
     }
 

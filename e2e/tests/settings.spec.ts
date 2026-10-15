@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   E2E_ACCOUNT_EMAIL,
   E2E_ACCOUNT_NAME,
+  appPath,
   composeButton,
   gotoPath,
   gotoSettings,
@@ -29,7 +30,7 @@ test('settings and account pages render after an account exists', async ({ page 
   await expect(page.getByRole('heading', { name: 'Keyboard shortcuts' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Accounts' })).toHaveAttribute(
     'href',
-    '/settings/accounts',
+    appPath('/settings/accounts'),
   );
 
   await gotoPath(page, '/settings/accounts');
@@ -39,11 +40,11 @@ test('settings and account pages render after an account exists', async ({ page 
   await expect(page.getByText('Active', { exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Add account' })).toHaveAttribute(
     'href',
-    '/settings/accounts/new',
+    appPath('/settings/accounts/new'),
   );
   await expect(page.getByRole('link', { name: 'Edit' })).toHaveAttribute(
     'href',
-    '/settings/accounts/e2e-account-1',
+    appPath('/settings/accounts/e2e-account-1'),
   );
 
   await gotoPath(page, '/settings/accounts/new');
@@ -62,7 +63,10 @@ test('settings and account pages render after an account exists', async ({ page 
   await gotoPath(page, '/');
   await expect(page.locator('#app')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Skip to message' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+  await expect(page.getByRole('link', { name: 'Settings' })).toHaveAttribute(
+    'href',
+    appPath('/settings'),
+  );
 
   await gotoPath(page, '/settings');
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();

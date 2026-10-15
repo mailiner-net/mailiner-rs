@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { gotoPath } from './helpers';
+import { appPath, gotoPath } from './helpers';
 
 test('boot splash paints before wasm and follows the saved theme', async ({
   page,
@@ -35,7 +35,7 @@ test('boot splash paints before wasm and follows the saved theme', async ({
   });
   await page.route('**/*.wasm', (route) => route.abort());
   await page.emulateMedia({ colorScheme: 'dark' });
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(appPath('/'), { waitUntil: 'domcontentloaded' });
 
   const splash = page.locator('#mailiner-splash');
   await expect(splash).toBeVisible();
@@ -89,20 +89,32 @@ test('web app manifest is linked and installable', async ({ page, request }) => 
   await gotoPath(page);
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
     'href',
-    '/manifest.webmanifest',
+    appPath('/manifest.webmanifest'),
   );
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute(
     'content',
     '#121212',
   );
 
-  const res = await request.get('/manifest.webmanifest');
+  const manifestPath = appPath('/manifest.webmanifest');
+  const res = await request.get(manifestPath);
   expect(res.ok()).toBe(true);
   const manifest = await res.json();
   expect(manifest.name).toBe('Mailiner');
   expect(manifest.short_name).toBe('Mailiner');
   expect(manifest.display).toBe('standalone');
-  expect(manifest.start_url).toBe('/');
+  // Relative to the manifest URL so the same file works at `/` and `/app/`.
+  expect(manifest.start_url).toBe('./');
+  expect(manifest.scope).toBe('./');
+  expect(manifest.id).toBe('./');
+  const manifestUrl = new URL(manifestPath, 'http://mailiner.test');
+  const mountDir = appPath('/').endsWith('/') ? appPath('/') : `${appPath('/')}/`;
+  expect(new URL(manifest.start_url, manifestUrl).pathname).toBe(mountDir);
+  expect(new URL(manifest.scope, manifestUrl).pathname).toBe(mountDir);
+  for (const icon of manifest.icons as { src: string; sizes: string }[]) {
+    const iconPath = new URL(icon.src, manifestUrl).pathname;
+    expect(iconPath.startsWith(`${mountDir}icons/`)).toBe(true);
+  }
   expect(manifest.icons.some((icon: { sizes: string }) => icon.sizes === '192x192')).toBe(
     true,
   );
@@ -119,33 +131,33 @@ test('PWA icons are served', async ({ request }) => {
     '/icons/icon-maskable-512.png',
     '/icons/apple-touch-icon.png',
   ]) {
-    const res = await request.get(path);
+    const res = await request.get(appPath(path));
     expect(res.ok(), path).toBe(true);
     expect(res.headers()['content-type'] ?? '').toMatch(/image\/png/);
   }
 });
 
 test('app-shell service worker is registered', async ({ page, request }) => {
-  const sw = await request.get('/sw.js');
+  const sw = await request.get(appPath('/sw.js'));
   expect(sw.ok()).toBe(true);
   const body = await sw.text();
-  expect(body).toContain('mailiner-shell-v2');
+  expect(body).toContain('mailiner-shell-v3');
   expect(body).toContain('isAppShell');
 
   await gotoPath(page);
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
   await expect
     .poll(async () =>
-      page.evaluate(async () => {
+      page.evaluate(async (scriptPath) => {
         if (!('serviceWorker' in navigator)) {
           return false;
         }
         const regs = await navigator.serviceWorker.getRegistrations();
         return regs.some((reg) => {
           const script = reg.active ?? reg.waiting ?? reg.installing;
-          return script?.scriptURL.includes('/sw.js') ?? false;
+          return script?.scriptURL.endsWith(scriptPath) ?? false;
         });
-      }),
+      }, appPath('/sw.js')),
     )
     .toBe(true);
 });

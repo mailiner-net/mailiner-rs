@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { completeEmailStep, completeProxyStepIfShown, gotoPath, wizardContinue } from './helpers';
+import {
+  appPath,
+  completeEmailStep,
+  completeProxyStepIfShown,
+  gotoPath,
+  wizardContinue,
+} from './helpers';
 
 function validationStatus(page: import('@playwright/test').Page) {
   return page.locator('.onboarding-status-error');
@@ -57,7 +63,9 @@ test('OAuth sign-in fields appear when the method is switched', async ({ page })
   await page.locator('#onboarding-auth-kind').selectOption('oauth2');
   await expect(page.locator('#onboarding-oauth-provider')).toBeVisible();
   await expect(page.getByLabel('OAuth client ID')).toBeVisible();
-  await expect(page.getByLabel('Redirect URI')).toBeVisible();
+  await expect(page.getByLabel('Redirect URI')).toHaveValue(
+    `${new URL(page.url()).origin}${appPath('/oauth/callback')}`,
+  );
   await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
 
   await page.locator('#onboarding-oauth-provider').selectOption('microsoft');

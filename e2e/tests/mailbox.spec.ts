@@ -3,6 +3,7 @@ import {
   E2E_ACCOUNT_NAME,
   E2E_MESSAGE_FROM,
   E2E_MESSAGE_SUBJECT,
+  appPath,
   gotoMail,
   gotoPath,
   pressShortcut,
@@ -130,15 +131,16 @@ test('mail chrome links to settings and accounts', async ({ page }) => {
 
   await expect(page.getByRole('link', { name: 'Settings' })).toHaveAttribute(
     'href',
-    '/settings',
+    appPath('/settings'),
   );
   await expect(page.getByRole('link', { name: E2E_ACCOUNT_NAME })).toHaveAttribute(
     'href',
-    '/settings/accounts',
+    appPath('/settings/accounts'),
   );
 
   await page.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(page).toHaveURL((url) => url.pathname === appPath('/settings'));
 });
 
 test('phone viewport walks folders → list → viewer', async ({ page }) => {

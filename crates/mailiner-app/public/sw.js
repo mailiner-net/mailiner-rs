@@ -1,34 +1,57 @@
 "use strict";
 
 // App-shell service worker. Precaches the HTML document, manifest, and icons.
-// Hashed Dioxus JS/CSS/WASM under /assets/ and /wasm/ are cached only after a
-// successful same-origin GET. Mail is IMAP over WebSocket — never HTTP — so
-// message bodies are not stored here.
+//
+// The script is served next to index.html. Its directory is the deploy prefix:
+// `/sw.js` controls `/`, and `/app/sw.js` controls `/app/`. Cache URLs are
+// resolved against that directory so one file works at the host root and
+// under a path. Hashed Dioxus JS/CSS/WASM under assets/ and wasm/ are cached
+// only after a successful same-origin GET. Mail is IMAP over WebSocket —
+// never HTTP — so message bodies are not stored here.
 
-const CACHE = "mailiner-shell-v2";
+const CACHE = "mailiner-shell-v3";
+
+// Directory of this script (`/` or `/app/`), including the trailing slash.
+const BASE = new URL("./", self.location);
+const INDEX_HTML = new URL("index.html", BASE).href;
 
 const PRECACHE = [
-  "/index.html",
-  "/manifest.webmanifest",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/icon-maskable-192.png",
-  "/icons/icon-maskable-512.png",
-  "/icons/apple-touch-icon.png",
-];
+  "index.html",
+  "manifest.webmanifest",
+  "icons/icon-192.png",
+  "icons/icon-512.png",
+  "icons/icon-maskable-192.png",
+  "icons/icon-maskable-512.png",
+  "icons/apple-touch-icon.png",
+].map((path) => new URL(path, BASE).href);
 
-function isAppShell(url) {
+function inScope(url) {
   if (url.origin !== self.location.origin) {
     return false;
   }
+  const base = BASE.pathname;
   const path = url.pathname;
-  if (path === "/" || path === "/index.html") {
+  return path === base || path + "/" === base || path.startsWith(base);
+}
+
+function relativePath(url) {
+  const base = BASE.pathname;
+  const path = url.pathname + "/" === base ? base : url.pathname;
+  return path.startsWith(base) ? path.slice(base.length) : path;
+}
+
+function isAppShell(url) {
+  if (!inScope(url)) {
+    return false;
+  }
+  const path = relativePath(url);
+  if (path === "" || path === "index.html") {
     return true;
   }
-  if (path === "/manifest.webmanifest" || path === "/sw.js") {
+  if (path === "manifest.webmanifest" || path === "sw.js") {
     return true;
   }
-  if (path.startsWith("/icons/") || path.startsWith("/assets/") || path.startsWith("/wasm/")) {
+  if (path.startsWith("icons/") || path.startsWith("assets/") || path.startsWith("wasm/")) {
     return true;
   }
   return /\.(?:js|wasm|css|ico|png|svg|webmanifest)$/.test(path);
@@ -61,12 +84,12 @@ self.addEventListener("fetch", (event) => {
   }
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) {
+  if (!inScope(url)) {
     return;
   }
 
   if (request.mode === "navigate") {
-    event.respondWith(networkFirst(request, "/index.html"));
+    event.respondWith(networkFirst(request, INDEX_HTML));
     return;
   }
 

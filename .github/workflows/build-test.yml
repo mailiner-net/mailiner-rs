@@ -131,7 +131,15 @@ jobs:
           dx --version
 
       - name: Build mailiner-app (release web)
-        run: dx build -p mailiner-app --release --web --debug-symbols=false --locked
+        run: |
+          set -euo pipefail
+          args=(dx build -p mailiner-app --release --web --debug-symbols=false --locked)
+          # Optional subpath (for example app → https://host/app). Unset keeps
+          # the host-root deploy. See README "Serving under a URL prefix".
+          if [ -n "${MAILINER_WEB_BASE_PATH:-}" ]; then
+            args+=(--base-path "${MAILINER_WEB_BASE_PATH}")
+          fi
+          "${args[@]}"
 
       - name: Prepare public directory
         run: |
@@ -148,11 +156,20 @@ jobs:
           test -f "$PUBLIC_DIR/icons/apple-touch-icon.png"
           # SPA fallback for Dioxus client-side routing on Cloudflare Pages.
           # Existing files (sw.js, manifest, icons) are served before redirects.
-          printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
+          # MAILINER_WEB_BASE_PATH nests the site under that prefix after this
+          # step; the root deploy keeps the unprefixed rule.
+          if [ -n "${MAILINER_WEB_BASE_PATH:-}" ]; then
+            base="${MAILINER_WEB_BASE_PATH#/}"
+            base="${base%/}"
+            printf '/%s    /%s/index.html   200\n/%s/*    /%s/index.html   200\n' \
+              "$base" "$base" "$base" "$base" > "$PUBLIC_DIR/_redirects"
+          else
+            printf '/*    /index.html   200\n' > "$PUBLIC_DIR/_redirects"
+          fi
           # Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/shell.rs.
           # Cloudflare Pages custom headers:
           # https://developers.cloudflare.com/pages/configuration/headers/
-          python3 -c 'import pathlib, re, sys
+          python3 -c 'import os, pathlib, re, sys
           src = pathlib.Path("crates/mailiner-app/src/shell.rs").read_text()
           match = re.search(r"const CONTENT_SECURITY_POLICY:\s*&str\s*=\s*\"(.*?)\";", src, re.S)
           if not match:
@@ -162,6 +179,8 @@ jobs:
               sys.exit("unexpected CONTENT_SECURITY_POLICY escaping: %r" % (policy,))
           if "default-src '\''self'\''" not in policy:
               sys.exit("unexpected CONTENT_SECURITY_POLICY: %r" % (policy,))
+          base = os.environ.get("MAILINER_WEB_BASE_PATH", "").strip().strip("/")
+          prefix = ("/" + base) if base else ""
           headers = pathlib.Path("target/dx/mailiner-app/release/web/public/_headers")
           headers.write_text(
               "# Same policy as CONTENT_SECURITY_POLICY in crates/mailiner-app/src/shell.rs\n"
@@ -169,15 +188,33 @@ jobs:
               "  Content-Security-Policy: %s\n"
               "\n"
               "# Always revalidate the service worker so updates are not stuck.\n"
-              "/sw.js\n"
+              "%s/sw.js\n"
               "  Cache-Control: no-cache\n"
               "\n"
-              "/manifest.webmanifest\n"
-              "  Content-Type: application/manifest+json\n" % (policy,)
+              "%s/manifest.webmanifest\n"
+              "  Content-Type: application/manifest+json\n" % (policy, prefix, prefix)
           )
           print("Wrote", headers, "CSP:")
           print(policy)
           '
+          # Pages reads _redirects and _headers from the upload root. A subpath
+          # deploy stores the app under that directory and leaves those two
+          # files at the root, with rules that name the prefix.
+          if [ -n "${MAILINER_WEB_BASE_PATH:-}" ]; then
+            base="${MAILINER_WEB_BASE_PATH#/}"
+            base="${base%/}"
+            stage="$(mktemp -d)"
+            shopt -s dotglob nullglob
+            mv "$PUBLIC_DIR"/* "$stage/"
+            mkdir -p "$PUBLIC_DIR/$base"
+            mv "$stage"/* "$PUBLIC_DIR/$base/"
+            shopt -u dotglob nullglob
+            rm -rf "$stage"
+            mv "$PUBLIC_DIR/$base/_redirects" "$PUBLIC_DIR/_redirects"
+            mv "$PUBLIC_DIR/$base/_headers" "$PUBLIC_DIR/_headers"
+            test -f "$PUBLIC_DIR/$base/index.html"
+            test -f "$PUBLIC_DIR/$base/sw.js"
+          fi
           test -f "$PUBLIC_DIR/_redirects"
           test -f "$PUBLIC_DIR/_headers"
           echo "Build tree:"

@@ -29,6 +29,16 @@ pub fn OauthCallbackPage() -> Element {
     }
 }
 
+/// In-app router path (`/`, `/settings/accounts`). Rejects protocol-relative
+/// and absolute URLs so the same-tab return cannot leave this origin.
+fn is_app_route(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && !path.contains(':')
+        && !path.contains('\0')
+}
+
 fn handle_callback(status: &mut Signal<String>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -73,10 +83,14 @@ fn handle_callback(status: &mut Signal<String>) {
             }
         }
 
+        // Router path (`/settings`), not a browser path. `with_base` adds the
+        // deploy prefix so a same-tab return from `/app/oauth/callback` does
+        // not land on the host root.
         let return_path = pending
             .and_then(|p| p.return_path)
-            .filter(|p| p.starts_with('/'))
+            .filter(|p| is_app_route(p))
             .unwrap_or_else(|| "/".into());
+        let return_path = crate::base_path::with_base(&return_path);
         status.set("Returning to Mailiner…".into());
         let _ = window.location().assign(&return_path);
         let _ = result;

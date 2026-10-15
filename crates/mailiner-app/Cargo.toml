@@ -18,6 +18,9 @@ dioxus = { version = "0.7.10", default-features = false, features = [
     "router",
     "web",
 ] }
+# `web` reads the debug `<meta name="DIOXUS_ASSET_ROOT">` and the release
+# compile-time base path. Direct dep so `base_path` can call it.
+dioxus-cli-config = { version = "0.7.10", features = ["web"] }
 futures-util = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 uuid = { version = "1.27", features = ["v4", "js"] }

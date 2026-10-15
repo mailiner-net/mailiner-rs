@@ -3901,6 +3901,7 @@ dependencies = [
  "der",
  "digest",
  "dioxus",
+ "dioxus-cli-config",
  "futures-channel",
  "futures-executor",
  "futures-util",

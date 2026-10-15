@@ -66,8 +66,6 @@ pub(crate) enum Route {
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
-const MANIFEST_HREF: &str = "/manifest.webmanifest";
-const APPLE_TOUCH_ICON_HREF: &str = "/icons/apple-touch-icon.png";
 const THEME_COLOR: &str = "#121212";
 
 /// Baseline Content-Security-Policy for the Mailiner origin (PR7).
@@ -160,7 +158,11 @@ fn register_service_worker() {
         {
             return;
         }
-        let _ = navigator.service_worker().register("/sw.js");
+        // Scope follows the script URL, so `/app/sw.js` controls `/app/` and
+        // `/sw.js` controls `/`. `public/sw.js` resolves its cache against
+        // its own URL and does not hard-code the host root.
+        let script = crate::base_path::with_base("/sw.js");
+        let _ = navigator.service_worker().register(&script);
     }
 }
 
@@ -526,11 +528,17 @@ fn App() -> Element {
     // The splash covered the empty document while WASM was still downloading.
     use_effect(dismiss_boot_splash);
 
+    // Public files are not `asset!()` paths, so prefix them ourselves.
+    // Absolute (not document-relative): a client route like `/settings/accounts`
+    // would otherwise resolve `manifest.webmanifest` under that route.
+    let manifest_href = crate::base_path::with_base("/manifest.webmanifest");
+    let apple_touch_icon_href = crate::base_path::with_base("/icons/apple-touch-icon.png");
+
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Link { rel: "manifest", href: MANIFEST_HREF }
-        document::Link { rel: "apple-touch-icon", href: APPLE_TOUCH_ICON_HREF }
+        document::Link { rel: "manifest", href: "{manifest_href}" }
+        document::Link { rel: "apple-touch-icon", href: "{apple_touch_icon_href}" }
         document::Meta {
             name: "viewport",
             content: "width=device-width, initial-scale=1",

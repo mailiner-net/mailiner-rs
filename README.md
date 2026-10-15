@@ -131,6 +131,30 @@ workspace `wasm-release` profile (`opt-level = "s"`, LTO) and runs `wasm-opt`
 without DWARF. Pass `--debug-symbols=false` so the CLI default does not
 re-enable debug info and skip optimization.
 
+### Serving under a URL prefix
+
+The default build is the host root (`https://mailiner.net/`). To serve the same
+app at `https://mailiner.net/app`, pass that prefix at build time. Dioxus bakes
+it into the release WASM (router and hashed assets) and into `index.html`:
+
+```
+dx serve -p mailiner-app --base-path /app
+dx build -p mailiner-app --release --web --debug-symbols=false --base-path /app
+```
+
+Publish the `public/` directory so the URL prefix maps onto it. Do not strip
+`/app` before the files: the browser requests `/app/assets/…` and
+`/app/sw.js`. Unknown paths under the prefix (`/app/settings`,
+`/app/oauth/callback`) must return `index.html` (SPA fallback).
+
+`MAILINER_WEB_BASE_PATH=app` does this in CI: `dx build --base-path`, then
+nests the Pages artifact under `app/` and writes `/app/* → /app/index.html`.
+Leave it unset for the root deploy.
+
+The OAuth redirect URI includes the prefix. The account form shows the exact
+value (`https://mailiner.net/app/oauth/callback`). Register that URI with the
+provider.
+
 Optional form prefill for local development (does **not** auto-connect):
 
 ```
@@ -173,8 +197,9 @@ Mailiner does **not** ship Google or Microsoft client IDs. Operators bring a
 1. Create a Web / SPA OAuth client in Google Cloud Console or Microsoft Entra.
 2. Add the exact redirect URI shown on the account form:
    `https://<your-origin>/oauth/callback`
-   Local `dx serve` uses `http://localhost:<port>/oauth/callback` (Google
-   allows `http://localhost`; Microsoft does too for loopback).
+   (`https://<your-origin>/app/oauth/callback` when the app is served under
+   `/app`). Local `dx serve` uses `http://localhost:<port>/oauth/callback`
+   (Google allows `http://localhost`; Microsoft does too for loopback).
 3. On the account form, choose **OAuth 2.0**, pick Google or Microsoft, paste
    the client ID (and a Microsoft tenant if you are not using `common`).
 4. Click **Sign in with Google/Microsoft**. A popup (or same-tab redirect)

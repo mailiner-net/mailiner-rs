@@ -15,6 +15,7 @@ pub mod address_book;
 pub mod autocrypt;
 pub mod autodiscover;
 pub mod background_sync;
+pub(crate) mod base_path;
 pub(crate) mod components;
 pub(crate) mod connection;
 pub(crate) mod context;

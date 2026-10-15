@@ -1,0 +1,24 @@
+e2e/tests/live-05-session.spec.ts
+  s_bd6f81258b6a7e::t_78814b45240421 437
+  s_bd6f81258b6a7e::t_98e3a74f7438a6 291-292,295-311,314-340,342-370,373-434,453-457,459,465,476,480-481,486-487
+  s_bd6f81258b6a7e::t_15a36dd60b7780 24,287-290,293-294
+  s_bd6f81258b6a7e::t_394e13a70723f7 1,27
+  s_bd6f81258b6a7e::t_5b75d55d622de4 312-313,435-436,438-441,443-452
+  s_bd6f81258b6a7e::t_b3627f6a247c1c 341,371-372,442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "296ddacb1baa300e5b535aa380bd01208e28af82",
+  "prompts": {},
+  "sessions": {
+    "s_bd6f81258b6a7e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a13f7a-ef14-76c1-9bbe-d89d8c080504",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

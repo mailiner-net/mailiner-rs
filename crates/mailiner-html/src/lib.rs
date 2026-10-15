@@ -1,6 +1,7 @@
 //! Shared HTML/CSS sanitization for Mailiner (viewer + composer).
 
 mod css;
+mod format_marker;
 
 pub use css::sanitize_css;
 
@@ -126,6 +127,10 @@ fn allowed_tags() -> [&'static str; 28] {
 /// - `img[src]`: cid, blob, safe data: — **strip remote images**
 /// - `a[href]`: http(s), mailto
 /// - strip srcset and other URL attrs via ammonia defaults + filter
+///
+/// U+200B is kept, including the collapsed-caret marker inside `strong` /
+/// `b` / `em` / `i` / `u`. Stripping it here would delete the live caret on
+/// the next editor sync. [`sanitize_for_export`] removes that marker.
 pub fn sanitize_for_edit(html: &str) -> String {
     sanitize_fragment(html, PolicyKind::Edit)
 }
@@ -133,11 +138,16 @@ pub fn sanitize_for_edit(html: &str) -> String {
 /// Sanitize HTML after blob/data→cid rewrite, before MIME.
 ///
 /// `img[src]` allows **cid only** (plus safe data: residual rejected in v1 — cid only).
+///
+/// A `strong`/`b`/`em`/`i`/`u` element whose text is only U+200B is removed,
+/// and a leading U+200B inside those tags is removed. That character is the
+/// collapsed-caret marker. Other U+200B characters stay, so a pasted
+/// word-break hint in ordinary text survives.
 pub fn sanitize_for_export(html: &str) -> String {
     let mut out = sanitize_fragment(html, PolicyKind::Export);
     // Strip composer-internal markers.
     out = strip_data_mlnr(&out);
-    out
+    format_marker::strip_collapsed_format_markers(out)
 }
 
 #[derive(Clone, Copy)]
@@ -323,5 +333,53 @@ mod tests {
         assert!(!is_safe_image_content_type("image/svg+xml"));
         assert!(!is_safe_image_content_type("application/octet-stream"));
         assert!(!is_safe_image_content_type(""));
+    }
+
+    #[test]
+    fn edit_keeps_collapsed_format_caret_marker() {
+        let html = "<p><strong>\u{200b}</strong></p>";
+        let out = sanitize_for_edit(html);
+        assert!(out.contains('\u{200b}'), "{out}");
+        assert!(out.to_ascii_lowercase().contains("strong"), "{out}");
+    }
+
+    #[test]
+    fn export_drops_format_element_that_is_only_zwsp() {
+        assert_eq!(sanitize_for_export("<b>\u{200b}</b>"), "");
+        assert_eq!(sanitize_for_export("<i>\u{200b}</i>"), "");
+        assert_eq!(sanitize_for_export("<u>\u{200b}</u>"), "");
+        assert_eq!(sanitize_for_export("<em>\u{200b}</em>"), "");
+        assert_eq!(sanitize_for_export("<strong>\u{200b}</strong>"), "");
+        let nested = sanitize_for_export("<p>Hi<strong><em>\u{200b}</em></strong></p>");
+        assert_eq!(nested, "<p>Hi</p>");
+    }
+
+    #[test]
+    fn export_drops_leading_zwsp_inside_format_tags() {
+        let out = sanitize_for_export("<p><strong>\u{200b}Hello</strong></p>");
+        assert_eq!(out, "<p><strong>Hello</strong></p>");
+        let nested = sanitize_for_export("<p><strong>\u{200b}<em>\u{200b}Yes</em></strong></p>");
+        assert_eq!(nested, "<p><strong><em>Yes</em></strong></p>");
+        let aliases = sanitize_for_export("<b>\u{200b}B</b><i>\u{200b}I</i><u>&#x200B;U</u>");
+        assert_eq!(aliases, "<b>B</b><i>I</i><u>U</u>");
+        let entity = sanitize_for_export("<em>&#8203;Go</em>");
+        assert_eq!(entity, "<em>Go</em>");
+        let upper = sanitize_for_export("<STRONG>\u{200b}Hi</STRONG>");
+        assert_eq!(upper, "<strong>Hi</strong>");
+    }
+
+    #[test]
+    fn export_keeps_zwsp_outside_format_markers() {
+        let plain = sanitize_for_export("<p>wo\u{200b}rd</p>");
+        assert_eq!(plain, "<p>wo\u{200b}rd</p>");
+        let span = sanitize_for_export("<p><span>\u{200b}x</span></p>");
+        assert_eq!(span, "<p><span>\u{200b}x</span></p>");
+        let middle = sanitize_for_export("<strong>a\u{200b}b</strong>");
+        assert_eq!(middle, "<strong>a\u{200b}b</strong>");
+        let with_img =
+            sanitize_for_export("<strong>\u{200b}<img src=\"cid:a@b\" alt=\"t\"></strong>");
+        assert_eq!(with_img, "<strong><img src=\"cid:a@b\" alt=\"t\"></strong>");
+        let classed = sanitize_for_export("<strong class=\"x\">\u{200b}Hi</strong>");
+        assert_eq!(classed, "<strong class=\"x\">Hi</strong>");
     }
 }

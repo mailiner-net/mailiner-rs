@@ -368,7 +368,9 @@ mod web {
     /// A collapsed caret that is not already inside the mark inserts an empty
     /// wrapper with a zero-width space so the browser keeps the element, and
     /// the caret is placed after that space. A second click on the same mark
-    /// moves the caret out of it.
+    /// moves the caret out of it. Export drops a wrapper whose only text is
+    /// that marker, and a leading marker left inside the wrapper. The edit
+    /// sanitizer keeps it so the next sync does not delete the live caret.
     ///
     /// A selection toggles. When every selected character already sits in the
     /// mark (`strong`/`b`, `em`/`i`, or `u`), that mark is lifted off the

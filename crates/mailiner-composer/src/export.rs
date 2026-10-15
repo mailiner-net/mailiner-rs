@@ -240,12 +240,19 @@ fn attachment_bytes(data: &AttachmentData) -> Result<&[u8], PrepareSubmitError> 
 fn alternative_or_single(draft: &DraftDocument) -> MimePart {
     let use_html = draft.mode == BodyMode::Rich || !draft.html_body.trim().is_empty();
     if use_html {
-        let plain = if draft.plain_cache_dirty || draft.plain_body.is_empty() {
-            html_to_plain(&draft.html_body)
+        let html = sanitize_for_export(&draft.html_body);
+        // Rich plain is a cache of the HTML. Rebuild it from the exported HTML
+        // when that cache still holds a collapsed-caret U+200B, so the text
+        // part does not keep a marker the HTML part just dropped. A U+200B in
+        // ordinary text is still in `html`, so a pasted word-break survives.
+        let plain = if draft.plain_cache_dirty
+            || draft.plain_body.is_empty()
+            || (draft.mode == BodyMode::Rich && draft.plain_body.contains('\u{200b}'))
+        {
+            html_to_plain(&html)
         } else {
             draft.plain_body.clone()
         };
-        let html = sanitize_for_export(&draft.html_body);
         MimePart {
             headers: vec![],
             body: MimeBody::Multipart {
@@ -453,6 +460,32 @@ mod tests {
         d.to.push(ComposerAddress::email_only("you@example.com"));
         let prepared = prepare_submit(&d, &id).unwrap();
         assert!(prepared.message_id.ends_with("@mailiner.invalid>"));
+    }
+
+    #[test]
+    fn rich_export_drops_collapsed_caret_marker_and_keeps_word_break() {
+        let mut d = minimal();
+        d.mode = BodyMode::Rich;
+        d.html_body = "<p><strong>\u{200b}</strong><em>\u{200b}Hi</em> a\u{200b}b</p>".into();
+        d.plain_body = html_to_plain(&d.html_body);
+        d.plain_cache_dirty = false;
+        let prepared = prepare_submit(&d, &identity()).unwrap();
+        let s = String::from_utf8_lossy(&prepared.rfc822);
+        assert!(
+            s.contains("<em>Hi</em>"),
+            "leading marker inside em should be gone:\n{s}"
+        );
+        assert!(
+            !s.to_ascii_lowercase().contains("<strong"),
+            "marker-only strong should be gone:\n{s}"
+        );
+        // One U+200B in the HTML part and one in the plain part (the word break).
+        // Format markers must not add more. Quoted-printable encodes the character.
+        assert_eq!(
+            s.matches("=E2=80=8B").count(),
+            2,
+            "word-break ZWSP should survive once per part:\n{s}"
+        );
     }
 
     #[test]

@@ -1,0 +1,24 @@
+crates/mailiner-app/src/components/oauth_callback.rs
+  s_343184a2f13875::t_d6390d13e654ad 35-39,44,113
+e2e/prefix-static-server.mjs
+  s_343184a2f13875::t_7ef7e73d4a4a3d 42,44,54-55,58,63,71-75,77-79,83,88-89
+  s_343184a2f13875::t_13d7dde7f53532 6-9,21
+playwright.config.ts
+  s_343184a2f13875::t_8602e20215f2ec 69-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "dd79898ecbfbc5081b89d28cd0cf169a11c77a1e",
+  "prompts": {},
+  "sessions": {
+    "s_343184a2f13875": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a14019-6e29-77c1-8249-528864092c49",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

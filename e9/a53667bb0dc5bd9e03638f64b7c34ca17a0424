@@ -1,0 +1,22 @@
+crates/mailiner-html/src/format_marker.rs
+  s_f443a40307c077::t_9ec7b382fca1d4 7-9,44
+  s_f443a40307c077::t_58747ff7efcb8c 67-76,306-308,310-323,325-331,335-353,355,362-363,365,368
+crates/mailiner-html/src/lib.rs
+  s_f443a40307c077::t_c1a298c1c9c8f7 385-424
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e9a53667bb0dc5bd9e03638f64b7c34ca17a0424",
+  "prompts": {},
+  "sessions": {
+    "s_f443a40307c077": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a14014-a001-7593-8c87-e8fa7fbe9c4e",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

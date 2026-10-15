@@ -1,0 +1,60 @@
+crates/mailiner-app/src/oauth.rs
+  s_343184a2f13875::t_aafb0b1aa2e66c 21-25,157-161,163-172,843,847,850-852
+e2e/tests/helpers.ts
+  s_343184a2f13875::t_9616932fec9db8 169-189,192
+crates/mailiner-app/Dioxus.toml
+  s_343184a2f13875::t_e995d38d773e08 8-11
+e2e/tests/app.spec.ts
+  s_343184a2f13875::t_9365596155f2b4 141,144
+  s_343184a2f13875::t_60de472ae26aab 151,158,160
+  s_343184a2f13875::t_4dc34696223dd6 2,38,92,99-100,106-117,134
+README.md
+  s_343184a2f13875::t_f1ace8fd9b06d9 134-157,200-202
+e2e/tests/settings.spec.ts
+  s_343184a2f13875::t_b15bc2f974ebb8 5,33,43,47,66-69
+crates/mailiner-app/src/shell.rs
+  s_343184a2f13875::t_2d08aa74cc833f 161-165,531-536,540-541
+crates/mailiner-app/public/manifest.webmanifest
+  s_343184a2f13875::t_99e2384d49c9f7 2,6-7,16,22,28,34
+crates/mailiner-app/Cargo.toml
+  s_343184a2f13875::t_53331eb47fac86 21-23
+e2e/tests/onboarding.spec.ts
+  s_343184a2f13875::t_0446cfa45b2ce0 2-8,66-68
+crates/mailiner-app/public/sw.js
+  s_343184a2f13875::t_df056288bf6000 4-10,12-16,19-26,28,32,34-48,51,54,87,92
+crates/mailiner-app/src/components/oauth_callback.rs
+  s_343184a2f13875::t_13d2a0d46ffbf0 32-41
+  s_343184a2f13875::t_4e714ad1445eba 86-88,91,93
+e2e/README.md
+  s_343184a2f13875::t_e519c86c28b9de 50-60
+e2e/tests/base-path.spec.ts
+  s_343184a2f13875::t_4be1a8bf4f9bc6 72-79
+  s_343184a2f13875::t_b8e32a4fc574d0 1-30,37-71,82-91
+  s_343184a2f13875::t_d5c39e62e9d683 31-36,80-81
+crates/mailiner-app/README.md
+  s_343184a2f13875::t_2da42ad57157c6 28-33,36-37
+crates/mailiner-app/src/base_path.rs
+  s_343184a2f13875::t_53f7b7fe50e731 1-19,21-37,44-45,47-48,50,52-59,81-107
+  s_343184a2f13875::t_51406eeb0a39dc 20,38-43,46,49,51
+  s_343184a2f13875::t_eb10df6e14be91 60-80
+e2e/tests/mailbox.spec.ts
+  s_343184a2f13875::t_e2f7237c9e6112 6,134,138,143
+.github/workflows/build-test.yml
+  s_343184a2f13875::t_d5ccfb7e423e8a 134-142,159-168,172,182-183,191,194-195,200-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "89fcb436df043c3e7429aa6636148ff6fdcaf780",
+  "prompts": {},
+  "sessions": {
+    "s_343184a2f13875": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a14019-6e29-77c1-8249-528864092c49",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

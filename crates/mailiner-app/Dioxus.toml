@@ -21,6 +21,10 @@ script = []
 #
 # PWA files (manifest, sw.js, icons) live in this crate's `public/` directory
 # and are copied as-is to the web output (stable paths, not asset-hashed).
+#
+# index.html next to this file replaces the dx-generated shell for both
+# `dx serve` and release. It paints the boot splash before WASM. Keep
+# `<div id="main">` and `</body>` so dx can mount and inject the module script.
 
 [web.resource.dev]
 

@@ -1,8 +1,67 @@
 import { test, expect } from '@playwright/test';
 import { gotoPath } from './helpers';
 
+test('boot splash paints before wasm and follows the saved theme', async ({
+  page,
+}) => {
+  // Production sends this as an HTTP header (see CONTENT_SECURITY_POLICY).
+  // The inline theme script must keep running under that policy.
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'sha256-KaoW6l5hTJxx84D7Fm09Vjr67WhRAgdifCVfrs4oYNk='",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: http: https:",
+    "font-src 'self'",
+    "connect-src 'self' ws: wss: http: https:",
+    "frame-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ');
+
+  await page.route('**/*', async (route) => {
+    if (route.request().resourceType() !== 'document') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const headers = response.headers();
+    headers['content-security-policy'] = csp;
+    await route.fulfill({
+      status: response.status(),
+      headers,
+      body: await response.body(),
+    });
+  });
+  await page.route('**/*.wasm', (route) => route.abort());
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+  const splash = page.locator('#mailiner-splash');
+  await expect(splash).toBeVisible();
+  await expect(splash).toContainText('Mailiner');
+  await expect(splash).toContainText('Loading…');
+  await expect(page.locator('#main')).toBeEmpty();
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
+  expect(
+    await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+  ).toBe('rgb(18, 18, 18)');
+
+  await page.addInitScript(() => {
+    // Matches `THEME_KEY` in ui_prefs.rs (`mailiner.ui.theme`).
+    localStorage.setItem('mailiner.ui.theme', 'light');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(splash).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(
+    await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+  ).toBe('rgb(255, 255, 255)');
+});
+
 test('empty store shows first-run onboarding', async ({ page }) => {
   await gotoPath(page);
+  await expect(page.locator('#mailiner-splash')).toHaveCount(0);
 
   // Empty localStorage → NeedsOnboarding → /onboarding (no mail chrome #app).
   await expect(page.getByRole('heading', { name: 'Welcome to Mailiner' })).toBeVisible();
@@ -70,7 +129,7 @@ test('app-shell service worker is registered', async ({ page, request }) => {
   const sw = await request.get('/sw.js');
   expect(sw.ok()).toBe(true);
   const body = await sw.text();
-  expect(body).toContain('mailiner-shell-v1');
+  expect(body).toContain('mailiner-shell-v2');
   expect(body).toContain('isAppShell');
 
   await gotoPath(page);

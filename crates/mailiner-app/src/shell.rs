@@ -77,9 +77,13 @@ const THEME_COLOR: &str = "#121212";
 /// message images working.
 ///
 /// Tradeoffs:
-/// - `script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'`: WASM instantiation
-///   needs `wasm-unsafe-eval`. wasm-bindgen also builds closures with
-///   `new Function(...)`, which requires `unsafe-eval`. No third-party scripts.
+/// - `script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'sha256-…'`: WASM
+///   instantiation needs `wasm-unsafe-eval`. wasm-bindgen also builds closures
+///   with `new Function(...)`, which requires `unsafe-eval`. No third-party
+///   scripts. The sha256 allow-lists the inline boot-splash theme script in
+///   `index.html` (`#mailiner-splash-theme`), which only copies
+///   `mailiner.ui.theme` onto `<html data-theme>` before first paint.
+///   Production CSP blocks every other inline script.
 /// - `style-src 'self' 'unsafe-inline'`: Dioxus components (e.g. virtual list)
 ///   use inline `style=` attributes; strict style-src breaks layout. Remote
 ///   stylesheets are not allowed (formatter/sanitizer strips them).
@@ -102,7 +106,7 @@ const THEME_COLOR: &str = "#121212";
 ///   after mount and does not send the header.
 const CONTENT_SECURITY_POLICY: &str = "\
 default-src 'self'; \
-script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; \
+script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'sha256-KaoW6l5hTJxx84D7Fm09Vjr67WhRAgdifCVfrs4oYNk='; \
 style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob: http: https:; \
 font-src 'self'; \
@@ -116,6 +120,25 @@ form-action 'self'\
 pub fn launch() {
     register_service_worker();
     dioxus::launch(App);
+}
+
+/// Element id of the pre-WASM splash in `crates/mailiner-app/index.html`.
+const BOOT_SPLASH_ID: &str = "mailiner-splash";
+
+/// Drop the boot splash once the app has committed its first frame.
+///
+/// The node is a sibling of `#main`, so the renderer never clears it.
+fn dismiss_boot_splash() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(splash) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(BOOT_SPLASH_ID))
+        else {
+            return;
+        };
+        splash.remove();
+    }
 }
 
 /// Register the app-shell service worker so the origin is installable.
@@ -499,6 +522,10 @@ fn App() -> Element {
         Rc::new(closure)
     });
 
+    // After this commit, #main has the first frame (loading / unlock / mail).
+    // The splash covered the empty document while WASM was still downloading.
+    use_effect(dismiss_boot_splash);
+
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
@@ -777,4 +804,109 @@ fn AccountEditView(id: String) -> Element {
         return redirecting_shell();
     }
     rsx! { AccountEditPage { id } }
+}
+
+#[cfg(test)]
+mod boot_splash_csp {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    use super::CONTENT_SECURITY_POLICY;
+
+    /// Text of `<script id="mailiner-splash-theme">`, which production CSP
+    /// allow-lists by sha256. Whitespace is part of the hash.
+    fn splash_theme_script(html: &str) -> &str {
+        const OPEN: &str = "<script id=\"mailiner-splash-theme\">";
+        let start = html
+            .find(OPEN)
+            .expect("index.html boot splash theme script")
+            + OPEN.len();
+        let rest = &html[start..];
+        let end = rest
+            .find("</script>")
+            .expect("index.html boot splash theme script end");
+        &rest[..end]
+    }
+
+    fn csp_hash(script: &str) -> String {
+        let digest = Sha256::digest(script.as_bytes());
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    }
+
+    /// Same extraction as `.github/workflows/build-test.yml` (the Pages header).
+    fn policy_from_shell_source(src: &str) -> String {
+        const MARKER: &str = "const CONTENT_SECURITY_POLICY: &str = \"";
+        let start = src.find(MARKER).expect("CONTENT_SECURITY_POLICY") + MARKER.len();
+        let end = src[start..]
+            .find("\";")
+            .expect("CONTENT_SECURITY_POLICY terminator");
+        src[start..start + end].replace("\\\n", "")
+    }
+
+    #[test]
+    fn inline_theme_script_matches_csp_hash() {
+        let html = include_str!("../index.html");
+        let script = splash_theme_script(html);
+        assert!(
+            script.contains(crate::ui_prefs::THEME_KEY),
+            "splash theme script must read the same localStorage key as ThemePref"
+        );
+        assert!(script.contains("\"dark\"") && script.contains("\"light\""));
+
+        let token = format!("'sha256-{}'", csp_hash(script));
+        assert!(
+            CONTENT_SECURITY_POLICY.contains(&token),
+            "add {token} to script-src in CONTENT_SECURITY_POLICY"
+        );
+
+        let mut rest = html;
+        let mut inline = 0;
+        while let Some(at) = rest.find("<script") {
+            let after = &rest[at..];
+            let tag_end = after.find('>').expect("script tag");
+            let tag = &after[..=tag_end];
+            let body_at = tag_end + 1;
+            let close = after[body_at..].find("</script>").expect("script close");
+            if !tag.contains("src=") {
+                inline += 1;
+                assert_eq!(&after[body_at..body_at + close], script);
+            }
+            rest = &after[body_at + close + "</script>".len()..];
+        }
+        assert_eq!(inline, 1, "only the theme script may be inline");
+
+        let main_at = html.find("<div id=\"main\"></div>").expect("#main");
+        let splash_at = html.find("<div id=\"mailiner-splash\"").expect("splash");
+        assert!(
+            splash_at < main_at,
+            "splash must be outside #main so Dioxus does not leave it in the tree"
+        );
+        assert!(!html[main_at..].contains("mailiner-splash"));
+
+        // dx replaces these tokens on every occurrence, including comments.
+        // `</body` is also rewritten globally when the module script is injected.
+        assert_eq!(html.matches("{app_title}").count(), 1);
+        assert_eq!(html.matches("{style_include}").count(), 1);
+        assert_eq!(html.matches("{base_path}").count(), 2);
+        assert_eq!(html.matches("</body>").count(), 1);
+
+        // Without JavaScript the loading line and bar must not sit next to
+        // the noscript warning. The style lives in <noscript>, so it applies
+        // only when scripting is disabled.
+        let noscript_at = html.find("<noscript>").expect("noscript");
+        let noscript_end = html[noscript_at..]
+            .find("</noscript>")
+            .expect("noscript end");
+        let noscript = &html[noscript_at..noscript_at + noscript_end];
+        assert!(noscript.contains(".mailiner-splash-loading"));
+        assert!(noscript.contains("display: none"));
+        assert!(html.contains("mailiner-splash-loading\">Loading…"));
+        assert!(html.contains("mailiner-splash-bar mailiner-splash-loading"));
+
+        let policy = policy_from_shell_source(include_str!("shell.rs"));
+        assert!(!policy.contains('\n'), "{policy:?}");
+        assert!(!policy.contains('\\'), "{policy:?}");
+        assert!(policy.contains(&token), "{policy}");
+        assert!(policy.contains("default-src 'self'"));
+    }
 }

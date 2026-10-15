@@ -196,9 +196,12 @@
                 <img src="/{base_path}/icons/icon-192.png" width="64" height="64" alt="">
             </div>
             <p class="mailiner-splash-title">Mailiner</p>
-            <p class="mailiner-splash-status">Loading…</p>
-            <div class="mailiner-splash-bar" aria-hidden="true"><span></span></div>
+            <p class="mailiner-splash-status mailiner-splash-loading">Loading…</p>
+            <div class="mailiner-splash-bar mailiner-splash-loading" aria-hidden="true"><span></span></div>
             <noscript>
+                <style>
+                    .mailiner-splash-loading { display: none; }
+                </style>
                 <p class="mailiner-splash-status">Mailiner needs JavaScript to start.</p>
             </noscript>
         </div>

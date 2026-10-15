@@ -890,6 +890,19 @@ mod boot_splash_csp {
         assert_eq!(html.matches("{base_path}").count(), 2);
         assert_eq!(html.matches("</body>").count(), 1);
 
+        // Without JavaScript the loading line and bar must not sit next to
+        // the noscript warning. The style lives in <noscript>, so it applies
+        // only when scripting is disabled.
+        let noscript_at = html.find("<noscript>").expect("noscript");
+        let noscript_end = html[noscript_at..]
+            .find("</noscript>")
+            .expect("noscript end");
+        let noscript = &html[noscript_at..noscript_at + noscript_end];
+        assert!(noscript.contains(".mailiner-splash-loading"));
+        assert!(noscript.contains("display: none"));
+        assert!(html.contains("mailiner-splash-loading\">Loading…"));
+        assert!(html.contains("mailiner-splash-bar mailiner-splash-loading"));
+
         let policy = policy_from_shell_source(include_str!("shell.rs"));
         assert!(!policy.contains('\n'), "{policy:?}");
         assert!(!policy.contains('\\'), "{policy:?}");

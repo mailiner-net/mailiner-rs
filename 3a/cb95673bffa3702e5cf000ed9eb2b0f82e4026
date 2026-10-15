@@ -1,0 +1,21 @@
+crates/mailiner-composer/src/editor/mount.rs
+  s_1a1f8d610405de::t_3c2d9e7f68546a 622,1000-1008,1011,1021,1023-1024
+e2e/tests/compose-format.spec.ts
+  s_1a1f8d610405de::t_eca51735f897a2 82-89,220-235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3acb95673bffa3702e5cf000ed9eb2b0f82e4026",
+  "prompts": {},
+  "sessions": {
+    "s_1a1f8d610405de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a13f7b-ae57-7231-a366-39f30cb7ca79",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

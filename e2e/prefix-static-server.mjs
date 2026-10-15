@@ -51,8 +51,9 @@ function sendFile(res, file) {
 }
 
 const server = http.createServer((req, res) => {
-  // Use the URL parser's pathname only. A second decode would turn
-  // `/app/..%2f_headers` into a path outside the prefix.
+  // Use the URL parser's pathname only. It already decodes escapes such as
+  // `%20` and removes `..` segments. Do not decode again: `%2f` stays a
+  // literal filename under the prefix instead of a directory separator.
   let pathname;
   try {
     pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
@@ -60,7 +61,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(400).end('bad path');
     return;
   }
-  if (pathname.includes('\0') || pathname.includes('\\') || pathname.includes('%')) {
+  if (pathname.includes('\0') || pathname.includes('\\')) {
     res.writeHead(400).end('bad path');
     return;
   }

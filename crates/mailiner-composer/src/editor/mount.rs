@@ -368,7 +368,13 @@ mod web {
     /// A collapsed caret that is not already inside the mark inserts an empty
     /// wrapper with a zero-width space so the browser keeps the element, and
     /// the caret is placed after that space. A second click on the same mark
-    /// moves the caret out of it. A non-collapsed selection is wrapped.
+    /// moves the caret out of it.
+    ///
+    /// A selection toggles. When every selected character already sits in the
+    /// mark (`strong`/`b`, `em`/`i`, or `u`), that mark is lifted off the
+    /// selection, splitting elements the selection covers only in part. Other
+    /// inline elements stay. Otherwise the mark is applied to characters that
+    /// lack it, without nesting a second copy on text that already has one.
     fn apply_inline_format(host_id: &str, command: EditorCommand) -> bool {
         let Some((tag, aliases)) = inline_tag(command) else {
             return false;
@@ -405,7 +411,7 @@ mod web {
                 insert_collapsed_wrapper(&sel, &range, tag)
             }
         } else {
-            wrap_range(&sel, &range, tag)
+            toggle_inline_selection(&sel, &range, tag, aliases, &edit)
         };
         if applied {
             let _ = edit.focus();
@@ -474,10 +480,44 @@ mod web {
             return false;
         }
         range.collapse_with_to_start(true);
-        if sel.remove_all_ranges().is_err() {
+        if sel.remove_all_ranges().is_err() || sel.add_range(&range).is_err() {
             return false;
         }
-        sel.add_range(&range).is_ok()
+        // Chrome snaps a caret on an element boundary back into the mark.
+        // A text node just outside, with the caret after a zero-width space,
+        // is a position it keeps.
+        if !caret_inside(sel, el) {
+            return true;
+        }
+        let Some(text) = exit_anchor(&document, el) else {
+            return false;
+        };
+        if range.set_start(&text, 1).is_err() {
+            return false;
+        }
+        range.collapse_with_to_start(true);
+        sel.remove_all_ranges().is_ok() && sel.add_range(&range).is_ok()
+    }
+
+    fn caret_inside(sel: &Selection, el: &Element) -> bool {
+        sel.anchor_node()
+            .is_some_and(|node| el.contains(Some(&node)))
+    }
+
+    /// Text node immediately after `el` that can hold a caret outside the mark.
+    fn exit_anchor(document: &web_sys::Document, el: &Element) -> Option<web_sys::Text> {
+        if let Some(next) = el.next_sibling() {
+            if let Some(text) = next.dyn_ref::<web_sys::Text>() {
+                if text.text_content().as_deref() == Some("\u{200b}") {
+                    return Some(text.clone());
+                }
+            }
+        }
+        let text = document.create_text_node("\u{200b}");
+        el.parent_node()?
+            .insert_before(&text, el.next_sibling().as_ref())
+            .ok()?;
+        Some(text)
     }
 
     fn insert_collapsed_wrapper(sel: &Selection, range: &web_sys::Range, tag: &str) -> bool {
@@ -529,6 +569,464 @@ mod web {
             return false;
         }
         sel.add_range(range).is_ok()
+    }
+
+    /// Marker attribute. Empty spans bracket the selection so later splits
+    /// cannot invalidate the original range endpoints.
+    const MARKER_ATTR: &str = "data-mlnr-fmt";
+
+    struct SelectionMarkers {
+        start: Element,
+        end: Element,
+        live: bool,
+    }
+
+    impl SelectionMarkers {
+        fn take_down(&mut self) {
+            if self.live {
+                self.start.remove();
+                self.end.remove();
+                self.live = false;
+            }
+        }
+    }
+
+    impl Drop for SelectionMarkers {
+        fn drop(&mut self) {
+            self.take_down();
+        }
+    }
+
+    fn toggle_inline_selection(
+        sel: &Selection,
+        range: &web_sys::Range,
+        tag: &str,
+        aliases: &[&str],
+        root: &HtmlElement,
+    ) -> bool {
+        let Some(mut markers) = insert_markers(range) else {
+            return false;
+        };
+        let handled = if selection_is_formatted(&markers.start, &markers.end, aliases, root) {
+            unwrap_marks(&markers.start, &markers.end, aliases, root);
+            true
+        } else {
+            wrap_unformatted(sel, &markers.start, &markers.end, tag, aliases, root)
+        };
+        if !handled {
+            return false;
+        }
+        let selected = range_between(&markers.start, &markers.end);
+        markers.take_down();
+        root.normalize();
+        remove_empty_inlines(root);
+        if let Some(selected) = selected {
+            let _ = sel.remove_all_ranges();
+            let _ = sel.add_range(&selected);
+        }
+        true
+    }
+
+    fn insert_markers(range: &web_sys::Range) -> Option<SelectionMarkers> {
+        let document = document()?;
+        let end = document.create_element("span").ok()?;
+        end.set_attribute(MARKER_ATTR, "end").ok()?;
+        let start = document.create_element("span").ok()?;
+        start.set_attribute(MARKER_ATTR, "start").ok()?;
+        // Clone both endpoints before either insert. Inserting the end marker
+        // first keeps a shared text node from shifting the start offset.
+        let end_point = range.clone_range();
+        end_point.collapse_with_to_start(false);
+        let start_point = range.clone_range();
+        start_point.collapse_with_to_start(true);
+        if end_point.insert_node(&end).is_err() {
+            return None;
+        }
+        if start_point.insert_node(&start).is_err() {
+            end.remove();
+            return None;
+        }
+        Some(SelectionMarkers {
+            start,
+            end,
+            live: true,
+        })
+    }
+
+    fn range_between(start: &Node, end: &Node) -> Option<web_sys::Range> {
+        let document = document()?;
+        let range = document.create_range().ok()?;
+        range.set_start_after(start).ok()?;
+        range.set_end_before(end).ok()?;
+        Some(range)
+    }
+
+    fn selection_is_formatted(
+        start: &Node,
+        end: &Node,
+        aliases: &[&str],
+        root: &HtmlElement,
+    ) -> bool {
+        let texts = text_nodes_between(root, start, end);
+        if !texts.is_empty() {
+            return texts
+                .iter()
+                .all(|node| formatting_ancestor(node, aliases, root).is_some());
+        }
+        // A selection of only a `<br>` or image is "on" when both edges sit in the mark.
+        formatting_ancestor(start, aliases, root).is_some()
+            && formatting_ancestor(end, aliases, root).is_some()
+    }
+
+    fn text_nodes_between(root: &Node, start: &Node, end: &Node) -> Vec<Node> {
+        let Some(sel) = range_between(start, end) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        collect_text(root, &sel, &mut out);
+        out
+    }
+
+    fn collect_text(node: &Node, sel: &web_sys::Range, out: &mut Vec<Node>) {
+        if node.node_type() == Node::TEXT_NODE {
+            if text_overlaps(sel, node) {
+                out.push(node.clone());
+            }
+            return;
+        }
+        for child in child_nodes(node) {
+            collect_text(&child, sel, out);
+        }
+    }
+
+    fn text_overlaps(sel: &web_sys::Range, node: &Node) -> bool {
+        let Some(text) = node.dyn_ref::<web_sys::Text>() else {
+            return false;
+        };
+        // `intersectsNode` is false when the node only touches a boundary.
+        text.length() > 0 && sel.intersects_node(node).unwrap_or(false)
+    }
+
+    fn child_nodes(node: &Node) -> Vec<Node> {
+        let mut out = Vec::new();
+        let mut current = node.first_child();
+        while let Some(child) = current {
+            current = child.next_sibling();
+            out.push(child);
+        }
+        out
+    }
+
+    fn tag_matches(node: &Node, aliases: &[&str]) -> bool {
+        let Some(el) = node.dyn_ref::<Element>() else {
+            return false;
+        };
+        let name = el.tag_name();
+        aliases.iter().any(|tag| name.eq_ignore_ascii_case(tag))
+    }
+
+    fn unwrap_marks(start: &Element, end: &Element, aliases: &[&str], root: &Element) {
+        let matches = collect_matches(root, aliases, start, end);
+        for el in matches {
+            if el.parent_node().is_none() {
+                continue;
+            }
+            let Some(sel) = range_between(start, end) else {
+                return;
+            };
+            if !sel.intersects_node(&el).unwrap_or(false) {
+                continue;
+            }
+            let start_inside = el.contains(Some(start));
+            let end_inside = el.contains(Some(end));
+            if start_inside && end_inside {
+                split_before(&el, end);
+                if el.parent_node().is_some() && el.contains(Some(start)) {
+                    if let Some(middle) = split_before(&el, start) {
+                        unwrap_element(&middle);
+                    }
+                }
+            } else if end_inside {
+                split_before(&el, end);
+                if el.parent_node().is_some() {
+                    unwrap_element(&el);
+                }
+            } else if start_inside {
+                if let Some(right) = split_before(&el, start) {
+                    unwrap_element(&right);
+                }
+            } else {
+                unwrap_element(&el);
+            }
+        }
+    }
+
+    fn collect_matches(root: &Element, aliases: &[&str], start: &Node, end: &Node) -> Vec<Element> {
+        let Some(sel) = range_between(start, end) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        collect_matching(root, &sel, aliases, &mut found);
+        found.sort_by_key(|el| std::cmp::Reverse(depth_under(el, root)));
+        found
+    }
+
+    fn collect_matching(
+        node: &Node,
+        sel: &web_sys::Range,
+        aliases: &[&str],
+        found: &mut Vec<Element>,
+    ) {
+        for child in child_nodes(node) {
+            if let Some(el) = child.dyn_ref::<Element>().cloned() {
+                if tag_matches(&child, aliases) && sel.intersects_node(&child).unwrap_or(false) {
+                    found.push(el);
+                }
+                collect_matching(&child, sel, aliases, found);
+            }
+        }
+    }
+
+    fn depth_under(node: &Node, root: &Node) -> u32 {
+        let mut depth = 0;
+        let mut current = node.parent_node();
+        while let Some(parent) = current {
+            depth += 1;
+            if parent.is_same_node(Some(root)) {
+                break;
+            }
+            current = parent.parent_node();
+        }
+        depth
+    }
+
+    /// Move `boundary` and everything after it into a new sibling of `el`.
+    /// Partially covered ancestors between `boundary` and `el` are split too.
+    fn split_before(el: &Element, boundary: &Node) -> Option<Element> {
+        if !el.contains(Some(boundary)) || el.is_same_node(Some(boundary)) {
+            return None;
+        }
+        let document = document()?;
+        let range = document.create_range().ok()?;
+        range.set_start_before(boundary).ok()?;
+        let end_offset = u32::try_from(child_nodes(el).len()).ok()?;
+        range.set_end(el, end_offset).ok()?;
+        if range.collapsed() {
+            return None;
+        }
+        let fragment = range.extract_contents().ok()?;
+        let clone = el.clone_node_with_deep(false).ok()?;
+        let clone = clone.dyn_into::<Element>().ok()?;
+        clone.append_child(&fragment).ok()?;
+        let parent = el.parent_node()?;
+        parent
+            .insert_before(&clone, el.next_sibling().as_ref())
+            .ok()?;
+        if el.first_child().is_none() {
+            el.remove();
+        }
+        if clone.first_child().is_none() {
+            clone.remove();
+            return None;
+        }
+        Some(clone)
+    }
+
+    fn unwrap_element(el: &Element) {
+        let Some(parent) = el.parent_node() else {
+            return;
+        };
+        while let Some(child) = el.first_child() {
+            if parent.insert_before(&child, Some(el)).is_err() {
+                return;
+            }
+        }
+        el.remove();
+    }
+
+    fn wrap_unformatted(
+        sel: &Selection,
+        start: &Element,
+        end: &Element,
+        tag: &str,
+        aliases: &[&str],
+        root: &HtmlElement,
+    ) -> bool {
+        let texts = text_nodes_between(root, start, end);
+        let mut wrapped = false;
+        for node in &texts {
+            if formatting_ancestor(node, aliases, root).is_some() {
+                continue;
+            }
+            if wrap_whole(node, tag) {
+                wrapped = true;
+            }
+        }
+        if wrapped {
+            if let Some(range) = range_between(start, end) {
+                merge_adjacent(root, &range, aliases, tag);
+            }
+            return true;
+        }
+        // Text was already formatted. The caller treats that as an unwrap.
+        if !texts.is_empty() {
+            return true;
+        }
+        let Some(range) = range_between(start, end) else {
+            return false;
+        };
+        wrap_range(sel, &range, tag)
+    }
+
+    fn wrap_whole(node: &Node, tag: &str) -> bool {
+        let Some(document) = document() else {
+            return false;
+        };
+        let Ok(el) = document.create_element(tag) else {
+            return false;
+        };
+        let Some(parent) = node.parent_node() else {
+            return false;
+        };
+        if parent.insert_before(&el, Some(node)).is_err() {
+            return false;
+        }
+        el.append_child(node).is_ok()
+    }
+
+    fn merge_adjacent(root: &Node, sel: &web_sys::Range, aliases: &[&str], canonical: &str) {
+        for child in child_nodes(root) {
+            if child.node_type() == Node::ELEMENT_NODE {
+                merge_adjacent(&child, sel, aliases, canonical);
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            let Some(next) = current.next_sibling() else {
+                break;
+            };
+            if is_plain_alias(&current, aliases) && is_plain_alias(&next, aliases) {
+                if let Some(index) = child_index(root, &next) {
+                    if point_strictly_inside(sel, root, index) {
+                        if let Some(keep) = merge_pair(root, &current, &next, canonical) {
+                            child = Some(keep);
+                            continue;
+                        }
+                    }
+                }
+            }
+            child = Some(next);
+        }
+    }
+
+    fn is_plain_alias(node: &Node, aliases: &[&str]) -> bool {
+        let Some(el) = node.dyn_ref::<Element>() else {
+            return false;
+        };
+        tag_matches(node, aliases) && el.get_attribute_names().length() == 0
+    }
+
+    fn child_index(parent: &Node, child: &Node) -> Option<u32> {
+        let mut index = 0;
+        let mut current = parent.first_child();
+        while let Some(node) = current {
+            if node.is_same_node(Some(child)) {
+                return Some(index);
+            }
+            index += 1;
+            current = node.next_sibling();
+        }
+        None
+    }
+
+    /// Chrome reports `-1` when this boundary is before the probe and `1` when it is after.
+    /// The selection's own start and end boundaries are not strictly inside.
+    fn point_strictly_inside(sel: &web_sys::Range, node: &Node, offset: u32) -> bool {
+        let Some(document) = document() else {
+            return false;
+        };
+        let Ok(probe) = document.create_range() else {
+            return false;
+        };
+        if probe.set_start(node, offset).is_err() {
+            return false;
+        }
+        probe.collapse_with_to_start(true);
+        let Ok(start_cmp) = sel.compare_boundary_points(web_sys::Range::START_TO_START, &probe)
+        else {
+            return false;
+        };
+        let Ok(end_cmp) = sel.compare_boundary_points(web_sys::Range::START_TO_END, &probe) else {
+            return false;
+        };
+        start_cmp == -1 && end_cmp == 1
+    }
+
+    fn merge_pair(parent: &Node, current: &Node, next: &Node, canonical: &str) -> Option<Node> {
+        let keep = if tag_is(current, canonical) {
+            current.clone()
+        } else {
+            let document = document()?;
+            let renamed = document.create_element(canonical).ok()?;
+            while let Some(child) = current.first_child() {
+                renamed.append_child(&child).ok()?;
+            }
+            parent.insert_before(&renamed, Some(current)).ok()?;
+            remove_node(current);
+            renamed.unchecked_into::<Node>()
+        };
+        while let Some(child) = next.first_child() {
+            keep.append_child(&child).ok()?;
+        }
+        remove_node(next);
+        Some(keep)
+    }
+
+    fn tag_is(node: &Node, tag: &str) -> bool {
+        node.dyn_ref::<Element>()
+            .is_some_and(|el| el.tag_name().eq_ignore_ascii_case(tag))
+    }
+
+    fn remove_node(node: &Node) {
+        if let Some(el) = node.dyn_ref::<Element>() {
+            el.remove();
+            return;
+        }
+        if let Some(parent) = node.parent_node() {
+            let _ = parent.remove_child(node);
+        }
+    }
+
+    /// Inline tags a split can leave with no children. `br`, `img`, and `hr`
+    /// are omitted: they have no children and are real content.
+    const EMPTY_INLINE: &[&str] = &["a", "b", "code", "em", "i", "span", "strong", "u"];
+
+    /// Drop empty inline wrappers. A split clones every ancestor between the
+    /// marker and the mark, so unwrapping bold can leave an empty `<em>`
+    /// inside the untouched side of a `<strong>`. Removing that `<em>` can
+    /// empty the `<strong>`, so this repeats.
+    fn remove_empty_inlines(root: &Node) {
+        loop {
+            let mut empty = Vec::new();
+            collect_empty_inlines(root, &mut empty);
+            if empty.is_empty() {
+                break;
+            }
+            for el in empty {
+                el.remove();
+            }
+        }
+    }
+
+    fn collect_empty_inlines(node: &Node, out: &mut Vec<Element>) {
+        for child in child_nodes(node) {
+            collect_empty_inlines(&child, out);
+            if tag_matches(&child, EMPTY_INLINE) && child.first_child().is_none() {
+                if let Some(el) = child.dyn_ref::<Element>() {
+                    out.push(el.clone());
+                }
+            }
+        }
     }
 }
 

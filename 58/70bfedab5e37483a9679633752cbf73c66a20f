@@ -1,0 +1,29 @@
+e2e/tests/compose-format.spec.ts
+  s_1a1f8d610405de::t_48b41775015ddb 1-61,76-133,135-189,192-231
+  s_1a1f8d610405de::t_4800f18b906f86 134
+  s_1a1f8d610405de::t_11a210833071ee 62-75
+  s_1a1f8d610405de::t_5592d13b1b871a 190-191
+crates/mailiner-composer/src/editor/mount.rs
+  s_1a1f8d610405de::t_f639299903614a 825,828,1016
+  s_1a1f8d610405de::t_e4cf641e5f6f6e 711-715,718-719
+  s_1a1f8d610405de::t_4fa619884e06c3 371-377,414
+  s_1a1f8d610405de::t_adbba368bc3959 483,486-520
+  s_1a1f8d610405de::t_47795a0e5883bf 573-667,669-710,716-717,720-777,779-811,814-824,826-827,829-1015,1017-1022
+  s_1a1f8d610405de::t_012ab0a4b0b675 812-813
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5870bfedab5e37483a9679633752cbf73c66a20f",
+  "prompts": {},
+  "sessions": {
+    "s_1a1f8d610405de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a13f7b-ae57-7231-a366-39f30cb7ca79",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

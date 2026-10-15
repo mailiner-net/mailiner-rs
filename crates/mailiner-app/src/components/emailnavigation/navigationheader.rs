@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use mailiner_core::MessageSort;
 
+use super::super::brand::MailinerLogo;
 use super::super::icons::{Icon, IconKind};
 use super::super::theme::ThemeSelect;
 
@@ -151,9 +152,13 @@ pub fn NavigationHeader(props: EmailNavigationHeaderProps) -> Element {
                 MobileBackButton {}
             }
 
-            Icon {
-                size: 24,
-                icon: if props.mode == Mode::MailboxTreeView { IconKind::User } else { IconKind::Folder },
+            if props.mode == Mode::MailboxTreeView {
+                MailinerLogo { height: 22 }
+            } else {
+                Icon {
+                    size: 24,
+                    icon: IconKind::Folder,
+                }
             }
 
             div {

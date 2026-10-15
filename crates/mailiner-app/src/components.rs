@@ -2,6 +2,7 @@ mod account_form;
 mod account_setup;
 mod accounts;
 mod attachments;
+mod brand;
 mod calendar;
 mod compose;
 mod connection_status;
@@ -24,6 +25,7 @@ pub mod virtual_scroll;
 mod wizard;
 
 pub use accounts::{AccountEditPage, AccountNewPage, AccountsSettingsPage};
+pub(crate) use brand::BrandLockup;
 pub use compose::ComposeOverlay;
 pub use connection_status::ConnectionStatusBanner;
 pub use emailnavigation::{EmailNavigation, MessageList};

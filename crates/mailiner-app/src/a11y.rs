@@ -181,23 +181,25 @@ mod tests {
     // Tokens must stay in sync with `:root` / dark theme in `assets/main.css`.
     #[test]
     fn light_theme_text_meets_aa() {
-        let bg = "#ffffff";
-        assert!(contrast_ratio("#0a0a0a", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#5f6368", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#6b6b6b", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#0066cc", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#b71c1c", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#0066cc", bg).unwrap() >= WCAG_AA_UI);
+        let bg = "#f4f1ea";
+        assert!(contrast_ratio("#171717", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#454545", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#5c5852", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#0b57a4", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#b42318", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#0b57a4", bg).unwrap() >= WCAG_AA_UI);
+        assert!(contrast_ratio("#ffffff", "#0b57a4").unwrap() >= WCAG_AA_NORMAL);
     }
 
     #[test]
     fn dark_theme_text_meets_aa() {
         let bg = "#121212";
         assert!(contrast_ratio("#e8e8e8", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#9aa0a6", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#888888", bg).unwrap() >= WCAG_AA_NORMAL);
-        assert!(contrast_ratio("#4da3ff", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#b9b9b9", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#9a9a9a", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#9cc7f7", bg).unwrap() >= WCAG_AA_NORMAL);
         assert!(contrast_ratio("#ef9a9a", bg).unwrap() >= WCAG_AA_NORMAL);
+        assert!(contrast_ratio("#0c1b2e", "#9cc7f7").unwrap() >= WCAG_AA_NORMAL);
     }
 
     #[test]

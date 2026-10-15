@@ -13,10 +13,10 @@ use crate::account_store::{
 use crate::account_vault::VaultState;
 use crate::components::virtual_scroll::SparseList;
 use crate::components::{
-    AccountEditPage, AccountNewPage, AccountsSettingsPage, ComposeOverlay, ConnectionStatusBanner,
-    EmailNavigation, FolderSubscribeHost, MailboxPickerHost, MessageHeadersHost, MessageList,
-    MessageSourceHost, MessageView, OauthCallbackPage, OnboardingForm, OutboxPanel, SettingsPage,
-    ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
+    AccountEditPage, AccountNewPage, AccountsSettingsPage, BrandLockup, ComposeOverlay,
+    ConnectionStatusBanner, EmailNavigation, FolderSubscribeHost, MailboxPickerHost,
+    MessageHeadersHost, MessageList, MessageSourceHost, MessageView, OauthCallbackPage,
+    OnboardingForm, OutboxPanel, SettingsPage, ShortcutsHost, SplitAxis, SplitHandle, ToastHost,
 };
 use crate::context::AppContext;
 use crate::core_event::{CoreEvent, CoreLoop, InitialBootstrap, core_loop};
@@ -66,7 +66,8 @@ pub(crate) enum Route {
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
-const THEME_COLOR: &str = "#121212";
+/// Browser chrome. Light paper from the Mailiner brand (`--background`).
+const THEME_COLOR: &str = "#f4f1ea";
 
 /// Baseline Content-Security-Policy for the Mailiner origin (PR7).
 ///
@@ -638,6 +639,7 @@ fn AppShell() -> Element {
                 class: "bootstrap-shell",
                 div {
                     class: "bootstrap-card",
+                    BrandLockup {}
                     p { class: "bootstrap-title", "Loading accounts…" }
                     p { class: "bootstrap-muted", "Opening local account storage." }
                 }
@@ -648,6 +650,7 @@ fn AppShell() -> Element {
                 class: "bootstrap-shell",
                 div {
                     class: "bootstrap-card bootstrap-error",
+                    BrandLockup {}
                     h1 { class: "bootstrap-title", "Account storage unavailable" }
                     p { "{message}" }
                     p {
@@ -895,7 +898,8 @@ mod boot_splash_csp {
         // `</body` is also rewritten globally when the module script is injected.
         assert_eq!(html.matches("{app_title}").count(), 1);
         assert_eq!(html.matches("{style_include}").count(), 1);
-        assert_eq!(html.matches("{base_path}").count(), 2);
+        // Favicon only. The splash envelope is inline so it paints before public files.
+        assert_eq!(html.matches("{base_path}").count(), 1);
         assert_eq!(html.matches("</body>").count(), 1);
 
         // Without JavaScript the loading line and bar must not sit next to

@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use super::brand::BrandLockup;
 use crate::a11y::focus_first_focusable;
 
 /// Presentational wizard frame. Not account-aware.
@@ -49,6 +50,7 @@ pub fn WizardShell(
                     on_primary.call(());
                 }
             },
+            BrandLockup {}
             if !eyebrow.is_empty() {
                 p { class: "wizard-eyebrow", "{eyebrow}" }
             }

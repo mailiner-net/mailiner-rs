@@ -9,7 +9,7 @@
 // only after a successful same-origin GET. Mail is IMAP over WebSocket —
 // never HTTP — so message bodies are not stored here.
 
-const CACHE = "mailiner-shell-v3";
+const CACHE = "mailiner-shell-v4";
 
 // Directory of this script (`/` or `/app/`), including the trailing slash.
 const BASE = new URL("./", self.location);

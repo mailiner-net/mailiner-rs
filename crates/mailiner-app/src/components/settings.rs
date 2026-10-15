@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use super::brand::BrandLockup;
 use crate::AccountStoreContext;
 use crate::Route;
 use crate::account::{Account, AccountId};
@@ -68,6 +69,7 @@ pub fn SettingsPage() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card settings-card",
+                BrandLockup {}
                 h1 { class: "bootstrap-title", {t("settings.title")} }
                 p {
                     class: "bootstrap-muted",

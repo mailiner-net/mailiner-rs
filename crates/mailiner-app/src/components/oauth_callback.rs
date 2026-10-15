@@ -2,6 +2,8 @@
 
 use dioxus::prelude::*;
 
+use super::brand::BrandLockup;
+
 #[cfg(target_arch = "wasm32")]
 use crate::oauth::{
     OAUTH_MESSAGE_TYPE, OAUTH_PENDING_KEY, OAUTH_RESULT_KEY, OauthPending, OauthPostMessage,
@@ -22,6 +24,7 @@ pub fn OauthCallbackPage() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
+                BrandLockup {}
                 h1 { class: "bootstrap-title", "OAuth sign-in" }
                 p { class: "bootstrap-muted", "{status}" }
             }

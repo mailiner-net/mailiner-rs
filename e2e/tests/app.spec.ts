@@ -56,7 +56,7 @@ test('boot splash paints before wasm and follows the saved theme', async ({
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   expect(
     await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
-  ).toBe('rgb(255, 255, 255)');
+  ).toBe('rgb(244, 241, 234)');
 });
 
 test('empty store shows first-run onboarding', async ({ page }) => {
@@ -93,7 +93,7 @@ test('web app manifest is linked and installable', async ({ page, request }) => 
   );
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute(
     'content',
-    '#121212',
+    '#f4f1ea',
   );
 
   const manifestPath = appPath('/manifest.webmanifest');
@@ -141,7 +141,7 @@ test('app-shell service worker is registered', async ({ page, request }) => {
   const sw = await request.get(appPath('/sw.js'));
   expect(sw.ok()).toBe(true);
   const body = await sw.text();
-  expect(body).toContain('mailiner-shell-v3');
+  expect(body).toContain('mailiner-shell-v4');
   expect(body).toContain('isAppShell');
 
   await gotoPath(page);

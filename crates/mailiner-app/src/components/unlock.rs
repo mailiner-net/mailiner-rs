@@ -10,6 +10,7 @@ use crate::AppBootstrapState;
 use crate::account_store::AccountStoreError;
 use crate::account_vault::MIN_PASSPHRASE_CHARS;
 use crate::components::account_form::{FormField, FormStatusBanner, StatusMessage};
+use crate::components::brand::BrandLockup;
 use crate::context::AppContext;
 use crate::core_event::CoreEvent;
 use crate::resolve_active_id;
@@ -34,6 +35,7 @@ pub fn UnlockForm() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
+                BrandLockup {}
                 h1 { class: "bootstrap-title", {crate::i18n::t("unlock.title")} }
                 p {
                     class: "bootstrap-muted",

@@ -27,13 +27,13 @@
             /* Zero specificity so main.css body colors win after mount.
                These only paint the document while the splash is up. */
             :where(html, body) {
-                background: #fff;
+                background: #f4f1ea;
                 color-scheme: light;
             }
 
             #mailiner-splash {
-                background: #fff;
-                color: #0a0a0a;
+                background: #f4f1ea;
+                color: #171717;
                 color-scheme: light;
             }
 
@@ -50,15 +50,19 @@
                 }
 
                 html:not([data-theme="light"]) .mailiner-splash-status {
-                    color: #9aa0a6;
+                    color: #b9b9b9;
                 }
 
                 html:not([data-theme="light"]) .mailiner-splash-bar {
-                    background: #2a2a2a;
+                    background: #2e2e2e;
                 }
 
                 html:not([data-theme="light"]) .mailiner-splash-bar > span {
-                    background: #4da3ff;
+                    background: #9cc7f7;
+                }
+
+                html:not([data-theme="light"]) #mailiner-splash::before {
+                    background: #ff7a96;
                 }
             }
 
@@ -74,13 +78,13 @@
             }
 
             :where(html[data-theme="light"], html[data-theme="light"] body) {
-                background: #fff;
+                background: #f4f1ea;
                 color-scheme: light;
             }
 
             html[data-theme="light"] #mailiner-splash {
-                background: #fff;
-                color: #0a0a0a;
+                background: #f4f1ea;
+                color: #171717;
                 color-scheme: light;
             }
 
@@ -99,44 +103,54 @@
                 align-items: center;
                 justify-content: center;
                 gap: 0.65rem;
-                font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+                font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+            }
+
+            #mailiner-splash::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                right: 0;
+                left: 0;
+                height: 2px;
+                background: #ee4266;
+            }
+
+            html[data-theme="dark"] #mailiner-splash::before {
+                background: #ff7a96;
             }
 
             .mailiner-splash-mark {
-                width: 80px;
-                height: 80px;
-                border-radius: 22px;
-                background: #0f1116;
-                display: grid;
-                place-items: center;
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+                width: 4.5rem;
+                height: auto;
             }
 
-            .mailiner-splash-mark img {
-                width: 64px;
-                height: 64px;
+            .mailiner-splash-mark svg {
                 display: block;
+                width: 100%;
+                height: auto;
             }
 
             .mailiner-splash-title {
-                margin: 0.35rem 0 0;
-                font-size: 1.35rem;
-                font-weight: 600;
-                letter-spacing: -0.02em;
+                margin: 0.15rem 0 0;
+                font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+                font-size: 1.75rem;
+                font-weight: 500;
+                letter-spacing: -0.03em;
             }
 
             .mailiner-splash-status {
                 margin: 0;
                 font-size: 0.9rem;
-                color: #5f6368;
+                color: #454545;
             }
 
             html[data-theme="dark"] .mailiner-splash-status {
-                color: #9aa0a6;
+                color: #b9b9b9;
             }
 
             html[data-theme="light"] .mailiner-splash-status {
-                color: #5f6368;
+                color: #454545;
             }
 
             .mailiner-splash-bar {
@@ -144,16 +158,16 @@
                 height: 3px;
                 margin-top: 0.35rem;
                 border-radius: 999px;
-                background: #e6e6e6;
+                background: #e0dacf;
                 overflow: hidden;
             }
 
             html[data-theme="dark"] .mailiner-splash-bar {
-                background: #2a2a2a;
+                background: #2e2e2e;
             }
 
             html[data-theme="light"] .mailiner-splash-bar {
-                background: #e6e6e6;
+                background: #e0dacf;
             }
 
             .mailiner-splash-bar > span {
@@ -161,16 +175,16 @@
                 height: 100%;
                 width: 40%;
                 border-radius: inherit;
-                background: #0066cc;
+                background: #0b57a4;
                 animation: mailiner-splash-slide 1.15s ease-in-out infinite;
             }
 
             html[data-theme="dark"] .mailiner-splash-bar > span {
-                background: #4da3ff;
+                background: #9cc7f7;
             }
 
             html[data-theme="light"] .mailiner-splash-bar > span {
-                background: #0066cc;
+                background: #0b57a4;
             }
 
             @keyframes mailiner-splash-slide {
@@ -193,7 +207,10 @@
     <body>
         <div id="mailiner-splash" role="status">
             <div class="mailiner-splash-mark">
-                <img src="/{base_path}/icons/icon-192.png" width="64" height="64" alt="">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 115.661 76.309" width="72" height="48" aria-hidden="true">
+                    <path fill="#a2deeb" d="M0 23.311a4.072 4.072 0 0 1 4.072-4.072c1.187 0 1.864.451 2.996 1.32 11.576 8.91 48.078 38.978 48.078 38.978 1.477 1.187 3.892 1.187 5.369 0 0 0 36.55-29.702 48.264-39.168.787-.635 1.72-1.13 2.812-1.13 2.206 0 4 1.76 4.064 3.951l.006 4.904v44.77a3.453 3.453 0 0 1-3.443 3.445H3.443A3.453 3.453 0 0 1 0 72.864V25.96Z"/>
+                    <path fill="#ee4266" d="M57.83 50.782c-1.765-.023-2.857-.884-3.63-1.489C41.807 39.625 4.51 8.141 4.51 8.141l.01-.032a4.567 4.567 0 0 1-1.672-3.536c0-2.358 1.787-4.3 4.083-4.546L6.94 0h101.783l.008.027a4.576 4.576 0 0 1 4.083 4.546 4.568 4.568 0 0 1-1.672 3.536l.01.032S76.197 36.65 61.404 49.293c-.673.575-1.947 1.511-3.574 1.489z"/>
+                </svg>
             </div>
             <p class="mailiner-splash-title">Mailiner</p>
             <p class="mailiner-splash-status mailiner-splash-loading">Loading…</p>

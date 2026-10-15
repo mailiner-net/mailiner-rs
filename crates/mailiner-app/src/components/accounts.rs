@@ -5,6 +5,8 @@ use dioxus::logger::tracing::{info, warn};
 use dioxus::prelude::*;
 use uuid::Uuid;
 
+use super::brand::BrandLockup;
+
 use crate::AccountStoreContext;
 use crate::AppBootstrapState;
 use crate::Route;
@@ -65,6 +67,7 @@ pub fn AccountsSettingsPage() -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card accounts-card",
+                BrandLockup {}
                 h1 { class: "bootstrap-title", "Accounts" }
                 p {
                     class: "bootstrap-muted",
@@ -1306,6 +1309,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     class: "bootstrap-shell",
                     div {
                         class: "bootstrap-card",
+                        BrandLockup {}
                         h1 { class: "bootstrap-title", "Account not found" }
                         p { class: "bootstrap-muted", "This account is no longer in storage." }
                         nav {
@@ -1322,6 +1326,7 @@ pub fn AccountEditPage(id: String) -> Element {
                     class: "bootstrap-shell",
                     div {
                         class: "bootstrap-card bootstrap-error",
+                        BrandLockup {}
                         h1 { class: "bootstrap-title", "Could not load account" }
                         p { "{msg}" }
                         nav {
@@ -1547,6 +1552,7 @@ pub fn AccountEditPage(id: String) -> Element {
             class: "bootstrap-shell onboarding-shell",
             div {
                 class: "bootstrap-card onboarding-card",
+                BrandLockup {}
                 h1 { class: "bootstrap-title", "Edit account" }
                 p {
                     class: "bootstrap-muted",

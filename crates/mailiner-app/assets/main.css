@@ -1,49 +1,59 @@
 :root {
     color-scheme: light;
 
-    --background: #fff;
-    --foreground: #0a0a0a;
-    --surface: #fff;
+    /* Brand tokens shared with the mailiner-home site (paper, ink, foam, signal). */
+    --background: #f4f1ea;
+    --foreground: #171717;
+    --surface: #fffdf8;
+    --foam: #a2deeb;
+    --signal: #ee4266;
 
-    --sidebar: #fafafa;
-    --sidebar-border: #c7c7c7;
-    --border: #d8d8d8;
-    --border-subtle: #ececec;
+    --sidebar: #fffdf8;
+    --sidebar-border: #e0dacf;
+    --border: #e0dacf;
+    --border-subtle: #ebe6dc;
 
-    --text-muted: #5f6368;
-    --text-subtle: #6b6b6b;
-    --label: #333;
-    --on-accent: #fff;
+    --text-muted: #454545;
+    --text-subtle: #5c5852;
+    --label: #2a2824;
+    --on-accent: #ffffff;
 
-    --item-hover-background: #f5f5f5;
-    --item-accent: #0066cc;
-    --accent-soft: #e3f2fd;
+    --item-hover-background: #e7e0d4;
+    --item-accent: #0b57a4;
+    --accent-soft: #d3f1f6;
 
-    --danger: #b71c1c;
-    --danger-soft: #fdecea;
+    --danger: #b42318;
+    --danger-soft: #fde8ea;
 
-    --input-disabled: #f0f0f0;
-    --surface-muted: #f3f3f3;
-    --row-border: #e0e0e0;
-    --muted-chip-bg: #f5f5f5;
-    --key-bg: #f7f7f8;
-    --confirm-bg: #fff8f8;
+    --input-disabled: #efeae2;
+    --surface-muted: #efeae2;
+    --row-border: #e6dfd3;
+    --muted-chip-bg: #efeae2;
+    --key-bg: #efeae2;
+    --confirm-bg: #fdecee;
 
-    --info-bg: #e8f1ff;
-    --info-fg: #0d47a1;
-    --info-border: #b8c9e8;
-    --success-bg: #e8f5e9;
+    --info-bg: #e7f1fb;
+    --info-fg: #0b57a4;
+    --info-border: #c5d8ef;
+    --success-bg: #e5f3e8;
     --success-fg: #1b5e20;
-    --warning-bg: #fff8e1;
+    --warning-bg: #fff4d6;
     --warning-fg: #6d4c00;
-    --warning-border: #f0c040;
-    --privacy-bg: #e8f4fd;
-    --privacy-border: #b6d9f0;
-    --skeleton-from: #f0f0f0;
-    --skeleton-mid: #f8f8f8;
+    --warning-border: #e4c36a;
+    --privacy-bg: #e5f7fa;
+    --privacy-border: #a2deeb;
+    --skeleton-from: #e6dfd3;
+    --skeleton-mid: #f7f4ee;
+
+    --toast-bg: #171717;
+    --toast-fg: #f4f1ea;
+    --toast-accent: #a2deeb;
+    --toast-border: transparent;
+
+    --font-serif: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
 
     --radius-sm: 6px;
-    --radius-md: 10px;
+    --radius-md: 16px;
     --radius-pill: 999px;
 
     --shadow-fab: 0 4px 14px rgba(0, 0, 0, 0.18);
@@ -78,43 +88,49 @@
         --background: #121212;
         --foreground: #e8e8e8;
         --surface: #1c1c1c;
+        --signal: #ff7a96;
 
-        --sidebar: #181818;
-        --sidebar-border: #3a3a3a;
-        --border: #3a3a3a;
-        --border-subtle: #2a2a2a;
+        --sidebar: #1c1c1c;
+        --sidebar-border: #2e2e2e;
+        --border: #2e2e2e;
+        --border-subtle: #242424;
 
-        --text-muted: #9aa0a6;
-        --text-subtle: #888;
-        --label: #d4d4d4;
-        --on-accent: #001a33;
+        --text-muted: #b9b9b9;
+        --text-subtle: #9a9a9a;
+        --label: #dcdcdc;
+        --on-accent: #0c1b2e;
 
         --item-hover-background: #2a2a2a;
-        --item-accent: #4da3ff;
-        --accent-soft: #1a365d;
+        --item-accent: #9cc7f7;
+        --accent-soft: #163044;
 
         --danger: #ef9a9a;
-        --danger-soft: #3d1f1f;
+        --danger-soft: #3d2428;
 
         --input-disabled: #2a2a2a;
         --surface-muted: #242424;
         --row-border: #2e2e2e;
         --muted-chip-bg: #2a2a2a;
         --key-bg: #2a2a2a;
-        --confirm-bg: #2a1a1a;
+        --confirm-bg: #2a1c1e;
 
-        --info-bg: #1a2a44;
-        --info-fg: #90caf9;
-        --info-border: #2a4a70;
+        --info-bg: #1a2a3c;
+        --info-fg: #9cc7f7;
+        --info-border: #2c4a68;
         --success-bg: #1b3320;
         --success-fg: #81c784;
         --warning-bg: #3d3208;
         --warning-fg: #ffcc80;
         --warning-border: #8a6d1b;
-        --privacy-bg: #1a2a3a;
-        --privacy-border: #2a4a60;
+        --privacy-bg: #15282c;
+        --privacy-border: #2a5560;
         --skeleton-from: #2a2a2a;
         --skeleton-mid: #333;
+
+        --toast-bg: #1c1c1c;
+        --toast-fg: #e8e8e8;
+        --toast-accent: #a2deeb;
+        --toast-border: #2e2e2e;
 
         --shadow-fab: 0 4px 14px rgba(0, 0, 0, 0.45);
         --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -127,43 +143,49 @@
     --background: #121212;
     --foreground: #e8e8e8;
     --surface: #1c1c1c;
+    --signal: #ff7a96;
 
-    --sidebar: #181818;
-    --sidebar-border: #3a3a3a;
-    --border: #3a3a3a;
-    --border-subtle: #2a2a2a;
+    --sidebar: #1c1c1c;
+    --sidebar-border: #2e2e2e;
+    --border: #2e2e2e;
+    --border-subtle: #242424;
 
-    --text-muted: #9aa0a6;
-    --text-subtle: #888;
-    --label: #d4d4d4;
-    --on-accent: #001a33;
+    --text-muted: #b9b9b9;
+    --text-subtle: #9a9a9a;
+    --label: #dcdcdc;
+    --on-accent: #0c1b2e;
 
     --item-hover-background: #2a2a2a;
-    --item-accent: #4da3ff;
-    --accent-soft: #1a365d;
+    --item-accent: #9cc7f7;
+    --accent-soft: #163044;
 
     --danger: #ef9a9a;
-    --danger-soft: #3d1f1f;
+    --danger-soft: #3d2428;
 
     --input-disabled: #2a2a2a;
     --surface-muted: #242424;
     --row-border: #2e2e2e;
     --muted-chip-bg: #2a2a2a;
     --key-bg: #2a2a2a;
-    --confirm-bg: #2a1a1a;
+    --confirm-bg: #2a1c1e;
 
-    --info-bg: #1a2a44;
-    --info-fg: #90caf9;
-    --info-border: #2a4a70;
+    --info-bg: #1a2a3c;
+    --info-fg: #9cc7f7;
+    --info-border: #2c4a68;
     --success-bg: #1b3320;
     --success-fg: #81c784;
     --warning-bg: #3d3208;
     --warning-fg: #ffcc80;
     --warning-border: #8a6d1b;
-    --privacy-bg: #1a2a3a;
-    --privacy-border: #2a4a60;
+    --privacy-bg: #15282c;
+    --privacy-border: #2a5560;
     --skeleton-from: #2a2a2a;
     --skeleton-mid: #333;
+
+    --toast-bg: #1c1c1c;
+    --toast-fg: #e8e8e8;
+    --toast-accent: #a2deeb;
+    --toast-border: #2e2e2e;
 
     --shadow-fab: 0 4px 14px rgba(0, 0, 0, 0.45);
     --shadow-dialog: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -173,12 +195,21 @@
     color-scheme: light;
 }
 
+html {
+    background-color: var(--background);
+}
+
 body {
     margin: 0;
     padding: 0;
     background-color: var(--background);
     color: var(--foreground);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+}
+
+::selection {
+    background: var(--foam);
+    color: #171717;
 }
 
 .sr-only {
@@ -199,10 +230,10 @@ body {
     top: 0.75rem;
     z-index: 10000;
     padding: 0.5rem 0.85rem;
-    background: var(--surface);
-    color: var(--foreground);
-    border: 2px solid var(--item-accent);
-    border-radius: var(--radius-sm);
+    background: var(--item-accent);
+    color: var(--on-accent);
+    border: none;
+    border-radius: var(--radius-pill);
     text-decoration: none;
     font-weight: 600;
     transform: translateY(-200%);
@@ -228,12 +259,27 @@ button.flat {
 
 /* Standalone so the asset pipeline keeps these (nested-only blocks drop them). */
 .mail-shell {
+    position: relative;
     display: flex;
     flex-direction: column;
     width: 100%;
     height: 100vh;
     height: 100dvh;
     overflow: hidden;
+}
+
+/* Coral rule from the marketing header. Standalone so the asset pipeline keeps it. */
+.mail-shell::before,
+.bootstrap-shell::before {
+    content: "";
+    position: absolute;
+    z-index: 25;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: var(--signal);
+    pointer-events: none;
 }
 
 #app {
@@ -264,6 +310,7 @@ button.flat {
 /* Full-page shells: loading, store error, onboarding, settings placeholders.
    No mail chrome (#app toolbar / mailbox panes). */
 .bootstrap-shell {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -272,7 +319,7 @@ button.flat {
     min-height: 100dvh;
     padding: 2rem;
     box-sizing: border-box;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: inherit;
     color: var(--foreground);
     background: var(--background);
 }
@@ -281,19 +328,47 @@ button.flat {
     max-width: 28rem;
     width: 100%;
     padding: 1.5rem 1.75rem;
-    border: 1px solid var(--sidebar-border);
-    border-radius: 8px;
-    background: var(--sidebar);
+    border: 1px solid var(--border);
+    border-radius: 1.5rem;
+    background: var(--surface);
 }
 
 .bootstrap-card.bootstrap-error {
-    border-color: #c62828;
+    border-color: var(--danger);
+}
+
+.brand-lockup {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0 0 1rem;
+    color: var(--foreground);
+}
+
+.wizard-form > .brand-lockup {
+    margin-bottom: 0;
+}
+
+.mailiner-logo {
+    display: block;
+    flex: 0 0 auto;
+}
+
+.brand-wordmark {
+    font-family: var(--font-serif);
+    font-size: 1.35rem;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1;
 }
 
 .bootstrap-title {
     margin: 0 0 0.75rem;
-    font-size: 1.25rem;
-    font-weight: 600;
+    font-family: var(--font-serif);
+    font-size: 1.85rem;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
 }
 
 .bootstrap-muted {
@@ -354,11 +429,10 @@ button.flat {
 /* —— Account setup wizard —— */
 .wizard-eyebrow {
     margin: 0 0 0.35rem;
-    font-size: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-muted);
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--item-accent);
 }
 
 .wizard-progress {
@@ -714,10 +788,13 @@ button.flat {
 .onboarding-btn-primary {
     background: var(--item-accent);
     color: var(--on-accent);
+    border-radius: var(--radius-pill);
+    padding-left: 1.15rem;
+    padding-right: 1.15rem;
 }
 
 .onboarding-btn-primary:hover:not(:disabled) {
-    filter: brightness(0.95);
+    opacity: 0.9;
 }
 
 .onboarding-btn-secondary {
@@ -819,19 +896,19 @@ button.flat {
 }
 
 .connection-banner-dot-info {
-    background: #1565c0;
+    background: var(--item-accent);
 }
 
 .connection-banner-dot-ready {
-    background: #2e7d32;
+    background: var(--success-fg);
 }
 
 .connection-banner-dot-error {
-    background: #c62828;
+    background: var(--danger);
 }
 
 .connection-banner-dot-muted {
-    background: #9e9e9e;
+    background: var(--text-subtle);
 }
 
 .connection-banner-retry {
@@ -842,14 +919,14 @@ button.flat {
     font-weight: 600;
     line-height: 1.2;
     border: 1px solid currentColor;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.65);
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
     color: inherit;
     cursor: pointer;
 }
 
 .connection-banner-retry:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--surface);
 }
 
 .connection-banner-retry:disabled {
@@ -954,12 +1031,14 @@ a.accounts-link-btn {
 }
 
 .accounts-btn-danger-solid {
-    background: #c62828;
-    border-color: #c62828;
+    background: #b42318;
+    border-color: #b42318;
+    color: #fff;
 }
 
 .accounts-btn-danger-solid:hover:not(:disabled) {
     filter: brightness(0.95);
+    opacity: 1;
 }
 
 .accounts-confirm {
@@ -1001,7 +1080,7 @@ a.accounts-link-btn {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #555;
+    color: var(--text-muted);
 }
 
 .accounts-data-actions {
@@ -1029,8 +1108,10 @@ a.accounts-link-btn {
 
 .settings-section h2 {
     margin: 0 0 0.35rem;
-    font-size: 1rem;
-    font-weight: 600;
+    font-family: var(--font-serif);
+    font-size: 1.35rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
 }
 
 .settings-hint {
@@ -1622,10 +1703,13 @@ a.accounts-link-btn {
 .ui-btn-primary {
     background: var(--item-accent);
     color: var(--on-accent);
+    border-radius: var(--radius-pill);
+    padding-left: 1.15rem;
+    padding-right: 1.15rem;
 }
 
 .ui-btn-primary:hover:not(:disabled) {
-    filter: brightness(0.95);
+    opacity: 0.9;
 }
 
 .ui-btn-secondary {
@@ -1732,8 +1816,10 @@ textarea.ui-input {
 
 .ui-dialog-title {
     margin: 0;
+    font-family: var(--font-serif);
     font-size: var(--text-lg);
-    font-weight: 600;
+    font-weight: 500;
+    letter-spacing: -0.02em;
     line-height: 1.3;
 }
 
@@ -1786,6 +1872,10 @@ textarea.ui-input {
     font-weight: 600;
     cursor: pointer;
     box-shadow: var(--shadow-fab);
+}
+
+.compose-fab:hover:not(:disabled) {
+    opacity: 0.9;
 }
 
 .compose-fab:disabled {
@@ -2025,7 +2115,7 @@ body:has(.compose-dock) .toast {
 
 .recipient-field.is-disabled {
     opacity: 0.65;
-    background: #f0f0f0;
+    background: var(--input-disabled);
     cursor: not-allowed;
 }
 
@@ -2704,13 +2794,14 @@ body:has(.compose-dock) .toast {
     bottom: 5rem;
     right: 1.5rem;
     z-index: 40;
-    background: #111;
-    color: #fff;
-    border-radius: 8px;
+    background: var(--toast-bg);
+    color: var(--toast-fg);
+    border: 1px solid var(--toast-border);
+    border-radius: 1rem;
     overflow: hidden;
     min-width: 16rem;
     max-width: min(28rem, calc(100vw - 2rem));
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-dialog);
 }
 
 .toast-body {
@@ -2729,7 +2820,7 @@ body:has(.compose-dock) .toast {
     flex: 0 0 auto;
     font: inherit;
     font-weight: 600;
-    color: #93c5fd;
+    color: var(--toast-accent);
     background: none;
     border: none;
     padding: 0;
@@ -2739,7 +2830,7 @@ body:has(.compose-dock) .toast {
 }
 
 .toast-undo:hover {
-    color: #bfdbfe;
+    color: var(--toast-fg);
 }
 
 .toast-close {
@@ -2759,7 +2850,7 @@ body:has(.compose-dock) .toast {
 
 .toast-timer {
     height: 3px;
-    background: rgba(255, 255, 255, 0.45);
+    background: var(--toast-accent);
     transform: scaleX(var(--toast-progress, 1));
     transform-origin: left center;
 }
@@ -3095,7 +3186,7 @@ body:has(.compose-dock) .toast {
 
 .message-pin-indicator.is-on,
 .message-pin-btn.is-on {
-    color: #4263eb;
+    color: var(--item-accent);
     opacity: 1;
 }
 
@@ -3213,7 +3304,7 @@ body:has(.compose-dock) .toast {
 }
 
 .message-snooze-btn.is-open {
-    color: #4263eb;
+    color: var(--item-accent);
 }
 
 .message-labels-item {
@@ -4065,7 +4156,7 @@ body:has(.compose-dock) .toast {
         }
 
         .attachment-preview-btn {
-            background: #fff;
+            background: var(--surface);
             color: var(--item-accent);
         }
 

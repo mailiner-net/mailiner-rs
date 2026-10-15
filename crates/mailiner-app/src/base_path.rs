@@ -70,7 +70,7 @@ mod tests {
         }
 
         let sw = include_str!("../public/sw.js");
-        assert!(sw.contains("mailiner-shell-v3"));
+        assert!(sw.contains("mailiner-shell-v4"));
         assert!(sw.contains("new URL(\"./\", self.location)"));
         assert!(!sw.contains("\"/index.html\""));
         assert!(!sw.contains("\"/manifest.webmanifest\""));

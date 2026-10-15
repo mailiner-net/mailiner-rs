@@ -1,0 +1,32 @@
+e2e/README.md
+  s_343184a2f13875::t_042faa5dbbf140 50-54
+crates/mailiner-app/src/components/oauth_callback.rs
+  s_343184a2f13875::t_0160ea4f745112 102-120
+  s_343184a2f13875::t_bee0ec40add573 34-37,39-41
+playwright.config.ts
+  s_343184a2f13875::t_37aa7aea9871a9 11-24,68-69
+e2e/prefix-static-server.mjs
+  s_343184a2f13875::t_ecd252a006f03b 1-90
+crates/mailiner-app/public/sw.js
+  s_343184a2f13875::t_4ade601eec4813 34-36
+.github/workflows/build-test.yml
+  s_343184a2f13875::t_2c6011a221f0bc 23-27,169-172
+README.md
+  s_343184a2f13875::t_751026db390496 150-154,203-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "131c0d83b22e9c22fc18102e425b36ee84ba92d2",
+  "prompts": {},
+  "sessions": {
+    "s_343184a2f13875": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a14019-6e29-77c1-8249-528864092c49",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

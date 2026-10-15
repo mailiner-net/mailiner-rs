@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   acceptNextDialog,
   composeButton,
@@ -21,9 +21,10 @@ import {
   deliverRaw,
   folderItem,
   gotoLiveMail,
-  messageRows,
+  messageList,
   openFolder,
   openSubject,
+  searchFolder,
   seedLiveAccount,
   simpleMessage,
   uniqueName,
@@ -283,12 +284,185 @@ test('a saved filter moves a matching message when the folder is opened', async 
   }
 });
 
+/** Search hit count from the "N results" label. Zero when that label is absent. */
+async function searchResultCount(page: Page): Promise<number> {
+  const label = page.locator('.message-list-filter-count');
+  if ((await label.count()) === 0) {
+    return 0;
+  }
+  const match = /^(\d+) results$/.exec((await label.innerText()).trim());
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * Search the open folder and wait until the result length stops growing.
+ * Dateless mail is stamped at fetch time, so opening Inbox replies once per
+ * new sender on the first page, and those copies arrive after Sent is visible.
+ */
+async function searchAndSettle(page: Page, query: string): Promise<number> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __mlnrSearchSawSearching?: boolean;
+      __mlnrSearchObs?: MutationObserver;
+    };
+    w.__mlnrSearchObs?.disconnect();
+    w.__mlnrSearchSawSearching = false;
+    const list = document.querySelector('.message-list-body');
+    const obs = new MutationObserver(() => {
+      const empty = list?.querySelector('.message-list-empty');
+      if ((empty?.textContent ?? '').includes('Searching')) {
+        w.__mlnrSearchSawSearching = true;
+      }
+    });
+    if (list) {
+      obs.observe(list, { childList: true, subtree: true, characterData: true });
+    }
+    w.__mlnrSearchObs = obs;
+  });
+  await searchFolder(page, query);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __mlnrSearchSawSearching?: boolean }).__mlnrSearchSawSearching ===
+          true,
+      ),
+    )
+    .toBe(true);
+  await expect(page.locator('.message-list-empty', { hasText: 'Searching…' })).toHaveCount(0, {
+    timeout: 20_000,
+  });
+
+  let previous = -1;
+  let settled = 0;
+  await expect
+    .poll(
+      async () => {
+        const count = await searchResultCount(page);
+        const stable = count > 0 && count === previous;
+        previous = count;
+        if (stable) {
+          settled = count;
+        }
+        return stable;
+      },
+      { timeout: 40_000, intervals: [2_000] },
+    )
+    .toBe(true);
+  return settled;
+}
+
+function toMeta(page: Page) {
+  return page.locator('.message-view-meta-item').filter({
+    has: page.locator('.message-view-meta-k', { hasText: /^To$/ }),
+  });
+}
+
+/** Scroll a virtual row into view, open it, and return the To header text. */
+async function openRowRecipient(page: Page, index: number, subject: string): Promise<string> {
+  const scroller = page.locator('#message-list-scroll');
+  await scroller.evaluate((el, rowIndex) => {
+    const row = el.querySelector(
+      '.virtual-scroll-item, .virtual-scroll-placeholder',
+    ) as HTMLElement | null;
+    const itemHeight = row ? Number.parseFloat(row.style.height) : 52;
+    (el as HTMLElement).scrollTop = (rowIndex as number) * itemHeight;
+  }, index);
+  // `data-index` is on the option itself. A nested locator would miss it.
+  const row = messageList(page).locator(`[role="option"][data-index="${index}"]`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  const alreadyOpen = (await row.getAttribute('aria-selected')) === 'true';
+  if (!alreadyOpen) {
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __mlnrViewTick?: number;
+        __mlnrViewObs?: MutationObserver;
+      };
+      w.__mlnrViewObs?.disconnect();
+      w.__mlnrViewTick = 0;
+      const obs = new MutationObserver(() => {
+        w.__mlnrViewTick = (w.__mlnrViewTick ?? 0) + 1;
+      });
+      const view = document.querySelector('#messageview');
+      if (view) {
+        obs.observe(view, { childList: true, subtree: true, characterData: true });
+      }
+      const host = document.querySelector('#mailiner-message-content');
+      if (host?.shadowRoot) {
+        obs.observe(host.shadowRoot, { childList: true, subtree: true, characterData: true });
+      }
+      w.__mlnrViewObs = obs;
+    });
+    await row.click();
+    await expect(row).toHaveAttribute('aria-selected', 'true');
+    // The header updates with the selection. A second reply to the same
+    // address has the same To text, so wait for the viewer DOM to change.
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { __mlnrViewTick?: number }).__mlnrViewTick ?? 0),
+      )
+      .toBeGreaterThan(0);
+  }
+  await expect(page.locator('.message-view-loading, .message-view-error')).toHaveCount(0);
+  await expect(page.locator('.message-view-subject')).toContainText(subject);
+  const to = toMeta(page);
+  await expect(to).toBeVisible();
+  const title = (await to.getAttribute('title')) ?? '';
+  return `${await to.innerText()}\n${title}`;
+}
+
+/**
+ * Open every Sent row for `subject` and count those addressed to `email`.
+ * The list label is the From name plus the subject, never the recipient.
+ */
+async function countRepliesTo(
+  page: Page,
+  subject: string,
+  email: string,
+): Promise<{ hits: number; total: number }> {
+  let total = await searchAndSettle(page, subject);
+  const countOnce = async (rows: number) => {
+    let hits = 0;
+    for (let index = 0; index < rows; index += 1) {
+      const blob = (await openRowRecipient(page, index, subject)).toLowerCase();
+      if (blob.includes(email.toLowerCase())) {
+        hits += 1;
+      }
+    }
+    return hits;
+  };
+  let hits = await countOnce(total);
+  // A reply can land while the rows are being opened. The same query does not
+  // start a second search, so wait for the live list and walk it again.
+  if ((await searchResultCount(page)) !== total) {
+    let previous = -1;
+    await expect
+      .poll(
+        async () => {
+          const count = await searchResultCount(page);
+          const stable = count > 0 && count === previous;
+          previous = count;
+          if (stable) {
+            total = count;
+          }
+          return stable;
+        },
+        { timeout: 20_000, intervals: [2_000] },
+      )
+      .toBe(true);
+    hits = await countOnce(total);
+  }
+  return { hits, total };
+}
+
 test('vacation sends one reply and does not send a second', async ({ page }) => {
+  test.setTimeout(180_000);
   await seedLiveAccount(page);
   await gotoLiveMail(page);
   const subject = uniqueName('vacation');
   const firstInbound = uniqueName('from-vac');
   const secondInbound = uniqueName('from-vac-2');
+  const recipient = `vacation-${subject}@example.com`;
   try {
     await gotoPath(page, '/settings');
     const vacation = page.locator('.settings-section', { hasText: 'Vacation' });
@@ -299,40 +473,18 @@ test('vacation sends one reply and does not send a second', async ({ page }) => 
 
     await gotoPath(page, '/');
     await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 45_000 });
-    // Dateless mail is stamped "now" on every FETCH, so other unread senders on
-    // the first page can each get one reply. Count stability is for this sender.
-    const sender = `Vacation Sender <vacation-${subject}@example.com>`;
-    const sentRows = () => messageRows(page).filter({ hasText: subject });
+    const sender = `Vacation Sender <${recipient}>`;
     await deliverRaw('INBOX', simpleMessage(sender, firstInbound, 'ping'));
     await openFolder(page, /Inbox/);
     await openFolder(page, 'Sent');
-    await expect(sentRows().first()).toBeVisible({ timeout: 40_000 });
-    // Opening the inbox replies to every new sender on the first page. Those
-    // copies reach Sent after the folder list is already on screen, so sample
-    // only once the count has stopped growing.
-    let previous = -1;
-    let firstCount = 0;
-    await expect
-      .poll(
-        async () => {
-          const count = await sentRows().count();
-          const stable = count > 0 && count === previous;
-          previous = count;
-          if (stable) {
-            firstCount = count;
-          }
-          return stable;
-        },
-        { timeout: 20_000, intervals: [2_000] },
-      )
-      .toBe(true);
+    const first = await countRepliesTo(page, subject, recipient);
+    expect(first.hits, `opened ${first.total} Sent messages`).toBe(1);
 
     await deliverRaw('INBOX', simpleMessage(sender, secondInbound, 'ping again'));
     await openFolder(page, /Inbox/);
     await openFolder(page, 'Sent');
-    await expect(sentRows()).toHaveCount(firstCount, { timeout: 20_000 });
-    await page.waitForTimeout(1_500);
-    await expect(sentRows()).toHaveCount(firstCount);
+    const second = await countRepliesTo(page, subject, recipient);
+    expect(second.hits, `opened ${second.total} Sent messages`).toBe(1);
   } finally {
     await cleanupSubject('INBOX', firstInbound);
     await cleanupSubject('INBOX', secondInbound);

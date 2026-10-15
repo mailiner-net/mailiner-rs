@@ -5,7 +5,7 @@
 // successful same-origin GET. Mail is IMAP over WebSocket — never HTTP — so
 // message bodies are not stored here.
 
-const CACHE = "mailiner-shell-v1";
+const CACHE = "mailiner-shell-v2";
 
 const PRECACHE = [
   "/index.html",

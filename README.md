@@ -64,7 +64,7 @@ send the header; HMR may also inject scripts after mount.
 | Directive | Policy | Why |
 |-----------|--------|-----|
 | `default-src` | `'self'` | Deny unexpected origins by default |
-| `script-src` | `'self' 'unsafe-eval' 'wasm-unsafe-eval'` | App WASM only; no third-party JS. `wasm-unsafe-eval` instantiates WASM; `unsafe-eval` is required for wasm-bindgen `new Function` closures (click/shortcut handlers) |
+| `script-src` | `'self' 'unsafe-eval' 'wasm-unsafe-eval'` plus one `sha256-…` | App WASM only; no third-party JS. `wasm-unsafe-eval` instantiates WASM; `unsafe-eval` is required for wasm-bindgen `new Function` closures (click/shortcut handlers). The hash allow-lists the inline boot-splash theme script in `crates/mailiner-app/index.html` (sets `data-theme` before paint). No `'unsafe-inline'` for scripts |
 | `style-src` | `'self' 'unsafe-inline'` | Dioxus uses inline `style=` (virtual list, layout). Strict style-src would break the UI. Remote stylesheets are stripped by the sanitizer |
 | `img-src` | `'self' data: blob: http: https:` | Inline message images (`data:` from cid rehydration); download / image-attachment previews (`blob:`); remote images when the user clicks **Allow remote resources** (privacy is gated in the HTML formatter first; CSP must not veto that path) |
 | `connect-src` | `'self' ws: wss: http: https:` | User-configured proxies can be any host; a strict host allowlist is not feasible without dynamic CSP. IMAP remains TLS-wrapped in the client |

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<!--
+  Custom dx shell (dev and release). Replaces the CLI's default index.html.
+
+  The boot splash paints with this document, before the WASM module is
+  downloaded. It sits outside #main; Dioxus mounts into #main and does not
+  remove siblings. App() removes #mailiner-splash after the first commit.
+
+  Keep the mount node (id main) and a literal end-body tag so dx can inject
+  the module script. dx replaces the app-title, base-path, and style-include
+  tokens everywhere they occur, including comments, so those tokens stay in
+  the slots below and nowhere else.
+
+  The inline #mailiner-splash-theme script is allow-listed by sha256 in
+  CONTENT_SECURITY_POLICY. Do not add other inline scripts.
+
+  Hot reload stays available: the debug WASM opens its own socket to dx.
+-->
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="color-scheme" content="light dark">
+        <title>{app_title}</title>
+        <link rel="icon" href="/{base_path}/icons/icon-192.png" type="image/png">
+        <style>
+            /* Zero specificity so main.css body colors win after mount.
+               These only paint the document while the splash is up. */
+            :where(html, body) {
+                background: #fff;
+                color-scheme: light;
+            }
+
+            #mailiner-splash {
+                background: #fff;
+                color: #0a0a0a;
+                color-scheme: light;
+            }
+
+            @media (prefers-color-scheme: dark) {
+                :where(html:not([data-theme="light"]), html:not([data-theme="light"]) body) {
+                    background: #121212;
+                    color-scheme: dark;
+                }
+
+                html:not([data-theme="light"]) #mailiner-splash {
+                    background: #121212;
+                    color: #e8e8e8;
+                    color-scheme: dark;
+                }
+
+                html:not([data-theme="light"]) .mailiner-splash-status {
+                    color: #9aa0a6;
+                }
+
+                html:not([data-theme="light"]) .mailiner-splash-bar {
+                    background: #2a2a2a;
+                }
+
+                html:not([data-theme="light"]) .mailiner-splash-bar > span {
+                    background: #4da3ff;
+                }
+            }
+
+            :where(html[data-theme="dark"], html[data-theme="dark"] body) {
+                background: #121212;
+                color-scheme: dark;
+            }
+
+            html[data-theme="dark"] #mailiner-splash {
+                background: #121212;
+                color: #e8e8e8;
+                color-scheme: dark;
+            }
+
+            :where(html[data-theme="light"], html[data-theme="light"] body) {
+                background: #fff;
+                color-scheme: light;
+            }
+
+            html[data-theme="light"] #mailiner-splash {
+                background: #fff;
+                color: #0a0a0a;
+                color-scheme: light;
+            }
+
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+            }
+
+            #mailiner-splash {
+                position: fixed;
+                inset: 0;
+                z-index: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 0.65rem;
+                font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            }
+
+            .mailiner-splash-mark {
+                width: 80px;
+                height: 80px;
+                border-radius: 22px;
+                background: #0f1116;
+                display: grid;
+                place-items: center;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            }
+
+            .mailiner-splash-mark img {
+                width: 64px;
+                height: 64px;
+                display: block;
+            }
+
+            .mailiner-splash-title {
+                margin: 0.35rem 0 0;
+                font-size: 1.35rem;
+                font-weight: 600;
+                letter-spacing: -0.02em;
+            }
+
+            .mailiner-splash-status {
+                margin: 0;
+                font-size: 0.9rem;
+                color: #5f6368;
+            }
+
+            html[data-theme="dark"] .mailiner-splash-status {
+                color: #9aa0a6;
+            }
+
+            html[data-theme="light"] .mailiner-splash-status {
+                color: #5f6368;
+            }
+
+            .mailiner-splash-bar {
+                width: 8.5rem;
+                height: 3px;
+                margin-top: 0.35rem;
+                border-radius: 999px;
+                background: #e6e6e6;
+                overflow: hidden;
+            }
+
+            html[data-theme="dark"] .mailiner-splash-bar {
+                background: #2a2a2a;
+            }
+
+            html[data-theme="light"] .mailiner-splash-bar {
+                background: #e6e6e6;
+            }
+
+            .mailiner-splash-bar > span {
+                display: block;
+                height: 100%;
+                width: 40%;
+                border-radius: inherit;
+                background: #0066cc;
+                animation: mailiner-splash-slide 1.15s ease-in-out infinite;
+            }
+
+            html[data-theme="dark"] .mailiner-splash-bar > span {
+                background: #4da3ff;
+            }
+
+            html[data-theme="light"] .mailiner-splash-bar > span {
+                background: #0066cc;
+            }
+
+            @keyframes mailiner-splash-slide {
+                from { transform: translateX(-120%); }
+                to { transform: translateX(280%); }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                .mailiner-splash-bar > span {
+                    animation: none;
+                    width: 100%;
+                    opacity: 0.55;
+                }
+            }
+        </style>
+        <!-- One line on purpose: production CSP hashes these exact bytes. -->
+        <script id="mailiner-splash-theme">(function(){var theme=null;try{theme=localStorage.getItem("mailiner.ui.theme");}catch(e){}var root=document.documentElement;if(theme==="dark"||theme==="light"){root.setAttribute("data-theme",theme);}else{root.removeAttribute("data-theme");}})();</script>
+        {style_include}
+    </head>
+    <body>
+        <div id="mailiner-splash" role="status">
+            <div class="mailiner-splash-mark">
+                <img src="/{base_path}/icons/icon-192.png" width="64" height="64" alt="">
+            </div>
+            <p class="mailiner-splash-title">Mailiner</p>
+            <p class="mailiner-splash-status">Loading…</p>
+            <div class="mailiner-splash-bar" aria-hidden="true"><span></span></div>
+            <noscript>
+                <p class="mailiner-splash-status">Mailiner needs JavaScript to start.</p>
+            </noscript>
+        </div>
+        <div id="main"></div>
+    </body>
+</html>

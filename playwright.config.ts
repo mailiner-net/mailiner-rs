@@ -66,7 +66,10 @@ export default defineConfig({
     ? undefined
     : {
         command: webServerCommand(),
-        url: SERVE_DIR && SERVE_PREFIX ? `${BASE_URL}/${SERVE_PREFIX}/` : BASE_URL,
+        url:
+          SERVE_DIR && SERVE_PREFIX
+            ? `${BASE_URL.replace(/\/+$/, '')}/${SERVE_PREFIX}/`
+            : BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: SERVE_DIR ? 60_000 : 5 * 60_000,
       },

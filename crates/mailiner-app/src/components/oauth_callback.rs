@@ -32,14 +32,16 @@ pub fn OauthCallbackPage() -> Element {
 /// In-app router path (`/`, `/settings/accounts`). Rejects protocol-relative
 /// and absolute URLs so the same-tab return cannot leave this origin.
 ///
-/// ASCII controls are rejected too. The URL parser removes tab and newlines
-/// before resolving the reference, so `/\t/evil.example` would become
-/// `//evil.example` and navigate off this origin.
+/// A leading `/` cannot be a scheme, so a colon in the path or query
+/// (`/settings?provider=imap:ssl`) stays on this origin. ASCII controls are
+/// rejected: the URL parser removes tab and newlines, so `/\t/evil.example`
+/// would become `//evil.example`. A backslash is rejected for the same
+/// reason: in a special URL it is treated as `/`.
 fn is_app_route(path: &str) -> bool {
     if path.bytes().any(|b| b.is_ascii_control()) {
         return false;
     }
-    path.starts_with('/') && !path.starts_with("//") && !path.contains('\\') && !path.contains(':')
+    path.starts_with('/') && !path.starts_with("//") && !path.contains('\\')
 }
 
 fn handle_callback(status: &mut Signal<String>) {
@@ -108,6 +110,7 @@ mod tests {
     fn return_path_stays_on_this_origin() {
         assert!(is_app_route("/"));
         assert!(is_app_route("/settings/accounts"));
+        assert!(is_app_route("/settings/accounts?provider=imap:ssl"));
         assert!(!is_app_route("//evil.example"));
         assert!(!is_app_route("///evil.example"));
         assert!(!is_app_route("/\t/evil.example"));

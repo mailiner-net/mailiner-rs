@@ -1,0 +1,19 @@
+e2e/prefix-static-server.mjs
+  s_343184a2f13875::t_2eeaa6f11c7c2c 54-56,64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "716b41fe9be5b55189ec4af43f8401b65c51d573",
+  "prompts": {},
+  "sessions": {
+    "s_343184a2f13875": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a14019-6e29-77c1-8249-528864092c49",
+        "model": "unknown"
+      },
+      "human_author": "Daniel Vrátil <me@dvratil.cz>"
+    }
+  }
+}

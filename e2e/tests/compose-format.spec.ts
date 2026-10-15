@@ -79,6 +79,14 @@ test('mixed content toggles without nesting the same mark', async ({ page }) => 
   await selectPlain(host, 0, 6);
   await compose.getByRole('button', { name: 'Bold', exact: true }).click();
   await expectMarks(host, ['', '', '', '', '', '']);
+
+  // Unwrapping bold around "cd" splits the strong through the em. The right
+  // strong used to keep an empty em that only held the end marker.
+  await setEditorHtml(host, '<p><strong>ab<em>cd</em>ef</strong></p>');
+  await selectPlain(host, 2, 4);
+  await compose.getByRole('button', { name: 'Bold', exact: true }).click();
+  await expectMarks(host, ['strong', 'strong', 'em', 'em', 'strong', 'strong']);
+  await expectNoEmptyInline(host);
 });
 
 test('a collapsed caret still enters the mark and a second click leaves it', async ({ page }) => {
@@ -207,6 +215,24 @@ async function readMarks(host: Locator): Promise<string[]> {
 
 async function expectMarks(host: Locator, expected: string[]) {
   await expect.poll(async () => readMarks(host)).toEqual(expected);
+}
+
+async function expectNoEmptyInline(host: Locator) {
+  const empty = await host.evaluate((el) => {
+    const edit = el.shadowRoot?.getElementById('mlnr-compose-editable');
+    if (!edit) {
+      return ['missing editor'];
+    }
+    const tags = ['a', 'b', 'code', 'em', 'i', 'span', 'strong', 'u'];
+    const found: string[] = [];
+    for (const node of edit.querySelectorAll(tags.join(','))) {
+      if (node.childNodes.length === 0) {
+        found.push(node.outerHTML);
+      }
+    }
+    return found;
+  });
+  expect(empty).toEqual([]);
 }
 
 async function expectNoNestedAlias(host: Locator, aliases: string[]) {

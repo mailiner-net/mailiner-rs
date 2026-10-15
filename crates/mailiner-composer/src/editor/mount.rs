@@ -619,7 +619,7 @@ mod web {
         let selected = range_between(&markers.start, &markers.end);
         markers.take_down();
         root.normalize();
-        remove_empty_marks(root, aliases);
+        remove_empty_inlines(root);
         if let Some(selected) = selected {
             let _ = sel.remove_all_ranges();
             let _ = sel.add_range(&selected);
@@ -997,10 +997,18 @@ mod web {
         }
     }
 
-    fn remove_empty_marks(root: &Node, aliases: &[&str]) {
+    /// Inline tags a split can leave with no children. `br`, `img`, and `hr`
+    /// are omitted: they have no children and are real content.
+    const EMPTY_INLINE: &[&str] = &["a", "b", "code", "em", "i", "span", "strong", "u"];
+
+    /// Drop empty inline wrappers. A split clones every ancestor between the
+    /// marker and the mark, so unwrapping bold can leave an empty `<em>`
+    /// inside the untouched side of a `<strong>`. Removing that `<em>` can
+    /// empty the `<strong>`, so this repeats.
+    fn remove_empty_inlines(root: &Node) {
         loop {
             let mut empty = Vec::new();
-            collect_empty_marks(root, aliases, &mut empty);
+            collect_empty_inlines(root, &mut empty);
             if empty.is_empty() {
                 break;
             }
@@ -1010,10 +1018,10 @@ mod web {
         }
     }
 
-    fn collect_empty_marks(node: &Node, aliases: &[&str], out: &mut Vec<Element>) {
+    fn collect_empty_inlines(node: &Node, out: &mut Vec<Element>) {
         for child in child_nodes(node) {
-            collect_empty_marks(&child, aliases, out);
-            if tag_matches(&child, aliases) && child.first_child().is_none() {
+            collect_empty_inlines(&child, out);
+            if tag_matches(&child, EMPTY_INLINE) && child.first_child().is_none() {
                 if let Some(el) = child.dyn_ref::<Element>() {
                     out.push(el.clone());
                 }

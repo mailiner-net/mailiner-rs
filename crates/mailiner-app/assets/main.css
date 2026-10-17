@@ -728,6 +728,47 @@ button.flat {
     accent-color: var(--item-accent);
 }
 
+.mark-read-setting {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0.35rem 0 0.15rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--label);
+}
+
+.mark-read-setting input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: var(--item-accent);
+}
+
+.mark-read-setting label {
+    cursor: pointer;
+    user-select: none;
+}
+
+.mark-read-seconds {
+    width: 4.5rem;
+    padding: 0.25rem 0.4rem;
+    font: inherit;
+    font-size: 0.95rem;
+    font-weight: 400;
+    color: var(--foreground);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-sizing: border-box;
+}
+
+.mark-read-seconds:focus {
+    outline: 2px solid color-mix(in srgb, var(--item-accent) 45%, transparent);
+    outline-offset: 1px;
+    border-color: var(--item-accent);
+}
+
 .onboarding-warning {
     margin: 0;
     padding: 0.6rem 0.75rem;

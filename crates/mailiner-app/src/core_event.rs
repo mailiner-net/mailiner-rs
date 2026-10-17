@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -77,6 +77,25 @@ use chrono::Utc;
 
 thread_local! {
     static SMTP_TX: RefCell<Option<UnboundedSender<CoreEvent>>> = const { RefCell::new(None) };
+    /// Bumped on every message open so a delayed auto-mark cannot land on a
+    /// message the user has already left.
+    static AUTO_MARK_READ_GEN: Cell<u64> = const { Cell::new(0) };
+    /// Last timer scheduled for the current generation, so a cache hit and the
+    /// following network refresh do not arm two waits.
+    static AUTO_MARK_READ_PENDING: RefCell<Option<(u64, MessageId)>> =
+        const { RefCell::new(None) };
+}
+
+fn bump_auto_mark_generation() -> u64 {
+    AUTO_MARK_READ_GEN.with(|slot| {
+        let next = slot.get().wrapping_add(1);
+        slot.set(next);
+        next
+    })
+}
+
+fn auto_mark_generation() -> u64 {
+    AUTO_MARK_READ_GEN.with(Cell::get)
 }
 
 fn bind_smtp_tx(tx: UnboundedSender<CoreEvent>) {
@@ -156,6 +175,12 @@ pub enum CoreEvent {
         mailbox_id: MailboxId,
         message_ids: Vec<MessageId>,
         is_read: bool,
+    },
+    /// Delayed `\Seen` for the message that was open when the timer started.
+    /// `generation` must still match or the user has moved on.
+    AutoMarkRead {
+        message_id: MessageId,
+        generation: u64,
     },
     /// Toggle `\Starred` (custom) on the given messages.
     ToggleStar {
@@ -672,6 +697,12 @@ pub async fn core_loop(input: CoreLoop) {
                 is_read,
             } => {
                 handle_mark_read(&manager, &mut ctx, mailbox_id, message_ids, is_read).await;
+            }
+            CoreEvent::AutoMarkRead {
+                message_id,
+                generation,
+            } => {
+                handle_deferred_auto_mark_read(&manager, &mut ctx, message_id, generation).await;
             }
             CoreEvent::ToggleStar {
                 account_id,
@@ -4042,6 +4073,8 @@ async fn handle_select_message(
     auto_mark_read: bool,
     replace_selection: bool,
 ) {
+    // Drop any timer armed for the previously open message.
+    let mark_generation = bump_auto_mark_generation();
     let index = ctx.messages.read().position(|m| m.id == message_id);
     if replace_selection {
         ctx.selection.write().replace(message_id.clone(), index);
@@ -4073,7 +4106,7 @@ async fn handle_select_message(
             message_id: message_id.clone(),
             loaded,
         });
-        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
+        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read, mark_generation).await;
         return;
     }
 
@@ -4112,7 +4145,7 @@ async fn handle_select_message(
         if manager.get(&account_id).is_none() {
             return;
         }
-        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
+        maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read, mark_generation).await;
     } else {
         ctx.clear_attachment_downloads();
         ctx.message_view.set(MessageViewState::Loading {
@@ -4157,7 +4190,7 @@ async fn handle_select_message(
                 message_id: message_id.clone(),
                 loaded,
             });
-            maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read).await;
+            maybe_auto_mark_read(manager, ctx, &message_id, auto_mark_read, mark_generation).await;
         }
         Err(e) => {
             if persisted.is_some() {
@@ -4201,8 +4234,45 @@ async fn maybe_auto_mark_read(
     ctx: &mut AppContext,
     message_id: &MessageId,
     auto_mark_read: bool,
+    generation: u64,
 ) {
-    let Some(target) = open_target_for(ctx, message_id).or_else(|| {
+    if !auto_mark_applies(ctx, message_id, auto_mark_read) {
+        return;
+    }
+    let Some((account_id, mailbox_id)) = auto_mark_target(manager, ctx, message_id) else {
+        return;
+    };
+    let pref = crate::ui_prefs::load_mark_read_delay();
+    if !pref.enabled {
+        return;
+    }
+    if pref.seconds == 0 {
+        commit_auto_mark_read(manager, ctx, message_id, &account_id, &mailbox_id).await;
+        return;
+    }
+    schedule_auto_mark_read(
+        message_id.clone(),
+        generation,
+        pref.seconds.saturating_mul(1000),
+    );
+}
+
+fn auto_mark_applies(ctx: &AppContext, message_id: &MessageId, auto_mark_read: bool) -> bool {
+    let was_unread = ctx
+        .messages
+        .read()
+        .find(|m| m.id == *message_id)
+        .is_some_and(|m| !m.is_read);
+    let is_multi = ctx.selection.read().is_multi();
+    was_unread && crate::selection::should_auto_mark_read(auto_mark_read, is_multi)
+}
+
+fn auto_mark_target(
+    manager: &AccountConnectionManager,
+    ctx: &AppContext,
+    message_id: &MessageId,
+) -> Option<(AccountId, MailboxId)> {
+    let target = open_target_for(ctx, message_id).or_else(|| {
         let mailbox_id = ctx.selected_mailbox.read().clone()?;
         if is_unified_mailbox(&mailbox_id) {
             return None;
@@ -4212,23 +4282,70 @@ async fn maybe_auto_mark_read(
             mailbox_id,
             message_id: message_id.clone(),
         })
-    }) else {
-        return;
-    };
-    let account_id = target.account_id;
-    let mailbox_id = target.mailbox_id;
-    let Some(connector) = manager.get(&account_id) else {
-        return;
-    };
-    let was_unread = ctx
-        .messages
-        .read()
-        .find(|m| m.id == *message_id)
-        .is_some_and(|m| !m.is_read);
-    let is_multi = ctx.selection.read().is_multi();
-    if !was_unread || !crate::selection::should_auto_mark_read(auto_mark_read, is_multi) {
+    })?;
+    manager.get(&target.account_id)?;
+    Some((target.account_id, target.mailbox_id))
+}
+
+fn schedule_auto_mark_read(message_id: MessageId, generation: u64, delay_ms: u32) {
+    let duplicate = AUTO_MARK_READ_PENDING.with(|pending| {
+        pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|(pending_gen, id)| *pending_gen == generation && id == &message_id)
+    });
+    if duplicate {
         return;
     }
+    AUTO_MARK_READ_PENDING.with(|pending| {
+        *pending.borrow_mut() = Some((generation, message_id.clone()));
+    });
+    spawn_reconnect_timer(async move {
+        TimeoutFuture::new(delay_ms).await;
+        queue_core_event(CoreEvent::AutoMarkRead {
+            message_id,
+            generation,
+        });
+    });
+}
+
+async fn handle_deferred_auto_mark_read(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_id: MessageId,
+    generation: u64,
+) {
+    if generation != auto_mark_generation() {
+        return;
+    }
+    AUTO_MARK_READ_PENDING.with(|pending| pending.borrow_mut().take());
+    if ctx.selection.read().focus() != Some(&message_id) {
+        return;
+    }
+    if !crate::ui_prefs::load_mark_read_delay().enabled {
+        return;
+    }
+    // The open itself already decided this was a single-message read. Re-check
+    // multi-select in case the selection grew while the timer ran.
+    if !auto_mark_applies(ctx, &message_id, true) {
+        return;
+    }
+    let Some((account_id, mailbox_id)) = auto_mark_target(manager, ctx, &message_id) else {
+        return;
+    };
+    commit_auto_mark_read(manager, ctx, &message_id, &account_id, &mailbox_id).await;
+}
+
+async fn commit_auto_mark_read(
+    manager: &AccountConnectionManager,
+    ctx: &mut AppContext,
+    message_id: &MessageId,
+    account_id: &AccountId,
+    mailbox_id: &MailboxId,
+) {
+    let Some(connector) = manager.get(account_id) else {
+        return;
+    };
     let folder_id = FolderId::new(mailbox_id.to_string());
     apply_read_flag(ctx, std::slice::from_ref(message_id), true);
     if let Err(e) = connector
@@ -4244,8 +4361,8 @@ async fn maybe_auto_mark_read(
         apply_read_flag(ctx, std::slice::from_ref(message_id), false);
     } else {
         relocate_unread_sort_rows(connector, ctx, std::slice::from_ref(message_id), true).await;
-        persist_selected_messages(manager.cache(), ctx, &account_id).await;
-        persist_folder_tree(manager.cache(), ctx, &account_id).await;
+        persist_selected_messages(manager.cache(), ctx, account_id).await;
+        persist_folder_tree(manager.cache(), ctx, account_id).await;
     }
 }
 

@@ -1,4 +1,4 @@
-//! General settings home: appearance, composer, filters, vacation, address book, privacy, shortcuts.
+//! General settings home: appearance, reading, composer, filters, vacation, address book, privacy, shortcuts.
 
 use dioxus::prelude::*;
 
@@ -24,6 +24,13 @@ use crate::ui_prefs::{
 use crate::vacation::{self, VacationSettings};
 use mailiner_core::ImapKeyword;
 
+fn persist_mark_read(enabled: bool, seconds_text: &str) -> u32 {
+    let seconds = crate::ui_prefs::parse_mark_read_seconds(seconds_text)
+        .unwrap_or(crate::ui_prefs::MARK_READ_DELAY_DEFAULT_SECONDS);
+    crate::ui_prefs::save_mark_read_delay(crate::ui_prefs::MarkReadDelay { enabled, seconds });
+    seconds
+}
+
 fn account_from_label(account: &Account) -> String {
     if account.name.is_empty() {
         account.email.clone()
@@ -48,6 +55,9 @@ pub fn SettingsPage() -> Element {
     let mut default_from = use_signal(crate::ui_prefs::load_default_from_account);
     let mut allow_remote = use_signal(crate::ui_prefs::load_allow_remote_images);
     let mut layout_reset = use_signal(|| false);
+    let loaded_mark_read = crate::ui_prefs::load_mark_read_delay();
+    let mut mark_read_enabled = use_signal(|| loaded_mark_read.enabled);
+    let mut mark_read_seconds = use_signal(|| loaded_mark_read.seconds.to_string());
     let mut locale = ctx.locale;
     let current_locale = *locale.read();
 
@@ -188,6 +198,54 @@ pub fn SettingsPage() -> Element {
                             class: "bootstrap-muted settings-reset-note",
                             {t("settings.reset_note")}
                         }
+                    }
+                }
+
+                section {
+                    class: "settings-section",
+                    h2 { {t("settings.reading")} }
+                    div {
+                        class: "mark-read-setting",
+                        input {
+                            id: "settings-mark-read-auto",
+                            r#type: "checkbox",
+                            checked: mark_read_enabled(),
+                            onchange: move |evt| {
+                                let enabled_now = evt.checked();
+                                mark_read_enabled.set(enabled_now);
+                                let raw = mark_read_seconds.peek().clone();
+                                let seconds = persist_mark_read(enabled_now, &raw);
+                                mark_read_seconds.set(seconds.to_string());
+                            },
+                        }
+                        label {
+                            r#for: "settings-mark-read-auto",
+                            {t("settings.mark_read_auto")}
+                        }
+                        input {
+                            id: "settings-mark-read-seconds",
+                            class: "mark-read-seconds",
+                            r#type: "number",
+                            min: "0",
+                            max: "9999",
+                            step: "1",
+                            inputmode: "numeric",
+                            aria_label: t("settings.mark_read_seconds_label"),
+                            value: "{mark_read_seconds}",
+                            oninput: move |evt| {
+                                let raw = evt.value();
+                                mark_read_seconds.set(raw.clone());
+                                if crate::ui_prefs::parse_mark_read_seconds(&raw).is_some() {
+                                    let _ = persist_mark_read(mark_read_enabled(), &raw);
+                                }
+                            },
+                            onblur: move |_| {
+                                let raw = mark_read_seconds.peek().clone();
+                                let seconds = persist_mark_read(mark_read_enabled(), &raw);
+                                mark_read_seconds.set(seconds.to_string());
+                            },
+                        }
+                        span { {t("settings.mark_read_seconds")} }
                     }
                 }
 

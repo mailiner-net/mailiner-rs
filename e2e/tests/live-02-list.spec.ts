@@ -116,8 +116,9 @@ test('next and previous move the selection', async ({ page }) => {
 
   // Inbox often has a single unseen row, so `n` has nothing to move to.
   // Two fresh messages, filter off: opening the folder marks the newest one
-  // read and leaves it in the list. `n` then lands on the older unread and
-  // stays there (the unread filter would drop that row as soon as it is read).
+  // read after the mark-read delay (default 5s) and leaves it in the list.
+  // `n` then lands on the older unread and stays there (the unread filter
+  // would drop that row as soon as it is read).
   const folder = uniqueName('next');
   const olderSubject = `${folder}-a`;
   const newerSubject = `${folder}-b`;

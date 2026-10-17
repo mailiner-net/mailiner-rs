@@ -588,6 +588,49 @@ pub const ACK_UNREAD_SCHEMA_VERSION: u32 = 1;
 /// `localStorage` key for the Inbox desktop-notification toggle (default off).
 pub const NOTIFY_INBOX_KEY: &str = "mailiner.ui.notifyInbox";
 
+/// `localStorage` key: `"1"` auto-marks an opened message read, `"0"` never does.
+/// Missing means on, which is the default.
+pub const MARK_READ_AUTO_KEY: &str = "mailiner.ui.markReadAuto";
+
+/// `localStorage` key: whole seconds to wait before that auto-mark.
+pub const MARK_READ_DELAY_SECONDS_KEY: &str = "mailiner.ui.markReadDelaySeconds";
+
+/// Default wait before an opened message is marked read.
+pub const MARK_READ_DELAY_DEFAULT_SECONDS: u32 = 5;
+
+/// Inclusive bounds for the delay field.
+pub const MARK_READ_DELAY_MIN_SECONDS: u32 = 0;
+pub const MARK_READ_DELAY_MAX_SECONDS: u32 = 9999;
+
+/// When an opened message becomes `\Seen`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkReadDelay {
+    /// `false` leaves unread until the user marks it.
+    pub enabled: bool,
+    /// Wait after the message is opened. `0` marks immediately.
+    pub seconds: u32,
+}
+
+impl Default for MarkReadDelay {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            seconds: MARK_READ_DELAY_DEFAULT_SECONDS,
+        }
+    }
+}
+
+/// Parse a delay field. Empty or non-numeric input is `None`. Out-of-range
+/// numbers clamp to [`MARK_READ_DELAY_MIN_SECONDS`]..=[`MARK_READ_DELAY_MAX_SECONDS`].
+pub fn parse_mark_read_seconds(raw: &str) -> Option<u32> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let n: u32 = trimmed.parse().ok()?;
+    Some(n.clamp(MARK_READ_DELAY_MIN_SECONDS, MARK_READ_DELAY_MAX_SECONDS))
+}
+
 /// `localStorage` key for user shortcut remaps (missing ids keep catalog defaults).
 pub const SHORTCUT_MAP_KEY: &str = "mailiner.ui.shortcuts.v1";
 /// Schema version for [`ShortcutMapBlob`].
@@ -1732,6 +1775,33 @@ pub fn save_notify_inbox(enabled: bool) {
     let _ = with_kv(|kv| kv.set_item(NOTIFY_INBOX_KEY, if enabled { "1" } else { "0" }));
 }
 
+/// Auto-mark delay. Missing keys use the default (on, 5 seconds).
+pub fn load_mark_read_delay() -> MarkReadDelay {
+    with_kv(|kv| {
+        let enabled = match kv.get_item(MARK_READ_AUTO_KEY)?.as_deref() {
+            Some("0") => false,
+            Some("1") => true,
+            _ => true,
+        };
+        let seconds = match kv.get_item(MARK_READ_DELAY_SECONDS_KEY)? {
+            Some(raw) => parse_mark_read_seconds(&raw).unwrap_or(MARK_READ_DELAY_DEFAULT_SECONDS),
+            None => MARK_READ_DELAY_DEFAULT_SECONDS,
+        };
+        Ok(MarkReadDelay { enabled, seconds })
+    })
+    .unwrap_or_default()
+}
+
+pub fn save_mark_read_delay(pref: MarkReadDelay) {
+    let seconds = pref
+        .seconds
+        .clamp(MARK_READ_DELAY_MIN_SECONDS, MARK_READ_DELAY_MAX_SECONDS);
+    let _ = with_kv(|kv| {
+        kv.set_item(MARK_READ_AUTO_KEY, if pref.enabled { "1" } else { "0" })?;
+        kv.set_item(MARK_READ_DELAY_SECONDS_KEY, &seconds.to_string())
+    });
+}
+
 fn load_shortcut_map_blob(kv: &dyn StringKvStore) -> Result<ShortcutMapBlob, AccountStoreError> {
     match kv.get_item(SHORTCUT_MAP_KEY)? {
         None => Ok(ShortcutMapBlob::empty()),
@@ -2431,6 +2501,42 @@ mod tests {
     }
 
     #[test]
+    fn mark_read_delay_defaults_on_and_roundtrips() {
+        host_kv::reset();
+        assert_eq!(load_mark_read_delay(), MarkReadDelay::default());
+        assert_eq!(parse_mark_read_seconds(""), None);
+        assert_eq!(parse_mark_read_seconds("nope"), None);
+        assert_eq!(parse_mark_read_seconds(" 12 "), Some(12));
+        assert_eq!(
+            parse_mark_read_seconds("100000"),
+            Some(MARK_READ_DELAY_MAX_SECONDS)
+        );
+
+        save_mark_read_delay(MarkReadDelay {
+            enabled: false,
+            seconds: 12,
+        });
+        assert_eq!(
+            load_mark_read_delay(),
+            MarkReadDelay {
+                enabled: false,
+                seconds: 12,
+            }
+        );
+        save_mark_read_delay(MarkReadDelay {
+            enabled: true,
+            seconds: 0,
+        });
+        assert_eq!(
+            load_mark_read_delay(),
+            MarkReadDelay {
+                enabled: true,
+                seconds: 0,
+            }
+        );
+        host_kv::reset();
+    }
+
     fn notify_inbox_defaults_off_and_roundtrips() {
         host_kv::reset();
         assert!(!load_notify_inbox());

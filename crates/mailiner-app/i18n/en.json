@@ -322,8 +322,12 @@
   },
   "settings": {
     "title": "Settings",
-    "intro": "Appearance, composer, filters, vacation, contacts, privacy, and shortcut preferences are stored in this browser.",
+    "intro": "Appearance, reading, composer, filters, vacation, contacts, privacy, and shortcut preferences are stored in this browser.",
     "appearance": "Appearance",
+    "reading": "Reading",
+    "mark_read_auto": "Automatically mark message as read after",
+    "mark_read_seconds": "seconds",
+    "mark_read_seconds_label": "Seconds before marking the message as read",
     "appearance_hint": "List density and mail layout apply immediately on desktop. Phone and tablet widths show one pane at a time. Pane sizes reset the next time you open mail.",
     "language": "Language",
     "density": "Message list density",

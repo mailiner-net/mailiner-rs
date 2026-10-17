@@ -93,6 +93,12 @@ test('settings home lists appearance, composer, filters, vacation, and privacy',
   await expect(page.getByLabel('Mail layout')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reset pane sizes' })).toBeVisible();
 
+  await expect(page.getByRole('heading', { name: 'Reading' })).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'Automatically mark message as read after' }),
+  ).toBeChecked();
+  await expect(page.getByLabel('Seconds before marking the message as read')).toHaveValue('5');
+
   await expect(page.getByRole('heading', { name: 'Composer' })).toBeVisible();
   await expect(page.getByLabel('Compose window')).toBeVisible();
   await expect(page.getByLabel('Default format')).toBeVisible();
@@ -111,6 +117,37 @@ test('settings home lists appearance, composer, filters, vacation, and privacy',
   await expect(page.getByLabel('Remote images')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'OpenPGP' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Keyboard shortcuts' })).toBeVisible();
+});
+
+test('mark-read delay persists across reload', async ({ page }) => {
+  test.setTimeout(180_000);
+  await seedAccount(page);
+  await gotoPath(page, '/settings');
+  const heading = page.getByRole('heading', { name: 'Settings', exact: true });
+  await expect(heading).toBeVisible({ timeout: 120_000 });
+
+  const box = page.getByRole('checkbox', {
+    name: 'Automatically mark message as read after',
+  });
+  const seconds = page.getByLabel('Seconds before marking the message as read');
+  await expect(box).toBeChecked();
+  await seconds.fill('12');
+  await seconds.blur();
+  await box.uncheck();
+  await expect(seconds).toHaveValue('12');
+
+  await page.reload();
+  await expect(heading).toBeVisible({ timeout: 120_000 });
+  await expect(box).not.toBeChecked();
+  await expect(seconds).toHaveValue('12');
+
+  await box.check();
+  await seconds.fill('0');
+  await seconds.blur();
+  await page.reload();
+  await expect(heading).toBeVisible({ timeout: 120_000 });
+  await expect(box).toBeChecked();
+  await expect(seconds).toHaveValue('0');
 });
 
 test('appearance density persists onto the message list', async ({ page }) => {
